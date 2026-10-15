@@ -1,0 +1,5 @@
+[default]
+
+[default.extend-words]
+WRONLY = "WRONLY"
+eis = "eis"

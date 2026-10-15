@@ -1,0 +1,161 @@
+{
+  "source_dmg": "$HOME/项目/macOS Catalina 10.15.7 19H2.dmg",
+  "source_dmg_sha256": "15009479b32f57a320830e4d0c08502b8a797a3501214197d8ea07c2872944d1",
+  "system_version": "10.15.7",
+  "system_build": "19H2",
+  "extraction": "Read-only reconstructed HFS -> InstallESD/Core.pkg XAR -> PBZX/XZ -> CPIO; original binaries not executed. Source tail incomplete. XAR metadata and selected CodeResources SHA256 matches are integrity checks, not a complete package/CMS signature verification.",
+  "car_decoder_source": "https://github.com/devcxm/carfile-go",
+  "car_decoder_commit": "fd018181f5efda6ef6fdd4f2d26c8085451e143c",
+  "format_version": 1,
+  "assets": [
+    {
+      "name": "general",
+      "source_path": "System/Library/PreferencePanes/Appearance.prefPane/Contents/Resources/Assets.car",
+      "source_sha256": "3a9c121a4608d09b73cd89751b1b1c7d3d625583a6ad826e63074aa726e2dae5",
+      "code_resources_sha256_matches": true,
+      "source_info_plist": "System/Library/PreferencePanes/Appearance.prefPane/Contents/Info.plist",
+      "png_sha256": "420b812f7982d4bd6eaadd5ec04b7d365e9f3ca7bc5fe4e883b8705ad95af22a",
+      "pixel_size": [
+        80,
+        80
+      ],
+      "resampled": false,
+      "method": "CoreUI asset catalog atlas decode/crop, GeneralPrefsIcon40/GeneralIcon@2x.png; carfile-go fd018181f5efda6ef6fdd4f2d26c8085451e143c",
+      "repository_file": "realand-settings/assets/macos/general.png",
+      "logical_size_points": [
+        40,
+        40
+      ]
+    },
+    {
+      "name": "mission-control",
+      "source_path": "System/Library/PreferencePanes/Expose.prefPane/Contents/Resources/MissionControl@2x.png",
+      "source_sha256": "fdc541fb75c23e365241377db58a0fead94da3a83e8ff18f3030082bf4f8d7c9",
+      "code_resources_sha256_matches": true,
+      "source_info_plist": "System/Library/PreferencePanes/Expose.prefPane/Contents/Info.plist",
+      "png_sha256": "fdc541fb75c23e365241377db58a0fead94da3a83e8ff18f3030082bf4f8d7c9",
+      "pixel_size": [
+        80,
+        80
+      ],
+      "resampled": false,
+      "method": "byte-for-byte original PNG copy",
+      "repository_file": "realand-settings/assets/macos/mission-control.png",
+      "logical_size_points": [
+        40,
+        40
+      ]
+    },
+    {
+      "name": "keyboard",
+      "source_path": "System/Library/PreferencePanes/Keyboard.prefPane/Contents/Resources/SystemPrefs_Keyboard@2x.png",
+      "source_sha256": "e120945e9c070f4250a1e59d354cc03a9cadd8a641d65ea1c7660840ddb1e8db",
+      "code_resources_sha256_matches": true,
+      "source_info_plist": "System/Library/PreferencePanes/Keyboard.prefPane/Contents/Info.plist",
+      "png_sha256": "e120945e9c070f4250a1e59d354cc03a9cadd8a641d65ea1c7660840ddb1e8db",
+      "pixel_size": [
+        80,
+        80
+      ],
+      "resampled": false,
+      "method": "byte-for-byte original PNG copy",
+      "repository_file": "realand-settings/assets/macos/keyboard.png",
+      "logical_size_points": [
+        40,
+        40
+      ]
+    },
+    {
+      "name": "displays",
+      "source_path": "System/Library/PreferencePanes/Displays.prefPane/Contents/Resources/DisplaysPrefIcon.tiff",
+      "source_sha256": "1a37cc70bcc8ef51f058922a0b2292bea5ed7dd4192aac243ec13b31eadceed9",
+      "code_resources_sha256_matches": true,
+      "source_info_plist": "System/Library/PreferencePanes/Displays.prefPane/Contents/Info.plist",
+      "png_sha256": "1cbb890c22275a3d2b6a10ef6fc46cfdc517777626bc1c4ef129b6a3732f52d0",
+      "pixel_size": [
+        80,
+        80
+      ],
+      "resampled": false,
+      "method": "Pillow lossless TIFF page to PNG",
+      "source_tiff_frame": 1,
+      "repository_file": "realand-settings/assets/macos/displays.png",
+      "logical_size_points": [
+        40,
+        40
+      ]
+    },
+    {
+      "name": "trackpad",
+      "source_path": "System/Library/PreferencePanes/Trackpad.prefPane/Contents/Resources/SystemPrefs_Trackpad@2x.png",
+      "source_sha256": "9a2fe66af7ae62ee2354066ca5fe6b20b6ca0644a083e6cc9151b5c500d91f3b",
+      "code_resources_sha256_matches": true,
+      "source_info_plist": "System/Library/PreferencePanes/Trackpad.prefPane/Contents/Info.plist",
+      "png_sha256": "9a2fe66af7ae62ee2354066ca5fe6b20b6ca0644a083e6cc9151b5c500d91f3b",
+      "pixel_size": [
+        80,
+        80
+      ],
+      "resampled": false,
+      "method": "byte-for-byte original PNG copy",
+      "repository_file": "realand-settings/assets/macos/trackpad.png",
+      "logical_size_points": [
+        40,
+        40
+      ]
+    }
+  ],
+  "shared_fonts": [
+    {
+      "asset": "SFNS.ttf",
+      "sha256": "ff4ce11bb9c93f347d194884d1a8b04922f10ab1c19305190279eac2bad0248f",
+      "size_bytes": 2169148,
+      "source_path": "System/Library/Fonts/Base/SFNS.ttf",
+      "source_sha256": "ff4ce11bb9c93f347d194884d1a8b04922f10ab1c19305190279eac2bad0248f",
+      "method": "unchanged original TrueType variable font copied from BaseSystem",
+      "repository_file": "realand-shell/assets/macos/SFNS.ttf",
+      "included_by": "realand-settings/src/theme.rs via include_bytes!, no second asset copy",
+      "source_image": {
+        "path": "$HOME/Documents/Codex/2026-10-06/jia/work/macos-image-inspection-20261008/extracted/Install macOS Catalina/Install macOS Catalina.app/Contents/SharedSupport/BaseSystem.dmg",
+        "sha256": "16d25e469399880002045c46ce0b032711984782ef4de21073aac8b230274399",
+        "size_bytes": 498626206,
+        "unchanged_after_extraction": true
+      }
+    },
+    {
+      "asset": "PingFangSC-Regular.otf",
+      "sha256": "62c7b3ad93180cbd07b4f0686b22fbb9cb0c77076fd11c679bca519a4218a2d0",
+      "size_bytes": 13023080,
+      "source_path": "System/Library/Fonts/Base/PingFang.ttc",
+      "source_sha256": "4c86d87a0c4aa0c91fc3991b0ea0211d51e674aea5c266dd2e996bd544569ebe",
+      "method": "fontTools standalone OpenType CFF face extraction from TTC index 2, no subsetting or glyph changes",
+      "ttc_face_index": 2,
+      "postscript_name": "PingFangSC-Regular",
+      "weight_class": 400,
+      "verification": {
+        "cff_table_identical": true,
+        "advance_widths_identical": true,
+        "cmap_identical": true
+      },
+      "repository_file": "realand-shell/assets/macos/PingFangSC-Regular.otf",
+      "included_by": "realand-settings/src/theme.rs via include_bytes!, no second asset copy",
+      "source_image": {
+        "path": "$HOME/Documents/Codex/2026-10-06/jia/work/macos-image-inspection-20261008/extracted/Install macOS Catalina/Install macOS Catalina.app/Contents/SharedSupport/BaseSystem.dmg",
+        "sha256": "16d25e469399880002045c46ce0b032711984782ef4de21073aac8b230274399",
+        "size_bytes": 498626206,
+        "unchanged_after_extraction": true
+      }
+    }
+  ],
+  "realand_vector_categories": [
+    "Advanced",
+    "Code",
+    "WindowLayout"
+  ],
+  "rendering_notes": [
+    "PNG assets retain original 80x80 pixel canvas and alpha; decoded/uploaded once per egui context.",
+    "Fonts use the original shell SFNS face and extracted PingFang SC regular face. SFNS Latin and PingFang Chinese parse, glyph presence, atlas raster coverage, and tessellation are validated headlessly at 1x, 1.25x, and 2x.",
+    "egui/ab_glyph rendering is not CoreText; using the source fonts does not establish pixel-identical macOS text rasterization.",
+    "Settings theme is explicitly Catalina light; no complete dark-theme fidelity is claimed."
+  ]
+}

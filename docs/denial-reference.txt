@@ -1,0 +1,67 @@
+Denial reference and Realand adaptations
+=======================================
+
+Upstream: https://github.com/denialwm/denial
+Reference revision: 0fccf2c68ea560402153491a4efeabe6caefaa4e
+Reviewed: 2026-10-06
+Upstream original-source license: GPL-3.0-or-later
+Upstream copyright: Copyright (C) 2026 Doctor Logix
+Notice: resources/licenses/denial-GPL-3.0-or-later.txt
+Full GPL version 3 text: LICENSE at the Realand repository root.
+
+Realand already has Denial-style window opening and closing effects. The
+reveal geometry/timing, close phases, and particle grid/ranges are adapted to
+Realand's Rust, GLES and Vulkan implementation. Relevant files include
+src/layout/opening_window.rs, src/layout/closing_window.rs,
+realand-config/src/animations.rs, and the opening/closing shaders under
+src/render_helpers/shaders/ and src/render_helpers/vulkan/. This notice
+records the upstream source and attribution for those existing adaptations.
+
+The earlier compositor/settings improvement round, recorded on 2026-10-06,
+independently implements the following behavior:
+
+1. Visible animation lifetime
+   Reference: dart_shell/lib/src/widgets/desktop_window_reveal.dart and
+   desktop_window_close_animation.dart. Built-in effects finish when their
+   clamped progress reaches its visible endpoint; custom shaders retain the
+   complete spring trajectory. Completed tile effects release their state
+   instead of repainting while a spring settles invisibly.
+
+2. Settings controls
+   Reference: dart_shell/lib/src/widgets/settings_animations_page.dart and
+   settings_appearance_page.dart. Realand provides direct choices for its
+   existing explosion/implode/fade/disabled closing effects and for its
+   existing blur settings. Edits use Realand's lossless KDL editor. They keep
+   unrelated timing, Glide, comments and numeric precision. Choosing a
+   built-in close effect explicitly replaces a custom close shader.
+
+3. Focus and visible layout
+   Reference: compositor/src/bin/deniald/wayland_frontend/workspace.rs,
+   window_management.rs and window_layout.rs. Dwindle insertion location is
+   independent of activation. Switching away from an expanded window reveals
+   the newly focused normal pane while retaining the expanded window's mode.
+   Visible iteration, hit testing, rendering and close snapshots agree.
+
+4. Failed display-save recovery
+   Reference: docs/protocol/control-v1.md and
+   compositor/src/bin/deniald/output_control.rs. Realand retains one confirmed
+   preview token so its settings client can request compensation after a
+   failed save or lost confirmation reply. New previews, external output
+   operations and configuration reloads invalidate this record. File rename
+   completion is tracked separately from directory-sync and reload errors,
+   so an already saved configuration is not mistakenly rolled back.
+
+   This is bounded compensation in Realand's existing IPC flow. It does not
+   implement Denial's compositor-owned staged persistence transaction and
+   does not guarantee recovery if the settings process exits after confirming
+   but before saving. If compensation is invalidated or cannot be confirmed,
+   the settings UI preserves the draft and reports the uncertain display state.
+
+No Flutter runtime, Denial shell, bundled third-party media or components were
+imported by that earlier compositor/settings improvement round.
+
+The separate Material desktop shell added on 2026-10-07 uses the official
+Flutter runtime and adapts Denial's component and interaction design at
+revision 85b2303e2f09ae7b7b993641f90061a200f03d53. See docs/native-shell.md for
+its sources, module boundaries and current feature limits. It does not embed
+Denial's custom engine or replace Realand's compositor renderer.

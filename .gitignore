@@ -1,0 +1,37 @@
+# Build artifacts
+/target
+
+# Nix build results
+/result
+/results
+
+# Python script caches
+__pycache__/
+*.py[cod]
+
+# Rust test coverage
+*.profraw
+
+# Insta snapshot review artifacts
+*.pending-snap
+*.snap.new
+
+# Local diagnostic dumps (do not commit)
+/crash_*.txt
+/done*.txt
+/vk3_*.txt
+/all.txt
+/t2.txt
+/sandbox_out.txt
+/test_out.txt
+
+# Editors
+.idea/
+.vscode/
+
+# Local Shell debug symbols
+/realand-shell/debug_info/
+
+# Promotional media belongs in release attachments, not source snapshots
+/promo/
+

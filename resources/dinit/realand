@@ -1,0 +1,7 @@
+type               = process
+command            = realand --session
+restart            = false
+working-dir        = $HOME
+ready-notification = pipevar:NOTIFY_FD
+logfile            = $HOME/.local/share/realand/realand.log
+depends-on:        dbus

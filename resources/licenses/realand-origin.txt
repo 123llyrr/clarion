@@ -1,0 +1,25 @@
+Realand source provenance
+Recorded: 2026-10-14
+
+Realand began as a project derived from niri, as identified by its owner.
+Upstream project: https://github.com/niri-wm/niri
+Historical project URL: https://github.com/YaLTeR/niri
+Original work is credited to the niri authors and contributors. The precise
+initial upstream commit is not identified by this checkout's local history.
+
+Realand uses the GPL-3.0-or-later license declared in Cargo.toml. The existing
+root LICENSE text and retained upstream source notices remain part of the
+project. This provenance record does not replace those notices.
+
+The Realand independent-core migration replaces desktop controllers and
+numeric policies with realand-core and keeps platform adapters for client,
+protocol and device resources. It does not erase the project's historical
+origin or claim that retained platform code was authored from scratch.
+
+Smithay, DRM/KMS, libinput, Wayland, Vulkan and other infrastructure retain
+their own dependency identities and licenses. Additional effect and Shell
+sources are recorded separately in this directory.
+
+The Catalina analysis records evidence for selected mechanisms. Realand does
+not embed Apple's analyzed executable code; unknown animation parameters are
+identified as Realand parameters rather than verified macOS curves.

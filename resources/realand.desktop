@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Realand
+Comment=A Wayland compositor with scrollable and dynamic dwindle tiling
+Exec=realand-session
+Type=Application
+DesktopNames=realand

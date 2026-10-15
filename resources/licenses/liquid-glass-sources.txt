@@ -1,0 +1,20 @@
+Realand liquid glass provenance (2026-10-13)
+
+Selected reference: https://github.com/zaroutt/Niri-glass
+Pinned revision: 72ee16331994b43a9460b713b828a218a023a857
+Original: src/render_helpers/shaders/clipped_surface.frag
+License: GNU GPL v3; copied unchanged as niri-glass-GPL-3.0.txt.
+The upstream shader credits https://github.com/4v3ngR/kwin-effects-glass.
+
+Adapted portions: rounded-rectangle signed distance and the finite-difference
+normal used to refract the live background. Realand implementation changes:
+logical-pixel bounded inward displacement, stationary edge light, one texture
+sample without chromatic dispersion, shared GLSL math for GLES/Vulkan,
+disconnected protocol-region crops, and conservative fragment-count fallback.
+This is an open-source approximation, not Apple's implementation.
+
+Other evaluated projects (no source copied):
+https://github.com/OverShifted/LiquidGlass
+https://github.com/whynotmake-it/flutter_liquid_glass
+The Flutter shader works inside a Flutter scene, whereas Realand must sample
+other Wayland clients in the compositor. No upstream installation script ran.

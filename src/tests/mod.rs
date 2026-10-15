@@ -1,0 +1,36 @@
+pub(crate) use fixture::Fixture;
+
+mod client;
+mod fixture;
+mod server;
+
+mod animations;
+mod background_effect;
+mod commit_timing;
+mod content_type;
+mod explicit_sync;
+mod expo_render;
+mod fifo;
+mod floating;
+mod frame_scheduling;
+mod fullscreen;
+mod gtk_shell;
+mod hot_corners;
+mod layer_shell;
+mod minimized;
+mod mode_transitions;
+mod mru_frame_callbacks;
+mod output_preview;
+mod popup_scale;
+mod qt_app_menu;
+mod remove_output;
+mod resize_commits;
+mod screencopy_readback;
+mod spread_input;
+mod spread_metadata;
+mod stage_input;
+mod stage_render;
+mod touch_grabs;
+mod transactions;
+mod window_opening;
+mod winit_frame_callbacks;

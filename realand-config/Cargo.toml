@@ -1,0 +1,31 @@
+[package]
+name = "realand-config"
+version.workspace = true
+description.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[dependencies]
+bitflags.workspace = true
+csscolorparser = "0.8.3"
+knuffel = "3.2.0"
+miette = { version = "5.10.0", features = ["fancy-no-backtrace"] }
+realand-ipc = { version = "0.1.0", path = "../realand-ipc" }
+regex = "1.13.1"
+smithay = { workspace = true, features = ["backend_libinput"] }
+tracing.workspace = true
+tracy-client.workspace = true
+
+[build-dependencies]
+quote = "1"
+syn = { version = "2", features = ["full", "visit"] }
+
+[dev-dependencies]
+insta.workspace = true
+pretty_assertions = "1.4.1"
+diff = "0.1.13"
+tempfile = "3.27.0"
+quote = "1"
+syn = { version = "2", features = ["full", "visit"] }
