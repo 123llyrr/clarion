@@ -1,7 +1,7 @@
-# Realand desktop shell
+# Clarion desktop shell
 
-`realand-shell/` is the Realand-owned desktop shell. Its Flutter Material 3
-widgets replace the external shell's UI responsibility while Realand retains
+`clarion-shell/` is the Clarion-owned desktop shell. Its Flutter Material 3
+widgets replace the external shell's UI responsibility while Clarion retains
 Wayland clients, input routing, workspace/window geometry and Vulkan/GLES
 composition. The shell is an independent Wayland process, so its UI toolkit
 does not become a second owner of compositor GPU resources.
@@ -61,7 +61,7 @@ macOS preferences wait for native style acknowledgement and the Dock first frame
 
 In macOS mode the two visible surfaces use layer-shell `exclusive=-1` to position
 against the whole output. Independent transparent, input-free GTK surfaces named
-`realand-shell-menu-reservation` and `realand-shell-dock-reservation` reserve only
+`clarion-shell-menu-reservation` and `clarion-shell-dock-reservation` reserve only
 the configured desktop edges. They have no Flutter view, keyboard focus or
 background effect. This avoids centering a side Dock inside the menu bar's
 reduced working area, or squeezing the menu and modal surface into the Dock's
@@ -77,7 +77,7 @@ edge remains independent. Height updates the native strip, blur, input, menu
 anchors and desktop reservation together; labels and icons keep their existing
 size and are vertically centered. The legacy width percentage remains readable
 and is preserved in saved files, but has no settings control. Configurable menu
-height is a Realand extension, not a recovered Catalina preference. Automatic hiding retains a two-pixel sensor on the strip's
+height is a Clarion extension, not a recovered Catalina preference. Automatic hiding retains a two-pixel sensor on the strip's
 top edge or the Dock's selected edge. Open menus keep their surface visible.
 Fixed applications can be reordered by a 350 ms press and drag; Finder retains
 its first position. A separate, optionally visible recent-app section shows at
@@ -135,7 +135,7 @@ path. Compositor window IDs are never interpreted as X11 IDs. Menus follow live
 layout, enabled/check states, owner disappearance and focus changes. Opening a
 menu expands the main native surface while keeping the application's menu target;
 Escape, focus changes and surface teardown close it. Applications exporting no
-menu retain Realand's system menu. App-owned title bars remain application-owned.
+menu retain Clarion's system menu. App-owned title bars remain application-owned.
 The menu bar keeps its menu open through the native surface's
 vertical expansion, while popup layout and input use the real overlay bounds.
 An action completes before menu dismissal releases its application target;
@@ -159,7 +159,7 @@ ordering after the target removes the cycle while retaining GTK menu export.
 The application notifies the manager after its first rasterized frame and
 bounded menu preparation, so XDG autostart clients do not race the registrar.
 Preview mode neither claims the registrar nor sends session readiness.
-`REALAND_SHELL_STARTUP_TRACE=1` records native entry, GTK registration, view
+`CLARION_SHELL_STARTUP_TRACE=1` records native entry, GTK registration, view
 creation and the main/Dock first frames using a monotonic clock. It is off by
 default and does not alter the session environment.
 
@@ -174,13 +174,13 @@ Traditional GTK 3 `GtkMenuBar` applications can use the separately installed
 [Vala Panel Appmenu module](https://github.com/rilian-la-te/vala-panel-appmenu).
 `scripts/install-gtk-appmenu.py --source <staged-install>` installs a complete
 user-local module, private parser library, source archive, license and compiled
-schema under `~/.local/lib/realand-appmenu/current`, with an atomic release switch
+schema under `~/.local/lib/clarion-appmenu/current`, with an atomic release switch
 and a backup. It requires `patchelf` and `glib-compile-schemas`. The stage must
 include `source-provenance.json` identifying the source tree used for the build.
 The module's `unity.*` actions are resolved only against the menu object's own
 action group, including subsequent enabled-state changes.
 
-`realand --session` enables this module only when its complete installation is
+`clarion --session` enables this module only when its complete installation is
 present, appending its absolute path to existing `GTK_MODULES`. It imports the
 module and schema environment for activated applications and restores the prior
 values when the compositor exits. Nested compositors and CLI commands do not
@@ -232,7 +232,7 @@ largest 256px PNG chunks. Launchpad/Mission Control remain 1024px originals.
 Selected ICNS files match their embedded CodeResources SHA-1 and SHA-256 entries;
 this checks resource integrity, not the incomplete image or Apple certificate trust.
 Sources and SHA-256 checksums are recorded in
-`realand-shell/assets/macos/provenance.json`; macOS applications are never run.
+`clarion-shell/assets/macos/provenance.json`; macOS applications are never run.
 
 `MacAppIcons` resolves exact desktop IDs or semantic icon names, and `MacAppIcon`
 applies that same result to Dock, Launchpad/search, folder previews and drag feedback.
@@ -251,10 +251,10 @@ mode. GTK lookup preserves theme/style priority and checks actual raster dimensi
 before accepting a smaller threshold match. Legacy callers without `pixelSize`
 keep their logical-size/GTK-scale behavior.
 Use `--preview --shell-style=macos` for a single-window preview that does not
-save the explicit style override. Runtime changes do not restart Realand or
+save the explicit style override. Runtime changes do not restart Clarion or
 client applications.
 
-The compositor leaves newly mapped `realand-desktop` on-demand surfaces unfocused
+The compositor leaves newly mapped `clarion-desktop` on-demand surfaces unfocused
 until the user clicks them, including after a shell restart or output attachment.
 Desktop dialogs can still request exclusive overlay focus. A valid `FocusWindow`
 action releases on-demand layer focus before returning keyboard input to the
@@ -276,7 +276,7 @@ uses compact icon buttons and chips;
 expanded panels keep their normal control sizes. The bar never takes keyboard focus. A menu
 expands into an output-sized modal overlay with exclusive keyboard interaction.
 Closing it releases that interaction. The top corners remain available to
-Realand's existing hot corners when the bar is collapsed.
+Clarion's existing hot corners when the bar is collapsed.
 
 Material bar tooltips use a temporary 128-pixel transparent surface, with input
 confined to the original 40-pixel strip and the same exclusive reservation. The tooltip
@@ -299,7 +299,7 @@ and release keyboard focus immediately.
 | `lib/theme` | Material 3 color roles, type, shape and motion |
 | `lib/ui` | System bar, launcher, controls, notifications, tray icons and menus |
 | `lib/state` | Immutable UI snapshots, selections, busy/error feedback |
-| `lib/services` | Realand IPC, XDG application catalog, system services, D-Bus notifications, StatusNotifier tray, wallpaper catalog/provider |
+| `lib/services` | Clarion IPC, XDG application catalog, system services, D-Bus notifications, StatusNotifier tray, wallpaper catalog/provider |
 | `lib/services/power_profiles_service.dart` | Existing system power-profile provider, supported profiles, authorization and property/owner changes |
 | `lib/ui/launcher_surface.dart` | Reversible launcher motion and native-surface lifetime coordination |
 | `lib/ui/mac_launcher_panel.dart` | macOS search, responsive grid, page navigation, folder and drag interactions |
@@ -336,7 +336,7 @@ Dock edge. This grid choice and animation constants have not been extracted from
 protected Catalina code or validated frame by frame against Catalina.
 
 Folders and icon order use stable desktop IDs and a separate
-`~/.config/realand-shell/launchpad-layout.json`; writes are serialized and atomic.
+`~/.config/clarion-shell/launchpad-layout.json`; writes are serialized and atomic.
 Catalog changes remove obsolete entries and add newly installed applications
 without duplicating IDs or overwriting edits made while loading. Search results
 use the real application catalog, including applications inside folders. Dragging
@@ -347,7 +347,7 @@ Launchpad animation curves are not implemented.
 
 Power controls use the existing provider's [PowerProfiles D-Bus API](https://upower.pages.freedesktop.org/power-profiles-daemon/gdbus-org.freedesktop.UPower.PowerProfiles.html).
 The service does not start or replace daemons, and profile changes retain normal
-D-Bus/Polkit authorization. Screenshot controls reuse Realand IPC rather than a
+D-Bus/Polkit authorization. Screenshot controls reuse Clarion IPC rather than a
 second capture backend; preparation waits for modal release and a rendered
 frame, is bounded by two seconds, and cancels obsolete requests.
 Request identity also guards delayed IPC errors, so a closed or replaced panel
@@ -368,7 +368,7 @@ on 2026-10-07. Reference files include:
 - `dart_shell/lib/src/theme/motion.dart`, `tokens.dart`, `shell_theme.dart`
 - `dart_shell/lib/src/system/status_notifier_*.dart`, `system_tray*.dart`
 
-The adaptation uses Realand's own Material 3 components and service boundary.
+The adaptation uses Clarion's own Material 3 components and service boundary.
 Denial's custom Flutter engine, GBM atlas, external window textures, DENW wire
 protocol and fork-only blur APIs are not prerequisites for this package.
 Original Denial sources are copyright 2026 Doctor Logix, GPL-3.0-or-later;
@@ -377,12 +377,12 @@ fonts and cursors are not copied.
 
 ## Running safely
 
-Use the build and preview instructions in `realand-shell/README.md`. Preview
+Use the build and preview instructions in `clarion-shell/README.md`. Preview
 mode uses a normal application window and does not reserve output space or
 claim the notification or StatusNotifier watcher names. Demo mode is explicitly
 labeled and never dispatches desktop actions. The current desktop shell can keep running while
 the new shell is previewed. The package does not restart the compositor or
-rewrite `~/.config/realand/config.kdl`.
+rewrite `~/.config/clarion/config.kdl`.
 
 Control center → Appearance → Bar position selects Top or Bottom. Top remains
 the default for existing preferences. `bar_position` in the shell's independent
@@ -464,8 +464,8 @@ lifetime and follows shell appearance preferences without starting device
 polling, notifications or tray services in each desktop engine.
 
 Positions are written atomically to separate files under
-`$XDG_CONFIG_HOME/realand-shell/desktop-layouts/` (normally
-`~/.config/realand-shell/desktop-layouts/`). A stable output identifier names
+`$XDG_CONFIG_HOME/clarion-shell/desktop-layouts/` (normally
+`~/.config/clarion-shell/desktop-layouts/`). A stable output identifier names
 each file, and its payload retains the output name. Separate files avoid
 cross-output overwrites between independent Dart isolates in one native
 process. The old `desktop-layout.json` is read for migration only. Resizing
@@ -497,9 +497,9 @@ contextual commands; they do not establish all private window/animation logic.
 scripts/run-shell.sh --desktop-only
 
 # A regular desktop preview window, using an isolated folder and layout.
-mkdir -p /tmp/realand-desktop-preview
-XDG_CONFIG_HOME=/tmp/realand-desktop-preview-config \
-  scripts/run-shell.sh --desktop-preview --desktop-dir=/tmp/realand-desktop-preview
+mkdir -p /tmp/clarion-desktop-preview
+XDG_CONFIG_HOME=/tmp/clarion-desktop-preview-config \
+  scripts/run-shell.sh --desktop-preview --desktop-dir=/tmp/clarion-desktop-preview
 
 # Bar and panels without attached desktop views.
 scripts/run-shell.sh --no-desktop
@@ -524,7 +524,7 @@ applications. Physical output hotplug still needs hardware acceptance.
 
 macOS 场景只订阅面板布局相关状态，因此动态控件必须自行订阅数据。控制中心的音量和亮度此前依赖父级重建，导致内部值已变化、旋钮和百分比却停在原处；Material 场景的父级全量监听掩盖了这个问题。现在控制中心分别订阅设置状态和滑块状态，macOS 外观表单仅订阅自己的偏好。连续调整音量或亮度不会重建完整外观表单。静音、服务可用性以及系统外部数值变化仍正常同步。
 
-macOS Slider 使用细轨道和圆形旋钮，保留 Flutter 的键盘、焦点及无障碍交互。3 px 轨道、14 px 旋钮是项目的 Catalina 风格参数，并非从镜像测得的像素值。用户镜像是 Catalina 10.15.7 / 19H2，其原始音量入口为 Volume.menu；当前集中控制中心属于 Realand 扩展，不能称为镜像原有控制中心的 1:1 复制。
+macOS Slider 使用细轨道和圆形旋钮，保留 Flutter 的键盘、焦点及无障碍交互。3 px 轨道、14 px 旋钮是项目的 Catalina 风格参数，并非从镜像测得的像素值。用户镜像是 Catalina 10.15.7 / 19H2，其原始音量入口为 Volume.menu；当前集中控制中心属于 Clarion 扩展，不能称为镜像原有控制中心的 1:1 复制。
 
 系统快照按字段比较，未变化的轮询不再通知外壳。拖动或写入未结束时推迟完整系统读取；松手并完成写入后统一同步。写入队列把命令自身耗时计入 90 ms 间隔，慢命令完成后直接处理最新值，避免额外再等 90 ms。Dock 仅在各自参数改变时更新原生几何、输入区或玻璃区，放大动画不再重复提交不变的 GTK 尺寸和桌面保留空间。
 

@@ -14,24 +14,25 @@ use calloop::EventLoop;
 use clap::{CommandFactory, Parser};
 use clap_complete::Shell;
 use clap_complete_nushell::Nushell;
-use directories::ProjectDirs;
-use realand::cli::{Cli, CompletionShell, Sub};
-use realand::compositor::State;
+use clarion::cli::{Cli, CompletionShell, Sub};
+use clarion::compositor::State;
 #[cfg(feature = "dbus")]
-use realand::dbus;
-use realand::ipc::client::handle_msg;
-use realand::utils::spawning::{
+use clarion::dbus;
+use clarion::ipc::client::handle_msg;
+use clarion::render_helpers::vulkan::lifecycle::{self, DEFAULT_SHUTDOWN_TIMEOUT};
+use clarion::utils::spawning::{
     spawn, spawn_sh, store_and_increase_nofile_rlimit, CHILD_DISPLAY, CHILD_ENV,
     REMOVE_ENV_RUST_BACKTRACE, REMOVE_ENV_RUST_LIB_BACKTRACE,
 };
-use realand::utils::{cause_panic, version, watcher, xwayland, IS_SYSTEMD_SERVICE};
-use realand_config::{Config, ConfigPath};
-use realand_ipc::socket::SOCKET_PATH_ENV;
+use clarion::utils::{cause_panic, version, watcher, xwayland, IS_SYSTEMD_SERVICE};
+use clarion_config::{Config, ConfigPath};
+use clarion_ipc::socket::{LEGACY_SOCKET_PATH_ENV, SOCKET_PATH_ENV};
+use directories::ProjectDirs;
 use sd_notify::NotifyState;
 use smithay::reexports::wayland_server::Display;
 use tracing_subscriber::EnvFilter;
 
-const DEFAULT_LOG_FILTER: &str = "realand=debug,smithay::backend::renderer::gles=error";
+const DEFAULT_LOG_FILTER: &str = "clarion=debug,smithay::backend::renderer::gles=error";
 
 #[cfg(feature = "profile-with-tracy-allocations")]
 #[global_allocator]
@@ -39,6 +40,7 @@ static GLOBAL: tracy_client::ProfiledAllocator<std::alloc::System> =
     tracy_client::ProfiledAllocator::new(std::alloc::System, 100);
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    clarion::utils::identity::inherit_legacy_environment();
     // Set backtrace defaults if not set.
     if env::var_os("RUST_BACKTRACE").is_none() {
         env::set_var("RUST_BACKTRACE", "1");
@@ -91,7 +93,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Set the current desktop for xdg-desktop-portal.
-        env::set_var("XDG_CURRENT_DESKTOP", "realand");
+        env::set_var("XDG_CURRENT_DESKTOP", "clarion");
         // Ensure the session type is set to Wayland for xdg-autostart and Qt apps.
         env::set_var("XDG_SESSION_TYPE", "wayland");
     }
@@ -117,7 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         clap_complete::generate(
                             Nushell,
                             &mut Cli::command(),
-                            "realand",
+                            "clarion",
                             &mut io::stdout(),
                         );
                     }
@@ -126,7 +128,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         clap_complete::generate(
                             generator,
                             &mut Cli::command(),
-                            "realand",
+                            "clarion",
                             &mut io::stdout(),
                         );
                     }
@@ -139,10 +141,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Needs to be done before starting Tracy, so that it applies to Tracy's threads.
     let app_menu_environment = cli
         .session
-        .then(realand::utils::app_menu_environment::AppMenuEnvironment::enable);
-    realand::utils::signals::block_early().unwrap();
+        .then(clarion::utils::app_menu_environment::AppMenuEnvironment::enable);
+    clarion::utils::signals::block_early().unwrap();
 
-    // Avoid starting Tracy for the `realand msg` code path since starting/stopping Tracy is a bit
+    // Avoid starting Tracy for the `clarion msg` code path since starting/stopping Tracy is a bit
     // slow.
     tracy_client::Client::start();
 
@@ -151,10 +153,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // below, because some of those Drop impls themselves create Tracy spans.
     let _shutdown_tracy = ShutdownTracy;
 
+    // Declared before State and the loop: their owner-only resources drop first,
+    // then this guard waits for all GPU worker/TLS destructors to finish. A main
+    // thread panic arms the same deadline before unwinding those resources.
+    install_gpu_exit_panic_hook();
+    let _shutdown_gpu = ShutdownGpuWorkers;
+
     info!("starting version {}", &version());
 
     // Load the config.
     let config_path = config_path(cli.config);
+    env::remove_var("CLARION_CONFIG");
     env::remove_var("REALAND_CONFIG");
     let (config_created_at, config_load_result) = config_path.load_or_create();
     let config_errored = config_load_result.config.is_err();
@@ -164,16 +173,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     let config_includes = config_load_result.includes;
 
-    let renderer_backend = realand::backend::RendererBackendType::resolve(cli.renderer, &config);
+    let renderer_backend = clarion::backend::RendererBackendType::resolve(cli.renderer, &config);
     if let Some(r) = cli.renderer {
-        env::set_var("REALAND_RENDERER", r.as_str());
+        env::set_var("CLARION_RENDERER", r.as_str());
     }
     let backend_source = if cli.renderer.is_some() {
         "command line flag (--renderer)"
     } else if config.renderer_backend().is_some() {
         "configuration file"
-    } else if env::var_os("REALAND_RENDERER").is_some() {
-        "environment variable (REALAND_RENDERER)"
+    } else if env::var_os("CLARION_RENDERER").is_some() {
+        "environment variable (CLARION_RENDERER)"
     } else {
         "default"
     };
@@ -195,7 +204,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut event_loop = EventLoop::<State>::try_new().unwrap();
 
     // Handle Ctrl+C and other signals.
-    realand::utils::signals::listen(&event_loop.handle());
+    clarion::utils::signals::listen(&event_loop.handle());
 
     // Create the compositor.
     let display = Display::new().unwrap();
@@ -216,23 +225,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .unwrap();
 
     // Set WAYLAND_DISPLAY for children.
-    let socket_name = state.realand.socket_name.as_deref().unwrap();
+    let socket_name = state.clarion.socket_name.as_deref().unwrap();
     env::set_var("WAYLAND_DISPLAY", socket_name);
     info!(
         "listening on Wayland socket: {}",
         socket_name.to_string_lossy()
     );
 
-    // Set REALAND_SOCKET for children.
-    if let Some(ipc) = &state.realand.ipc_server {
+    // Set CLARION_SOCKET for children.
+    if let Some(ipc) = &state.clarion.ipc_server {
         let socket_path = ipc.socket_path.as_deref().unwrap();
         env::set_var(SOCKET_PATH_ENV, socket_path);
+        env::set_var(LEGACY_SOCKET_PATH_ENV, socket_path);
         info!("IPC listening on: {}", socket_path.to_string_lossy());
     }
 
     // Setup xwayland-satellite integration.
     xwayland::satellite::setup_startup(&mut state);
-    if let Some(satellite) = &state.realand.satellite {
+    if let Some(satellite) = &state.clarion.satellite {
         let name = satellite.display_name();
         *CHILD_DISPLAY.write().unwrap() = Some(name.to_owned());
         env::set_var("DISPLAY", name);
@@ -249,13 +259,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Inhibit power key handling so we can suspend on it.
         #[cfg(feature = "dbus")]
         if !state
-            .realand
+            .clarion
             .config
             .borrow()
             .input
             .disable_power_key_handling
         {
-            if let Err(err) = state.realand.inhibit_power_key() {
+            if let Err(err) = state.clarion.inhibit_power_key() {
                 warn!("error inhibiting power key: {err:?}");
             }
         }
@@ -266,10 +276,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(feature = "dbus")]
     if cli.session {
-        state.realand.a11y.start();
+        state.clarion.a11y.start();
     }
 
-    if env::var_os("REALAND_DISABLE_SYSTEM_MANAGER_NOTIFY").is_none_or(|x| x != "1") {
+    if env::var_os("CLARION_DISABLE_SYSTEM_MANAGER_NOTIFY").is_none_or(|x| x != "1") {
         // Notify systemd we're ready.
         if let Err(err) = sd_notify::notify(&[NotifyState::Ready]) {
             warn!("error notifying systemd: {err:?}");
@@ -295,22 +305,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Show the config error notification right away if needed.
     if config_errored {
-        state.realand.config_error_notification.show();
+        state.clarion.config_error_notification.show();
         state.ipc_config_loaded(true);
     } else if let Some(path) = config_created_at {
-        state.realand.config_error_notification.show_created(path);
+        state.clarion.config_error_notification.show_created(path);
     }
 
     // Run the compositor.
-    event_loop
-        .run(None, &mut state, |state| state.refresh_and_flush_clients())
-        .unwrap();
+    let result = event_loop.run(None, &mut state, |state| state.refresh_and_flush_clients());
+
+    // Begin the deadline before owner teardown: a lost driver can also stall an
+    // EGL/KMS/device destructor, before the final worker barrier gets control.
+    lifecycle::arm_exit_deadline(DEFAULT_SHUTDOWN_TIMEOUT);
+    let stopped_loop = event_loop.handle().downgrade();
+    lifecycle::log_shutdown_state("before-owner-teardown");
+    state.prepare_shutdown();
+    drop(state);
+    lifecycle::log_shutdown_state("after-owner-teardown");
+    drop(event_loop);
+    info!(
+        expired = stopped_loop.expired(),
+        "compositor event loop released"
+    );
+    lifecycle::log_shutdown_state("after-event-loop-teardown");
+    result?;
 
     Ok(())
 }
 
 fn import_environment(
-    app_menu_environment: Option<&realand::utils::app_menu_environment::AppMenuEnvironment>,
+    app_menu_environment: Option<&clarion::utils::app_menu_environment::AppMenuEnvironment>,
 ) {
     let mut variables = vec![
         "WAYLAND_DISPLAY",
@@ -318,6 +342,7 @@ fn import_environment(
         "XDG_CURRENT_DESKTOP",
         "XDG_SESSION_TYPE",
         SOCKET_PATH_ENV,
+        LEGACY_SOCKET_PATH_ENV,
     ];
     if let Some(environment) = app_menu_environment {
         variables.extend(environment.variables());
@@ -366,24 +391,29 @@ fn import_environment(
 }
 
 fn env_config_path() -> Option<PathBuf> {
-    env::var_os("REALAND_CONFIG")
-        .filter(|x| !x.is_empty())
-        .map(PathBuf::from)
+    clarion_config::identity::config_path_from_environment()
 }
 
 fn default_config_path() -> Option<PathBuf> {
-    let Some(dirs) = ProjectDirs::from("", "", "realand") else {
+    let Some(dirs) = ProjectDirs::from("", "", "clarion") else {
         warn!("error retrieving home directory");
         return None;
     };
 
     let mut path = dirs.config_dir().to_owned();
     path.push("config.kdl");
-    Some(path)
+    let legacy_path = dirs.config_dir().parent()?.join("realand/config.kdl");
+    Some(clarion_config::identity::prefer_existing_path(
+        path,
+        legacy_path,
+    ))
 }
 
 fn system_config_path() -> PathBuf {
-    PathBuf::from("/etc/realand/config.kdl")
+    clarion_config::identity::prefer_existing_path(
+        PathBuf::from("/etc/clarion/config.kdl"),
+        PathBuf::from("/etc/realand/config.kdl"),
+    )
 }
 
 fn config_path(cli_path: Option<PathBuf>) -> ConfigPath {
@@ -457,5 +487,25 @@ impl Drop for ShutdownTracy {
         unsafe {
             tracy_client::sys::___tracy_shutdown_profiler();
         }
+    }
+}
+
+fn install_gpu_exit_panic_hook() {
+    let owner = std::thread::current().id();
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        // Preparation jobs recover caught panics on their own worker. Those
+        // panics must not close a healthy compositor's global GPU services.
+        if std::thread::current().id() == owner {
+            lifecycle::arm_exit_deadline(DEFAULT_SHUTDOWN_TIMEOUT);
+        }
+        previous(info);
+    }));
+}
+
+struct ShutdownGpuWorkers;
+impl Drop for ShutdownGpuWorkers {
+    fn drop(&mut self) {
+        lifecycle::shutdown_or_terminate(DEFAULT_SHUTDOWN_TIMEOUT);
     }
 }

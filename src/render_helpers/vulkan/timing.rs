@@ -90,7 +90,31 @@ impl Slots {
 #[derive(Default)]
 struct State {
     slots: Slots,
-    completed: CompletedTimings,
+}
+
+/// Completed numbers can outlive the query pool without retaining a device.
+/// Event-loop callbacks own this mailbox, never the GPU timing owner itself.
+#[derive(Default)]
+pub(super) struct TimingDelivery(Mutex<CompletedTimings>);
+
+impl TimingDelivery {
+    fn push(&self, sample: GpuTimingSample) {
+        self.0.lock().unwrap().push(sample);
+    }
+
+    /// Take a bounded batch under a try-lock, then release the lock before any
+    /// callback touches platform or diagnostic state. This does not allocate.
+    pub(super) fn drain(&self, mut callback: impl FnMut(GpuTimingSample)) {
+        let mut samples = [None; COMPLETED_CAPACITY];
+        let Ok(mut completed) = self.0.try_lock() else {
+            return;
+        };
+        let len = completed.drain_into(&mut samples);
+        drop(completed);
+        for sample in samples[..len].iter().flatten() {
+            callback(*sample);
+        }
+    }
 }
 
 pub(super) struct GpuTimings {
@@ -99,6 +123,7 @@ pub(super) struct GpuTimings {
     valid_bits: u32,
     period_ns: f64,
     state: Mutex<State>,
+    delivery: Arc<TimingDelivery>,
 }
 
 impl std::fmt::Debug for GpuTimings {
@@ -137,6 +162,7 @@ impl GpuTimings {
             valid_bits,
             period_ns,
             state: Mutex::new(State::default()),
+            delivery: Arc::new(TimingDelivery::default()),
         })))
     }
 
@@ -150,18 +176,13 @@ impl GpuTimings {
         })
     }
 
-    /// Take a bounded batch under a try-lock, then release the lock before any
-    /// callback touches platform or diagnostic state. This does not allocate.
-    pub(super) fn drain(&self, mut callback: impl FnMut(GpuTimingSample)) {
-        let mut samples = [None; COMPLETED_CAPACITY];
-        let Ok(mut state) = self.state.try_lock() else {
-            return;
-        };
-        let len = state.completed.drain_into(&mut samples);
-        drop(state);
-        for sample in samples[..len].iter().flatten() {
-            callback(*sample);
-        }
+    pub(super) fn delivery(&self) -> Arc<TimingDelivery> {
+        self.delivery.clone()
+    }
+
+    #[cfg(test)]
+    pub(super) fn drain(&self, callback: impl FnMut(GpuTimingSample)) {
+        self.delivery.drain(callback);
     }
 }
 
@@ -240,15 +261,10 @@ impl QueryLease {
         ) else {
             return;
         };
-        self.timings
-            .state
-            .lock()
-            .unwrap()
-            .completed
-            .push(GpuTimingSample {
-                tag: self.tag,
-                gpu_time,
-            });
+        self.timings.delivery.push(GpuTimingSample {
+            tag: self.tag,
+            gpu_time,
+        });
     }
 }
 
@@ -335,5 +351,37 @@ mod tests {
             assert_eq!(sample.gpu_time, Duration::from_nanos(744 + offset as u64));
         }
         assert_eq!(completed.drain_into(&mut samples), 0);
+    }
+
+    #[test]
+    fn delivery_survives_producer_drop_and_calls_back_without_its_lock() {
+        let producer = Arc::new(TimingDelivery::default());
+        let delivery = producer.clone();
+        let sample = GpuTimingSample {
+            tag: GpuTimingTag {
+                output_generation: 9,
+                redraw_sequence: 3,
+            },
+            gpu_time: Duration::from_nanos(10),
+        };
+        producer.push(sample);
+        drop(producer);
+        let mut observed = Vec::new();
+        delivery.drain(|value| {
+            observed.push(value);
+            // Publishing from a callback would deadlock if drain held the lock.
+            delivery.push(GpuTimingSample {
+                tag: GpuTimingTag {
+                    redraw_sequence: 4,
+                    ..value.tag
+                },
+                ..value
+            });
+        });
+        assert_eq!(observed, [sample]);
+        delivery.drain(|value| observed.push(value));
+        assert_eq!(observed.len(), 2);
+        assert_eq!(observed[1].tag.redraw_sequence, 4);
+        delivery.drain(|_| panic!("sample delivered twice"));
     }
 }

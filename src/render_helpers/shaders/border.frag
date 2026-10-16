@@ -1,14 +1,14 @@
 precision highp float;
 
 #if defined(DEBUG_FLAGS)
-uniform float realand_tint;
+uniform float clarion_tint;
 #endif
 
-uniform float realand_alpha;
-uniform float realand_scale;
+uniform float clarion_alpha;
+uniform float clarion_scale;
 
-uniform vec2 realand_size;
-varying vec2 realand_v_coords;
+uniform vec2 clarion_size;
+varying vec2 clarion_v_coords;
 
 uniform float colorspace;
 uniform float hue_interpolation;
@@ -210,12 +210,12 @@ vec4 gradient_color(vec2 coords) {
     return color_mix(color_from, color_to, frac);
 }
 
-float realand_rounding_alpha(vec2 coords, vec2 size, vec4 corner_radius);
+float clarion_rounding_alpha(vec2 coords, vec2 size, vec4 corner_radius);
 
 void main() {
-    vec3 coords_geo = input_to_geo * vec3(realand_v_coords, 1.0);
+    vec3 coords_geo = input_to_geo * vec3(clarion_v_coords, 1.0);
     vec4 color = gradient_color(coords_geo.xy);
-    color = color * realand_rounding_alpha(coords_geo.xy, geo_size, outer_radius);
+    color = color * clarion_rounding_alpha(coords_geo.xy, geo_size, outer_radius);
 
     if (border_width > 0.0) {
         coords_geo -= vec3(border_width);
@@ -223,16 +223,16 @@ void main() {
         // Intersect the rounded mask with antialiased rectangle edges. A hard
         // inside test makes half-pixel border widths unstable across GPU backends.
         vec2 edge = min(coords_geo.xy, inner_geo_size - coords_geo.xy);
-        float coverage = clamp(min(edge.x, edge.y) * realand_scale + 0.5, 0.0, 1.0);
+        float coverage = clamp(min(edge.x, edge.y) * clarion_scale + 0.5, 0.0, 1.0);
         vec4 inner_radius = max(outer_radius - vec4(border_width), vec4(0.0));
-        float inner_alpha = min(coverage, realand_rounding_alpha(coords_geo.xy, inner_geo_size, inner_radius));
+        float inner_alpha = min(coverage, clarion_rounding_alpha(coords_geo.xy, inner_geo_size, inner_radius));
         color *= 1.0 - inner_alpha;
     }
 
-    color = color * realand_alpha;
+    color = color * clarion_alpha;
 
 #if defined(DEBUG_FLAGS)
-    if (realand_tint == 1.0)
+    if (clarion_tint == 1.0)
         color = vec4(0.0, 0.2, 0.0, 0.2) + color * 0.8;
 #endif
 

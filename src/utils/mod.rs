@@ -11,9 +11,9 @@ use std::{f64, fmt};
 
 use anyhow::{ensure, Context};
 use bitflags::bitflags;
+use clarion_config::{Config, OutputName};
 use directories::UserDirs;
 use git_version::git_version;
-use realand_config::{Config, OutputName};
 use smithay::backend::renderer::utils::{
     with_renderer_surface_state, RendererSurfaceStateUserData,
 };
@@ -38,6 +38,7 @@ use crate::handlers::KdeDecorationsModeState;
 
 pub mod app_menu_environment;
 pub mod id;
+pub mod identity;
 pub mod latency;
 pub(crate) mod owned_tasks;
 pub mod region;
@@ -155,7 +156,9 @@ impl ResizeEdge {
 }
 
 pub fn version() -> String {
-    if let Some(v) = option_env!("REALAND_BUILD_VERSION_STRING") {
+    if let Some(v) =
+        option_env!("CLARION_BUILD_VERSION_STRING").or(option_env!("REALAND_BUILD_VERSION_STRING"))
+    {
         return String::from(v);
     }
 
@@ -163,8 +166,9 @@ pub fn version() -> String {
     const MINOR: &str = env!("CARGO_PKG_VERSION_MINOR");
     const PATCH: &str = env!("CARGO_PKG_VERSION_PATCH");
 
-    let commit =
-        option_env!("REALAND_BUILD_COMMIT").unwrap_or(git_version!(fallback = "unknown commit"));
+    let commit = option_env!("CLARION_BUILD_COMMIT")
+        .or(option_env!("REALAND_BUILD_COMMIT"))
+        .unwrap_or(git_version!(fallback = "unknown commit"));
 
     if PATCH == "0" {
         format!("{MAJOR}.{MINOR:0>2} ({commit})")
@@ -219,21 +223,21 @@ pub fn output_size(output: &Output) -> Size<f64, Logical> {
     output_transform.transform_size(logical_size)
 }
 
-pub fn logical_output(output: &Output) -> realand_ipc::LogicalOutput {
+pub fn logical_output(output: &Output) -> clarion_ipc::LogicalOutput {
     let loc = output.current_location();
     // Match the integer logical_size advertised by Smithay's xdg-output protocol.
     let size: Size<i32, Logical> = output_size(output).to_i32_round();
     let transform = match output.current_transform() {
-        Transform::Normal => realand_ipc::Transform::Normal,
-        Transform::_90 => realand_ipc::Transform::_90,
-        Transform::_180 => realand_ipc::Transform::_180,
-        Transform::_270 => realand_ipc::Transform::_270,
-        Transform::Flipped => realand_ipc::Transform::Flipped,
-        Transform::Flipped90 => realand_ipc::Transform::Flipped90,
-        Transform::Flipped180 => realand_ipc::Transform::Flipped180,
-        Transform::Flipped270 => realand_ipc::Transform::Flipped270,
+        Transform::Normal => clarion_ipc::Transform::Normal,
+        Transform::_90 => clarion_ipc::Transform::_90,
+        Transform::_180 => clarion_ipc::Transform::_180,
+        Transform::_270 => clarion_ipc::Transform::_270,
+        Transform::Flipped => clarion_ipc::Transform::Flipped,
+        Transform::Flipped90 => clarion_ipc::Transform::Flipped90,
+        Transform::Flipped180 => clarion_ipc::Transform::Flipped180,
+        Transform::Flipped270 => clarion_ipc::Transform::Flipped270,
     };
-    realand_ipc::LogicalOutput {
+    clarion_ipc::LogicalOutput {
         x: loc.x,
         y: loc.y,
         width: size.w as u32,
@@ -252,16 +256,16 @@ pub fn panel_orientation(output: &Output) -> Transform {
         .unwrap_or(Transform::Normal)
 }
 
-pub fn ipc_transform_to_smithay(transform: realand_ipc::Transform) -> Transform {
+pub fn ipc_transform_to_smithay(transform: clarion_ipc::Transform) -> Transform {
     match transform {
-        realand_ipc::Transform::Normal => Transform::Normal,
-        realand_ipc::Transform::_90 => Transform::_90,
-        realand_ipc::Transform::_180 => Transform::_180,
-        realand_ipc::Transform::_270 => Transform::_270,
-        realand_ipc::Transform::Flipped => Transform::Flipped,
-        realand_ipc::Transform::Flipped90 => Transform::Flipped90,
-        realand_ipc::Transform::Flipped180 => Transform::Flipped180,
-        realand_ipc::Transform::Flipped270 => Transform::Flipped270,
+        clarion_ipc::Transform::Normal => Transform::Normal,
+        clarion_ipc::Transform::_90 => Transform::_90,
+        clarion_ipc::Transform::_180 => Transform::_180,
+        clarion_ipc::Transform::_270 => Transform::_270,
+        clarion_ipc::Transform::Flipped => Transform::Flipped,
+        clarion_ipc::Transform::Flipped90 => Transform::Flipped90,
+        clarion_ipc::Transform::Flipped180 => Transform::Flipped180,
+        clarion_ipc::Transform::Flipped270 => Transform::Flipped270,
     }
 }
 
@@ -590,7 +594,7 @@ pub fn show_screenshot_notification(image_path: Option<&Path>) -> anyhow::Result
         Some("org.freedesktop.Notifications"),
         "Notify",
         &(
-            "realand",
+            "clarion",
             0u32,
             image_url.as_ref().map(|url| url.as_str()).unwrap_or(""),
             "Screenshot captured",

@@ -3,7 +3,7 @@
 # Optional YUV capabilities are reported explicitly, never counted as exercised.
 set -euo pipefail
 repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-log_dir=${REALAND_VULKAN_LOG_DIR:-"$repo_dir/target/vulkan-check"}
+log_dir=${CLARION_VULKAN_LOG_DIR:-${REALAND_VULKAN_LOG_DIR:-"$repo_dir/target/vulkan-check"}}
 mkdir -p -- "$log_dir"
 
 check_validation_log() {
@@ -22,7 +22,7 @@ if ! grep -q 'VK_LAYER_KHRONOS_validation' "$log_dir/devices.log"; then
 fi
 export VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation
 export VK_LAYER_VALIDATE_SYNC=1
-export REALAND_REQUIRE_VULKAN=1
+export CLARION_REQUIRE_VULKAN=1
 if (( $# == 0 )); then
     shopt -s nullglob
     set -- /dev/dri/renderD*
@@ -30,11 +30,11 @@ fi
 (( $# > 0 )) || { echo 'No DRM render nodes found.' >&2; exit 1; }
 for node in "$@"; do
     [[ -r "$node" && -w "$node" ]] || { echo "Cannot access $node" >&2; exit 1; }
-    export REALAND_VULKAN_TEST_NODE="$node"
+    export CLARION_VULKAN_TEST_NODE="$node"
     log_file="$log_dir/$(basename -- "$node").log"
     skip_file="$log_dir/$(basename -- "$node").unsupported.log"
     : > "$skip_file"
-    cargo test --manifest-path "$repo_dir/Cargo.toml" -p realand --lib --offline --locked \
+    cargo test --manifest-path "$repo_dir/Cargo.toml" -p clarion --lib --offline --locked \
         render_helpers::vulkan -- --include-ignored --nocapture --test-threads=1 2>&1 | tee "$log_file"
     check_validation_log "$log_file"
     if ! grep -Eq '^test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$log_file"; then
@@ -73,7 +73,7 @@ for node in "$@"; do
         integration_name=${integration_case%%:*}
         test_name=${integration_case#*:}
         integration_log="$log_dir/$(basename -- "$node").$integration_name.log"
-        cargo test --manifest-path "$repo_dir/Cargo.toml" -p realand --lib --offline --locked \
+        cargo test --manifest-path "$repo_dir/Cargo.toml" -p clarion --lib --offline --locked \
             "$test_name" -- --ignored --exact --nocapture --test-threads=1 2>&1 | tee "$integration_log"
         check_validation_log "$integration_log"
         if ! grep -Eq '^test result: ok\. 1 passed; 0 failed; 0 ignored;' "$integration_log" \

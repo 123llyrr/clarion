@@ -2,12 +2,12 @@ use futures_util::StreamExt;
 use zbus::fdo;
 use zbus::names::InterfaceName;
 
-pub enum Login1ToRealand {
+pub enum Login1ToClarion {
     LidClosedChanged(bool),
 }
 
 pub fn start(
-    to_realand: calloop::channel::Sender<Login1ToRealand>,
+    to_clarion: calloop::channel::Sender<Login1ToClarion>,
 ) -> anyhow::Result<zbus::blocking::Connection> {
     let conn = zbus::blocking::Connection::system()?;
 
@@ -53,8 +53,8 @@ pub fn start(
             .and_then(|value| bool::try_from(value).ok())
             .unwrap_or_default();
 
-        if let Err(err) = to_realand.send(Login1ToRealand::LidClosedChanged(lid_closed)) {
-            warn!("error sending initial lid state to realand: {err:?}");
+        if let Err(err) = to_clarion.send(Login1ToClarion::LidClosedChanged(lid_closed)) {
+            warn!("error sending initial lid state to clarion: {err:?}");
             return;
         };
 
@@ -88,8 +88,8 @@ pub fn start(
             }
 
             lid_closed = new_lid_closed;
-            if let Err(err) = to_realand.send(Login1ToRealand::LidClosedChanged(lid_closed)) {
-                warn!("error sending message to realand: {err:?}");
+            if let Err(err) = to_clarion.send(Login1ToClarion::LidClosedChanged(lid_closed)) {
+                warn!("error sending message to clarion: {err:?}");
                 return;
             };
         }

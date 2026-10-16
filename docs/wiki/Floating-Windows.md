@@ -2,7 +2,7 @@
 
 <sup>Since: 25.01</sup>
 
-Floating windows in realand always show on top of the tiled windows.
+Floating windows in clarion always show on top of the tiled windows.
 The floating layout does not scroll.
 Each workspace/monitor has its own floating layout, just like each workspace/monitor has its own tiling layout.
 
@@ -13,4 +13,4 @@ You can also use the `open-floating true/false` window rule to either force a wi
 Use `switch-focus-between-floating-and-tiling` to switch the focus between the two layouts.
 When focused on the floating layout, binds (like `focus-column-right`) will operate on the floating window.
 
-You can precisely position a floating window with a command like `realand msg action move-floating-window -x 100 -y 200`.
+You can precisely position a floating window with a command like `clarion msg action move-floating-window -x 100 -y 200`.

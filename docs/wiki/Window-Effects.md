@@ -16,7 +16,7 @@ Focus ring and border can also cover the background effect, see [this FAQ entry]
 Windows and layer surfaces can request their background to be blurred via the [`ext-background-effect` protocol](https://wayland.app/protocols/ext-background-effect-v1).
 In this case, the application will usually offer some "background blur" setting that you'll need to enable in its configuration.
 
-You can also enable blur on the realand side with the `blur true` background effect window rule:
+You can also enable blur on the clarion side with the `blur true` background effect window rule:
 
 ```kdl
 // Enable blur behind the Alacritty terminal.
@@ -40,10 +40,10 @@ layer-rule {
 
 Blur enabled via the window rule will follow the window corner radius set via [`geometry-corner-radius`](./Configuration:-Window-Rules.md#geometry-corner-radius).
 On the other hand, blur enabled through `ext-background-effect` will exactly follow the shape requested by the window.
-If the window or layer has clientside rounded corners or other complex shape, it should set a corresponding blur shape through `ext-background-effect`, then it will get correctly shaped background blur without any manual realand configuration.
+If the window or layer has clientside rounded corners or other complex shape, it should set a corresponding blur shape through `ext-background-effect`, then it will get correctly shaped background blur without any manual clarion configuration.
 
 Windows can also blur their pop-up menus using `ext-background-effect`.
-On the realand side, you can do it with a `popups` block inside [`window-rule`](./Configuration:-Window-Rules.md#popups) and [`layer-rule`](./Configuration:-Layer-Rules.md#popups).
+On the clarion side, you can do it with a `popups` block inside [`window-rule`](./Configuration:-Window-Rules.md#popups) and [`layer-rule`](./Configuration:-Layer-Rules.md#popups).
 See those wiki pages for examples and limitations.
 
 Global blur settings are configured in the [`blur {}` config section](./Configuration:-Miscellaneous.md#blur) and apply to all background blur.
@@ -54,7 +54,7 @@ Xray makes the window background "see through" to your wallpaper, ignoring any o
 You can enable it with `xray true` background effect [window](./Configuration:-Window-Rules.md#background-effect) or [layer](./Configuration:-Layer-Rules.md#background-effect) rule.
 
 Xray is automatically enabled by default if any other background effect (like blur) is active.
-This is because it's much more efficient: with xray active, realand only needs to blur the background once, and then can reuse this blurred version with no extra work (since the wallpaper changes very rarely).
+This is because it's much more efficient: with xray active, clarion only needs to blur the background once, and then can reuse this blurred version with no extra work (since the wallpaper changes very rarely).
 
 If you have an animated wallpaper, xray will still have to recompute blur every frame, but that happens once and shared among all windows, rather than recomputed separately for each window.
 
@@ -62,13 +62,13 @@ If you have an animated wallpaper, xray will still have to recompute blur every 
 
 You can disable xray with `xray false` background effect window rule.
 This gives you the normal kind of blur where everything below a window is blurred.
-Keep in mind that non-xray blur and other non-xray effects are more expensive as realand has to recompute them any time you move the window, or the contents underneath change.
+Keep in mind that non-xray blur and other non-xray effects are more expensive as clarion has to recompute them any time you move the window, or the contents underneath change.
 
 > [!WARNING]
 > Non-xray effects are currently experimental because they have some known limitations.
 >
 > - They disappear during window open/close animations and while dragging a tiled window.
-> Fixing this requires a refactor to the realand rendering code to defer offscreen rendering, and possibly other refactors.
+> Fixing this requires a refactor to the clarion rendering code to defer offscreen rendering, and possibly other refactors.
 
 ### Implementation notes
 

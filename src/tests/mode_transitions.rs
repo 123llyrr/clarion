@@ -1,4 +1,4 @@
-use realand_config::Config;
+use clarion_config::Config;
 use smithay::backend::allocator::Fourcc;
 use smithay::reexports::wayland_protocols::ext::session_lock::v1::client::{
     ext_session_lock_manager_v1::ExtSessionLockManagerV1,
@@ -18,28 +18,28 @@ const OVERVIEW_DURATION: std::time::Duration = std::time::Duration::from_millis(
 fn setup() -> Fixture {
     let mut config = Config::default();
     config.animations.overview_open_close.0.kind =
-        realand_config::animations::Kind::Easing(realand_config::animations::EasingParams {
+        clarion_config::animations::Kind::Easing(clarion_config::animations::EasingParams {
             duration_ms: OVERVIEW_DURATION.as_millis() as u32,
-            curve: realand_config::animations::Curve::Linear,
+            curve: clarion_config::animations::Curve::Linear,
         });
     setup_with_config(config)
 }
 
 fn setup_with_config(config: Config) -> Fixture {
-    let native = config.renderer_backend() == Some(realand_config::RendererBackendConfig::Vulkan);
+    let native = config.renderer_backend() == Some(clarion_config::RendererBackendConfig::Vulkan);
     let mut f = Fixture::with_config(config);
     // Fixture's server deliberately defaults to GLES. Select the actual native
     // backend before adding outputs or clients for the explicit hardware case.
     if native {
         let mut headless = crate::backend::Headless::new(
-            f.realand().config.clone(),
+            f.clarion().config.clone(),
             crate::backend::RendererBackendType::Vulkan,
         );
         headless.add_renderer().unwrap();
         headless.init(&mut crate::platform::device_bridge::DeviceCoordinator::new(
-            f.realand(),
+            f.clarion(),
         ));
-        f.realand_state().backend = crate::backend::Backend::Headless(headless);
+        f.clarion_state().backend = crate::backend::Backend::Headless(headless);
     } else {
         f.init_gles_renderer();
     }
@@ -57,21 +57,21 @@ fn setup_with_config(config: Config) -> Fixture {
     window.set_size(100, 100);
     window.ack_last_and_commit();
     f.double_roundtrip(client);
-    f.realand_complete_animations();
-    f.realand().layout.toggle_expo();
-    f.realand_complete_animations();
+    f.clarion_complete_animations();
+    f.clarion().layout.toggle_expo();
+    f.clarion_complete_animations();
     f
 }
 
 fn pixels(f: &mut Fixture, target: RenderTarget) -> Vec<u8> {
-    let output = f.realand_output(1);
-    let state = f.realand_state();
-    let realand = &mut state.realand;
-    realand.update_render_elements(None);
+    let output = f.clarion_output(1);
+    let state = f.clarion_state();
+    let clarion = &mut state.clarion;
+    clarion.update_render_elements(None);
     macro_rules! draw {
         ($renderer:expr) => {{
             let renderer = $renderer;
-            let elements = realand.render_to_vec(
+            let elements = clarion.render_to_vec(
                 RenderCtx {
                     renderer,
                     target,
@@ -103,7 +103,7 @@ fn pixels(f: &mut Fixture, target: RenderTarget) -> Vec<u8> {
 #[test]
 fn actions_and_hot_corners_share_the_composed_frame_handoff() {
     use crate::compositor::HotCornerKind;
-    use realand_config::{Action, OverviewStyle};
+    use clarion_config::{Action, OverviewStyle};
 
     for (style, expected, corner) in [
         (
@@ -128,17 +128,17 @@ fn actions_and_hot_corners_share_the_composed_frame_handoff() {
             config.gestures.hot_corners.top_left = true;
             config.gestures.hot_corners.top_right = true;
             let mut f = setup_with_config(config);
-            f.realand_state()
+            f.clarion_state()
                 .overview_command(OverviewCommand::ToggleSpread);
-            f.realand_complete_animations();
-            f.realand().clock.set_rate(0.);
+            f.clarion_complete_animations();
+            f.clarion().clock.set_rate(0.);
             let targets = [
                 RenderTarget::Output,
                 RenderTarget::ScreenCapture,
                 RenderTarget::Screencast,
             ];
             let before = targets.map(|target| pixels(&mut f, target));
-            let workspace = f.realand().layout.active_workspace().unwrap().id();
+            let workspace = f.clarion().layout.active_workspace().unwrap().id();
             if via_hot_corner {
                 let x = if corner == HotCornerKind::TopRight {
                     636.
@@ -146,19 +146,19 @@ fn actions_and_hot_corners_share_the_composed_frame_handoff() {
                     4.
                 };
                 super::hot_corners::motion(&mut f, (x, 4.));
-                assert_eq!(f.realand().hot_corner_latch().unwrap().1, corner);
+                assert_eq!(f.clarion().hot_corner_latch().unwrap().1, corner);
             } else {
                 let action = if expected == OverviewMode::Expo {
                     Action::ToggleExpo
                 } else {
                     Action::ToggleOverview
                 };
-                f.realand_state().do_action(action, false);
+                f.clarion_state().do_action(action, false);
             }
-            assert_eq!(f.realand().layout.overview_mode(), expected);
-            assert!(f.realand().layout.is_overview_open());
+            assert_eq!(f.clarion().layout.overview_mode(), expected);
+            assert!(f.clarion().layout.is_overview_open());
             assert_eq!(
-                f.realand().layout.active_workspace().unwrap().id(),
+                f.clarion().layout.active_workspace().unwrap().id(),
                 workspace
             );
             for (target, before) in targets.into_iter().zip(before) {
@@ -177,42 +177,42 @@ fn overview_command_claims_stationary_gestures_and_cancel_restores_the_entry_sta
     use std::time::Duration;
     let mut f = setup();
     assert!(!f
-        .realand_state()
+        .clarion_state()
         .overview_command(OverviewCommand::GestureUpdate {
             delta: 0.,
             timestamp: Duration::ZERO
         }));
     for initially_open in [true, false] {
         if !initially_open {
-            f.realand_state().overview_command(OverviewCommand::Close);
-            f.realand_complete_animations();
+            f.clarion_state().overview_command(OverviewCommand::Close);
+            f.clarion_complete_animations();
         }
-        let workspace = f.realand().layout.active_workspace().unwrap().id();
+        let workspace = f.clarion().layout.active_workspace().unwrap().id();
         assert!(f
-            .realand_state()
+            .clarion_state()
             .overview_command(OverviewCommand::GestureBegin));
         assert!(f
-            .realand_state()
+            .clarion_state()
             .overview_command(OverviewCommand::GestureUpdate {
                 delta: 0.,
                 timestamp: Duration::ZERO
             }));
         assert!(f
-            .realand_state()
+            .clarion_state()
             .overview_command(OverviewCommand::GestureUpdate {
                 delta: if initially_open { -60. } else { 60. },
                 timestamp: Duration::from_millis(10)
             }));
         assert!(f
-            .realand_state()
+            .clarion_state()
             .overview_command(OverviewCommand::GestureEnd { cancelled: true }));
-        f.realand_complete_animations();
-        assert_eq!(f.realand().layout.is_overview_open(), initially_open);
+        f.clarion_complete_animations();
+        assert_eq!(f.clarion().layout.is_overview_open(), initially_open);
         assert_eq!(
-            f.realand().layout.active_workspace().unwrap().id(),
+            f.clarion().layout.active_workspace().unwrap().id(),
             workspace
         );
-        assert!(!f.realand().layout.are_animations_ongoing(None));
+        assert!(!f.clarion().layout.are_animations_ongoing(None));
     }
 }
 
@@ -220,25 +220,25 @@ fn overview_command_claims_stationary_gestures_and_cancel_restores_the_entry_sta
 fn overview_handoff_preserves_composed_pixels_and_repeated_switches() {
     let mut f = setup();
     let before = pixels(&mut f, RenderTarget::Output);
-    f.realand_state()
+    f.clarion_state()
         .overview_command(OverviewCommand::ToggleSpread);
     assert_eq!(pixels(&mut f, RenderTarget::Output), before);
 
-    let now = f.realand().clock.now_unadjusted();
-    f.realand()
+    let now = f.clarion().clock.now_unadjusted();
+    f.clarion()
         .clock
         .set_unadjusted(now + OVERVIEW_DURATION / 2);
-    f.realand().advance_animations();
+    f.clarion().advance_animations();
     let halfway = pixels(&mut f, RenderTarget::Output);
     assert_ne!(halfway, before);
-    f.realand_state()
+    f.clarion_state()
         .overview_command(OverviewCommand::ToggleExpo);
     assert_eq!(pixels(&mut f, RenderTarget::Output), halfway);
-    let now = f.realand().clock.now_unadjusted();
-    f.realand().clock.set_unadjusted(now + OVERVIEW_DURATION);
-    f.realand().advance_animations();
-    let output = f.realand_output(1);
-    assert!(f.realand().output_state[&output]
+    let now = f.clarion().clock.now_unadjusted();
+    f.clarion().clock.set_unadjusted(now + OVERVIEW_DURATION);
+    f.clarion().advance_animations();
+    let output = f.clarion_output(1);
+    assert!(f.clarion().output_state[&output]
         .screen_transition
         .is_none());
 }
@@ -249,10 +249,10 @@ fn identical_transition_targets_share_the_captured_image() {
 
     let mut f = setup();
     // Expo's unchanged unprotected scene is identical for all three targets.
-    let output = f.realand_output(1);
-    f.realand_state()
+    let output = f.clarion_output(1);
+    f.clarion_state()
         .capture_overview_test_frame(OverviewMode::Windows);
-    let transition = f.realand().output_state[&output]
+    let transition = f.clarion().output_state[&output]
         .screen_transition
         .as_ref()
         .unwrap();
@@ -267,15 +267,15 @@ fn identical_transition_targets_share_the_captured_image() {
 #[test]
 fn overview_handoff_respects_disabled_animations_and_output_changes() {
     let mut f = setup();
-    let output = f.realand_output(1);
-    f.realand_state()
+    let output = f.clarion_output(1);
+    f.clarion_state()
         .capture_overview_test_frame(OverviewMode::Windows);
-    assert!(f.realand().output_state[&output]
+    assert!(f.clarion().output_state[&output]
         .screen_transition
         .is_some());
     // Ordinary shell refreshes use this path too, without resizing the output.
-    f.realand().output_resized(&output);
-    assert!(f.realand().output_state[&output]
+    f.clarion().output_resized(&output);
+    assert!(f.clarion().output_state[&output]
         .screen_transition
         .is_some());
     output.change_current_state(
@@ -284,21 +284,21 @@ fn overview_handoff_respects_disabled_animations_and_output_changes() {
         Some(smithay::output::Scale::Fractional(1.25)),
         None,
     );
-    f.realand().output_resized(&output);
-    assert!(f.realand().output_state[&output]
+    f.clarion().output_resized(&output);
+    assert!(f.clarion().output_state[&output]
         .screen_transition
         .is_none());
-    f.realand().config.borrow_mut().animations.off = true;
-    f.realand_state()
+    f.clarion().config.borrow_mut().animations.off = true;
+    f.clarion_state()
         .capture_overview_test_frame(OverviewMode::Windows);
-    assert!(f.realand().output_state[&output]
+    assert!(f.clarion().output_state[&output]
         .screen_transition
         .is_none());
 }
 
 #[test]
 fn layer_privacy_changes_clear_handoff_pixels_without_rearming_hot_corners() {
-    use realand_config::{BlockOutFrom, LayerRule};
+    use clarion_config::{BlockOutFrom, LayerRule};
     use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::{
         zwlr_layer_shell_v1::Layer, zwlr_layer_surface_v1::Anchor,
     };
@@ -309,15 +309,15 @@ fn layer_privacy_changes_clear_handoff_pixels_without_rearming_hot_corners() {
     for remap in [false, true] {
         let mut config = Config::default();
         config.layer_rules.push(LayerRule {
-            matches: vec![realand_config::layer_rule::Match {
-                layer: Some(realand_ipc::Layer::Bottom),
+            matches: vec![clarion_config::layer_rule::Match {
+                layer: Some(clarion_ipc::Layer::Bottom),
                 ..Default::default()
             }],
             block_out_from: Some(BlockOutFrom::ScreenCapture),
             ..Default::default()
         });
         let mut f = setup_with_config(config);
-        let output = f.realand_output(1);
+        let output = f.clarion_output(1);
         let client = f.add_client();
         let panel = f
             .client(client)
@@ -338,10 +338,10 @@ fn layer_privacy_changes_clear_handoff_pixels_without_rearming_hot_corners() {
         panel.set_size(100, 40);
         panel.ack_last_and_commit();
         f.double_roundtrip(client);
-        f.realand_complete_animations();
+        f.clarion_complete_animations();
         // Protocol dispatch clears the cached wall clock. Freeze adjusted time
         // so a slow roundtrip cannot finish the handoff before privacy changes.
-        f.realand().clock.set_rate(0.);
+        f.clarion().clock.set_rate(0.);
         let has_green = |image: &[u8]| {
             image
                 .as_chunks::<4>()
@@ -352,10 +352,10 @@ fn layer_privacy_changes_clear_handoff_pixels_without_rearming_hot_corners() {
         assert!(has_green(&pixels(&mut f, RenderTarget::ScreenCapture)));
         let latch = Some((output.clone(), HotCornerKind::TopLeft));
         assert!(f
-            .realand()
+            .clarion()
             .hot_corner_motion_entered((4., 4.).into(), latch.clone()));
-        f.realand_state().overview_command(OverviewCommand::Toggle);
-        assert!(f.realand().output_state[&output]
+        f.clarion_state().overview_command(OverviewCommand::Toggle);
+        assert!(f.clarion().output_state[&output]
             .screen_transition
             .is_some());
 
@@ -364,7 +364,7 @@ fn layer_privacy_changes_clear_handoff_pixels_without_rearming_hot_corners() {
             panel.attach_null();
             panel.commit();
             f.double_roundtrip(client);
-            assert!(f.realand().output_state[&output]
+            assert!(f.clarion().output_state[&output]
                 .screen_transition
                 .is_some());
         }
@@ -385,10 +385,10 @@ fn layer_privacy_changes_clear_handoff_pixels_without_rearming_hot_corners() {
             f.double_roundtrip(client);
         }
         assert!(
-            f.realand().output_state[&output].screen_transition.is_none(),
+            f.clarion().output_state[&output].screen_transition.is_none(),
             "a newly protected layer must invalidate previously unblocked handoff textures, remap={remap}"
         );
-        assert_eq!(f.realand().hot_corner_latch(), latch);
+        assert_eq!(f.clarion().hot_corner_latch(), latch);
         assert!(has_green(&pixels(&mut f, RenderTarget::Output)));
         for target in [RenderTarget::ScreenCapture, RenderTarget::Screencast] {
             assert!(
@@ -403,63 +403,63 @@ fn layer_privacy_changes_clear_handoff_pixels_without_rearming_hot_corners() {
 fn reduced_motion_and_animation_reload_release_snapshots_immediately() {
     for disable_global in [false, true] {
         let mut f = setup();
-        let output = f.realand_output(1);
-        f.realand_state()
+        let output = f.clarion_output(1);
+        f.clarion_state()
             .capture_overview_test_frame(OverviewMode::Windows);
-        assert!(f.realand().output_state[&output]
+        assert!(f.clarion().output_state[&output]
             .screen_transition
             .is_some());
-        let config = f.realand().config.clone();
+        let config = f.clarion().config.clone();
         if disable_global {
             config.borrow_mut().animations.off = true;
         } else {
             config.borrow_mut().animations.overview_open_close.0.off = true;
         }
-        f.realand().layout.update_config(&config.borrow());
-        f.realand().advance_animations();
-        assert!(f.realand().output_state[&output]
+        f.clarion().layout.update_config(&config.borrow());
+        f.clarion().advance_animations();
+        assert!(f.clarion().output_state[&output]
             .screen_transition
             .is_none());
-        f.realand_state()
+        f.clarion_state()
             .overview_command(OverviewCommand::ToggleSpread);
-        f.realand().advance_animations();
-        assert!(!f.realand().overview_mode_transition_active());
-        assert!(!f.realand().layout.are_transitions_ongoing(Some(&output)));
+        f.clarion().advance_animations();
+        assert!(!f.clarion().overview_mode_transition_active());
+        assert!(!f.clarion().layout.are_transitions_ongoing(Some(&output)));
     }
 }
 
 #[test]
 fn overview_handoff_uses_adjusted_time_without_changing_explicit_transition_timing() {
     let mut f = setup();
-    let output = f.realand_output(1);
-    f.realand().clock.set_rate(0.5);
-    f.realand_state()
+    let output = f.clarion_output(1);
+    f.clarion().clock.set_rate(0.5);
+    f.clarion_state()
         .capture_overview_test_frame(OverviewMode::Windows);
-    let start = f.realand().clock.now_unadjusted();
-    f.realand().clock.set_unadjusted(start + OVERVIEW_DURATION);
-    let transition = f.realand().output_state[&output]
+    let start = f.clarion().clock.now_unadjusted();
+    f.clarion().clock.set_unadjusted(start + OVERVIEW_DURATION);
+    let transition = f.clarion().output_state[&output]
         .screen_transition
         .as_ref()
         .unwrap();
     assert!(!transition.is_done());
     assert!((transition.alpha() - 0.5).abs() < 0.001);
-    f.realand()
+    f.clarion()
         .clock
         .set_unadjusted(start + OVERVIEW_DURATION * 2);
-    assert!(f.realand().output_state[&output]
+    assert!(f.clarion().output_state[&output]
         .screen_transition
         .as_ref()
         .unwrap()
         .is_done());
-    f.realand().advance_animations();
+    f.clarion().advance_animations();
 
-    let state = f.realand_state();
+    let state = f.clarion_state();
     state
         .backend
-        .with_primary_renderer(|renderer| state.realand.do_screen_transition(renderer, Some(0)));
-    let start = f.realand().clock.now_unadjusted();
-    f.realand().clock.set_unadjusted(start + DURATION);
-    assert!(f.realand().output_state[&output]
+        .with_primary_renderer(|renderer| state.clarion.do_screen_transition(renderer, Some(0)));
+    let start = f.clarion().clock.now_unadjusted();
+    f.clarion().clock.set_unadjusted(start + DURATION);
+    assert!(f.clarion().output_state[&output]
         .screen_transition
         .as_ref()
         .unwrap()
@@ -470,16 +470,16 @@ fn overview_handoff_uses_adjusted_time_without_changing_explicit_transition_timi
 fn hidden_or_unchanged_modes_do_not_allocate_handoffs() {
     let mut f = Fixture::with_config(Config::default());
     f.add_output(1, (640, 400));
-    let output = f.realand_output(1);
-    f.realand_state()
+    let output = f.clarion_output(1);
+    f.clarion_state()
         .capture_overview_test_frame(OverviewMode::Windows);
-    assert!(f.realand().output_state[&output]
+    assert!(f.clarion().output_state[&output]
         .screen_transition
         .is_none());
-    f.realand().layout.toggle_expo();
-    f.realand_state()
+    f.clarion().layout.toggle_expo();
+    f.clarion_state()
         .capture_overview_test_frame(OverviewMode::Expo);
-    assert!(f.realand().output_state[&output]
+    assert!(f.clarion().output_state[&output]
         .screen_transition
         .is_none());
 }
@@ -487,67 +487,67 @@ fn hidden_or_unchanged_modes_do_not_allocate_handoffs() {
 #[test]
 fn switching_modes_releases_old_workspace_and_view_gestures_without_committing_focus() {
     let mut f = setup();
-    let output = f.realand_output(1);
-    let initial_workspace = f.realand().layout.active_workspace().unwrap().id();
-    let initial_window = f.realand().layout.active_window().unwrap().id();
-    f.realand()
+    let output = f.clarion_output(1);
+    let initial_workspace = f.clarion().layout.active_workspace().unwrap().id();
+    let initial_window = f.clarion().layout.active_window().unwrap().id();
+    f.clarion()
         .layout
         .workspace_switch_gesture_begin(&output, true);
-    f.realand().layout.workspace_switch_gesture_update(
+    f.clarion().layout.workspace_switch_gesture_update(
         300.,
         std::time::Duration::from_millis(10),
         true,
     );
-    f.realand_state()
+    f.clarion_state()
         .overview_command(OverviewCommand::ToggleSpread);
     assert!(f
-        .realand()
+        .clarion()
         .layout
         .workspace_switch_gesture_end(Some(true))
         .is_none());
-    f.realand_complete_animations();
+    f.clarion_complete_animations();
     assert_eq!(
-        f.realand().layout.active_workspace().unwrap().id(),
+        f.clarion().layout.active_workspace().unwrap().id(),
         initial_workspace
     );
 
-    f.realand()
+    f.clarion()
         .layout
         .view_offset_gesture_begin(&output, None, true);
-    f.realand()
+    f.clarion()
         .layout
         .view_offset_gesture_update(300., std::time::Duration::from_millis(20), true);
-    f.realand_state()
+    f.clarion_state()
         .overview_command(OverviewCommand::ToggleExpo);
     assert!(f
-        .realand()
+        .clarion()
         .layout
         .view_offset_gesture_end(Some(true))
         .is_none());
-    f.realand_complete_animations();
+    f.clarion_complete_animations();
     assert_eq!(
-        f.realand().layout.active_window().unwrap().id(),
+        f.clarion().layout.active_window().unwrap().id(),
         initial_window
     );
 }
 
 fn enter_mode(f: &mut Fixture, mode: OverviewMode) {
     if matches!(mode, OverviewMode::Stage | OverviewMode::Strip) {
-        let config = f.realand().config.clone();
+        let config = f.clarion().config.clone();
         config.borrow_mut().overview.style = if mode == OverviewMode::Stage {
-            realand_config::OverviewStyle::Stage
+            clarion_config::OverviewStyle::Stage
         } else {
-            realand_config::OverviewStyle::Strip
+            clarion_config::OverviewStyle::Strip
         };
-        f.realand().layout.update_config(&config.borrow());
+        f.clarion().layout.update_config(&config.borrow());
     }
     let command = match mode {
         OverviewMode::Stage | OverviewMode::Strip => OverviewCommand::Toggle,
         OverviewMode::Expo => OverviewCommand::ToggleExpo,
         OverviewMode::Windows => OverviewCommand::ToggleSpread,
     };
-    f.realand_state().overview_command(command);
-    assert_eq!(f.realand().layout.overview_mode(), mode);
+    f.clarion_state().overview_command(command);
+    assert_eq!(f.clarion().layout.overview_mode(), mode);
 }
 
 #[test]
@@ -564,53 +564,53 @@ fn all_four_mode_handoffs_preserve_pixels_at_each_animation_state_and_scale() {
             for target in modes.into_iter().filter(|mode| *mode != source) {
                 for phase in ["opening", "open", "closing", "gesture"] {
                     let mut f = setup();
-                    let output = f.realand_output(1);
+                    let output = f.clarion_output(1);
                     output.change_current_state(
                         None,
                         None,
                         Some(smithay::output::Scale::Fractional(scale)),
                         None,
                     );
-                    f.realand().output_resized(&output);
-                    f.realand().layout.close_overview();
-                    f.realand_complete_animations();
+                    f.clarion().output_resized(&output);
+                    f.clarion().layout.close_overview();
+                    f.clarion_complete_animations();
                     enter_mode(&mut f, source);
                     if phase != "opening" {
-                        f.realand_complete_animations();
+                        f.clarion_complete_animations();
                     }
                     if phase == "closing" {
-                        f.realand().layout.close_overview();
-                        let now = f.realand().clock.now_unadjusted();
-                        f.realand()
+                        f.clarion().layout.close_overview();
+                        let now = f.clarion().clock.now_unadjusted();
+                        f.clarion()
                             .clock
                             .set_unadjusted(now + OVERVIEW_DURATION / 3);
-                        f.realand().advance_animations();
+                        f.clarion().advance_animations();
                     } else if phase == "gesture" {
-                        f.realand().layout.overview_gesture_begin();
-                        f.realand()
+                        f.clarion().layout.overview_gesture_begin();
+                        f.clarion()
                             .layout
                             .overview_gesture_update(-90., std::time::Duration::from_millis(10));
                     }
-                    let workspace = f.realand().layout.active_workspace().unwrap().id();
-                    let window = f.realand().layout.active_window().unwrap().id();
+                    let workspace = f.clarion().layout.active_workspace().unwrap().id();
+                    let window = f.clarion().layout.active_window().unwrap().id();
                     let before = pixels(&mut f, RenderTarget::Output);
                     enter_mode(&mut f, target);
                     assert!(pixels(&mut f, RenderTarget::Output) == before,
                         "discontinuous first frame: {source:?} -> {target:?}, {phase}, scale {scale}");
                     assert!(f
-                        .realand()
+                        .clarion()
                         .layout
                         .overview_gesture_update(80., std::time::Duration::from_millis(20))
                         .is_none());
-                    assert!(!f.realand().layout.overview_gesture_end());
-                    f.realand_complete_animations();
-                    assert!(f.realand().layout.is_overview_open());
-                    assert!(!f.realand().overview_mode_transition_active());
+                    assert!(!f.clarion().layout.overview_gesture_end());
+                    f.clarion_complete_animations();
+                    assert!(f.clarion().layout.is_overview_open());
+                    assert!(!f.clarion().overview_mode_transition_active());
                     assert_eq!(
-                        f.realand().layout.active_workspace().unwrap().id(),
+                        f.clarion().layout.active_workspace().unwrap().id(),
                         workspace
                     );
-                    assert_eq!(f.realand().layout.active_window().unwrap().id(), window);
+                    assert_eq!(f.clarion().layout.active_window().unwrap().id(), window);
                     scenarios += 1;
                 }
             }
@@ -624,36 +624,36 @@ fn cancelled_overview_gestures_restore_original_open_state_without_inertia() {
     for initially_open in [false, true] {
         let mut f = setup();
         if !initially_open {
-            f.realand().layout.close_overview();
-            f.realand_complete_animations();
+            f.clarion().layout.close_overview();
+            f.clarion_complete_animations();
         }
-        let workspace = f.realand().layout.active_workspace().unwrap().id();
-        f.realand().layout.overview_gesture_begin();
+        let workspace = f.clarion().layout.active_workspace().unwrap().id();
+        f.clarion().layout.overview_gesture_begin();
         let delta = if initially_open { -200. } else { 200. };
-        f.realand()
+        f.clarion()
             .layout
             .overview_gesture_update(delta, std::time::Duration::from_millis(10));
-        assert!(f.realand().layout.overview_gesture_cancel());
-        assert!(!f.realand().layout.overview_gesture_end());
-        f.realand_complete_animations();
-        assert_eq!(f.realand().layout.is_overview_open(), initially_open);
+        assert!(f.clarion().layout.overview_gesture_cancel());
+        assert!(!f.clarion().layout.overview_gesture_end());
+        f.clarion_complete_animations();
+        assert_eq!(f.clarion().layout.is_overview_open(), initially_open);
         assert_eq!(
-            f.realand().layout.active_workspace().unwrap().id(),
+            f.clarion().layout.active_workspace().unwrap().id(),
             workspace
         );
-        assert_eq!(f.realand().layout.is_overview_visible(), initially_open);
+        assert_eq!(f.clarion().layout.is_overview_visible(), initially_open);
     }
 }
 
 #[test]
 fn stage_cross_output_preview_preserves_actual_focus_until_confirmation() {
     let mut f = setup();
-    f.realand().layout.close_overview();
-    f.realand_complete_animations();
+    f.clarion().layout.close_overview();
+    f.clarion_complete_animations();
     f.add_output(2, (640, 400));
-    let first = f.realand_output(1);
-    let second = f.realand_output(2);
-    f.realand().layout.focus_output(&second);
+    let first = f.clarion_output(1);
+    let second = f.clarion_output(2);
+    f.clarion().layout.focus_output(&second);
     let client = f.add_client();
     let window = f.client(client).create_window();
     let surface = window.surface.clone();
@@ -664,61 +664,61 @@ fn stage_cross_output_preview_preserves_actual_focus_until_confirmation() {
     window.set_size(100, 100);
     window.ack_last_and_commit();
     f.double_roundtrip(client);
-    f.realand_complete_animations();
-    let entry = f.realand().layout.active_window().unwrap().id();
-    let workspace = f.realand().layout.active_workspace().unwrap().id();
+    f.clarion_complete_animations();
+    let entry = f.clarion().layout.active_window().unwrap().id();
+    let workspace = f.clarion().layout.active_workspace().unwrap().id();
     enter_mode(&mut f, OverviewMode::Stage);
-    f.realand_complete_animations();
-    assert!(f.realand().layout.stage_navigate(Some(&first), 1));
-    assert_eq!(f.realand().layout.active_output(), Some(&second));
+    f.clarion_complete_animations();
+    assert!(f.clarion().layout.stage_navigate(Some(&first), 1));
+    assert_eq!(f.clarion().layout.active_output(), Some(&second));
     assert_eq!(
-        f.realand().layout.active_workspace().unwrap().id(),
+        f.clarion().layout.active_workspace().unwrap().id(),
         workspace
     );
-    assert_eq!(f.realand().layout.active_window().unwrap().id(), entry);
-    assert!(f.realand().layout.stage_navigate(None, -1));
-    assert_eq!(f.realand().layout.active_window().unwrap().id(), entry);
-    assert!(f.realand().layout.confirm_stage());
-    f.realand_complete_animations();
-    assert_eq!(f.realand().layout.active_output(), Some(&first));
+    assert_eq!(f.clarion().layout.active_window().unwrap().id(), entry);
+    assert!(f.clarion().layout.stage_navigate(None, -1));
+    assert_eq!(f.clarion().layout.active_window().unwrap().id(), entry);
+    assert!(f.clarion().layout.confirm_stage());
+    f.clarion_complete_animations();
+    assert_eq!(f.clarion().layout.active_output(), Some(&first));
 
-    let entry = f.realand().layout.active_window().unwrap().id();
+    let entry = f.clarion().layout.active_window().unwrap().id();
     enter_mode(&mut f, OverviewMode::Stage);
-    f.realand_complete_animations();
-    f.realand().layout.stage_navigate(Some(&second), 1);
-    assert!(f.realand().layout.cancel_stage());
-    f.realand_complete_animations();
-    assert_eq!(f.realand().layout.active_output(), Some(&first));
-    assert_eq!(f.realand().layout.active_window().unwrap().id(), entry);
+    f.clarion_complete_animations();
+    f.clarion().layout.stage_navigate(Some(&second), 1);
+    assert!(f.clarion().layout.cancel_stage());
+    f.clarion_complete_animations();
+    assert_eq!(f.clarion().layout.active_output(), Some(&first));
+    assert_eq!(f.clarion().layout.active_window().unwrap().id(), entry);
 }
 
 #[test]
 fn overview_handoff_uses_configured_duration_and_curve() {
     let mut config = Config::default();
     config.animations.overview_open_close.0.kind =
-        realand_config::animations::Kind::Easing(realand_config::animations::EasingParams {
+        clarion_config::animations::Kind::Easing(clarion_config::animations::EasingParams {
             duration_ms: 400,
-            curve: realand_config::animations::Curve::EaseOutQuad,
+            curve: clarion_config::animations::Curve::EaseOutQuad,
         });
     let mut f = setup_with_config(config);
-    let output = f.realand_output(1);
-    f.realand_state()
+    let output = f.clarion_output(1);
+    f.clarion_state()
         .capture_overview_test_frame(OverviewMode::Windows);
-    let start = f.realand().clock.now_unadjusted();
-    f.realand()
+    let start = f.clarion().clock.now_unadjusted();
+    f.clarion()
         .clock
         .set_unadjusted(start + std::time::Duration::from_millis(200));
-    let transition = f.realand().output_state[&output]
+    let transition = f.clarion().output_state[&output]
         .screen_transition
         .as_ref()
         .unwrap();
     assert!(!transition.is_done());
     assert!((transition.alpha() - 0.25).abs() < 0.001);
-    f.realand()
+    f.clarion()
         .clock
         .set_unadjusted(start + std::time::Duration::from_millis(400));
-    f.realand().advance_animations();
-    assert!(f.realand().output_state[&output]
+    f.clarion().advance_animations();
+    assert!(f.clarion().output_state[&output]
         .screen_transition
         .is_none());
 }
@@ -730,13 +730,13 @@ fn dual_output_virtual_refresh_finishes_handoffs_and_retires_animation_timers() 
 
     let mut f = setup();
     f.add_output(2, (640, 400));
-    f.realand_complete_animations();
-    let outputs = [f.realand_output(1), f.realand_output(2)];
+    f.clarion_complete_animations();
+    let outputs = [f.clarion_output(1), f.clarion_output(2)];
     for (output, hz) in outputs.iter().zip([60., 144.]) {
         let mut mode = output.current_mode().unwrap();
         mode.refresh = (hz * 1000.) as i32;
         output.change_current_state(Some(mode), None, None, None);
-        f.realand()
+        f.clarion()
             .output_state
             .get_mut(output)
             .unwrap()
@@ -746,50 +746,50 @@ fn dual_output_virtual_refresh_finishes_handoffs_and_retires_animation_timers() 
                 false,
             ));
     }
-    f.realand().pointer_visibility = PointerVisibility::Hidden;
-    f.realand_state()
+    f.clarion().pointer_visibility = PointerVisibility::Hidden;
+    f.clarion_state()
         .overview_command(OverviewCommand::ToggleSpread);
     assert!(outputs
         .iter()
-        .all(|output| f.realand().output_state[output].screen_transition.is_some()));
-    let start = f.realand().clock.now_unadjusted();
+        .all(|output| f.clarion().output_state[output].screen_transition.is_some()));
+    let start = f.clarion().clock.now_unadjusted();
     let mut rendered = [0, 0];
     // 720 ticks per second represents both output clocks exactly. Drive their
     // actual headless submission/timer paths at independent virtual vblanks.
     for tick in 0..=720 {
-        f.realand()
+        f.clarion()
             .clock
             .set_unadjusted(start + std::time::Duration::from_secs_f64(tick as f64 / 720.));
-        f.realand().advance_animations();
+        f.clarion().advance_animations();
         for (index, (output, interval)) in outputs.iter().zip([12, 5]).enumerate() {
             if tick % interval != 0 {
                 continue;
             }
-            let state = f.realand_state();
-            state.realand.queue_redraw(output);
-            let unfinished = state.realand.animations_need_redraw(output);
+            let state = f.clarion_state();
+            state.clarion.queue_redraw(output);
+            let unfinished = state.clarion.animations_need_redraw(output);
             state
-                .realand
+                .clarion
                 .output_state
                 .get_mut(output)
                 .unwrap()
                 .schedule
                 .set_animations_remain(unfinished);
             let mut coordinator =
-                crate::frame_pipeline::FrameCoordinator::new(&mut state.realand, output);
+                crate::frame_pipeline::FrameCoordinator::new(&mut state.clarion, output);
             state.backend.headless().render(&mut coordinator, output);
             rendered[index] += 1;
         }
     }
     assert_eq!(rendered, [61, 145]);
     for output in &outputs {
-        let state = &f.realand().output_state[output];
+        let state = &f.clarion().output_state[output];
         assert!(state.screen_transition.is_none());
         assert!(!state.schedule.animations_remain());
         assert!(matches!(state.schedule.redraw_state(), RedrawState::Idle));
     }
     let sequences = outputs.each_ref().map(|output| {
-        f.realand().output_state[output]
+        f.clarion().output_state[output]
             .schedule
             .callback_sequence()
     });
@@ -800,65 +800,65 @@ fn dual_output_virtual_refresh_finishes_handoffs_and_retires_animation_timers() 
         .unwrap();
     for (output, sequence) in outputs.iter().zip(sequences) {
         assert_eq!(
-            f.realand().output_state[output]
+            f.clarion().output_state[output]
                 .schedule
                 .callback_sequence(),
             sequence
         );
         assert!(matches!(
-            f.realand().output_state[output].schedule.redraw_state(),
+            f.clarion().output_state[output].schedule.redraw_state(),
             RedrawState::Idle
         ));
     }
 
     // Removal while an animation timer exists must retire it along with caches.
-    f.realand_state()
+    f.clarion_state()
         .overview_command(OverviewCommand::ToggleExpo);
     let removed = outputs[1].clone();
-    let state = f.realand_state();
-    state.realand.queue_redraw(&removed);
+    let state = f.clarion_state();
+    state.clarion.queue_redraw(&removed);
     state
-        .realand
+        .clarion
         .output_state
         .get_mut(&removed)
         .unwrap()
         .schedule
         .set_animations_remain(true);
     let mut coordinator =
-        crate::frame_pipeline::FrameCoordinator::new(&mut state.realand, &removed);
+        crate::frame_pipeline::FrameCoordinator::new(&mut state.clarion, &removed);
     state.backend.headless().render(&mut coordinator, &removed);
     assert!(matches!(
-        f.realand().output_state[&removed].schedule.redraw_state(),
+        f.clarion().output_state[&removed].schedule.redraw_state(),
         RedrawState::WaitingForEstimatedVBlank(_)
     ));
-    f.realand().remove_output(&removed);
+    f.clarion().remove_output(&removed);
     let server = &mut f.state.server;
     server
         .event_loop
         .dispatch(std::time::Duration::from_millis(30), &mut server.state)
         .unwrap();
-    assert!(!f.realand().output_state.contains_key(&removed));
-    f.realand_complete_animations();
-    assert!(!f.realand().overview_mode_transition_active());
+    assert!(!f.clarion().output_state.contains_key(&removed));
+    f.clarion_complete_animations();
+    assert!(!f.clarion().overview_mode_transition_active());
 }
 
 #[test]
 fn overview_handoff_keeps_each_privacy_target_separate() {
-    use realand_config::appearance::BlockOutFrom;
+    use clarion_config::appearance::BlockOutFrom;
     for privacy in [BlockOutFrom::Screencast, BlockOutFrom::ScreenCapture] {
         let mut f = setup();
-        f.realand()
+        f.clarion()
             .config
             .borrow_mut()
             .window_rules
-            .push(realand_config::WindowRule {
+            .push(clarion_config::WindowRule {
                 block_out_from: Some(privacy),
                 ..Default::default()
             });
-        f.realand().recompute_window_rules();
-        f.realand().layout.toggle_overview();
-        f.realand_complete_animations();
-        assert_eq!(f.realand().layout.overview_mode(), OverviewMode::Stage);
+        f.clarion().recompute_window_rules();
+        f.clarion().layout.toggle_overview();
+        f.clarion_complete_animations();
+        assert_eq!(f.clarion().layout.overview_mode(), OverviewMode::Stage);
         let targets = [
             RenderTarget::Output,
             RenderTarget::Screencast,
@@ -874,7 +874,7 @@ fn overview_handoff_keeps_each_privacy_target_separate() {
         } else {
             assert_ne!(before[0], before[2]);
         }
-        f.realand_state()
+        f.clarion_state()
             .overview_command(OverviewCommand::ToggleSpread);
         for (target, expected) in targets.into_iter().zip(before) {
             assert_eq!(pixels(&mut f, target), expected, "target {target:?}");
@@ -883,11 +883,11 @@ fn overview_handoff_keeps_each_privacy_target_separate() {
 }
 
 fn preview_point(f: &mut Fixture) -> smithay::utils::Point<f64, smithay::utils::Logical> {
-    let output = f.realand_output(1);
+    let output = f.clarion_output(1);
     for y in (8..400).step_by(4) {
         for x in (8..640).step_by(4) {
             let point = (x as f64, y as f64).into();
-            if f.realand().layout.window_under(&output, point).is_some() {
+            if f.clarion().layout.window_under(&output, point).is_some() {
                 return point;
             }
         }
@@ -906,31 +906,31 @@ fn closing_previews_in_every_mode_keep_client_input_and_activation_blocked() {
         let mut f = setup();
         match mode {
             OverviewMode::Expo => (),
-            OverviewMode::Windows => f.realand().layout.toggle_window_spread(),
+            OverviewMode::Windows => f.clarion().layout.toggle_window_spread(),
             OverviewMode::Stage | OverviewMode::Strip => {
-                let config = f.realand().config.clone();
+                let config = f.clarion().config.clone();
                 config.borrow_mut().overview.style = if mode == OverviewMode::Stage {
-                    realand_config::OverviewStyle::Stage
+                    clarion_config::OverviewStyle::Stage
                 } else {
-                    realand_config::OverviewStyle::Strip
+                    clarion_config::OverviewStyle::Strip
                 };
-                f.realand().layout.update_config(&config.borrow());
-                f.realand().layout.toggle_overview();
+                f.clarion().layout.update_config(&config.borrow());
+                f.clarion().layout.toggle_overview();
             }
         }
-        f.realand_complete_animations();
+        f.clarion_complete_animations();
         let point = preview_point(&mut f);
-        let stale = f.realand().contents_under(point);
+        let stale = f.clarion().contents_under(point);
         assert!(stale.window.is_some(), "mode {mode:?}");
-        assert!(f.realand().layout.close_overview());
-        assert!(f.realand().window_under(point).is_none(), "mode {mode:?}");
-        assert!(f.realand().workspace_under(false, point).is_none());
-        let under = f.realand().contents_under(point);
+        assert!(f.clarion().layout.close_overview());
+        assert!(f.clarion().window_under(point).is_none(), "mode {mode:?}");
+        assert!(f.clarion().workspace_under(false, point).is_none());
+        let under = f.clarion().contents_under(point);
         assert!(under.window.is_none());
         assert!(under.surface.is_none());
-        f.realand().handle_focus_follows_mouse(&stale);
-        f.realand_complete_animations();
-        assert!(!f.realand().layout.is_overview_visible());
+        f.clarion().handle_focus_follows_mouse(&stale);
+        f.clarion_complete_animations();
+        assert!(!f.clarion().layout.is_overview_visible());
     }
 }
 
@@ -938,39 +938,39 @@ fn closing_previews_in_every_mode_keep_client_input_and_activation_blocked() {
 fn mode_handoff_blocks_layout_input_until_the_visible_snapshot_is_released() {
     let mut f = setup();
     let point = preview_point(&mut f);
-    assert!(f.realand().window_under(point).is_some());
-    f.realand_state()
+    assert!(f.clarion().window_under(point).is_some());
+    f.clarion_state()
         .capture_overview_test_frame(OverviewMode::Windows);
-    assert!(f.realand().overview_mode_transition_active());
-    assert!(f.realand().window_under(point).is_none());
-    assert!(f.realand().workspace_under(false, point).is_none());
-    let under = f.realand().contents_under(point);
+    assert!(f.clarion().overview_mode_transition_active());
+    assert!(f.clarion().window_under(point).is_none());
+    assert!(f.clarion().workspace_under(false, point).is_none());
+    let under = f.clarion().contents_under(point);
     assert!(under.window.is_none());
     assert!(under.surface.is_none());
-    f.realand_complete_animations();
-    assert!(!f.realand().overview_mode_transition_active());
-    assert!(f.realand().window_under(point).is_some());
+    f.clarion_complete_animations();
+    assert!(!f.clarion().overview_mode_transition_active());
+    assert!(f.clarion().window_under(point).is_some());
 }
 
 #[test]
 fn privacy_rule_changes_release_previously_unprotected_snapshot_pixels() {
     let mut f = setup();
-    let output = f.realand_output(1);
-    f.realand_state()
+    let output = f.clarion_output(1);
+    f.clarion_state()
         .capture_overview_test_frame(OverviewMode::Windows);
-    assert!(f.realand().output_state[&output]
+    assert!(f.clarion().output_state[&output]
         .screen_transition
         .is_some());
-    f.realand()
+    f.clarion()
         .config
         .borrow_mut()
         .window_rules
-        .push(realand_config::WindowRule {
-            block_out_from: Some(realand_config::appearance::BlockOutFrom::ScreenCapture),
+        .push(clarion_config::WindowRule {
+            block_out_from: Some(clarion_config::appearance::BlockOutFrom::ScreenCapture),
             ..Default::default()
         });
-    f.realand().recompute_window_rules();
-    assert!(f.realand().output_state[&output]
+    f.clarion().recompute_window_rules();
+    assert!(f.clarion().output_state[&output]
         .screen_transition
         .is_none());
     let normal = pixels(&mut f, RenderTarget::Output);
@@ -982,10 +982,10 @@ fn privacy_rule_changes_release_previously_unprotected_snapshot_pixels() {
 fn destroying_the_previewed_window_during_handoff_releases_focus_and_caches() {
     let mut f = setup();
     enter_mode(&mut f, OverviewMode::Stage);
-    f.realand_complete_animations();
-    f.realand_state()
+    f.clarion_complete_animations();
+    f.clarion_state()
         .overview_command(OverviewCommand::ToggleSpread);
-    assert!(f.realand().overview_mode_transition_active());
+    assert!(f.clarion().overview_mode_transition_active());
     let client = f.state.clients[0].id;
     let window = &f.client(client).state.windows[0];
     window.viewport.destroy();
@@ -993,14 +993,14 @@ fn destroying_the_previewed_window_during_handoff_releases_focus_and_caches() {
     window.xdg_surface.destroy();
     window.surface.destroy();
     f.double_roundtrip(client);
-    assert_eq!(f.realand().layout.windows().count(), 0);
-    assert!(f.realand().layout.active_window().is_none());
-    f.realand_complete_animations();
-    assert!(!f.realand().overview_mode_transition_active());
-    let output = f.realand_output(1);
-    assert!(!f.realand().layout.are_transitions_ongoing(Some(&output)));
-    assert!(f.realand().window_under((320., 200.).into()).is_none());
-    if let Some((_, workspace)) = f.realand().workspace_under(false, (320., 200.).into()) {
+    assert_eq!(f.clarion().layout.windows().count(), 0);
+    assert!(f.clarion().layout.active_window().is_none());
+    f.clarion_complete_animations();
+    assert!(!f.clarion().overview_mode_transition_active());
+    let output = f.clarion_output(1);
+    assert!(!f.clarion().layout.are_transitions_ongoing(Some(&output)));
+    assert!(f.clarion().window_under((320., 200.).into()).is_none());
+    if let Some((_, workspace)) = f.clarion().workspace_under(false, (320., 200.).into()) {
         assert!(!workspace.has_windows());
     }
     for target in [
@@ -1015,10 +1015,10 @@ fn destroying_the_previewed_window_during_handoff_releases_focus_and_caches() {
 #[test]
 fn failed_snapshot_allocation_releases_the_previous_mode_image() {
     let mut f = setup();
-    let output = f.realand_output(1);
-    f.realand_state()
+    let output = f.clarion_output(1);
+    f.clarion_state()
         .capture_overview_test_frame(OverviewMode::Windows);
-    assert!(f.realand().output_state[&output]
+    assert!(f.clarion().output_state[&output]
         .screen_transition
         .is_some());
     // Exceed GLES texture width limits while keeping the attempted byte size small.
@@ -1033,9 +1033,9 @@ fn failed_snapshot_allocation_releases_the_previous_mode_image() {
         None,
         None,
     );
-    f.realand_state()
+    f.clarion_state()
         .capture_overview_test_frame(OverviewMode::Windows);
-    assert!(f.realand().output_state[&output]
+    assert!(f.clarion().output_state[&output]
         .screen_transition
         .is_none());
     output.change_current_state(Some(original_mode), None, None, None);
@@ -1095,14 +1095,14 @@ fn session_lock_and_mode_actions_cancel_all_compositor_grabs_before_any_final_mo
     for (mode_switch, moving) in [(false, false), (false, true), (true, false), (true, true)] {
         let mut f = setup();
         enter_mode(&mut f, OverviewMode::Stage);
-        f.realand_complete_animations();
-        let output = f.realand_output(1);
+        f.clarion_complete_animations();
+        let output = f.clarion_output(1);
         let position = preview_point(&mut f);
-        let workspace = f.realand().layout.active_workspace().unwrap().id();
-        let window = f.realand().layout.active_window().unwrap().window.clone();
-        let pointer = f.realand().seat.get_pointer().unwrap();
+        let workspace = f.clarion().layout.active_workspace().unwrap().id();
+        let window = f.clarion().layout.active_window().unwrap().window.clone();
+        let pointer = f.clarion().seat.get_pointer().unwrap();
         pointer.button(
-            f.realand_state(),
+            f.clarion_state(),
             &ButtonEvent {
                 serial: SERIAL_COUNTER.next_serial(),
                 time: 10,
@@ -1111,7 +1111,7 @@ fn session_lock_and_mode_actions_cancel_all_compositor_grabs_before_any_final_mo
             },
         );
         let grab = MoveGrab::new(
-            f.realand_state(),
+            f.clarion_state(),
             AnyStartData::Pointer(GrabStartData {
                 focus: None,
                 button: 0x110,
@@ -1123,14 +1123,14 @@ fn session_lock_and_mode_actions_cancel_all_compositor_grabs_before_any_final_mo
         )
         .unwrap();
         pointer.set_grab(
-            f.realand_state(),
+            f.clarion_state(),
             grab,
             SERIAL_COUNTER.next_serial(),
             Focus::Clear,
         );
         if moving {
             pointer.motion(
-                f.realand_state(),
+                f.clarion_state(),
                 None,
                 &MotionEvent {
                     location: position
@@ -1139,16 +1139,16 @@ fn session_lock_and_mode_actions_cancel_all_compositor_grabs_before_any_final_mo
                     time: 20,
                 },
             );
-            pointer.frame(f.realand_state());
+            pointer.frame(f.clarion_state());
             assert!(f
-                .realand()
+                .clarion()
                 .layout
                 .interactive_move_is_moving_above_output(&output));
         }
 
-        let touch = f.realand().seat.add_touch();
+        let touch = f.clarion().seat.add_touch();
         touch.down(
-            f.realand_state(),
+            f.clarion_state(),
             None,
             &DownEvent {
                 slot: Some(1).into(),
@@ -1171,9 +1171,9 @@ fn session_lock_and_mode_actions_cancel_all_compositor_grabs_before_any_final_mo
             Some(window.clone()),
             OverviewMode::Stage,
         );
-        touch.set_grab(f.realand_state(), grab, SERIAL_COUNTER.next_serial());
+        touch.set_grab(f.clarion_state(), grab, SERIAL_COUNTER.next_serial());
 
-        let tablet_seat = f.realand().seat.tablet_seat();
+        let tablet_seat = f.clarion().seat.tablet_seat();
         let tablet = tablet_seat.add_tablet(&TabletDescriptor {
             name: "Lock cancellation tablet".into(),
             usb_id: None,
@@ -1186,7 +1186,7 @@ fn session_lock_and_mode_actions_cancel_all_compositor_grabs_before_any_final_mo
             capabilities: TabletToolCapabilities::empty(),
         });
         pen.proximity_in(
-            f.realand_state(),
+            f.clarion_state(),
             None,
             tablet,
             &tool::ProximityInEvent {
@@ -1197,7 +1197,7 @@ fn session_lock_and_mode_actions_cancel_all_compositor_grabs_before_any_final_mo
             },
         );
         pen.down(
-            f.realand_state(),
+            f.clarion_state(),
             &tool::DownEvent {
                 serial: SERIAL_COUNTER.next_serial(),
                 time: 10,
@@ -1218,7 +1218,7 @@ fn session_lock_and_mode_actions_cancel_all_compositor_grabs_before_any_final_mo
             OverviewMode::Stage,
         );
         pen.set_grab(
-            f.realand_state(),
+            f.clarion_state(),
             grab,
             10,
             SERIAL_COUNTER.next_serial(),
@@ -1227,35 +1227,35 @@ fn session_lock_and_mode_actions_cancel_all_compositor_grabs_before_any_final_mo
         assert!(pointer.is_grabbed() && touch.is_grabbed() && pen.is_grabbed());
 
         let _lock = if mode_switch {
-            f.realand_state()
-                .do_action(realand_config::Action::ToggleExpo, false);
+            f.clarion_state()
+                .do_action(clarion_config::Action::ToggleExpo, false);
             None
         } else {
             let lock = request_session_lock(&mut f);
             assert!(matches!(
-                f.realand().lock_state,
+                f.clarion().lock_state,
                 crate::compositor::LockState::WaitingForSurfaces { .. }
             ));
             assert!(
-                !f.realand().is_locked(),
+                !f.clarion().is_locked(),
                 "surface wait is distinct from a completed lock"
             );
             Some(lock)
         };
         assert!(!pointer.is_grabbed() && !touch.is_grabbed() && !pen.is_grabbed());
         assert!(!f
-            .realand()
+            .clarion()
             .layout
             .interactive_move_is_moving_above_output(&output));
-        assert!(f.realand().layout.is_overview_open());
+        assert!(f.clarion().layout.is_overview_open());
         let expected_mode = if mode_switch {
             OverviewMode::Expo
         } else {
             OverviewMode::Stage
         };
-        assert_eq!(f.realand().layout.overview_mode(), expected_mode);
+        assert_eq!(f.clarion().layout.overview_mode(), expected_mode);
         pointer.button(
-            f.realand_state(),
+            f.clarion_state(),
             &ButtonEvent {
                 serial: SERIAL_COUNTER.next_serial(),
                 time: 21,
@@ -1264,7 +1264,7 @@ fn session_lock_and_mode_actions_cancel_all_compositor_grabs_before_any_final_mo
             },
         );
         touch.up(
-            f.realand_state(),
+            f.clarion_state(),
             &UpEvent {
                 slot: Some(1).into(),
                 serial: SERIAL_COUNTER.next_serial(),
@@ -1272,30 +1272,30 @@ fn session_lock_and_mode_actions_cancel_all_compositor_grabs_before_any_final_mo
             },
         );
         pen.up(
-            f.realand_state(),
+            f.clarion_state(),
             &tool::UpEvent {
                 serial: SERIAL_COUNTER.next_serial(),
                 time: 21,
             },
         );
-        f.realand_complete_animations();
-        assert!(f.realand().layout.is_overview_open());
-        assert_eq!(f.realand().layout.overview_mode(), expected_mode);
+        f.clarion_complete_animations();
+        assert!(f.clarion().layout.is_overview_open());
+        assert_eq!(f.clarion().layout.overview_mode(), expected_mode);
         assert_eq!(
-            f.realand().layout.active_workspace().unwrap().id(),
+            f.clarion().layout.active_workspace().unwrap().id(),
             workspace
         );
-        assert_eq!(f.realand().layout.active_window().unwrap().window, window);
+        assert_eq!(f.clarion().layout.active_window().unwrap().window, window);
     }
 }
 
 #[test]
 fn session_lock_request_releases_snapshots_and_blocks_corner_actions() {
     let mut f = setup();
-    let output = f.realand_output(1);
-    f.realand_state()
+    let output = f.clarion_output(1);
+    f.clarion_state()
         .capture_overview_test_frame(OverviewMode::Windows);
-    assert!(f.realand().output_state[&output]
+    assert!(f.clarion().output_state[&output]
         .screen_transition
         .is_some());
     let client = f.add_client();
@@ -1311,20 +1311,20 @@ fn session_lock_request_releases_snapshots_and_blocks_corner_actions() {
     let _lock = manager.lock(&c.qh, ());
     f.double_roundtrip(client);
     assert!(!matches!(
-        f.realand().lock_state,
+        f.clarion().lock_state,
         crate::compositor::LockState::Unlocked
     ));
-    assert!(f.realand().output_state[&output]
+    assert!(f.clarion().output_state[&output]
         .screen_transition
         .is_none());
-    f.realand_state().process_hot_corner_motion(
+    f.clarion_state().process_hot_corner_motion(
         (636., 4.).into(),
         Some((output.clone(), crate::compositor::HotCornerKind::TopRight)),
     );
-    assert!(f.realand().hot_corner_latch().is_none());
-    f.realand_state()
+    assert!(f.clarion().hot_corner_latch().is_none());
+    f.clarion_state()
         .capture_overview_test_frame(OverviewMode::Windows);
-    assert!(f.realand().output_state[&output]
+    assert!(f.clarion().output_state[&output]
         .screen_transition
         .is_none());
 }
@@ -1333,19 +1333,19 @@ fn session_lock_request_releases_snapshots_and_blocks_corner_actions() {
 #[ignore = "requires a real DRM render node and Vulkan; never acquires display master"]
 fn native_stage_handoff_preserves_pixels_and_privacy_targets() {
     let mut config = Config {
-        renderer: Some(realand_config::RendererBackendConfig::Vulkan),
+        renderer: Some(clarion_config::RendererBackendConfig::Vulkan),
         ..Default::default()
     };
-    config.window_rules.push(realand_config::WindowRule {
-        block_out_from: Some(realand_config::appearance::BlockOutFrom::ScreenCapture),
+    config.window_rules.push(clarion_config::WindowRule {
+        block_out_from: Some(clarion_config::appearance::BlockOutFrom::ScreenCapture),
         ..Default::default()
     });
     let mut f = setup_with_config(config);
     assert_eq!(
-        f.realand_state().backend.renderer_backend(),
+        f.clarion_state().backend.renderer_backend(),
         crate::render_helpers::renderer::RendererBackendType::Vulkan
     );
-    f.realand_state()
+    f.clarion_state()
         .backend
         .with_renderer(|renderer| match renderer {
             crate::render_helpers::renderer::AnyRenderer::Native(renderer) => eprintln!(
@@ -1357,9 +1357,9 @@ fn native_stage_handoff_preserves_pixels_and_privacy_targets() {
             }
         })
         .unwrap();
-    f.realand().layout.toggle_overview();
-    f.realand_complete_animations();
-    assert_eq!(f.realand().layout.overview_mode(), OverviewMode::Stage);
+    f.clarion().layout.toggle_overview();
+    f.clarion_complete_animations();
+    assert_eq!(f.clarion().layout.overview_mode(), OverviewMode::Stage);
     let targets = [
         RenderTarget::Output,
         RenderTarget::Screencast,
@@ -1368,12 +1368,12 @@ fn native_stage_handoff_preserves_pixels_and_privacy_targets() {
     let before = targets.map(|target| pixels(&mut f, target));
     assert_ne!(before[0], before[1]);
     assert_ne!(before[0], before[2]);
-    f.realand_state()
+    f.clarion_state()
         .overview_command(OverviewCommand::ToggleSpread);
     for (target, expected) in targets.into_iter().zip(before) {
         assert_eq!(pixels(&mut f, target), expected, "native target {target:?}");
     }
-    f.realand_complete_animations();
-    assert!(!f.realand().overview_mode_transition_active());
+    f.clarion_complete_animations();
+    assert!(!f.clarion().overview_mode_transition_active());
     eprintln!("HARDWARE: native Stage handoff captured composed pixels separately for Output/Screencast/ScreenCapture");
 }

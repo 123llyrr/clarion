@@ -1,13 +1,13 @@
 // We need to implement RenderElement manually due to AsGlesFrame requirement.
 // This macro does it for us.
 #[macro_export]
-macro_rules! realand_render_elements {
+macro_rules! clarion_render_elements {
     // The two callable variants: with <R> and without <R>. They include From impls because nested
     // repetitions ($type and $variant with + and $R with ?) don't work properly.
     ($name:ident<R> => { $($variant:ident = $type:ty),+ $(,)? }) => {
-        $crate::realand_render_elements!(@impl $name () ($name<R>) => { $($variant = $type),+ });
+        $crate::clarion_render_elements!(@impl $name () ($name<R>) => { $($variant = $type),+ });
 
-        $(impl<R: $crate::render_helpers::renderer::RealandRenderer> From<$type> for $name<R> {
+        $(impl<R: $crate::render_helpers::renderer::ClarionRenderer> From<$type> for $name<R> {
             fn from(x: $type) -> Self {
                 Self::$variant(x)
             }
@@ -15,7 +15,7 @@ macro_rules! realand_render_elements {
     };
 
     ($name:ident => { $($variant:ident = $type:ty),+ $(,)? }) => {
-        $crate::realand_render_elements!(@impl $name ($name) () => { $($variant = $type),+ });
+        $crate::clarion_render_elements!(@impl $name ($name) () => { $($variant = $type),+ });
 
         $(impl From<$type> for $name {
             fn from(x: $type) -> Self {
@@ -31,11 +31,11 @@ macro_rules! realand_render_elements {
     (@impl $name:ident ($($name_no_R:ident)?) ($($name_R:ident<$R:ident>)?) => { $($variant:ident = $type:ty),+ }) => {
         #[allow(clippy::large_enum_variant)]
         #[derive(Debug)]
-        pub enum $name$(<$R: $crate::render_helpers::renderer::RealandRenderer>)? {
+        pub enum $name$(<$R: $crate::render_helpers::renderer::ClarionRenderer>)? {
             $($variant($type)),+
         }
 
-        impl$(<$R: $crate::render_helpers::renderer::RealandRenderer>)? smithay::backend::renderer::element::Element for $name$(<$R>)? {
+        impl$(<$R: $crate::render_helpers::renderer::ClarionRenderer>)? smithay::backend::renderer::element::Element for $name$(<$R>)? {
             fn id(&self) -> &smithay::backend::renderer::element::Id {
                 match self {
                     $($name::$variant(elem) => elem.id()),+

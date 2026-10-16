@@ -3,11 +3,11 @@ use std::collections::HashMap;
 use std::fmt::{self, Write as _};
 use std::rc::Rc;
 
+use clarion_config::{Action, Bind, Config, Key, ModKey, Modifiers, Trigger};
 use pangocairo::cairo::{self, ImageSurface};
 use pangocairo::pango::{
     AttrColor, AttrInt, AttrList, AttrString, EllipsizeMode, FontDescription, Weight, WrapMode,
 };
-use realand_config::{Action, Bind, Config, Key, ModKey, Modifiers, Trigger};
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::{ContextId, ImportMem, Texture};
 use smithay::input::keyboard::xkb::keysym_get_name;
@@ -18,7 +18,7 @@ use smithay::utils::user_data::UserDataMap;
 use smithay::utils::{Scale, Transform};
 
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
-use crate::render_helpers::renderer::RealandRenderer;
+use crate::render_helpers::renderer::ClarionRenderer;
 use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
 use crate::utils::{output_size, to_physical_precise_round};
 
@@ -126,7 +126,16 @@ impl HotkeyOverlay {
         self.buffers = UserDataMap::new();
     }
 
-    pub fn render<R: RealandRenderer>(
+    pub(crate) fn on_native_renderer_replaced(&self) {
+        if let Some(cache) = self
+            .buffers
+            .get::<OverlayTextures<crate::render_helpers::vulkan::VulkanTexture>>()
+        {
+            cache.0.borrow_mut().clear();
+        }
+    }
+
+    pub fn render<R: ClarionRenderer>(
         &self,
         renderer: &mut R,
         output: &Output,
@@ -414,7 +423,7 @@ where
     R: ImportMem,
     R::Error: std::error::Error + Send + Sync + 'static,
 {
-    let _span = realand_tracy_span!("hotkey_overlay::render");
+    let _span = clarion_tracy_span!("hotkey_overlay::render");
     let rendered = render_surface(config, mod_key, scale, target_size, page)?;
     let size = (rendered.surface.width(), rendered.surface.height());
     let data = rendered.surface.take_data()?;
@@ -840,7 +849,7 @@ fn parse_action_markup(action: &str) -> (Option<AttrList>, String) {
 
 fn action_name(action: &Action) -> String {
     match action {
-        Action::Quit(_) => String::from("Exit realand"),
+        Action::Quit(_) => String::from("Exit clarion"),
         Action::ShowHotkeyOverlay => String::from("Show Important Hotkeys"),
         Action::CloseWindow => String::from("Close Focused Window"),
         Action::FocusColumnLeft => String::from("Focus Column to the Left"),
@@ -1295,7 +1304,7 @@ mod tests {
     }
 
     fn save_preview(surface: &ImageSurface, size: (i32, i32), scale: f64, page: usize, kind: &str) {
-        let Some(directory) = std::env::var_os("REALAND_HOTKEY_TEST_PREVIEW") else {
+        let Some(directory) = std::env::var_os("CLARION_HOTKEY_TEST_PREVIEW") else {
             return;
         };
         let mut rgba = Vec::new();
@@ -1382,7 +1391,7 @@ mod tests {
                 .0
                 .iter()
                 .any(|pixel| pixel[3] > 100));
-            if let Some(directory) = std::env::var_os("REALAND_HOTKEY_TEST_PREVIEW") {
+            if let Some(directory) = std::env::var_os("CLARION_HOTKEY_TEST_PREVIEW") {
                 let path = std::path::Path::new(&directory).join(format!(
                     "supreme-hotkeys-gpu-{}x{}-{scale}-page-{}.png",
                     size.0, size.1, hotkeys.page,

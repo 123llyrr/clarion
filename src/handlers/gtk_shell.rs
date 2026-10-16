@@ -6,7 +6,7 @@
 
 use std::sync::Mutex;
 
-use realand_ipc::GtkAppMenu;
+use clarion_ipc::GtkAppMenu;
 use smithay::reexports::wayland_server::backend::GlobalId;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{

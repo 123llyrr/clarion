@@ -22,7 +22,7 @@ struct LazyClock {
 #[derive(Debug, Clone)]
 struct AdjustableClock {
     inner: LazyClock,
-    rate_clock: realand_core::rate_clock::RateClock,
+    rate_clock: clarion_motion::rate_clock::RateClock,
 }
 
 impl Clock {
@@ -132,7 +132,7 @@ impl LazyClock {
 
 impl AdjustableClock {
     pub fn new(mut inner: LazyClock) -> Self {
-        let rate_clock = realand_core::rate_clock::RateClock::new(inner.now());
+        let rate_clock = clarion_motion::rate_clock::RateClock::new(inner.now());
         Self { inner, rate_clock }
     }
 
@@ -230,8 +230,8 @@ mod tests {
 
     #[test]
     fn mixed_refresh_forecasts_restore_the_event_clock_at_every_rate() {
-        use realand_core::frame_clock::FrameClock;
-        use realand_core::trajectory::{Curve, Trajectory};
+        use clarion_motion::trajectory::{Curve, Trajectory};
+        use clarion_timing::frame_clock::FrameClock;
 
         let base = Duration::from_secs(1);
         let period = Duration::from_nanos(8_333_333);
@@ -312,7 +312,7 @@ mod tests {
 
     #[test]
     fn completion_at_foreign_future_target_does_not_escape_projection() {
-        use realand_core::trajectory::{Curve, Trajectory};
+        use clarion_motion::trajectory::{Curve, Trajectory};
 
         let clock = Clock::with_time(Duration::from_secs(1));
         let trajectory = Trajectory::ease_at(

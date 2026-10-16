@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use calloop::EventLoop;
-use realand_config::Config;
+use clarion_config::Config;
 use smithay::reexports::wayland_server::Display;
 
 use crate::compositor::State;

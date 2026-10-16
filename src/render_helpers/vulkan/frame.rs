@@ -1993,12 +1993,19 @@ impl Drop for VulkanFrame<'_> {
                 // Returning from Drop still drops every Rust field. Retain all
                 // image, custom shader and pipeline owners before abandoning
                 // the raw command, semaphore and vertex-buffer handles.
+                super::lifecycle::record_quarantine();
                 std::mem::forget(std::mem::take(&mut self.draws));
+                super::lifecycle::record_quarantine();
                 std::mem::forget(self.snapshot.take());
+                super::lifecycle::record_quarantine();
                 std::mem::forget(self.target_keepalive.take());
+                super::lifecycle::record_quarantine();
                 std::mem::forget(std::mem::take(&mut self.scratch_textures));
+                super::lifecycle::record_quarantine();
                 std::mem::forget(std::mem::take(&mut self.client_buffers));
+                super::lifecycle::record_quarantine();
                 std::mem::forget(self.pipeline_mgr.clone());
+                super::lifecycle::record_quarantine();
                 std::mem::forget(self.gpu_timing.take());
                 return;
             }
@@ -2131,11 +2138,17 @@ impl Drop for GpuCompletion {
                 ?err,
                 "Vulkan fence wait failed; retaining in-flight GPU resources until process exit"
             );
+            super::lifecycle::record_quarantine();
             std::mem::forget(std::mem::take(&mut self._textures));
+            super::lifecycle::record_quarantine();
             std::mem::forget(std::mem::take(&mut self._custom));
+            super::lifecycle::record_quarantine();
             std::mem::forget(std::mem::take(&mut self.scratch));
+            super::lifecycle::record_quarantine();
             std::mem::forget(std::mem::take(self.client_buffers.get_mut().unwrap()));
+            super::lifecycle::record_quarantine();
             std::mem::forget(self._pipeline.clone());
+            super::lifecycle::record_quarantine();
             std::mem::forget(self.gpu_timing.take());
             return;
         }

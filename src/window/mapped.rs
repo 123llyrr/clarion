@@ -1,7 +1,7 @@
 use std::cell::{Cell, Ref, RefCell};
 use std::time::Duration;
 
-use realand_config::{Color, Config, CornerRadius, GradientInterpolation, WindowRule};
+use clarion_config::{Color, Config, CornerRadius, GradientInterpolation, WindowRule};
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::GlesRenderer;
@@ -26,16 +26,16 @@ use smithay::wayland::shell::xdg::{
 use wayland_backend::server::Credentials;
 
 use super::{surface_content_type, ResolvedWindowRules, WindowRef};
+use crate::clarion_render_elements;
 use crate::handlers::KdeDecorationsModeState;
 use crate::layout::{
     ConfigureIntent, InteractiveResizeData, LayoutElement, LayoutElementRenderElement,
     LayoutElementRenderSnapshot, SizingMode,
 };
-use crate::realand_render_elements;
 use crate::render_helpers::background_effect::BackgroundEffectElement;
 use crate::render_helpers::border::BorderRenderElement;
 use crate::render_helpers::offscreen::OffscreenData;
-use crate::render_helpers::renderer::RealandRenderer;
+use crate::render_helpers::renderer::ClarionRenderer;
 use crate::render_helpers::snapshot::RenderSnapshot;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::surface::{
@@ -78,7 +78,7 @@ pub struct Mapped {
     need_to_recompute_rules: bool,
 
     /// Last committed content hint, used to invalidate dynamic window rules.
-    content_type: realand_config::window_rule::ContentType,
+    content_type: clarion_config::window_rule::ContentType,
 
     /// Whether this window needs a configure this loop cycle.
     ///
@@ -119,7 +119,7 @@ pub struct Mapped {
     block_out_buffer: RefCell<SolidColorBuffer>,
 
     /// The blur config, passed for background effect rendering.
-    blur_config: realand_config::Blur,
+    blur_config: clarion_config::Blur,
 
     /// Whether the next configure should be animated, if the configured state changed.
     animate_next_configure: bool,
@@ -217,7 +217,7 @@ pub struct Mapped {
     focus_timestamp: Option<Duration>,
 }
 
-realand_render_elements! {
+clarion_render_elements! {
     WindowCastRenderElements<R> => {
         Layout = LayoutElementRenderElement<R>,
         // Blocked-out window with rounded corners.
@@ -249,7 +249,7 @@ impl MappedId {
     /// That way, clients can associate a foreign toplevel handle with an IPC window ID.
     ///
     /// We use the decimal representation of the ID, which is up to 20 characters long for u64::MAX.
-    /// This is within the 32-character limit, and is nice because it matches up with how `realand msg`
+    /// This is within the 32-character limit, and is nice because it matches up with how `clarion msg`
     /// prints the IDs to the console.
     ///
     /// This namespace can be extended in the future, with any non-numeric prefix to disambiguate.
@@ -442,12 +442,12 @@ impl Mapped {
     }
 
     /// Renders a snapshot of the window without popups.
-    fn render_snapshot<R: RealandRenderer>(
+    fn render_snapshot<R: ClarionRenderer>(
         &self,
         renderer: &mut R,
         geometry: Rectangle<i32, Logical>,
     ) -> LayoutElementRenderSnapshot<R::TextureId> {
-        let _span = realand_tracy_span!("Mapped::render_snapshot");
+        let _span = clarion_tracy_span!("Mapped::render_snapshot");
 
         let size = geometry.size.to_f64();
 
@@ -586,7 +586,7 @@ impl Mapped {
         &self.last_interactive_resize_start
     }
 
-    pub fn render_for_screen_cast<R: RealandRenderer>(
+    pub fn render_for_screen_cast<R: ClarionRenderer>(
         &self,
         renderer: &mut R,
         scale: Scale<f64>,
@@ -749,7 +749,7 @@ impl LayoutElement for Mapped {
         &self.window
     }
 
-    fn update_config(&mut self, blur_config: realand_config::Blur) {
+    fn update_config(&mut self, blur_config: clarion_config::Blur) {
         self.blur_config = blur_config;
     }
 
@@ -770,7 +770,7 @@ impl LayoutElement for Mapped {
         self.window.is_in_input_region(&surface_local)
     }
 
-    fn render_normal<R: RealandRenderer>(
+    fn render_normal<R: ClarionRenderer>(
         &self,
         ctx: RenderCtx<R>,
         location: Point<f64, Logical>,
@@ -808,7 +808,7 @@ impl LayoutElement for Mapped {
         }
     }
 
-    fn render_popups<R: RealandRenderer>(
+    fn render_popups<R: ClarionRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         location: Point<f64, Logical>,
@@ -826,7 +826,7 @@ impl LayoutElement for Mapped {
             let popup_rules = match popup {
                 PopupKind::Xdg(_) => self.rules.popups,
                 // IME popups aren't affected by rules for regular popups.
-                PopupKind::InputMethod(_) => realand_config::ResolvedPopupsRules::default(),
+                PopupKind::InputMethod(_) => clarion_config::ResolvedPopupsRules::default(),
             };
             let alpha = alpha * popup_rules.opacity.unwrap_or(1.).clamp(0., 1.);
 
@@ -872,7 +872,7 @@ impl LayoutElement for Mapped {
         }
     }
 
-    fn render_background_effect<R: RealandRenderer>(
+    fn render_background_effect<R: ClarionRenderer>(
         &self,
         ctx: RenderCtx<R>,
         geometry: Rectangle<f64, Logical>,

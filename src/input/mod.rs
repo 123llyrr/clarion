@@ -4,11 +4,11 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use calloop::timer::{TimeoutAction, Timer};
-use input::event::gesture::GestureEventCoordinates as _;
-use realand_config::{
+use clarion_config::{
     Action, Bind, Binds, Config, Key, ModKey, Modifiers, MruDirection, SwitchBinds, Trigger,
 };
-use realand_ipc::LayoutSwitchTarget;
+use clarion_ipc::LayoutSwitchTarget;
+use input::event::gesture::GestureEventCoordinates as _;
 use smithay::backend::input::{
     AbsolutePositionEvent, Axis, AxisSource, ButtonState, Device, DeviceCapability, Event,
     GestureBeginEvent, GestureEndEvent, GesturePinchUpdateEvent as _, GestureSwipeUpdateEvent as _,
@@ -70,7 +70,7 @@ pub mod spatial_movement_grab;
 pub mod touch_overview_grab;
 pub use crate::gestures::{scroll_swipe_gesture, scroll_tracker, swipe_tracker};
 
-use backend_ext::{RealandInputBackend as InputBackend, RealandInputDevice as _};
+use backend_ext::{ClarionInputBackend as InputBackend, ClarionInputDevice as _};
 
 pub const DOUBLE_CLICK_TIME: Duration = Duration::from_millis(400);
 
@@ -139,7 +139,7 @@ impl State {
     where
         I::Device: 'static, // Needed for downcasting.
     {
-        let _span = realand_tracy_span!("process_input_event");
+        let _span = clarion_tracy_span!("process_input_event");
 
         // Discrete events observe all motion before them. Continuous pointer packets
         // keep protocol ordering but defer desktop animation/layout work to the frame.
@@ -147,35 +147,35 @@ impl State {
             &event,
             InputEvent::PointerMotion { .. } | InputEvent::PointerMotionAbsolute { .. }
         ) {
-            self.realand.layout.flush_pending_move();
-            self.realand.advance_animations();
+            self.clarion.layout.flush_pending_move();
+            self.clarion.advance_animations();
         }
 
-        if self.realand.monitors_active {
+        if self.clarion.monitors_active {
             // Notify the idle-notifier of activity.
             if should_notify_activity(&event) {
-                self.realand.notify_activity();
+                self.clarion.notify_activity();
             }
         } else {
             // Power on monitors if they were off.
             if should_activate_monitors(&event) {
-                self.realand.activate_monitors(&mut self.backend);
+                self.clarion.activate_monitors(&mut self.backend);
 
                 // Notify the idle-notifier of activity only if we're also powering on the
                 // monitors.
-                self.realand.notify_activity();
+                self.clarion.notify_activity();
             }
         }
 
         if should_reset_pointer_inactivity_timer(&event) {
-            self.realand.reset_pointer_inactivity_timer();
+            self.clarion.reset_pointer_inactivity_timer();
         }
 
         let hide_hotkey_overlay =
-            self.realand.hotkey_overlay.is_open() && should_hide_hotkey_overlay(&event);
+            self.clarion.hotkey_overlay.is_open() && should_hide_hotkey_overlay(&event);
 
         let hide_exit_confirm_dialog =
-            self.realand.exit_confirm_dialog.is_open() && should_hide_exit_confirm_dialog(&event);
+            self.clarion.exit_confirm_dialog.is_open() && should_hide_exit_confirm_dialog(&event);
 
         let mut consumed_by_a11y = false;
         let mut consumed_by_hotkey_overlay = false;
@@ -220,28 +220,28 @@ impl State {
         }
 
         // Do this last so that screenshot still gets it.
-        if hide_hotkey_overlay && self.realand.hotkey_overlay.hide() {
-            self.realand.queue_redraw_all();
+        if hide_hotkey_overlay && self.clarion.hotkey_overlay.hide() {
+            self.clarion.queue_redraw_all();
         }
 
-        if hide_exit_confirm_dialog && self.realand.exit_confirm_dialog.hide() {
-            self.realand.queue_redraw_all();
+        if hide_exit_confirm_dialog && self.clarion.exit_confirm_dialog.hide() {
+            self.clarion.queue_redraw_all();
         }
     }
 
     pub fn process_libinput_event(&mut self, event: &mut InputEvent<LibinputInputBackend>) {
-        let _span = realand_tracy_span!("process_libinput_event");
+        let _span = clarion_tracy_span!("process_libinput_event");
 
         match event {
             InputEvent::DeviceAdded { device } => {
-                self.realand.devices.insert(device.clone());
+                self.clarion.devices.insert(device.clone());
 
                 if device.has_capability(input::DeviceCapability::TabletTool) {
                     match device.size() {
                         Some((w, h)) => {
                             let aspect_ratio = w / h;
                             let data = TabletData { aspect_ratio };
-                            self.realand.tablets.insert(device.clone(), data);
+                            self.clarion.tablets.insert(device.clone(), data);
                         }
                         None => {
                             warn!("tablet tool device has no size");
@@ -251,7 +251,7 @@ impl State {
 
                 if device.has_capability(input::DeviceCapability::Keyboard) {
                     if let Some(led_state) = self
-                        .realand
+                        .clarion
                         .seat
                         .get_keyboard()
                         .map(|keyboard| keyboard.led_state())
@@ -261,15 +261,15 @@ impl State {
                 }
 
                 if device.has_capability(input::DeviceCapability::Touch) {
-                    self.realand.touch.insert(device.clone());
+                    self.clarion.touch.insert(device.clone());
                 }
 
-                apply_libinput_settings(&self.realand.config.borrow().input, device);
+                apply_libinput_settings(&self.clarion.config.borrow().input, device);
             }
             InputEvent::DeviceRemoved { device } => {
-                self.realand.touch.remove(device);
-                self.realand.tablets.remove(device);
-                self.realand.devices.remove(device);
+                self.clarion.touch.remove(device);
+                self.clarion.tablets.remove(device);
+                self.clarion.devices.remove(device);
             }
             _ => (),
         }
@@ -277,20 +277,20 @@ impl State {
 
     fn on_device_added(&mut self, device: impl Device) {
         if device.has_capability(DeviceCapability::TabletTool) {
-            let tablet_seat = self.realand.seat.tablet_seat();
+            let tablet_seat = self.clarion.seat.tablet_seat();
 
             let desc = TabletDescriptor::from(&device);
-            tablet_seat.add_wp_tablet(&self.realand.display_handle, &desc);
+            tablet_seat.add_wp_tablet(&self.clarion.display_handle, &desc);
         }
-        if device.has_capability(DeviceCapability::Touch) && self.realand.seat.get_touch().is_none()
+        if device.has_capability(DeviceCapability::Touch) && self.clarion.seat.get_touch().is_none()
         {
-            self.realand.seat.add_touch();
+            self.clarion.seat.add_touch();
         }
     }
 
     fn on_device_removed(&mut self, device: impl Device) {
         if device.has_capability(DeviceCapability::TabletTool) {
-            let tablet_seat = self.realand.seat.tablet_seat();
+            let tablet_seat = self.clarion.seat.tablet_seat();
 
             let desc = TabletDescriptor::from(&device);
             tablet_seat.remove_tablet(&desc);
@@ -300,17 +300,17 @@ impl State {
                 tablet_seat.clear_tools();
             }
         }
-        if device.has_capability(DeviceCapability::Touch) && self.realand.touch.is_empty() {
-            self.realand.seat.remove_touch();
+        if device.has_capability(DeviceCapability::Touch) && self.clarion.touch.is_empty() {
+            self.clarion.seat.remove_touch();
         }
     }
 
     /// Computes the rectangle that covers all outputs in global space.
     fn global_bounding_rectangle(&self) -> Option<Rectangle<i32, Logical>> {
-        self.realand.global_space.outputs().fold(
+        self.clarion.global_space.outputs().fold(
             None,
             |acc: Option<Rectangle<i32, Logical>>, output| {
-                self.realand
+                self.clarion
                     .global_space
                     .output_geometry(output)
                     .map(|geo| acc.map(|acc| acc.merge(geo)).unwrap_or(geo))
@@ -330,14 +330,14 @@ impl State {
         I::Device: 'static,
     {
         let device_output = event.device().output(self);
-        let device_output = device_output.filter(|output| self.realand.output_exists(output));
+        let device_output = device_output.filter(|output| self.clarion.output_exists(output));
         let device_output = device_output.as_ref();
-        let mapped_output = device_output.or_else(|| self.realand.output_for_tablet());
+        let mapped_output = device_output.or_else(|| self.clarion.output_for_tablet());
 
         // If the tablet is configured to map to the focused window, use that window's geometry on
         // the mapped output (or on the focused output if no specific output is mapped).
         let map_to_focused_window = self
-            .realand
+            .clarion
             .config
             .borrow()
             .input
@@ -345,12 +345,12 @@ impl State {
             .map_to_focused_window;
         // But only if the keyboard focus is on the layout, so that it doesn't trigger on the lock
         // screen and such.
-        let window_target = if map_to_focused_window && self.realand.keyboard_focus.is_layout() {
-            let output = mapped_output.or_else(|| self.realand.layout.active_output());
+        let window_target = if map_to_focused_window && self.clarion.keyboard_focus.is_layout() {
+            let output = mapped_output.or_else(|| self.clarion.layout.active_output());
             output.and_then(|output| {
-                let monitor = self.realand.layout.monitor_for_output(output)?;
+                let monitor = self.clarion.layout.monitor_for_output(output)?;
                 let mut rect = monitor.active_window_visual_rectangle()?;
-                let output_geo = self.realand.global_space.output_geometry(output)?;
+                let output_geo = self.clarion.global_space.output_geometry(output)?;
                 rect.loc += output_geo.loc.to_f64();
                 Some((rect, output))
             })
@@ -366,7 +366,7 @@ impl State {
                 output.current_transform(),
             )
         } else if let Some(output) = mapped_output {
-            let geo = self.realand.global_space.output_geometry(output)?;
+            let geo = self.clarion.global_space.output_geometry(output)?;
             (
                 geo.to_f64(),
                 true,
@@ -378,7 +378,7 @@ impl State {
 
             // FIXME: this 1 px size should ideally somehow be computed for the rightmost output
             // corresponding to the position on the right when clamping.
-            let output = self.realand.global_space.outputs().next()?;
+            let output = self.clarion.global_space.outputs().next()?;
             let scale = output.current_scale().fractional_scale();
 
             // Do not keep ratio for the unified mode as this is what OpenTabletDriver expects.
@@ -396,7 +396,7 @@ impl State {
 
             let device = event.device();
             if let Some(device) = (&device as &dyn Any).downcast_ref::<input::Device>() {
-                if let Some(data) = self.realand.tablets.get(device) {
+                if let Some(data) = self.clarion.tablets.get(device) {
                     // This code does the same thing as mutter with "keep aspect ratio" enabled.
                     let size = transform.invert().transform_size(target_geo.size);
                     let output_aspect_ratio = size.w / size.h;
@@ -420,11 +420,11 @@ impl State {
     }
 
     fn is_inhibiting_shortcuts(&self) -> bool {
-        self.realand
+        self.clarion
             .keyboard_focus
             .surface()
             .and_then(|surface| {
-                self.realand
+                self.clarion
                     .keyboard_shortcuts_inhibiting_surfaces
                     .get(surface)
             })
@@ -432,21 +432,21 @@ impl State {
     }
 
     pub(crate) fn desktop_owns_macos_shortcuts(&self) -> bool {
-        if !matches!(self.realand.lock_state, LockState::Unlocked)
-            || self.realand.screenshot_ui.is_open()
-            || self.realand.window_mru_ui.is_open()
-            || self.realand.exit_confirm_dialog.is_open()
-            || self.realand.hotkey_overlay.is_open()
+        if !matches!(self.clarion.lock_state, LockState::Unlocked)
+            || self.clarion.screenshot_ui.is_open()
+            || self.clarion.window_mru_ui.is_open()
+            || self.clarion.exit_confirm_dialog.is_open()
+            || self.clarion.hotkey_overlay.is_open()
         {
             return false;
         }
-        let KeyboardFocus::LayerShell { surface } = &self.realand.keyboard_focus else {
+        let KeyboardFocus::LayerShell { surface } = &self.clarion.keyboard_focus else {
             return false;
         };
         // Logical focus names the root even while a popup owns the actual seat.
         // Only the base desktop, never an interaction view or popup, opts in.
         if self
-            .realand
+            .clarion
             .seat
             .get_keyboard()
             .unwrap()
@@ -456,13 +456,13 @@ impl State {
         {
             return false;
         }
-        self.realand
+        self.clarion
             .mapped_layer_surfaces
             .keys()
-            .any(|layer| layer.wl_surface() == surface && layer.namespace() == "realand-desktop")
+            .any(|layer| layer.wl_surface() == surface && layer.namespace() == "clarion-desktop")
             && crate::handlers::gtk_shell::surface_application_id_matches(
                 surface,
-                "io.github.realand.Desktop.MacOS",
+                "io.github.clarion.Desktop.MacOS",
             )
     }
 
@@ -472,7 +472,7 @@ impl State {
         consumed_by_a11y: &mut bool,
         consumed_by_hotkey_overlay: &mut bool,
     ) {
-        let mod_key = self.backend.mod_key(&self.realand.config.borrow());
+        let mod_key = self.backend.mod_key(&self.clarion.config.borrow());
 
         let serial = SERIAL_COUNTER.next_serial();
         let time = Event::time_msec(&event);
@@ -486,8 +486,8 @@ impl State {
         // But it's good enough for now.
         // FIXME: handle this properly.
         if !pressed {
-            if let Some(token) = self.realand.bind_repeat_timer.take() {
-                self.realand.event_loop.remove(token);
+            if let Some(token) = self.clarion.bind_repeat_timer.take() {
+                self.clarion.event_loop.remove(token);
             }
         }
 
@@ -522,7 +522,7 @@ impl State {
         #[cfg(not(feature = "dbus"))]
         let _ = consumed_by_a11y;
 
-        let Some(Some(bind)) = self.realand.seat.get_keyboard().unwrap().input(
+        let Some(Some(bind)) = self.clarion.seat.get_keyboard().unwrap().input(
             self,
             event.key_code(),
             event.state(),
@@ -572,23 +572,23 @@ impl State {
                     }
                 }
 
-                if this.realand.exit_confirm_dialog.is_open() && pressed {
+                if this.clarion.exit_confirm_dialog.is_open() && pressed {
                     if raw == Some(Keysym::Return) {
                         info!("quitting after confirming exit dialog");
-                        this.realand.stop_signal.stop();
+                        this.clarion.stop_signal.stop();
                     }
 
                     // Don't send this press to any clients.
-                    this.realand.suppressed_keys.insert(key_code);
+                    this.clarion.suppressed_keys.insert(key_code);
                     return FilterResult::Intercept(None);
                 }
 
                 // Check if all modifiers were released while the MRU UI was open. If so, close the
                 // UI (which will also transfer the focus to the current MRU UI selection).
-                if this.realand.window_mru_ui.is_open() && !pressed && modifiers.is_empty() {
+                if this.clarion.window_mru_ui.is_open() && !pressed && modifiers.is_empty() {
                     this.do_action(Action::MruConfirm, false);
 
-                    if this.realand.suppressed_keys.remove(&key_code) {
+                    if this.clarion.suppressed_keys.remove(&key_code) {
                         return FilterResult::Intercept(None);
                     } else {
                         return FilterResult::Forward;
@@ -597,25 +597,25 @@ impl State {
 
                 if pressed && raw == Some(Keysym::Escape) {
                     // Cancel certain grabs on Escape.
-                    let pointer = this.realand.seat.get_pointer().unwrap();
+                    let pointer = this.clarion.seat.get_pointer().unwrap();
                     if pointer
                         .with_grab(|_, grab| Self::grab_can_be_cancelled_with_esc(grab))
                         .unwrap_or(false)
                     {
                         pointer.unset_grab(this, serial, time);
-                        this.realand.suppressed_keys.insert(key_code);
+                        this.clarion.suppressed_keys.insert(key_code);
                         return FilterResult::Intercept(None);
                     }
                 }
 
                 // Screenshot, lock, exit confirmation, accessibility and MRU keep priority.
                 // Suppress both halves of navigation keys, including releases after closing.
-                let allow_hotkey_overlay = !this.realand.is_locked()
-                    && !this.realand.screenshot_ui.is_open()
-                    && !this.realand.window_mru_ui.is_open();
+                let allow_hotkey_overlay = !this.clarion.is_locked()
+                    && !this.clarion.screenshot_ui.is_open()
+                    && !this.clarion.window_mru_ui.is_open();
                 if intercept_hotkey_overlay_key(
-                    &mut this.realand.hotkey_overlay,
-                    &mut this.realand.suppressed_keys,
+                    &mut this.clarion.hotkey_overlay,
+                    &mut this.clarion.suppressed_keys,
                     key_code,
                     modified,
                     pressed,
@@ -623,26 +623,26 @@ impl State {
                     allow_hotkey_overlay,
                 ) {
                     *consumed_by_hotkey_overlay = true;
-                    this.realand.queue_redraw_all();
+                    this.clarion.queue_redraw_all();
                     return FilterResult::Intercept(None);
                 }
 
                 if let Some(Keysym::space) = raw {
-                    this.realand.screenshot_ui.set_space_down(pressed);
+                    this.clarion.screenshot_ui.set_space_down(pressed);
                 }
 
                 let res = {
                     let desktop_shortcut = is_macos_desktop_shortcut(raw, *mods)
                         && this.desktop_owns_macos_shortcuts();
-                    let config = this.realand.config.borrow();
+                    let config = this.clarion.config.borrow();
                     // Keep normal release suppression: changing focus/style or releasing
                     // Super first must not invent a release for an intercepted press.
                     let bindings =
-                        make_binds_iter(&config, &mut this.realand.window_mru_ui, modifiers)
+                        make_binds_iter(&config, &mut this.clarion.window_mru_ui, modifiers)
                             .filter(|_| !desktop_shortcut);
 
                     should_intercept_key(
-                        &mut this.realand.suppressed_keys,
+                        &mut this.clarion.suppressed_keys,
                         bindings,
                         mod_key,
                         key_code,
@@ -650,8 +650,8 @@ impl State {
                         raw,
                         pressed,
                         *mods,
-                        &this.realand.screenshot_ui,
-                        this.realand
+                        &this.clarion.screenshot_ui,
+                        this.clarion
                             .config
                             .borrow()
                             .input
@@ -661,12 +661,12 @@ impl State {
                 };
 
                 if pressed
-                    && this.realand.overview_mode_transition_active()
-                    && this.realand.keyboard_focus.is_overview()
+                    && this.clarion.overview_mode_transition_active()
+                    && this.clarion.keyboard_focus.is_overview()
                     && modified != Keysym::Escape
                     && matches!(res, FilterResult::Forward)
                 {
-                    this.realand.suppressed_keys.insert(key_code);
+                    this.clarion.suppressed_keys.insert(key_code);
                     return FilterResult::Intercept(None);
                 }
 
@@ -674,15 +674,15 @@ impl State {
                     && !mods.ctrl
                     && !mods.alt
                     && !mods.logo
-                    && !this.realand.is_locked()
-                    && !this.realand.screenshot_ui.is_open()
-                    && !this.realand.window_mru_ui.is_open()
-                    && this.realand.keyboard_focus.is_overview()
+                    && !this.clarion.is_locked()
+                    && !this.clarion.screenshot_ui.is_open()
+                    && !this.clarion.window_mru_ui.is_open()
+                    && this.clarion.keyboard_focus.is_overview()
                     && matches!(res, FilterResult::Forward)
                     && this.overview_command(OverviewCommand::StageKey(modified))
                 {
-                    this.realand.suppressed_keys.insert(key_code);
-                    this.realand.queue_redraw_all();
+                    this.clarion.suppressed_keys.insert(key_code);
+                    this.clarion.queue_redraw_all();
                     return FilterResult::Intercept(None);
                 }
 
@@ -692,27 +692,27 @@ impl State {
                     && !mods.logo
                     && this.overview_command(OverviewCommand::SpreadKey(modified))
                 {
-                    this.realand.suppressed_keys.insert(key_code);
-                    this.realand.queue_redraw_all();
+                    this.clarion.suppressed_keys.insert(key_code);
+                    this.clarion.queue_redraw_all();
                     return FilterResult::Intercept(None);
                 }
 
                 if matches!(res, FilterResult::Forward) {
                     // If we didn't find any bind, try other hardcoded keys.
-                    if this.realand.keyboard_focus.is_overview() && pressed {
-                        let is_expo = this.realand.layout.overview_mode()
+                    if this.clarion.keyboard_focus.is_overview() && pressed {
+                        let is_expo = this.clarion.layout.overview_mode()
                             == crate::layout::OverviewMode::Expo;
                         if let Some(bind) =
                             raw.and_then(|raw| hardcoded_overview_bind(raw, *mods, is_expo))
                         {
-                            this.realand.suppressed_keys.insert(key_code);
+                            this.clarion.suppressed_keys.insert(key_code);
                             return FilterResult::Intercept(Some(bind));
                         }
                     }
 
                     // Interaction with the active window, immediately update the active window's
                     // focus timestamp without waiting for a possible pending MRU lock-in delay.
-                    this.realand.mru_apply_keyboard_commit();
+                    this.clarion.mru_apply_keyboard_commit();
                 }
 
                 res
@@ -736,11 +736,11 @@ impl State {
         }
 
         // Stop the previous key repeat if any.
-        if let Some(token) = self.realand.bind_repeat_timer.take() {
-            self.realand.event_loop.remove(token);
+        if let Some(token) = self.clarion.bind_repeat_timer.take() {
+            self.clarion.event_loop.remove(token);
         }
 
-        let config = self.realand.config.borrow();
+        let config = self.clarion.config.borrow();
         let config = &config.input.keyboard;
 
         let repeat_rate = config.repeat_rate;
@@ -753,7 +753,7 @@ impl State {
             Timer::from_duration(Duration::from_millis(u64::from(config.repeat_delay)));
 
         let token = self
-            .realand
+            .clarion
             .event_loop
             .insert_source(repeat_timer, move |_, _, state| {
                 state.handle_bind(bind.clone());
@@ -761,29 +761,29 @@ impl State {
             })
             .unwrap();
 
-        self.realand.bind_repeat_timer = Some(token);
+        self.clarion.bind_repeat_timer = Some(token);
     }
 
     fn hide_cursor_if_needed(&mut self) {
         // If the pointer is already invisible, don't reset it back to Hidden causing one frame
         // of hover.
-        if !self.realand.pointer_visibility.is_visible() {
+        if !self.clarion.pointer_visibility.is_visible() {
             return;
         }
 
-        if !self.realand.config.borrow().cursor.hide_when_typing {
+        if !self.clarion.config.borrow().cursor.hide_when_typing {
             return;
         }
 
-        // realand keeps this set only while actively using a tablet, which means the cursor position
+        // clarion keeps this set only while actively using a tablet, which means the cursor position
         // is likely to change almost immediately, causing pointer_visibility to just flicker back
         // and forth.
-        if self.realand.tablet_cursor_location.is_some() {
+        if self.clarion.tablet_cursor_location.is_some() {
             return;
         }
 
-        self.realand.pointer_visibility = PointerVisibility::Hidden;
-        self.realand.queue_redraw_all();
+        self.clarion.pointer_visibility = PointerVisibility::Hidden;
+        self.clarion.queue_redraw_all();
     }
 
     pub fn handle_bind(&mut self, bind: Bind) {
@@ -793,23 +793,23 @@ impl State {
         };
 
         // Check this first so that it doesn't trigger the cooldown.
-        if self.realand.is_locked()
+        if self.clarion.is_locked()
             && !(bind.allow_when_locked || allowed_when_locked(&bind.action))
         {
             return;
         }
 
-        match self.realand.bind_cooldown_timers.entry(bind.key) {
+        match self.clarion.bind_cooldown_timers.entry(bind.key) {
             // The bind is on cooldown.
             Entry::Occupied(_) => (),
             Entry::Vacant(entry) => {
                 let timer = Timer::from_duration(cooldown);
                 let token = self
-                    .realand
+                    .clarion
                     .event_loop
                     .insert_source(timer, move |_, _, state| {
                         if state
-                            .realand
+                            .clarion
                             .bind_cooldown_timers
                             .remove(&bind.key)
                             .is_none()
@@ -827,12 +827,12 @@ impl State {
     }
 
     pub fn do_action(&mut self, action: Action, allow_when_locked: bool) {
-        if self.realand.is_locked() && !(allow_when_locked || allowed_when_locked(&action)) {
+        if self.clarion.is_locked() && !(allow_when_locked || allowed_when_locked(&action)) {
             return;
         }
 
         // IPC and bindings must observe all drag motion preceding the command.
-        self.realand.layout.flush_pending_move();
+        self.clarion.layout.flush_pending_move();
 
         // Mode-entry commands own capture-before-ungrab ordering. Other actions
         // retain their existing touch cancellation before changing layout.
@@ -844,7 +844,7 @@ impl State {
                 | Action::ToggleExpo
         );
         if let Some(touch) = (!mode_entry)
-            .then(|| self.realand.seat.get_touch())
+            .then(|| self.clarion.seat.get_touch())
             .flatten()
         {
             if touch.is_grabbed() {
@@ -943,7 +943,7 @@ impl State {
                 | Action::SwitchTilingMode(..)
                 | Action::ToggleDwindleSplit
         ) {
-            self.realand.layout.checkpoint_layout();
+            self.clarion.layout.checkpoint_layout();
         }
 
         // Explicit mutations of a parked window first rejoin its original
@@ -973,82 +973,82 @@ impl State {
         };
         if let Some(id) = mutate_id {
             let window = self
-                .realand
+                .clarion
                 .layout
                 .windows()
                 .find(|(_, mapped)| mapped.id().get() == id)
                 .map(|(_, mapped)| mapped.window.clone());
             if let Some(window) = window {
-                self.realand.layout.restore_window(&window);
+                self.clarion.layout.restore_window(&window);
             }
         }
 
         match action {
             Action::Quit(skip_confirmation) => {
-                if !skip_confirmation && self.realand.exit_confirm_dialog.show() {
-                    self.realand.queue_redraw_all();
+                if !skip_confirmation && self.clarion.exit_confirm_dialog.show() {
+                    self.clarion.queue_redraw_all();
                     return;
                 }
 
                 info!("quitting as requested");
-                self.realand.stop_signal.stop()
+                self.clarion.stop_signal.stop()
             }
             Action::ChangeVt(vt) => {
                 self.backend.change_vt(vt);
                 // Changing VT may not deliver the key releases, so clear the state.
-                self.realand.suppressed_keys.clear();
+                self.clarion.suppressed_keys.clear();
             }
             Action::Suspend => {
                 self.backend.suspend();
                 // Suspend may not deliver the key releases, so clear the state.
-                self.realand.suppressed_keys.clear();
+                self.clarion.suppressed_keys.clear();
             }
             Action::PowerOffMonitors => {
-                self.realand.deactivate_monitors(&mut self.backend);
+                self.clarion.deactivate_monitors(&mut self.backend);
             }
             Action::PowerOnMonitors => {
-                self.realand.activate_monitors(&mut self.backend);
+                self.clarion.activate_monitors(&mut self.backend);
             }
             Action::ToggleDebugTint => {
                 self.backend.toggle_debug_tint();
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::DebugToggleOpaqueRegions => {
-                self.realand.debug_draw_opaque_regions = !self.realand.debug_draw_opaque_regions;
-                self.realand.queue_redraw_all();
+                self.clarion.debug_draw_opaque_regions = !self.clarion.debug_draw_opaque_regions;
+                self.clarion.queue_redraw_all();
             }
             Action::DebugToggleDamage => {
-                self.realand.debug_toggle_damage();
+                self.clarion.debug_toggle_damage();
             }
             Action::Spawn(command) => {
-                let (token, _) = self.realand.activation_state.create_external_token(None);
+                let (token, _) = self.clarion.activation_state.create_external_token(None);
                 spawn(command, Some(token.clone()));
             }
             Action::SpawnSh(command) => {
-                let (token, _) = self.realand.activation_state.create_external_token(None);
+                let (token, _) = self.clarion.activation_state.create_external_token(None);
                 spawn_sh(command, Some(token.clone()));
             }
             Action::DoScreenTransition(delay_ms) => {
                 self.backend.with_renderer(|renderer| match renderer {
                     crate::render_helpers::renderer::AnyRenderer::Gles(renderer) => {
-                        self.realand.do_screen_transition(renderer, delay_ms)
+                        self.clarion.do_screen_transition(renderer, delay_ms)
                     }
                     crate::render_helpers::renderer::AnyRenderer::Native(renderer) => {
-                        self.realand.do_screen_transition(renderer, delay_ms)
+                        self.clarion.do_screen_transition(renderer, delay_ms)
                     }
                 });
             }
             Action::ScreenshotScreen(write_to_disk, show_pointer, path) => {
-                let active = self.realand.layout.active_output().cloned();
+                let active = self.clarion.layout.active_output().cloned();
                 if let Some(active) = active {
                     self.backend
                         .with_renderer_for_output(Some(&active), |renderer| {
                             let res = match renderer {
                                 crate::render_helpers::renderer::AnyRenderer::Gles(gles) => self
-                                    .realand
+                                    .clarion
                                     .screenshot(gles, &active, write_to_disk, show_pointer, path),
                                 crate::render_helpers::renderer::AnyRenderer::Native(native) => {
-                                    self.realand.screenshot(
+                                    self.clarion.screenshot(
                                         native,
                                         &active,
                                         write_to_disk,
@@ -1067,32 +1067,32 @@ impl State {
                 self.confirm_screenshot(write_to_disk);
             }
             Action::CancelScreenshot => {
-                if !self.realand.screenshot_ui.is_open() {
+                if !self.clarion.screenshot_ui.is_open() {
                     return;
                 }
 
-                self.realand.screenshot_ui.close();
-                self.realand
+                self.clarion.screenshot_ui.close();
+                self.clarion
                     .cursor_manager
                     .set_cursor_image(CursorImageStatus::default_named());
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::ScreenshotTogglePointer => {
-                self.realand.screenshot_ui.toggle_pointer();
-                self.realand.queue_redraw_all();
+                self.clarion.screenshot_ui.toggle_pointer();
+                self.clarion.queue_redraw_all();
             }
             Action::Screenshot(show_cursor, path) => {
                 self.open_screenshot_ui(show_cursor, path);
-                self.realand.cancel_mru();
+                self.clarion.cancel_mru();
             }
             Action::ScreenshotWindow(write_to_disk, show_pointer, path) => {
-                let focus = self.realand.layout.focus_with_output();
+                let focus = self.clarion.layout.focus_with_output();
                 if let Some((mapped, output)) = focus {
                     self.backend
                         .with_renderer_for_output(Some(output), |renderer| {
                             let res = match renderer {
                                 crate::render_helpers::renderer::AnyRenderer::Gles(gles) => {
-                                    self.realand.screenshot_window(
+                                    self.clarion.screenshot_window(
                                         gles,
                                         output,
                                         mapped,
@@ -1102,7 +1102,7 @@ impl State {
                                     )
                                 }
                                 crate::render_helpers::renderer::AnyRenderer::Native(native) => {
-                                    self.realand.screenshot_window(
+                                    self.clarion.screenshot_window(
                                         native,
                                         output,
                                         mapped,
@@ -1124,7 +1124,7 @@ impl State {
                 show_pointer,
                 path,
             } => {
-                let mut windows = self.realand.layout.windows();
+                let mut windows = self.clarion.layout.windows();
                 let window = windows.find(|(_, m)| m.id().get() == id);
                 if let Some((Some(monitor), mapped)) = window {
                     let output = monitor.output();
@@ -1132,7 +1132,7 @@ impl State {
                         .with_renderer_for_output(Some(output), |renderer| {
                             let res = match renderer {
                                 crate::render_helpers::renderer::AnyRenderer::Gles(gles) => {
-                                    self.realand.screenshot_window(
+                                    self.clarion.screenshot_window(
                                         gles,
                                         output,
                                         mapped,
@@ -1142,7 +1142,7 @@ impl State {
                                     )
                                 }
                                 crate::render_helpers::renderer::AnyRenderer::Native(native) => {
-                                    self.realand.screenshot_window(
+                                    self.clarion.screenshot_window(
                                         native,
                                         output,
                                         mapped,
@@ -1159,8 +1159,8 @@ impl State {
                 }
             }
             Action::ToggleKeyboardShortcutsInhibit => {
-                if let Some(inhibitor) = self.realand.keyboard_focus.surface().and_then(|surface| {
-                    self.realand
+                if let Some(inhibitor) = self.clarion.keyboard_focus.surface().and_then(|surface| {
+                    self.clarion
                         .keyboard_shortcuts_inhibiting_surfaces
                         .get(surface)
                 }) {
@@ -1172,13 +1172,13 @@ impl State {
                 }
             }
             Action::CloseWindow => {
-                if let Some(mapped) = self.realand.layout.focus() {
+                if let Some(mapped) = self.clarion.layout.focus() {
                     mapped.toplevel().send_close();
                 }
             }
             Action::CloseWindowById(id) => {
                 let window = self
-                    .realand
+                    .clarion
                     .layout
                     .windows()
                     .find(|(_, m)| m.id().get() == id);
@@ -1187,49 +1187,49 @@ impl State {
                 }
             }
             Action::FullscreenWindow => {
-                let focus = self.realand.layout.focus().map(|m| m.window.clone());
+                let focus = self.clarion.layout.focus().map(|m| m.window.clone());
                 if let Some(window) = focus {
-                    self.realand.layout.toggle_fullscreen(&window);
+                    self.clarion.layout.toggle_fullscreen(&window);
                     // FIXME: granular
-                    self.realand.queue_redraw_all();
+                    self.clarion.queue_redraw_all();
                 }
             }
             Action::FullscreenWindowById(id) => {
                 let window = self
-                    .realand
+                    .clarion
                     .layout
                     .windows()
                     .find(|(_, m)| m.id().get() == id);
                 let window = window.map(|(_, m)| m.window.clone());
                 if let Some(window) = window {
-                    self.realand.layout.toggle_fullscreen(&window);
+                    self.clarion.layout.toggle_fullscreen(&window);
                     // FIXME: granular
-                    self.realand.queue_redraw_all();
+                    self.clarion.queue_redraw_all();
                 }
             }
             Action::ToggleWindowedFullscreen => {
-                let focus = self.realand.layout.focus().map(|m| m.window.clone());
+                let focus = self.clarion.layout.focus().map(|m| m.window.clone());
                 if let Some(window) = focus {
-                    self.realand.layout.toggle_windowed_fullscreen(&window);
+                    self.clarion.layout.toggle_windowed_fullscreen(&window);
                     // FIXME: granular
-                    self.realand.queue_redraw_all();
+                    self.clarion.queue_redraw_all();
                 }
             }
             Action::ToggleWindowedFullscreenById(id) => {
                 let window = self
-                    .realand
+                    .clarion
                     .layout
                     .windows()
                     .find(|(_, m)| m.id().get() == id);
                 let window = window.map(|(_, m)| m.window.clone());
                 if let Some(window) = window {
-                    self.realand.layout.toggle_windowed_fullscreen(&window);
+                    self.clarion.layout.toggle_windowed_fullscreen(&window);
                     // FIXME: granular
-                    self.realand.queue_redraw_all();
+                    self.clarion.queue_redraw_all();
                 }
             }
             Action::MinimizeWindow => {
-                let id = self.realand.layout.focus().map(|mapped| mapped.id().get());
+                let id = self.clarion.layout.focus().map(|mapped| mapped.id().get());
                 if let Some(id) = id {
                     self.minimize_window_by_id(id);
                 }
@@ -1241,30 +1241,30 @@ impl State {
                 reduce_motion,
             } => {
                 let window = self
-                    .realand
+                    .clarion
                     .layout
                     .windows()
                     .find(|(_, mapped)| mapped.id().get() == id)
                     .map(|(_, mapped)| mapped.window.clone());
                 if let Some(window) = window {
                     if let Some(output) =
-                        self.realand
+                        self.clarion
                             .layout
                             .set_minimize_target(&window, target, reduce_motion)
                     {
-                        self.realand.queue_redraw(&output);
+                        self.clarion.queue_redraw(&output);
                     }
                 }
             }
             Action::FocusWindow(id) => {
                 if !matches!(
-                    self.realand.lock_state,
+                    self.clarion.lock_state,
                     crate::compositor::LockState::Unlocked
                 ) {
                     return;
                 }
                 let window = self
-                    .realand
+                    .clarion
                     .layout
                     .windows()
                     .find(|(_, m)| m.id().get() == id);
@@ -1274,20 +1274,20 @@ impl State {
                     self.focus_window(&window);
                     // Dock/IPC activation explicitly returns focus to an app.
                     // Invalid IDs leave the current on-demand layer untouched.
-                    self.realand.layer_shell_on_demand_focus = None;
+                    self.clarion.layer_shell_on_demand_focus = None;
                 }
             }
             Action::FocusWindowInColumn(index) => {
-                self.realand.layout.focus_window_in_column(index);
+                self.clarion.layout.focus_window_in_column(index);
                 self.maybe_warp_cursor_to_focus();
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::FocusWindowPrevious => {
-                let current = self.realand.layout.focus().map(|win| win.id());
+                let current = self.clarion.layout.focus().map(|win| win.id());
                 if let Some(window) = self
-                    .realand
+                    .clarion
                     .layout
                     .windows()
                     .map(|(_, win)| win)
@@ -1296,13 +1296,13 @@ impl State {
                     .map(|win| win.window.clone())
                 {
                     // Commit current focus so repeated focus-window-previous works as expected.
-                    self.realand.mru_apply_keyboard_commit();
+                    self.clarion.mru_apply_keyboard_commit();
 
                     self.focus_window(&window);
                 }
             }
             Action::SwitchLayout(action) => {
-                let keyboard = &self.realand.seat.get_keyboard().unwrap();
+                let keyboard = &self.clarion.seat.get_keyboard().unwrap();
                 keyboard.with_xkb_state(self, |mut state| match action {
                     LayoutSwitchTarget::Next => state.cycle_next_layout(),
                     LayoutSwitchTarget::Prev => state.cycle_prev_layout(),
@@ -1317,44 +1317,44 @@ impl State {
                 });
             }
             Action::MoveColumnLeft => {
-                if self.realand.screenshot_ui.is_open() {
-                    self.realand.screenshot_ui.move_left();
+                if self.clarion.screenshot_ui.is_open() {
+                    self.clarion.screenshot_ui.move_left();
                 } else {
-                    self.realand.layout.move_left();
+                    self.clarion.layout.move_left();
                     self.maybe_warp_cursor_to_focus();
                 }
 
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::MoveColumnRight => {
-                if self.realand.screenshot_ui.is_open() {
-                    self.realand.screenshot_ui.move_right();
+                if self.clarion.screenshot_ui.is_open() {
+                    self.clarion.screenshot_ui.move_right();
                 } else {
-                    self.realand.layout.move_right();
+                    self.clarion.layout.move_right();
                     self.maybe_warp_cursor_to_focus();
                 }
 
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::MoveColumnToFirst => {
-                self.realand.layout.move_column_to_first();
+                self.clarion.layout.move_column_to_first();
                 self.maybe_warp_cursor_to_focus();
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::MoveColumnToLast => {
-                self.realand.layout.move_column_to_last();
+                self.clarion.layout.move_column_to_last();
                 self.maybe_warp_cursor_to_focus();
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::MoveColumnLeftOrToMonitorLeft => {
-                if self.realand.screenshot_ui.is_open() {
-                    self.realand.screenshot_ui.move_left();
-                } else if let Some(output) = self.realand.output_left() {
-                    if self.realand.layout.move_column_left_or_to_output(&output)
+                if self.clarion.screenshot_ui.is_open() {
+                    self.clarion.screenshot_ui.move_left();
+                } else if let Some(output) = self.clarion.output_left() {
+                    if self.clarion.layout.move_column_left_or_to_output(&output)
                         && !self.maybe_warp_cursor_to_focus_centered()
                     {
                         self.move_cursor_to_output(&output);
@@ -1362,18 +1362,18 @@ impl State {
                         self.maybe_warp_cursor_to_focus();
                     }
                 } else {
-                    self.realand.layout.move_left();
+                    self.clarion.layout.move_left();
                     self.maybe_warp_cursor_to_focus();
                 }
 
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::MoveColumnRightOrToMonitorRight => {
-                if self.realand.screenshot_ui.is_open() {
-                    self.realand.screenshot_ui.move_right();
-                } else if let Some(output) = self.realand.output_right() {
-                    if self.realand.layout.move_column_right_or_to_output(&output)
+                if self.clarion.screenshot_ui.is_open() {
+                    self.clarion.screenshot_ui.move_right();
+                } else if let Some(output) = self.clarion.output_right() {
+                    if self.clarion.layout.move_column_right_or_to_output(&output)
                         && !self.maybe_warp_cursor_to_focus_centered()
                     {
                         self.move_cursor_to_output(&output);
@@ -1381,177 +1381,177 @@ impl State {
                         self.maybe_warp_cursor_to_focus();
                     }
                 } else {
-                    self.realand.layout.move_right();
+                    self.clarion.layout.move_right();
                     self.maybe_warp_cursor_to_focus();
                 }
 
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::MoveWindowDown => {
-                if self.realand.screenshot_ui.is_open() {
-                    self.realand.screenshot_ui.move_down();
+                if self.clarion.screenshot_ui.is_open() {
+                    self.clarion.screenshot_ui.move_down();
                 } else {
-                    self.realand.layout.move_down();
+                    self.clarion.layout.move_down();
                     self.maybe_warp_cursor_to_focus();
                 }
 
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::MoveWindowUp => {
-                if self.realand.screenshot_ui.is_open() {
-                    self.realand.screenshot_ui.move_up();
+                if self.clarion.screenshot_ui.is_open() {
+                    self.clarion.screenshot_ui.move_up();
                 } else {
-                    self.realand.layout.move_up();
+                    self.clarion.layout.move_up();
                     self.maybe_warp_cursor_to_focus();
                 }
 
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::MoveWindowDownOrToWorkspaceDown => {
-                if self.realand.screenshot_ui.is_open() {
-                    self.realand.screenshot_ui.move_down();
+                if self.clarion.screenshot_ui.is_open() {
+                    self.clarion.screenshot_ui.move_down();
                 } else {
-                    self.realand.layout.move_down_or_to_workspace_down();
+                    self.clarion.layout.move_down_or_to_workspace_down();
                     self.maybe_warp_cursor_to_focus();
                 }
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::MoveWindowUpOrToWorkspaceUp => {
-                if self.realand.screenshot_ui.is_open() {
-                    self.realand.screenshot_ui.move_up();
+                if self.clarion.screenshot_ui.is_open() {
+                    self.clarion.screenshot_ui.move_up();
                 } else {
-                    self.realand.layout.move_up_or_to_workspace_up();
+                    self.clarion.layout.move_up_or_to_workspace_up();
                     self.maybe_warp_cursor_to_focus();
                 }
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::ConsumeOrExpelWindowLeft => {
-                self.realand.layout.consume_or_expel_window_left(None);
+                self.clarion.layout.consume_or_expel_window_left(None);
                 self.maybe_warp_cursor_to_focus();
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::ConsumeOrExpelWindowLeftById(id) => {
                 let window = self
-                    .realand
+                    .clarion
                     .layout
                     .windows()
                     .find(|(_, m)| m.id().get() == id);
                 let window = window.map(|(_, m)| m.window.clone());
                 if let Some(window) = window {
-                    self.realand
+                    self.clarion
                         .layout
                         .consume_or_expel_window_left(Some(&window));
                     self.maybe_warp_cursor_to_focus();
                     // FIXME: granular
-                    self.realand.queue_redraw_all();
+                    self.clarion.queue_redraw_all();
                 }
             }
             Action::ConsumeOrExpelWindowRight => {
-                self.realand.layout.consume_or_expel_window_right(None);
+                self.clarion.layout.consume_or_expel_window_right(None);
                 self.maybe_warp_cursor_to_focus();
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::ConsumeOrExpelWindowRightById(id) => {
                 let window = self
-                    .realand
+                    .clarion
                     .layout
                     .windows()
                     .find(|(_, m)| m.id().get() == id);
                 let window = window.map(|(_, m)| m.window.clone());
                 if let Some(window) = window {
-                    self.realand
+                    self.clarion
                         .layout
                         .consume_or_expel_window_right(Some(&window));
                     self.maybe_warp_cursor_to_focus();
                     // FIXME: granular
-                    self.realand.queue_redraw_all();
+                    self.clarion.queue_redraw_all();
                 }
             }
             Action::FocusColumnLeft => {
-                self.realand.layout.focus_left();
+                self.clarion.layout.focus_left();
                 self.maybe_warp_cursor_to_focus();
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::FocusColumnLeftUnderMouse => {
-                if let Some((output, ws)) = self.realand.workspace_under_cursor(true) {
+                if let Some((output, ws)) = self.clarion.workspace_under_cursor(true) {
                     let ws_id = ws.id();
                     let ws = {
-                        let mut workspaces = self.realand.layout.workspaces_mut();
+                        let mut workspaces = self.clarion.layout.workspaces_mut();
                         workspaces.find(|ws| ws.id() == ws_id).unwrap()
                     };
                     ws.focus_left();
                     self.maybe_warp_cursor_to_focus();
-                    self.realand.layer_shell_on_demand_focus = None;
-                    self.realand.queue_redraw(&output);
+                    self.clarion.layer_shell_on_demand_focus = None;
+                    self.clarion.queue_redraw(&output);
                 }
             }
             Action::FocusColumnRight => {
-                self.realand.layout.focus_right();
+                self.clarion.layout.focus_right();
                 self.maybe_warp_cursor_to_focus();
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::FocusColumnRightUnderMouse => {
-                if let Some((output, ws)) = self.realand.workspace_under_cursor(true) {
+                if let Some((output, ws)) = self.clarion.workspace_under_cursor(true) {
                     let ws_id = ws.id();
                     let ws = {
-                        let mut workspaces = self.realand.layout.workspaces_mut();
+                        let mut workspaces = self.clarion.layout.workspaces_mut();
                         workspaces.find(|ws| ws.id() == ws_id).unwrap()
                     };
                     ws.focus_right();
                     self.maybe_warp_cursor_to_focus();
-                    self.realand.layer_shell_on_demand_focus = None;
-                    self.realand.queue_redraw(&output);
+                    self.clarion.layer_shell_on_demand_focus = None;
+                    self.clarion.queue_redraw(&output);
                 }
             }
             Action::FocusColumnFirst => {
-                self.realand.layout.focus_column_first();
+                self.clarion.layout.focus_column_first();
                 self.maybe_warp_cursor_to_focus();
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::FocusColumnLast => {
-                self.realand.layout.focus_column_last();
+                self.clarion.layout.focus_column_last();
                 self.maybe_warp_cursor_to_focus();
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::FocusColumnRightOrFirst => {
-                self.realand.layout.focus_column_right_or_first();
+                self.clarion.layout.focus_column_right_or_first();
                 self.maybe_warp_cursor_to_focus();
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::FocusColumnLeftOrLast => {
-                self.realand.layout.focus_column_left_or_last();
+                self.clarion.layout.focus_column_left_or_last();
                 self.maybe_warp_cursor_to_focus();
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::FocusColumn(index) => {
-                self.realand.layout.focus_column(index);
+                self.clarion.layout.focus_column(index);
                 self.maybe_warp_cursor_to_focus();
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::FocusWindowOrMonitorUp => {
-                if let Some(output) = self.realand.output_up() {
-                    if self.realand.layout.focus_window_up_or_output(&output)
+                if let Some(output) = self.clarion.output_up() {
+                    if self.clarion.layout.focus_window_up_or_output(&output)
                         && !self.maybe_warp_cursor_to_focus_centered()
                     {
                         self.move_cursor_to_output(&output);
@@ -1559,17 +1559,17 @@ impl State {
                         self.maybe_warp_cursor_to_focus();
                     }
                 } else {
-                    self.realand.layout.focus_up();
+                    self.clarion.layout.focus_up();
                     self.maybe_warp_cursor_to_focus();
                 }
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
 
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::FocusWindowOrMonitorDown => {
-                if let Some(output) = self.realand.output_down() {
-                    if self.realand.layout.focus_window_down_or_output(&output)
+                if let Some(output) = self.clarion.output_down() {
+                    if self.clarion.layout.focus_window_down_or_output(&output)
                         && !self.maybe_warp_cursor_to_focus_centered()
                     {
                         self.move_cursor_to_output(&output);
@@ -1577,17 +1577,17 @@ impl State {
                         self.maybe_warp_cursor_to_focus();
                     }
                 } else {
-                    self.realand.layout.focus_down();
+                    self.clarion.layout.focus_down();
                     self.maybe_warp_cursor_to_focus();
                 }
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
 
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::FocusColumnOrMonitorLeft => {
-                if let Some(output) = self.realand.output_left() {
-                    if self.realand.layout.focus_column_left_or_output(&output)
+                if let Some(output) = self.clarion.output_left() {
+                    if self.clarion.layout.focus_column_left_or_output(&output)
                         && !self.maybe_warp_cursor_to_focus_centered()
                     {
                         self.move_cursor_to_output(&output);
@@ -1595,17 +1595,17 @@ impl State {
                         self.maybe_warp_cursor_to_focus();
                     }
                 } else {
-                    self.realand.layout.focus_left();
+                    self.clarion.layout.focus_left();
                     self.maybe_warp_cursor_to_focus();
                 }
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
 
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::FocusColumnOrMonitorRight => {
-                if let Some(output) = self.realand.output_right() {
-                    if self.realand.layout.focus_column_right_or_output(&output)
+                if let Some(output) = self.clarion.output_right() {
+                    if self.clarion.layout.focus_column_right_or_output(&output)
                         && !self.maybe_warp_cursor_to_focus_centered()
                     {
                         self.move_cursor_to_output(&output);
@@ -1613,117 +1613,117 @@ impl State {
                         self.maybe_warp_cursor_to_focus();
                     }
                 } else {
-                    self.realand.layout.focus_right();
+                    self.clarion.layout.focus_right();
                     self.maybe_warp_cursor_to_focus();
                 }
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
 
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::FocusWindowDown => {
-                self.realand.layout.focus_down();
+                self.clarion.layout.focus_down();
                 self.maybe_warp_cursor_to_focus();
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::FocusWindowUp => {
-                self.realand.layout.focus_up();
+                self.clarion.layout.focus_up();
                 self.maybe_warp_cursor_to_focus();
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::FocusWindowDownOrColumnLeft => {
-                self.realand.layout.focus_down_or_left();
+                self.clarion.layout.focus_down_or_left();
                 self.maybe_warp_cursor_to_focus();
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::FocusWindowDownOrColumnRight => {
-                self.realand.layout.focus_down_or_right();
+                self.clarion.layout.focus_down_or_right();
                 self.maybe_warp_cursor_to_focus();
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::FocusWindowUpOrColumnLeft => {
-                self.realand.layout.focus_up_or_left();
+                self.clarion.layout.focus_up_or_left();
                 self.maybe_warp_cursor_to_focus();
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::FocusWindowUpOrColumnRight => {
-                self.realand.layout.focus_up_or_right();
+                self.clarion.layout.focus_up_or_right();
                 self.maybe_warp_cursor_to_focus();
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::FocusWindowOrWorkspaceDown => {
-                self.realand.layout.focus_window_or_workspace_down();
+                self.clarion.layout.focus_window_or_workspace_down();
                 self.maybe_warp_cursor_to_focus();
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::FocusWindowOrWorkspaceUp => {
-                self.realand.layout.focus_window_or_workspace_up();
+                self.clarion.layout.focus_window_or_workspace_up();
                 self.maybe_warp_cursor_to_focus();
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::FocusWindowTop => {
-                self.realand.layout.focus_window_top();
+                self.clarion.layout.focus_window_top();
                 self.maybe_warp_cursor_to_focus();
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::FocusWindowBottom => {
-                self.realand.layout.focus_window_bottom();
+                self.clarion.layout.focus_window_bottom();
                 self.maybe_warp_cursor_to_focus();
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::FocusWindowDownOrTop => {
-                self.realand.layout.focus_window_down_or_top();
+                self.clarion.layout.focus_window_down_or_top();
                 self.maybe_warp_cursor_to_focus();
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::FocusWindowUpOrBottom => {
-                self.realand.layout.focus_window_up_or_bottom();
+                self.clarion.layout.focus_window_up_or_bottom();
                 self.maybe_warp_cursor_to_focus();
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::MoveWindowToWorkspaceDown(focus) => {
-                self.realand.layout.move_to_workspace_down(focus);
+                self.clarion.layout.move_to_workspace_down(focus);
                 self.maybe_warp_cursor_to_focus();
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::MoveWindowToWorkspaceUp(focus) => {
-                self.realand.layout.move_to_workspace_up(focus);
+                self.clarion.layout.move_to_workspace_up(focus);
                 self.maybe_warp_cursor_to_focus();
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::MoveWindowToWorkspace(reference, focus) => {
                 if let Some((mut output, index)) =
-                    self.realand.find_output_and_workspace_index(reference)
+                    self.clarion.find_output_and_workspace_index(reference)
                 {
                     // The source output is always the active output, so if the target output is
                     // also the active output, we don't need to use move_to_output().
-                    if let Some(active) = self.realand.layout.active_output() {
+                    if let Some(active) = self.clarion.layout.active_output() {
                         if output.as_ref() == Some(active) {
                             output = None;
                         }
@@ -1736,7 +1736,7 @@ impl State {
                     };
 
                     if let Some(output) = output {
-                        self.realand
+                        self.clarion
                             .layout
                             .move_to_output(None, &output, Some(index), activate);
 
@@ -1748,12 +1748,12 @@ impl State {
                             self.maybe_warp_cursor_to_focus();
                         }
                     } else {
-                        self.realand.layout.move_to_workspace(None, index, activate);
+                        self.clarion.layout.move_to_workspace(None, index, activate);
                         self.maybe_warp_cursor_to_focus();
                     }
 
                     // FIXME: granular
-                    self.realand.queue_redraw_all();
+                    self.clarion.queue_redraw_all();
                 }
             }
             Action::MoveWindowToWorkspaceById {
@@ -1762,17 +1762,17 @@ impl State {
                 focus,
             } => {
                 let window = self
-                    .realand
+                    .clarion
                     .layout
                     .windows()
                     .find(|(_, m)| m.id().get() == id);
                 let window = window.map(|(_, m)| m.window.clone());
                 if let Some(window) = window {
                     if let Some((output, index)) =
-                        self.realand.find_output_and_workspace_index(reference)
+                        self.clarion.find_output_and_workspace_index(reference)
                     {
                         let target_was_active = self
-                            .realand
+                            .clarion
                             .layout
                             .active_output()
                             .is_some_and(|active| output.as_ref() == Some(active));
@@ -1784,7 +1784,7 @@ impl State {
                         };
 
                         if let Some(output) = output {
-                            self.realand.layout.move_to_output(
+                            self.clarion.layout.move_to_output(
                                 Some(&window),
                                 &output,
                                 Some(index),
@@ -1794,527 +1794,527 @@ impl State {
                             // If the active output changed (window was moved and focused).
                             #[allow(clippy::collapsible_if)]
                             if !target_was_active
-                                && self.realand.layout.active_output() == Some(&output)
+                                && self.clarion.layout.active_output() == Some(&output)
                             {
                                 if !self.maybe_warp_cursor_to_focus_centered() {
                                     self.move_cursor_to_output(&output);
                                 }
                             }
                         } else {
-                            self.realand
+                            self.clarion
                                 .layout
                                 .move_to_workspace(Some(&window), index, activate);
 
                             // If we focused the target window.
-                            let new_focus = self.realand.layout.focus();
+                            let new_focus = self.clarion.layout.focus();
                             if new_focus.is_some_and(|win| win.window == window) {
                                 self.maybe_warp_cursor_to_focus();
                             }
                         }
 
                         // FIXME: granular
-                        self.realand.queue_redraw_all();
+                        self.clarion.queue_redraw_all();
                     }
                 }
             }
             Action::MoveColumnToWorkspaceDown(focus) => {
-                self.realand.layout.move_column_to_workspace_down(focus);
+                self.clarion.layout.move_column_to_workspace_down(focus);
                 self.maybe_warp_cursor_to_focus();
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::MoveColumnToWorkspaceUp(focus) => {
-                self.realand.layout.move_column_to_workspace_up(focus);
+                self.clarion.layout.move_column_to_workspace_up(focus);
                 self.maybe_warp_cursor_to_focus();
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::MoveColumnToWorkspace(reference, focus) => {
                 if let Some((mut output, index)) =
-                    self.realand.find_output_and_workspace_index(reference)
+                    self.clarion.find_output_and_workspace_index(reference)
                 {
-                    if let Some(active) = self.realand.layout.active_output() {
+                    if let Some(active) = self.clarion.layout.active_output() {
                         if output.as_ref() == Some(active) {
                             output = None;
                         }
                     }
 
                     if let Some(output) = output {
-                        self.realand
+                        self.clarion
                             .layout
                             .move_column_to_output(&output, Some(index), focus);
                         if focus && !self.maybe_warp_cursor_to_focus_centered() {
                             self.move_cursor_to_output(&output);
                         }
                     } else {
-                        self.realand.layout.move_column_to_workspace(index, focus);
+                        self.clarion.layout.move_column_to_workspace(index, focus);
                         if focus {
                             self.maybe_warp_cursor_to_focus();
                         }
                     }
 
                     // FIXME: granular
-                    self.realand.queue_redraw_all();
+                    self.clarion.queue_redraw_all();
                 }
             }
             Action::MoveColumnToIndex(idx) => {
-                self.realand.layout.move_column_to_index(idx);
+                self.clarion.layout.move_column_to_index(idx);
                 self.maybe_warp_cursor_to_focus();
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::FocusWorkspaceDown => {
-                self.realand.layout.switch_workspace_down();
+                self.clarion.layout.switch_workspace_down();
                 self.maybe_warp_cursor_to_focus();
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::FocusWorkspaceDownUnderMouse => {
-                if let Some(output) = self.realand.output_under_cursor() {
-                    if let Some(mon) = self.realand.layout.monitor_for_output_mut(&output) {
+                if let Some(output) = self.clarion.output_under_cursor() {
+                    if let Some(mon) = self.clarion.layout.monitor_for_output_mut(&output) {
                         mon.switch_workspace_down();
                         self.maybe_warp_cursor_to_focus();
-                        self.realand.layer_shell_on_demand_focus = None;
-                        self.realand.queue_redraw(&output);
+                        self.clarion.layer_shell_on_demand_focus = None;
+                        self.clarion.queue_redraw(&output);
                     }
                 }
             }
             Action::FocusWorkspaceUp => {
-                self.realand.layout.switch_workspace_up();
+                self.clarion.layout.switch_workspace_up();
                 self.maybe_warp_cursor_to_focus();
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::FocusWorkspaceUpUnderMouse => {
-                if let Some(output) = self.realand.output_under_cursor() {
-                    if let Some(mon) = self.realand.layout.monitor_for_output_mut(&output) {
+                if let Some(output) = self.clarion.output_under_cursor() {
+                    if let Some(mon) = self.clarion.layout.monitor_for_output_mut(&output) {
                         mon.switch_workspace_up();
                         self.maybe_warp_cursor_to_focus();
-                        self.realand.layer_shell_on_demand_focus = None;
-                        self.realand.queue_redraw(&output);
+                        self.clarion.layer_shell_on_demand_focus = None;
+                        self.clarion.queue_redraw(&output);
                     }
                 }
             }
             Action::FocusWorkspace(reference) => {
                 if let Some((mut output, index)) =
-                    self.realand.find_output_and_workspace_index(reference)
+                    self.clarion.find_output_and_workspace_index(reference)
                 {
-                    if let Some(active) = self.realand.layout.active_output() {
+                    if let Some(active) = self.clarion.layout.active_output() {
                         if output.as_ref() == Some(active) {
                             output = None;
                         }
                     }
 
                     if let Some(output) = output {
-                        self.realand.layout.focus_output(&output);
-                        self.realand.layout.switch_workspace(index);
+                        self.clarion.layout.focus_output(&output);
+                        self.clarion.layout.switch_workspace(index);
                         if !self.maybe_warp_cursor_to_focus_centered() {
                             self.move_cursor_to_output(&output);
                         }
                     } else {
-                        let config = &self.realand.config;
+                        let config = &self.clarion.config;
                         if config.borrow().input.workspace_auto_back_and_forth {
-                            self.realand
+                            self.clarion
                                 .layout
                                 .switch_workspace_auto_back_and_forth(index);
                         } else {
-                            self.realand.layout.switch_workspace(index);
+                            self.clarion.layout.switch_workspace(index);
                         }
                         self.maybe_warp_cursor_to_focus();
                     }
-                    self.realand.layer_shell_on_demand_focus = None;
+                    self.clarion.layer_shell_on_demand_focus = None;
 
                     // FIXME: granular
-                    self.realand.queue_redraw_all();
+                    self.clarion.queue_redraw_all();
                 }
             }
             Action::FocusWorkspacePrevious => {
-                self.realand.layout.switch_workspace_previous();
+                self.clarion.layout.switch_workspace_previous();
                 self.maybe_warp_cursor_to_focus();
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::MoveWorkspaceDown => {
-                self.realand.layout.move_workspace_down();
+                self.clarion.layout.move_workspace_down();
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::MoveWorkspaceUp => {
-                self.realand.layout.move_workspace_up();
+                self.clarion.layout.move_workspace_up();
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::MoveWorkspaceToIndex(new_idx) => {
                 let new_idx = new_idx.saturating_sub(1);
-                self.realand.layout.move_workspace_to_idx(None, new_idx);
+                self.clarion.layout.move_workspace_to_idx(None, new_idx);
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::MoveWorkspaceToIndexByRef { new_idx, reference } => {
-                if let Some(res) = self.realand.find_output_and_workspace_index(reference) {
+                if let Some(res) = self.clarion.find_output_and_workspace_index(reference) {
                     let new_idx = new_idx.saturating_sub(1);
-                    self.realand
+                    self.clarion
                         .layout
                         .move_workspace_to_idx(Some(res), new_idx);
                     // FIXME: granular
-                    self.realand.queue_redraw_all();
+                    self.clarion.queue_redraw_all();
                 }
             }
             Action::SetWorkspaceName(name) => {
-                self.realand.layout.set_workspace_name(name, None);
+                self.clarion.layout.set_workspace_name(name, None);
             }
             Action::SetWorkspaceNameByRef { name, reference } => {
-                self.realand
+                self.clarion
                     .layout
                     .set_workspace_name(name, Some(reference));
             }
             Action::UnsetWorkspaceName => {
-                self.realand.layout.unset_workspace_name(None);
+                self.clarion.layout.unset_workspace_name(None);
             }
             Action::UnsetWorkSpaceNameByRef(reference) => {
-                self.realand.layout.unset_workspace_name(Some(reference));
+                self.clarion.layout.unset_workspace_name(Some(reference));
             }
             Action::ConsumeWindowIntoColumn => {
-                self.realand.layout.consume_into_column();
+                self.clarion.layout.consume_into_column();
                 // This does not cause immediate focus or window size change, so warping mouse to
                 // focus won't do anything here.
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::ExpelWindowFromColumn => {
-                self.realand.layout.expel_from_column();
+                self.clarion.layout.expel_from_column();
                 self.maybe_warp_cursor_to_focus();
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::SwapWindowRight => {
-                self.realand
+                self.clarion
                     .layout
                     .swap_window_in_direction(ScrollDirection::Right);
                 self.maybe_warp_cursor_to_focus();
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::SwapWindowLeft => {
-                self.realand
+                self.clarion
                     .layout
                     .swap_window_in_direction(ScrollDirection::Left);
                 self.maybe_warp_cursor_to_focus();
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::ToggleColumnTabbedDisplay => {
-                self.realand.layout.toggle_column_tabbed_display();
+                self.clarion.layout.toggle_column_tabbed_display();
                 self.maybe_warp_cursor_to_focus();
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::ToggleColumnDwindleDisplay => {
-                self.realand.layout.toggle_column_dwindle_display();
+                self.clarion.layout.toggle_column_dwindle_display();
                 self.maybe_warp_cursor_to_focus();
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::SetColumnDisplay(display) => {
-                self.realand.layout.set_column_display(display);
+                self.clarion.layout.set_column_display(display);
                 self.maybe_warp_cursor_to_focus();
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::SwitchPresetColumnWidth => {
-                self.realand.layout.toggle_width(true);
+                self.clarion.layout.toggle_width(true);
             }
             Action::SwitchPresetColumnWidthBack => {
-                self.realand.layout.toggle_width(false);
+                self.clarion.layout.toggle_width(false);
             }
             Action::SwitchPresetWindowWidth => {
-                self.realand.layout.toggle_window_width(None, true);
+                self.clarion.layout.toggle_window_width(None, true);
             }
             Action::SwitchPresetWindowWidthBack => {
-                self.realand.layout.toggle_window_width(None, false);
+                self.clarion.layout.toggle_window_width(None, false);
             }
             Action::SwitchPresetWindowWidthById(id) => {
                 let window = self
-                    .realand
+                    .clarion
                     .layout
                     .windows()
                     .find(|(_, m)| m.id().get() == id);
                 let window = window.map(|(_, m)| m.window.clone());
                 if let Some(window) = window {
-                    self.realand.layout.toggle_window_width(Some(&window), true);
+                    self.clarion.layout.toggle_window_width(Some(&window), true);
                 }
             }
             Action::SwitchPresetWindowWidthBackById(id) => {
                 let window = self
-                    .realand
+                    .clarion
                     .layout
                     .windows()
                     .find(|(_, m)| m.id().get() == id);
                 let window = window.map(|(_, m)| m.window.clone());
                 if let Some(window) = window {
-                    self.realand
+                    self.clarion
                         .layout
                         .toggle_window_width(Some(&window), false);
                 }
             }
             Action::SwitchPresetWindowHeight => {
-                self.realand.layout.toggle_window_height(None, true);
+                self.clarion.layout.toggle_window_height(None, true);
             }
             Action::SwitchPresetWindowHeightBack => {
-                self.realand.layout.toggle_window_height(None, false);
+                self.clarion.layout.toggle_window_height(None, false);
             }
             Action::SwitchPresetWindowHeightById(id) => {
                 let window = self
-                    .realand
+                    .clarion
                     .layout
                     .windows()
                     .find(|(_, m)| m.id().get() == id);
                 let window = window.map(|(_, m)| m.window.clone());
                 if let Some(window) = window {
-                    self.realand
+                    self.clarion
                         .layout
                         .toggle_window_height(Some(&window), true);
                 }
             }
             Action::SwitchPresetWindowHeightBackById(id) => {
                 let window = self
-                    .realand
+                    .clarion
                     .layout
                     .windows()
                     .find(|(_, m)| m.id().get() == id);
                 let window = window.map(|(_, m)| m.window.clone());
                 if let Some(window) = window {
-                    self.realand
+                    self.clarion
                         .layout
                         .toggle_window_height(Some(&window), false);
                 }
             }
             Action::CenterColumn => {
-                self.realand.layout.center_column();
+                self.clarion.layout.center_column();
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::CenterWindow => {
-                self.realand.layout.center_window(None);
+                self.clarion.layout.center_window(None);
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::CenterWindowById(id) => {
                 let window = self
-                    .realand
+                    .clarion
                     .layout
                     .windows()
                     .find(|(_, m)| m.id().get() == id);
                 let window = window.map(|(_, m)| m.window.clone());
                 if let Some(window) = window {
-                    self.realand.layout.center_window(Some(&window));
+                    self.clarion.layout.center_window(Some(&window));
                     // FIXME: granular
-                    self.realand.queue_redraw_all();
+                    self.clarion.queue_redraw_all();
                 }
             }
             Action::CenterVisibleColumns => {
-                self.realand.layout.center_visible_columns();
+                self.clarion.layout.center_visible_columns();
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::MaximizeColumn => {
-                self.realand.layout.toggle_full_width();
+                self.clarion.layout.toggle_full_width();
             }
             Action::MaximizeWindowToEdges => {
-                let focus = self.realand.layout.focus().map(|m| m.window.clone());
+                let focus = self.clarion.layout.focus().map(|m| m.window.clone());
                 if let Some(window) = focus {
-                    self.realand.layout.toggle_maximized(&window);
+                    self.clarion.layout.toggle_maximized(&window);
                     // FIXME: granular
-                    self.realand.queue_redraw_all();
+                    self.clarion.queue_redraw_all();
                 }
             }
             Action::MaximizeWindowToEdgesById(id) => {
                 let window = self
-                    .realand
+                    .clarion
                     .layout
                     .windows()
                     .find(|(_, m)| m.id().get() == id);
                 let window = window.map(|(_, m)| m.window.clone());
                 if let Some(window) = window {
-                    self.realand.layout.toggle_maximized(&window);
+                    self.clarion.layout.toggle_maximized(&window);
                     // FIXME: granular
-                    self.realand.queue_redraw_all();
+                    self.clarion.queue_redraw_all();
                 }
             }
             Action::FocusMonitorLeft => {
-                if let Some(output) = self.realand.output_left() {
-                    self.realand.layout.focus_output(&output);
+                if let Some(output) = self.clarion.output_left() {
+                    self.clarion.layout.focus_output(&output);
                     if !self.maybe_warp_cursor_to_focus_centered() {
                         self.move_cursor_to_output(&output);
                     }
-                    self.realand.layer_shell_on_demand_focus = None;
+                    self.clarion.layer_shell_on_demand_focus = None;
                 }
             }
             Action::FocusMonitorRight => {
-                if let Some(output) = self.realand.output_right() {
-                    self.realand.layout.focus_output(&output);
+                if let Some(output) = self.clarion.output_right() {
+                    self.clarion.layout.focus_output(&output);
                     if !self.maybe_warp_cursor_to_focus_centered() {
                         self.move_cursor_to_output(&output);
                     }
-                    self.realand.layer_shell_on_demand_focus = None;
+                    self.clarion.layer_shell_on_demand_focus = None;
                 }
             }
             Action::FocusMonitorDown => {
-                if let Some(output) = self.realand.output_down() {
-                    self.realand.layout.focus_output(&output);
+                if let Some(output) = self.clarion.output_down() {
+                    self.clarion.layout.focus_output(&output);
                     if !self.maybe_warp_cursor_to_focus_centered() {
                         self.move_cursor_to_output(&output);
                     }
-                    self.realand.layer_shell_on_demand_focus = None;
+                    self.clarion.layer_shell_on_demand_focus = None;
                 }
             }
             Action::FocusMonitorUp => {
-                if let Some(output) = self.realand.output_up() {
-                    self.realand.layout.focus_output(&output);
+                if let Some(output) = self.clarion.output_up() {
+                    self.clarion.layout.focus_output(&output);
                     if !self.maybe_warp_cursor_to_focus_centered() {
                         self.move_cursor_to_output(&output);
                     }
-                    self.realand.layer_shell_on_demand_focus = None;
+                    self.clarion.layer_shell_on_demand_focus = None;
                 }
             }
             Action::FocusMonitorPrevious => {
-                if let Some(output) = self.realand.output_previous() {
-                    self.realand.layout.focus_output(&output);
+                if let Some(output) = self.clarion.output_previous() {
+                    self.clarion.layout.focus_output(&output);
                     if !self.maybe_warp_cursor_to_focus_centered() {
                         self.move_cursor_to_output(&output);
                     }
-                    self.realand.layer_shell_on_demand_focus = None;
+                    self.clarion.layer_shell_on_demand_focus = None;
                 }
             }
             Action::FocusMonitorNext => {
-                if let Some(output) = self.realand.output_next() {
-                    self.realand.layout.focus_output(&output);
+                if let Some(output) = self.clarion.output_next() {
+                    self.clarion.layout.focus_output(&output);
                     if !self.maybe_warp_cursor_to_focus_centered() {
                         self.move_cursor_to_output(&output);
                     }
-                    self.realand.layer_shell_on_demand_focus = None;
+                    self.clarion.layer_shell_on_demand_focus = None;
                 }
             }
             Action::FocusMonitor(output) => {
-                if let Some(output) = self.realand.output_by_name_match(&output).cloned() {
-                    self.realand.layout.focus_output(&output);
+                if let Some(output) = self.clarion.output_by_name_match(&output).cloned() {
+                    self.clarion.layout.focus_output(&output);
                     if !self.maybe_warp_cursor_to_focus_centered() {
                         self.move_cursor_to_output(&output);
                     }
-                    self.realand.layer_shell_on_demand_focus = None;
+                    self.clarion.layer_shell_on_demand_focus = None;
                 }
             }
             Action::MoveWindowToMonitorLeft => {
-                if let Some(current_output) = self.realand.screenshot_ui.selection_output() {
-                    if let Some(target_output) = self.realand.output_left_of(current_output) {
+                if let Some(current_output) = self.clarion.screenshot_ui.selection_output() {
+                    if let Some(target_output) = self.clarion.output_left_of(current_output) {
                         self.move_cursor_to_output(&target_output);
-                        self.realand.screenshot_ui.move_to_output(target_output);
+                        self.clarion.screenshot_ui.move_to_output(target_output);
                     }
-                } else if let Some(output) = self.realand.output_left() {
-                    self.realand
+                } else if let Some(output) = self.clarion.output_left() {
+                    self.clarion
                         .layout
                         .move_to_output(None, &output, None, ActivateWindow::Smart);
-                    self.realand.layout.focus_output(&output);
+                    self.clarion.layout.focus_output(&output);
                     if !self.maybe_warp_cursor_to_focus_centered() {
                         self.move_cursor_to_output(&output);
                     }
                 }
             }
             Action::MoveWindowToMonitorRight => {
-                if let Some(current_output) = self.realand.screenshot_ui.selection_output() {
-                    if let Some(target_output) = self.realand.output_right_of(current_output) {
+                if let Some(current_output) = self.clarion.screenshot_ui.selection_output() {
+                    if let Some(target_output) = self.clarion.output_right_of(current_output) {
                         self.move_cursor_to_output(&target_output);
-                        self.realand.screenshot_ui.move_to_output(target_output);
+                        self.clarion.screenshot_ui.move_to_output(target_output);
                     }
-                } else if let Some(output) = self.realand.output_right() {
-                    self.realand
+                } else if let Some(output) = self.clarion.output_right() {
+                    self.clarion
                         .layout
                         .move_to_output(None, &output, None, ActivateWindow::Smart);
-                    self.realand.layout.focus_output(&output);
+                    self.clarion.layout.focus_output(&output);
                     if !self.maybe_warp_cursor_to_focus_centered() {
                         self.move_cursor_to_output(&output);
                     }
                 }
             }
             Action::MoveWindowToMonitorDown => {
-                if let Some(current_output) = self.realand.screenshot_ui.selection_output() {
-                    if let Some(target_output) = self.realand.output_down_of(current_output) {
+                if let Some(current_output) = self.clarion.screenshot_ui.selection_output() {
+                    if let Some(target_output) = self.clarion.output_down_of(current_output) {
                         self.move_cursor_to_output(&target_output);
-                        self.realand.screenshot_ui.move_to_output(target_output);
+                        self.clarion.screenshot_ui.move_to_output(target_output);
                     }
-                } else if let Some(output) = self.realand.output_down() {
-                    self.realand
+                } else if let Some(output) = self.clarion.output_down() {
+                    self.clarion
                         .layout
                         .move_to_output(None, &output, None, ActivateWindow::Smart);
-                    self.realand.layout.focus_output(&output);
+                    self.clarion.layout.focus_output(&output);
                     if !self.maybe_warp_cursor_to_focus_centered() {
                         self.move_cursor_to_output(&output);
                     }
                 }
             }
             Action::MoveWindowToMonitorUp => {
-                if let Some(current_output) = self.realand.screenshot_ui.selection_output() {
-                    if let Some(target_output) = self.realand.output_up_of(current_output) {
+                if let Some(current_output) = self.clarion.screenshot_ui.selection_output() {
+                    if let Some(target_output) = self.clarion.output_up_of(current_output) {
                         self.move_cursor_to_output(&target_output);
-                        self.realand.screenshot_ui.move_to_output(target_output);
+                        self.clarion.screenshot_ui.move_to_output(target_output);
                     }
-                } else if let Some(output) = self.realand.output_up() {
-                    self.realand
+                } else if let Some(output) = self.clarion.output_up() {
+                    self.clarion
                         .layout
                         .move_to_output(None, &output, None, ActivateWindow::Smart);
-                    self.realand.layout.focus_output(&output);
+                    self.clarion.layout.focus_output(&output);
                     if !self.maybe_warp_cursor_to_focus_centered() {
                         self.move_cursor_to_output(&output);
                     }
                 }
             }
             Action::MoveWindowToMonitorPrevious => {
-                if let Some(current_output) = self.realand.screenshot_ui.selection_output() {
-                    if let Some(target_output) = self.realand.output_previous_of(current_output) {
+                if let Some(current_output) = self.clarion.screenshot_ui.selection_output() {
+                    if let Some(target_output) = self.clarion.output_previous_of(current_output) {
                         self.move_cursor_to_output(&target_output);
-                        self.realand.screenshot_ui.move_to_output(target_output);
+                        self.clarion.screenshot_ui.move_to_output(target_output);
                     }
-                } else if let Some(output) = self.realand.output_previous() {
-                    self.realand
+                } else if let Some(output) = self.clarion.output_previous() {
+                    self.clarion
                         .layout
                         .move_to_output(None, &output, None, ActivateWindow::Smart);
-                    self.realand.layout.focus_output(&output);
+                    self.clarion.layout.focus_output(&output);
                     if !self.maybe_warp_cursor_to_focus_centered() {
                         self.move_cursor_to_output(&output);
                     }
                 }
             }
             Action::MoveWindowToMonitorNext => {
-                if let Some(current_output) = self.realand.screenshot_ui.selection_output() {
-                    if let Some(target_output) = self.realand.output_next_of(current_output) {
+                if let Some(current_output) = self.clarion.screenshot_ui.selection_output() {
+                    if let Some(target_output) = self.clarion.output_next_of(current_output) {
                         self.move_cursor_to_output(&target_output);
-                        self.realand.screenshot_ui.move_to_output(target_output);
+                        self.clarion.screenshot_ui.move_to_output(target_output);
                     }
-                } else if let Some(output) = self.realand.output_next() {
-                    self.realand
+                } else if let Some(output) = self.clarion.output_next() {
+                    self.clarion
                         .layout
                         .move_to_output(None, &output, None, ActivateWindow::Smart);
-                    self.realand.layout.focus_output(&output);
+                    self.clarion.layout.focus_output(&output);
                     if !self.maybe_warp_cursor_to_focus_centered() {
                         self.move_cursor_to_output(&output);
                     }
                 }
             }
             Action::MoveWindowToMonitor(output) => {
-                if let Some(output) = self.realand.output_by_name_match(&output).cloned() {
-                    if self.realand.screenshot_ui.is_open() {
+                if let Some(output) = self.clarion.output_by_name_match(&output).cloned() {
+                    if self.clarion.screenshot_ui.is_open() {
                         self.move_cursor_to_output(&output);
-                        self.realand.screenshot_ui.move_to_output(output);
+                        self.clarion.screenshot_ui.move_to_output(output);
                     } else {
-                        self.realand.layout.move_to_output(
+                        self.clarion.layout.move_to_output(
                             None,
                             &output,
                             None,
                             ActivateWindow::Smart,
                         );
-                        self.realand.layout.focus_output(&output);
+                        self.clarion.layout.focus_output(&output);
                         if !self.maybe_warp_cursor_to_focus_centered() {
                             self.move_cursor_to_output(&output);
                         }
@@ -2322,9 +2322,9 @@ impl State {
                 }
             }
             Action::MoveWindowToMonitorById { id, output } => {
-                if let Some(output) = self.realand.output_by_name_match(&output).cloned() {
+                if let Some(output) = self.clarion.output_by_name_match(&output).cloned() {
                     let window = self
-                        .realand
+                        .clarion
                         .layout
                         .windows()
                         .find(|(_, m)| m.id().get() == id);
@@ -2332,12 +2332,12 @@ impl State {
 
                     if let Some(window) = window {
                         let target_was_active = self
-                            .realand
+                            .clarion
                             .layout
                             .active_output()
                             .is_some_and(|active| output == *active);
 
-                        self.realand.layout.move_to_output(
+                        self.clarion.layout.move_to_output(
                             Some(&window),
                             &output,
                             None,
@@ -2347,7 +2347,7 @@ impl State {
                         // If the active output changed (window was moved and focused).
                         #[allow(clippy::collapsible_if)]
                         if !target_was_active
-                            && self.realand.layout.active_output() == Some(&output)
+                            && self.clarion.layout.active_output() == Some(&output)
                         {
                             if !self.maybe_warp_cursor_to_focus_centered() {
                                 self.move_cursor_to_output(&output);
@@ -2357,111 +2357,111 @@ impl State {
                 }
             }
             Action::MoveColumnToMonitorLeft => {
-                if let Some(current_output) = self.realand.screenshot_ui.selection_output() {
-                    if let Some(target_output) = self.realand.output_left_of(current_output) {
+                if let Some(current_output) = self.clarion.screenshot_ui.selection_output() {
+                    if let Some(target_output) = self.clarion.output_left_of(current_output) {
                         self.move_cursor_to_output(&target_output);
-                        self.realand.screenshot_ui.move_to_output(target_output);
+                        self.clarion.screenshot_ui.move_to_output(target_output);
                     }
-                } else if let Some(output) = self.realand.output_left() {
-                    self.realand
+                } else if let Some(output) = self.clarion.output_left() {
+                    self.clarion
                         .layout
                         .move_column_to_output(&output, None, true);
-                    self.realand.layout.focus_output(&output);
+                    self.clarion.layout.focus_output(&output);
                     if !self.maybe_warp_cursor_to_focus_centered() {
                         self.move_cursor_to_output(&output);
                     }
                 }
             }
             Action::MoveColumnToMonitorRight => {
-                if let Some(current_output) = self.realand.screenshot_ui.selection_output() {
-                    if let Some(target_output) = self.realand.output_right_of(current_output) {
+                if let Some(current_output) = self.clarion.screenshot_ui.selection_output() {
+                    if let Some(target_output) = self.clarion.output_right_of(current_output) {
                         self.move_cursor_to_output(&target_output);
-                        self.realand.screenshot_ui.move_to_output(target_output);
+                        self.clarion.screenshot_ui.move_to_output(target_output);
                     }
-                } else if let Some(output) = self.realand.output_right() {
-                    self.realand
+                } else if let Some(output) = self.clarion.output_right() {
+                    self.clarion
                         .layout
                         .move_column_to_output(&output, None, true);
-                    self.realand.layout.focus_output(&output);
+                    self.clarion.layout.focus_output(&output);
                     if !self.maybe_warp_cursor_to_focus_centered() {
                         self.move_cursor_to_output(&output);
                     }
                 }
             }
             Action::MoveColumnToMonitorDown => {
-                if let Some(current_output) = self.realand.screenshot_ui.selection_output() {
-                    if let Some(target_output) = self.realand.output_down_of(current_output) {
+                if let Some(current_output) = self.clarion.screenshot_ui.selection_output() {
+                    if let Some(target_output) = self.clarion.output_down_of(current_output) {
                         self.move_cursor_to_output(&target_output);
-                        self.realand.screenshot_ui.move_to_output(target_output);
+                        self.clarion.screenshot_ui.move_to_output(target_output);
                     }
-                } else if let Some(output) = self.realand.output_down() {
-                    self.realand
+                } else if let Some(output) = self.clarion.output_down() {
+                    self.clarion
                         .layout
                         .move_column_to_output(&output, None, true);
-                    self.realand.layout.focus_output(&output);
+                    self.clarion.layout.focus_output(&output);
                     if !self.maybe_warp_cursor_to_focus_centered() {
                         self.move_cursor_to_output(&output);
                     }
                 }
             }
             Action::MoveColumnToMonitorUp => {
-                if let Some(current_output) = self.realand.screenshot_ui.selection_output() {
-                    if let Some(target_output) = self.realand.output_up_of(current_output) {
+                if let Some(current_output) = self.clarion.screenshot_ui.selection_output() {
+                    if let Some(target_output) = self.clarion.output_up_of(current_output) {
                         self.move_cursor_to_output(&target_output);
-                        self.realand.screenshot_ui.move_to_output(target_output);
+                        self.clarion.screenshot_ui.move_to_output(target_output);
                     }
-                } else if let Some(output) = self.realand.output_up() {
-                    self.realand
+                } else if let Some(output) = self.clarion.output_up() {
+                    self.clarion
                         .layout
                         .move_column_to_output(&output, None, true);
-                    self.realand.layout.focus_output(&output);
+                    self.clarion.layout.focus_output(&output);
                     if !self.maybe_warp_cursor_to_focus_centered() {
                         self.move_cursor_to_output(&output);
                     }
                 }
             }
             Action::MoveColumnToMonitorPrevious => {
-                if let Some(current_output) = self.realand.screenshot_ui.selection_output() {
-                    if let Some(target_output) = self.realand.output_previous_of(current_output) {
+                if let Some(current_output) = self.clarion.screenshot_ui.selection_output() {
+                    if let Some(target_output) = self.clarion.output_previous_of(current_output) {
                         self.move_cursor_to_output(&target_output);
-                        self.realand.screenshot_ui.move_to_output(target_output);
+                        self.clarion.screenshot_ui.move_to_output(target_output);
                     }
-                } else if let Some(output) = self.realand.output_previous() {
-                    self.realand
+                } else if let Some(output) = self.clarion.output_previous() {
+                    self.clarion
                         .layout
                         .move_column_to_output(&output, None, true);
-                    self.realand.layout.focus_output(&output);
+                    self.clarion.layout.focus_output(&output);
                     if !self.maybe_warp_cursor_to_focus_centered() {
                         self.move_cursor_to_output(&output);
                     }
                 }
             }
             Action::MoveColumnToMonitorNext => {
-                if let Some(current_output) = self.realand.screenshot_ui.selection_output() {
-                    if let Some(target_output) = self.realand.output_next_of(current_output) {
+                if let Some(current_output) = self.clarion.screenshot_ui.selection_output() {
+                    if let Some(target_output) = self.clarion.output_next_of(current_output) {
                         self.move_cursor_to_output(&target_output);
-                        self.realand.screenshot_ui.move_to_output(target_output);
+                        self.clarion.screenshot_ui.move_to_output(target_output);
                     }
-                } else if let Some(output) = self.realand.output_next() {
-                    self.realand
+                } else if let Some(output) = self.clarion.output_next() {
+                    self.clarion
                         .layout
                         .move_column_to_output(&output, None, true);
-                    self.realand.layout.focus_output(&output);
+                    self.clarion.layout.focus_output(&output);
                     if !self.maybe_warp_cursor_to_focus_centered() {
                         self.move_cursor_to_output(&output);
                     }
                 }
             }
             Action::MoveColumnToMonitor(output) => {
-                if let Some(output) = self.realand.output_by_name_match(&output).cloned() {
-                    if self.realand.screenshot_ui.is_open() {
+                if let Some(output) = self.clarion.output_by_name_match(&output).cloned() {
+                    if self.clarion.screenshot_ui.is_open() {
                         self.move_cursor_to_output(&output);
-                        self.realand.screenshot_ui.move_to_output(output);
+                        self.clarion.screenshot_ui.move_to_output(output);
                     } else {
-                        self.realand
+                        self.clarion
                             .layout
                             .move_column_to_output(&output, None, true);
-                        self.realand.layout.focus_output(&output);
+                        self.clarion.layout.focus_output(&output);
                         if !self.maybe_warp_cursor_to_focus_centered() {
                             self.move_cursor_to_output(&output);
                         }
@@ -2469,133 +2469,133 @@ impl State {
                 }
             }
             Action::SetColumnWidth(change) => {
-                if self.realand.screenshot_ui.is_open() {
-                    self.realand.screenshot_ui.set_width(change);
+                if self.clarion.screenshot_ui.is_open() {
+                    self.clarion.screenshot_ui.set_width(change);
 
                     // FIXME: granular
-                    self.realand.queue_redraw_all();
+                    self.clarion.queue_redraw_all();
                 } else {
-                    self.realand.layout.set_column_width(change);
+                    self.clarion.layout.set_column_width(change);
                 }
             }
             Action::SetWindowWidth(change) => {
-                if self.realand.screenshot_ui.is_open() {
-                    self.realand.screenshot_ui.set_width(change);
+                if self.clarion.screenshot_ui.is_open() {
+                    self.clarion.screenshot_ui.set_width(change);
 
                     // FIXME: granular
-                    self.realand.queue_redraw_all();
+                    self.clarion.queue_redraw_all();
                 } else {
-                    self.realand.layout.set_window_width(None, change);
+                    self.clarion.layout.set_window_width(None, change);
                 }
             }
             Action::SetWindowWidthById { id, change } => {
                 let window = self
-                    .realand
+                    .clarion
                     .layout
                     .windows()
                     .find(|(_, m)| m.id().get() == id);
                 let window = window.map(|(_, m)| m.window.clone());
                 if let Some(window) = window {
-                    self.realand.layout.set_window_width(Some(&window), change);
+                    self.clarion.layout.set_window_width(Some(&window), change);
                 }
             }
             Action::SetWindowHeight(change) => {
-                if self.realand.screenshot_ui.is_open() {
-                    self.realand.screenshot_ui.set_height(change);
+                if self.clarion.screenshot_ui.is_open() {
+                    self.clarion.screenshot_ui.set_height(change);
 
                     // FIXME: granular
-                    self.realand.queue_redraw_all();
+                    self.clarion.queue_redraw_all();
                 } else {
-                    self.realand.layout.set_window_height(None, change);
+                    self.clarion.layout.set_window_height(None, change);
                 }
             }
             Action::SetWindowHeightById { id, change } => {
                 let window = self
-                    .realand
+                    .clarion
                     .layout
                     .windows()
                     .find(|(_, m)| m.id().get() == id);
                 let window = window.map(|(_, m)| m.window.clone());
                 if let Some(window) = window {
-                    self.realand.layout.set_window_height(Some(&window), change);
+                    self.clarion.layout.set_window_height(Some(&window), change);
                 }
             }
             Action::ResetWindowHeight => {
-                self.realand.layout.reset_window_height(None);
+                self.clarion.layout.reset_window_height(None);
             }
             Action::ResetWindowHeightById(id) => {
                 let window = self
-                    .realand
+                    .clarion
                     .layout
                     .windows()
                     .find(|(_, m)| m.id().get() == id);
                 let window = window.map(|(_, m)| m.window.clone());
                 if let Some(window) = window {
-                    self.realand.layout.reset_window_height(Some(&window));
+                    self.clarion.layout.reset_window_height(Some(&window));
                 }
             }
             Action::ExpandColumnToAvailableWidth => {
-                self.realand.layout.expand_column_to_available_width();
+                self.clarion.layout.expand_column_to_available_width();
             }
             Action::ShowHotkeyOverlay => {
-                if self.realand.hotkey_overlay.show() {
-                    self.realand.queue_redraw_all();
+                if self.clarion.hotkey_overlay.show() {
+                    self.clarion.queue_redraw_all();
 
                     #[cfg(feature = "dbus")]
-                    self.realand.a11y_announce_hotkey_overlay();
+                    self.clarion.a11y_announce_hotkey_overlay();
                 }
             }
             Action::MoveWorkspaceToMonitorLeft => {
-                if let Some(output) = self.realand.output_left() {
-                    self.realand.layout.move_workspace_to_output(&output);
+                if let Some(output) = self.clarion.output_left() {
+                    self.clarion.layout.move_workspace_to_output(&output);
                     if !self.maybe_warp_cursor_to_focus_centered() {
                         self.move_cursor_to_output(&output);
                     }
                 }
             }
             Action::MoveWorkspaceToMonitorRight => {
-                if let Some(output) = self.realand.output_right() {
-                    self.realand.layout.move_workspace_to_output(&output);
+                if let Some(output) = self.clarion.output_right() {
+                    self.clarion.layout.move_workspace_to_output(&output);
                     if !self.maybe_warp_cursor_to_focus_centered() {
                         self.move_cursor_to_output(&output);
                     }
                 }
             }
             Action::MoveWorkspaceToMonitorDown => {
-                if let Some(output) = self.realand.output_down() {
-                    self.realand.layout.move_workspace_to_output(&output);
+                if let Some(output) = self.clarion.output_down() {
+                    self.clarion.layout.move_workspace_to_output(&output);
                     if !self.maybe_warp_cursor_to_focus_centered() {
                         self.move_cursor_to_output(&output);
                     }
                 }
             }
             Action::MoveWorkspaceToMonitorUp => {
-                if let Some(output) = self.realand.output_up() {
-                    self.realand.layout.move_workspace_to_output(&output);
+                if let Some(output) = self.clarion.output_up() {
+                    self.clarion.layout.move_workspace_to_output(&output);
                     if !self.maybe_warp_cursor_to_focus_centered() {
                         self.move_cursor_to_output(&output);
                     }
                 }
             }
             Action::MoveWorkspaceToMonitorPrevious => {
-                if let Some(output) = self.realand.output_previous() {
-                    self.realand.layout.move_workspace_to_output(&output);
+                if let Some(output) = self.clarion.output_previous() {
+                    self.clarion.layout.move_workspace_to_output(&output);
                     if !self.maybe_warp_cursor_to_focus_centered() {
                         self.move_cursor_to_output(&output);
                     }
                 }
             }
             Action::MoveWorkspaceToMonitorNext => {
-                if let Some(output) = self.realand.output_next() {
-                    self.realand.layout.move_workspace_to_output(&output);
+                if let Some(output) = self.clarion.output_next() {
+                    self.clarion.layout.move_workspace_to_output(&output);
                     if !self.maybe_warp_cursor_to_focus_centered() {
                         self.move_cursor_to_output(&output);
                     }
                 }
             }
             Action::MoveWorkspaceToMonitor(new_output) => {
-                if let Some(new_output) = self.realand.output_by_name_match(&new_output).cloned() {
-                    if self.realand.layout.move_workspace_to_output(&new_output)
+                if let Some(new_output) = self.clarion.output_by_name_match(&new_output).cloned() {
+                    if self.clarion.layout.move_workspace_to_output(&new_output)
                         && !self.maybe_warp_cursor_to_focus_centered()
                     {
                         self.move_cursor_to_output(&new_output);
@@ -2607,12 +2607,12 @@ impl State {
                 reference,
             } => {
                 if let Some((output, old_idx)) =
-                    self.realand.find_output_and_workspace_index(reference)
+                    self.clarion.find_output_and_workspace_index(reference)
                 {
                     if let Some(new_output) =
-                        self.realand.output_by_name_match(&output_name).cloned()
+                        self.clarion.output_by_name_match(&output_name).cloned()
                     {
-                        if self.realand.layout.move_workspace_to_output_by_id(
+                        if self.clarion.layout.move_workspace_to_output_by_id(
                             old_idx,
                             output,
                             &new_output,
@@ -2626,83 +2626,83 @@ impl State {
                 }
             }
             Action::ToggleWindowFloating => {
-                self.realand.layout.toggle_window_floating(None);
+                self.clarion.layout.toggle_window_floating(None);
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::ToggleWindowFloatingById(id) => {
                 let window = self
-                    .realand
+                    .clarion
                     .layout
                     .windows()
                     .find(|(_, m)| m.id().get() == id);
                 let window = window.map(|(_, m)| m.window.clone());
                 if let Some(window) = window {
-                    self.realand.layout.toggle_window_floating(Some(&window));
+                    self.clarion.layout.toggle_window_floating(Some(&window));
                     // FIXME: granular
-                    self.realand.queue_redraw_all();
+                    self.clarion.queue_redraw_all();
                 }
             }
             Action::MoveWindowToFloating => {
-                self.realand.layout.set_window_floating(None, true);
+                self.clarion.layout.set_window_floating(None, true);
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::MoveWindowToFloatingById(id) => {
                 let window = self
-                    .realand
+                    .clarion
                     .layout
                     .windows()
                     .find(|(_, m)| m.id().get() == id);
                 let window = window.map(|(_, m)| m.window.clone());
                 if let Some(window) = window {
-                    self.realand.layout.set_window_floating(Some(&window), true);
+                    self.clarion.layout.set_window_floating(Some(&window), true);
                     // FIXME: granular
-                    self.realand.queue_redraw_all();
+                    self.clarion.queue_redraw_all();
                 }
             }
             Action::MoveWindowToTiling => {
-                self.realand.layout.set_window_floating(None, false);
+                self.clarion.layout.set_window_floating(None, false);
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::MoveWindowToTilingById(id) => {
                 let window = self
-                    .realand
+                    .clarion
                     .layout
                     .windows()
                     .find(|(_, m)| m.id().get() == id);
                 let window = window.map(|(_, m)| m.window.clone());
                 if let Some(window) = window {
-                    self.realand
+                    self.clarion
                         .layout
                         .set_window_floating(Some(&window), false);
                     // FIXME: granular
-                    self.realand.queue_redraw_all();
+                    self.clarion.queue_redraw_all();
                 }
             }
             Action::FocusFloating => {
-                self.realand.layout.focus_floating();
+                self.clarion.layout.focus_floating();
                 self.maybe_warp_cursor_to_focus();
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::FocusTiling => {
-                self.realand.layout.focus_tiling();
+                self.clarion.layout.focus_tiling();
                 self.maybe_warp_cursor_to_focus();
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::SwitchFocusBetweenFloatingAndTiling => {
-                self.realand.layout.switch_focus_floating_tiling();
+                self.clarion.layout.switch_focus_floating_tiling();
                 self.maybe_warp_cursor_to_focus();
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::MoveFloatingWindowById { id, x, y } => {
                 let window = if let Some(id) = id {
                     let window = self
-                        .realand
+                        .clarion
                         .layout
                         .windows()
                         .find(|(_, m)| m.id().get() == id);
@@ -2715,15 +2715,15 @@ impl State {
                     None
                 };
 
-                self.realand
+                self.clarion
                     .layout
                     .move_floating_window(window.as_ref(), x, y, true);
                 // FIXME: granular
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::ToggleWindowRuleOpacity => {
                 let active_window = self
-                    .realand
+                    .clarion
                     .layout
                     .active_workspace_mut()
                     .and_then(|ws| ws.active_window_mut());
@@ -2731,13 +2731,13 @@ impl State {
                     if window.rules().opacity.is_some_and(|o| o != 1.) {
                         window.toggle_ignore_opacity_window_rule();
                         // FIXME: granular
-                        self.realand.queue_redraw_all();
+                        self.clarion.queue_redraw_all();
                     }
                 }
             }
             Action::ToggleWindowRuleOpacityById(id) => {
                 let window = self
-                    .realand
+                    .clarion
                     .layout
                     .workspaces_mut()
                     .find_map(|ws| ws.windows_mut().find(|w| w.id().get() == id));
@@ -2745,13 +2745,13 @@ impl State {
                     if window.rules().opacity.is_some_and(|o| o != 1.) {
                         window.toggle_ignore_opacity_window_rule();
                         // FIXME: granular
-                        self.realand.queue_redraw_all();
+                        self.clarion.queue_redraw_all();
                     }
                 }
             }
             Action::SetDynamicCastWindow => {
                 let id = self
-                    .realand
+                    .clarion
                     .layout
                     .active_workspace()
                     .and_then(|ws| ws.active_window())
@@ -2761,15 +2761,15 @@ impl State {
                 }
             }
             Action::SetDynamicCastWindowById(id) => {
-                let layout = &self.realand.layout;
+                let layout = &self.clarion.layout;
                 if layout.windows().any(|(_, mapped)| mapped.id().get() == id) {
                     self.set_dynamic_cast_target(CastTarget::Window { id });
                 }
             }
             Action::SetDynamicCastMonitor(output) => {
                 let output = match output {
-                    None => self.realand.layout.active_output(),
-                    Some(name) => self.realand.output_by_name_match(&name),
+                    None => self.clarion.layout.active_output(),
+                    Some(name) => self.clarion.output_by_name_match(&name),
                 };
                 if let Some(output) = output {
                     self.set_dynamic_cast_target(CastTarget::output(output));
@@ -2779,7 +2779,7 @@ impl State {
                 self.set_dynamic_cast_target(CastTarget::Nothing);
             }
             Action::StopCast(session_id) => {
-                self.realand.stop_cast(CastSessionId::from(session_id));
+                self.clarion.stop_cast(CastSessionId::from(session_id));
             }
             Action::ToggleOverview => {
                 self.overview_command(OverviewCommand::Toggle);
@@ -2792,7 +2792,7 @@ impl State {
             }
             Action::ToggleWindowUrgent(id) => {
                 let window = self
-                    .realand
+                    .clarion
                     .layout
                     .workspaces_mut()
                     .find_map(|ws| ws.windows_mut().find(|w| w.id().get() == id));
@@ -2800,32 +2800,32 @@ impl State {
                     let urgent = window.is_urgent();
                     window.set_urgent(!urgent);
                 }
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::SetWindowUrgent(id) => {
                 let window = self
-                    .realand
+                    .clarion
                     .layout
                     .workspaces_mut()
                     .find_map(|ws| ws.windows_mut().find(|w| w.id().get() == id));
                 if let Some(window) = window {
                     window.set_urgent(true);
                 }
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::UnsetWindowUrgent(id) => {
                 let window = self
-                    .realand
+                    .clarion
                     .layout
                     .workspaces_mut()
                     .find_map(|ws| ws.windows_mut().find(|w| w.id().get() == id));
                 if let Some(window) = window {
                     window.set_urgent(false);
                 }
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::LoadConfigFile(path) => {
-                if let Some(watcher) = &self.realand.config_file_watcher {
+                if let Some(watcher) = &self.clarion.config_file_watcher {
                     watcher.load_config(path);
                 }
             }
@@ -2833,32 +2833,32 @@ impl State {
                 self.confirm_mru();
             }
             Action::MruCancel => {
-                self.realand.cancel_mru();
+                self.clarion.cancel_mru();
             }
             Action::MruAdvance {
                 direction,
                 scope,
                 filter,
             } => {
-                if self.realand.window_mru_ui.is_open() {
-                    self.realand.window_mru_ui.advance(direction, filter);
-                    self.realand.queue_redraw_mru_output();
-                } else if self.realand.config.borrow().recent_windows.on {
-                    self.realand.mru_apply_keyboard_commit();
+                if self.clarion.window_mru_ui.is_open() {
+                    self.clarion.window_mru_ui.advance(direction, filter);
+                    self.clarion.queue_redraw_mru_output();
+                } else if self.clarion.config.borrow().recent_windows.on {
+                    self.clarion.mru_apply_keyboard_commit();
 
-                    let config = self.realand.config.borrow();
-                    let scope = scope.unwrap_or(self.realand.window_mru_ui.scope());
+                    let config = self.clarion.config.borrow();
+                    let scope = scope.unwrap_or(self.clarion.window_mru_ui.scope());
 
-                    let mut wmru = WindowMru::new(&self.realand);
+                    let mut wmru = WindowMru::new(&self.clarion);
                     if !wmru.is_empty() {
                         wmru.set_scope(scope);
                         if let Some(filter) = filter {
                             wmru.set_filter(filter);
                         }
 
-                        if let Some(output) = self.realand.layout.active_output() {
-                            self.realand.window_mru_ui.open(
-                                self.realand.clock.clone(),
+                        if let Some(output) = self.clarion.layout.active_output() {
+                            self.clarion.window_mru_ui.open(
+                                self.clarion.clock.clone(),
                                 wmru,
                                 output.clone(),
                             );
@@ -2867,21 +2867,21 @@ impl State {
                             // first one) is already focused. If nothing is focused, keep the first
                             // window (which is logically the "previously selected" one).
                             let keep_first = direction == MruDirection::Forward
-                                && self.realand.layout.focus().is_none();
+                                && self.clarion.layout.focus().is_none();
                             if !keep_first {
-                                self.realand.window_mru_ui.advance(direction, None);
+                                self.clarion.window_mru_ui.advance(direction, None);
                             }
 
                             drop(config);
-                            self.realand.queue_redraw_all();
+                            self.clarion.queue_redraw_all();
                         }
                     }
                 }
             }
             Action::MruCloseCurrentWindow => {
-                if self.realand.window_mru_ui.is_open() {
-                    if let Some(id) = self.realand.window_mru_ui.current_window_id() {
-                        if let Some(w) = self.realand.find_window_by_id(id) {
+                if self.clarion.window_mru_ui.is_open() {
+                    if let Some(id) = self.clarion.window_mru_ui.current_window_id() {
+                        if let Some(w) = self.clarion.find_window_by_id(id) {
                             if let Some(tl) = w.toplevel() {
                                 tl.send_close();
                             }
@@ -2890,79 +2890,79 @@ impl State {
                 }
             }
             Action::MruFirst => {
-                if self.realand.window_mru_ui.is_open() {
-                    self.realand.window_mru_ui.first();
-                    self.realand.queue_redraw_mru_output();
+                if self.clarion.window_mru_ui.is_open() {
+                    self.clarion.window_mru_ui.first();
+                    self.clarion.queue_redraw_mru_output();
                 }
             }
             Action::MruLast => {
-                if self.realand.window_mru_ui.is_open() {
-                    self.realand.window_mru_ui.last();
-                    self.realand.queue_redraw_mru_output();
+                if self.clarion.window_mru_ui.is_open() {
+                    self.clarion.window_mru_ui.last();
+                    self.clarion.queue_redraw_mru_output();
                 }
             }
             Action::MruSetScope(scope) => {
-                if self.realand.window_mru_ui.is_open() {
-                    self.realand.window_mru_ui.set_scope(scope);
-                    self.realand.queue_redraw_mru_output();
+                if self.clarion.window_mru_ui.is_open() {
+                    self.clarion.window_mru_ui.set_scope(scope);
+                    self.clarion.queue_redraw_mru_output();
                 }
             }
             Action::MruCycleScope => {
-                if self.realand.window_mru_ui.is_open() {
-                    self.realand.window_mru_ui.cycle_scope();
-                    self.realand.queue_redraw_mru_output();
+                if self.clarion.window_mru_ui.is_open() {
+                    self.clarion.window_mru_ui.cycle_scope();
+                    self.clarion.queue_redraw_mru_output();
                 }
             }
             Action::ToggleCanvas => {
-                if let Some(ws) = self.realand.layout.active_workspace_mut() {
+                if let Some(ws) = self.clarion.layout.active_workspace_mut() {
                     ws.toggle_canvas();
                 }
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::PanCanvas(x, y) => {
-                if let Some(ws) = self.realand.layout.active_workspace_mut() {
+                if let Some(ws) = self.clarion.layout.active_workspace_mut() {
                     ws.pan_canvas(Point::from((f64::from(x), f64::from(y))), false);
                 }
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::ResetCanvas => {
-                if let Some(ws) = self.realand.layout.active_workspace_mut() {
+                if let Some(ws) = self.clarion.layout.active_workspace_mut() {
                     ws.reset_canvas();
                 }
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::SwitchTilingMode(mode) => {
-                self.realand.layout.switch_tiling_mode(mode);
-                self.realand.queue_redraw_all();
+                self.clarion.layout.switch_tiling_mode(mode);
+                self.clarion.queue_redraw_all();
             }
             Action::ToggleDwindleSplit => {
-                self.realand.layout.toggle_dwindle_split();
+                self.clarion.layout.toggle_dwindle_split();
             }
             Action::UndoLayout => {
-                self.realand.layout.undo_layout(false);
-                self.realand.queue_redraw_all();
+                self.clarion.layout.undo_layout(false);
+                self.clarion.queue_redraw_all();
             }
             Action::RedoLayout => {
-                self.realand.layout.undo_layout(true);
-                self.realand.queue_redraw_all();
+                self.clarion.layout.undo_layout(true);
+                self.clarion.queue_redraw_all();
             }
             Action::SetWindowGroup { name, windows } => {
                 let ids = self
-                    .realand
+                    .clarion
                     .layout
                     .windows()
                     .filter(|(_, w)| windows.contains(&w.id().get()))
                     .map(|(_, w)| w.window.clone())
                     .collect();
-                self.realand.layout.set_window_group(name, ids);
+                self.clarion.layout.set_window_group(name, ids);
             }
-            Action::RemoveWindowGroup { name } => self.realand.layout.remove_window_group(&name),
+            Action::RemoveWindowGroup { name } => self.clarion.layout.remove_window_group(&name),
             Action::MoveWindowGroup { name, workspace_id } => {
-                self.realand.layout.move_window_group(
+                self.clarion.layout.move_window_group(
                     &name,
                     crate::layout::workspace::WorkspaceId::specific(workspace_id),
                 );
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
             Action::RestoreSessionLayout { json } => {
                 self.queue_session_layout_restore(json);
@@ -2980,62 +2980,62 @@ impl State {
                 self.overview_command(OverviewCommand::ConfirmExpo);
             }
             Action::ExpoNavigateLeft => {
-                if self.realand.layout.expo_navigate(-1, 0) {
-                    self.realand.queue_redraw_all();
+                if self.clarion.layout.expo_navigate(-1, 0) {
+                    self.clarion.queue_redraw_all();
                 }
             }
             Action::ExpoNavigateRight => {
-                if self.realand.layout.expo_navigate(1, 0) {
-                    self.realand.queue_redraw_all();
+                if self.clarion.layout.expo_navigate(1, 0) {
+                    self.clarion.queue_redraw_all();
                 }
             }
             Action::ExpoNavigateUp => {
-                if self.realand.layout.expo_navigate(0, -1) {
-                    self.realand.queue_redraw_all();
+                if self.clarion.layout.expo_navigate(0, -1) {
+                    self.clarion.queue_redraw_all();
                 }
             }
             Action::ExpoNavigateDown => {
-                if self.realand.layout.expo_navigate(0, 1) {
-                    self.realand.queue_redraw_all();
+                if self.clarion.layout.expo_navigate(0, 1) {
+                    self.clarion.queue_redraw_all();
                 }
             }
             Action::ToggleScratchpad => {
-                self.realand.layout.toggle_scratchpad();
+                self.clarion.layout.toggle_scratchpad();
                 self.maybe_warp_cursor_to_focus();
-                self.realand.layer_shell_on_demand_focus = None;
-                self.realand.queue_redraw_all();
+                self.clarion.layer_shell_on_demand_focus = None;
+                self.clarion.queue_redraw_all();
             }
             Action::MoveWindowToScratchpad => {
-                self.realand.layout.move_window_to_scratchpad();
+                self.clarion.layout.move_window_to_scratchpad();
                 self.maybe_warp_cursor_to_focus();
-                self.realand.layer_shell_on_demand_focus = None;
-                self.realand.queue_redraw_all();
+                self.clarion.layer_shell_on_demand_focus = None;
+                self.clarion.queue_redraw_all();
             }
             Action::ToggleWindowWobble => {
-                self.realand.layout.toggle_window_wobble();
-                self.realand.queue_redraw_all();
+                self.clarion.layout.toggle_window_wobble();
+                self.clarion.queue_redraw_all();
             }
             Action::ToggleWorkspaceCube => {
-                self.realand.layout.toggle_workspace_cube();
-                self.realand.queue_redraw_all();
+                self.clarion.layout.toggle_workspace_cube();
+                self.clarion.queue_redraw_all();
             }
             Action::ToggleWindowGlide => {
-                self.realand.layout.toggle_window_glide();
-                self.realand.queue_redraw_all();
+                self.clarion.layout.toggle_window_glide();
+                self.clarion.queue_redraw_all();
             }
         }
     }
 
     fn on_pointer_motion<I: InputBackend>(&mut self, event: I::PointerMotionEvent) {
         // We need an output to be able to move the pointer.
-        if self.realand.global_space.outputs().next().is_none() {
-            self.realand.reset_hot_corner();
+        if self.clarion.global_space.outputs().next().is_none() {
+            self.clarion.reset_hot_corner();
             return;
         }
 
         let serial = SERIAL_COUNTER.next_serial();
 
-        let pointer = self.realand.seat.get_pointer().unwrap();
+        let pointer = self.clarion.seat.get_pointer().unwrap();
 
         let pos = pointer.current_location();
 
@@ -3043,14 +3043,14 @@ impl State {
         let mut new_pos = pos + event.delta();
 
         // We received an event for the regular pointer, so show it now.
-        self.realand.pointer_visibility = PointerVisibility::Visible;
-        self.realand.tablet_cursor_location = None;
+        self.clarion.pointer_visibility = PointerVisibility::Visible;
+        self.clarion.tablet_cursor_location = None;
 
         // Check if we have an active pointer constraint.
         //
         // FIXME: ideally this should use the pointer focus with up-to-date global location.
         let mut pointer_confined = None;
-        if let Some(under) = &self.realand.pointer_contents.surface {
+        if let Some(under) = &self.clarion.pointer_contents.surface {
             // No need to check if the pointer focus surface matches, because here we're checking
             // for an already-active constraint, and the constraint is deactivated when the focused
             // surface changes.
@@ -3117,7 +3117,7 @@ impl State {
             None
         });
         if let Some((output, horizontal)) = spatial_grab.flatten() {
-            if let Some(geo) = self.realand.global_space.output_geometry(&output) {
+            if let Some(geo) = self.clarion.global_space.output_geometry(&output) {
                 let geo = geo.to_f64();
                 if horizontal {
                     new_pos.x = (new_pos.x - geo.loc.x).rem_euclid(geo.size.w) + geo.loc.x;
@@ -3130,17 +3130,17 @@ impl State {
         }
 
         if self
-            .realand
+            .clarion
             .global_space
             .output_under(new_pos)
             .next()
             .is_none()
         {
             // We ended up outside the outputs and need to clip the movement.
-            if let Some(output) = self.realand.global_space.output_under(pos).next() {
+            if let Some(output) = self.clarion.global_space.output_under(pos).next() {
                 // The pointer was previously on some output. Clip the movement against its
                 // boundaries.
-                let Some(geom) = self.realand.global_space.output_geometry(output) else {
+                let Some(geom) = self.clarion.global_space.output_geometry(output) else {
                     return;
                 };
                 new_pos.x = new_pos
@@ -3152,37 +3152,37 @@ impl State {
             } else {
                 // The pointer was not on any output in the first place. Find one for it.
                 // Let's do the simple thing and just put it on the first output.
-                let Some(output) = self.realand.global_space.outputs().next() else {
+                let Some(output) = self.clarion.global_space.outputs().next() else {
                     // Outputs can temporarily be absent while they are being reconfigured.
                     return;
                 };
-                let Some(geom) = self.realand.global_space.output_geometry(output) else {
+                let Some(geom) = self.clarion.global_space.output_geometry(output) else {
                     return;
                 };
                 new_pos = center(geom).to_f64();
             }
         }
 
-        if let Some(output) = self.realand.screenshot_ui.selection_output() {
-            let Some(geom) = self.realand.global_space.output_geometry(output) else {
+        if let Some(output) = self.clarion.screenshot_ui.selection_output() {
+            let Some(geom) = self.clarion.global_space.output_geometry(output) else {
                 return;
             };
             let point = (new_pos - geom.loc.to_f64())
                 .to_physical(output.current_scale().fractional_scale())
                 .to_i32_round::<i32>();
 
-            self.realand.screenshot_ui.pointer_motion(point, None);
+            self.clarion.screenshot_ui.pointer_motion(point, None);
         }
 
-        if let Some(mru_output) = self.realand.window_mru_ui.output() {
-            if let Some((output, pos_within_output)) = self.realand.output_under(new_pos) {
+        if let Some(mru_output) = self.clarion.window_mru_ui.output() {
+            if let Some((output, pos_within_output)) = self.clarion.output_under(new_pos) {
                 if mru_output == output {
-                    self.realand.window_mru_ui.pointer_motion(pos_within_output);
+                    self.clarion.window_mru_ui.pointer_motion(pos_within_output);
                 }
             }
         }
 
-        let under = self.realand.contents_under(new_pos);
+        let under = self.clarion.contents_under(new_pos);
 
         // Handle confined pointer.
         if let Some((focus_surface, region)) = pointer_confined {
@@ -3218,9 +3218,9 @@ impl State {
             }
         }
 
-        self.realand.handle_focus_follows_mouse(&under);
+        self.clarion.handle_focus_follows_mouse(&under);
 
-        self.realand.pointer_contents.clone_from(&under);
+        self.clarion.pointer_contents.clone_from(&under);
 
         pointer.motion(
             self,
@@ -3247,16 +3247,16 @@ impl State {
         self.process_hot_corner_motion(new_pos, under.output.zip(under.hot_corner));
 
         // Activate a new confinement if necessary.
-        self.realand.maybe_activate_pointer_constraint();
+        self.clarion.maybe_activate_pointer_constraint();
 
         // Inform the layout of an ongoing DnD operation.
         let is_dnd_grab = pointer
             .with_grab(|_, grab| Self::is_dnd_grab(grab.as_any()))
             .unwrap_or(false);
         if is_dnd_grab {
-            if let Some((output, pos_within_output)) = self.realand.output_under(new_pos) {
+            if let Some((output, pos_within_output)) = self.clarion.output_under(new_pos) {
                 let output = output.clone();
-                self.realand.layout.dnd_update(output, pos_within_output);
+                self.clarion.layout.dnd_update(output, pos_within_output);
             }
         }
 
@@ -3266,7 +3266,7 @@ impl State {
 
         // Redraw to update the cursor position.
         // FIXME: redraw only outputs overlapping the cursor.
-        self.realand.queue_redraw_all();
+        self.clarion.queue_redraw_all();
     }
 
     fn on_pointer_motion_absolute<I: InputBackend>(
@@ -3283,32 +3283,32 @@ impl State {
 
         let serial = SERIAL_COUNTER.next_serial();
 
-        let pointer = self.realand.seat.get_pointer().unwrap();
+        let pointer = self.clarion.seat.get_pointer().unwrap();
 
-        if let Some(output) = self.realand.screenshot_ui.selection_output() {
-            let Some(geom) = self.realand.global_space.output_geometry(output) else {
+        if let Some(output) = self.clarion.screenshot_ui.selection_output() {
+            let Some(geom) = self.clarion.global_space.output_geometry(output) else {
                 return;
             };
             let point = (pos - geom.loc.to_f64())
                 .to_physical(output.current_scale().fractional_scale())
                 .to_i32_round::<i32>();
 
-            self.realand.screenshot_ui.pointer_motion(point, None);
+            self.clarion.screenshot_ui.pointer_motion(point, None);
         }
 
-        if let Some(mru_output) = self.realand.window_mru_ui.output() {
-            if let Some((output, pos_within_output)) = self.realand.output_under(pos) {
+        if let Some(mru_output) = self.clarion.window_mru_ui.output() {
+            if let Some((output, pos_within_output)) = self.clarion.output_under(pos) {
                 if mru_output == output {
-                    self.realand.window_mru_ui.pointer_motion(pos_within_output);
+                    self.clarion.window_mru_ui.pointer_motion(pos_within_output);
                 }
             }
         }
 
-        let under = self.realand.contents_under(pos);
+        let under = self.clarion.contents_under(pos);
 
-        self.realand.handle_focus_follows_mouse(&under);
+        self.clarion.handle_focus_follows_mouse(&under);
 
-        self.realand.pointer_contents.clone_from(&under);
+        self.clarion.pointer_contents.clone_from(&under);
 
         pointer.motion(
             self,
@@ -3324,22 +3324,22 @@ impl State {
 
         self.process_hot_corner_motion(pos, under.output.zip(under.hot_corner));
 
-        self.realand.maybe_activate_pointer_constraint();
+        self.clarion.maybe_activate_pointer_constraint();
 
         // We moved the pointer, show it.
-        self.realand.pointer_visibility = PointerVisibility::Visible;
+        self.clarion.pointer_visibility = PointerVisibility::Visible;
 
         // We moved the regular pointer, so show it now.
-        self.realand.tablet_cursor_location = None;
+        self.clarion.tablet_cursor_location = None;
 
         // Inform the layout of an ongoing DnD operation.
         let is_dnd_grab = pointer
             .with_grab(|_, grab| Self::is_dnd_grab(grab.as_any()))
             .unwrap_or(false);
         if is_dnd_grab {
-            if let Some((output, pos_within_output)) = self.realand.output_under(pos) {
+            if let Some((output, pos_within_output)) = self.clarion.output_under(pos) {
                 let output = output.clone();
-                self.realand.layout.dnd_update(output, pos_within_output);
+                self.clarion.layout.dnd_update(output, pos_within_output);
             }
         }
 
@@ -3349,7 +3349,7 @@ impl State {
 
         // Redraw to update the cursor position.
         // FIXME: redraw only outputs overlapping the cursor.
-        self.realand.queue_redraw_all();
+        self.clarion.queue_redraw_all();
     }
 
     /// Shared by relative and absolute pointer motion, after updating pointer focus.
@@ -3358,22 +3358,22 @@ impl State {
         pos: Point<f64, Logical>,
         candidate: Option<(Output, HotCornerKind)>,
     ) {
-        if !matches!(self.realand.lock_state, LockState::Unlocked)
-            || self.realand.screenshot_ui.is_open()
-            || self.realand.window_mru_ui.is_open()
-            || self.realand.exit_confirm_dialog.is_open()
+        if !matches!(self.clarion.lock_state, LockState::Unlocked)
+            || self.clarion.screenshot_ui.is_open()
+            || self.clarion.window_mru_ui.is_open()
+            || self.clarion.exit_confirm_dialog.is_open()
         {
-            self.realand.reset_hot_corner();
+            self.clarion.reset_hot_corner();
             return;
         }
-        let pointer = self.realand.seat.get_pointer().unwrap();
+        let pointer = self.clarion.seat.get_pointer().unwrap();
         let touch_grabbed = self
-            .realand
+            .clarion
             .seat
             .get_touch()
             .is_some_and(|touch| touch.is_grabbed());
         let mut tablet_grabbed = false;
-        self.realand.seat.tablet_seat().with_tools(|tools| {
+        self.clarion.seat.tablet_seat().with_tools(|tools| {
             tablet_grabbed = tools.values().any(|tool| tool.is_grabbed());
         });
         let allowed = pointer.current_focus().is_none()
@@ -3384,7 +3384,7 @@ impl State {
                 .unwrap_or(true);
         let candidate = candidate.filter(|_| allowed);
         let corner = candidate.as_ref().map(|(_, corner)| *corner);
-        if !self.realand.hot_corner_motion_entered(pos, candidate) {
+        if !self.clarion.hot_corner_motion_entered(pos, candidate) {
             return;
         }
         match corner.unwrap() {
@@ -3402,14 +3402,14 @@ impl State {
     /// Other applications' active operations are left untouched.
     pub(crate) fn minimize_window_by_id(&mut self, id: u64) {
         if !matches!(
-            self.realand.lock_state,
+            self.clarion.lock_state,
             crate::compositor::LockState::Unlocked
-        ) || self.realand.screenshot_ui.is_open()
+        ) || self.clarion.screenshot_ui.is_open()
         {
             return;
         }
         let window = self
-            .realand
+            .clarion
             .layout
             .windows()
             .find(|(_, mapped)| mapped.id().get() == id)
@@ -3417,24 +3417,24 @@ impl State {
         let Some(window) = window else {
             return;
         };
-        if self.realand.layout.is_minimized(&window) {
+        if self.clarion.layout.is_minimized(&window) {
             return;
         }
         let Some(surface) = window.toplevel().map(|top| top.wl_surface().clone()) else {
             return;
         };
         let time = get_monotonic_time().as_millis() as u32;
-        if let Some(pointer) = self.realand.seat.get_pointer() {
+        if let Some(pointer) = self.clarion.seat.get_pointer() {
             let targets_window =
                 pointer.current_focus().as_ref().is_some_and(|focused| {
-                    self.realand.find_root_shell_surface(focused) == surface
+                    self.clarion.find_root_shell_surface(focused) == surface
                 }) || pointer
                     .with_grab(|_, grab| {
                         grab.start_data()
                             .focus
                             .as_ref()
                             .is_some_and(|(focused, _)| {
-                                self.realand.find_root_shell_surface(focused) == surface
+                                self.clarion.find_root_shell_surface(focused) == surface
                             })
                     })
                     .unwrap_or(false);
@@ -3442,14 +3442,14 @@ impl State {
                 pointer.unset_grab(self, SERIAL_COUNTER.next_serial(), time);
             }
         }
-        if let Some(touch) = self.realand.seat.get_touch() {
+        if let Some(touch) = self.clarion.seat.get_touch() {
             let targets_window = touch
                 .with_grab(|_, grab| {
                     grab.start_data()
                         .focus
                         .as_ref()
                         .is_some_and(|(focused, _)| {
-                            self.realand.find_root_shell_surface(focused) == surface
+                            self.clarion.find_root_shell_surface(focused) == surface
                         })
                 })
                 .unwrap_or(false);
@@ -3458,7 +3458,7 @@ impl State {
             }
         }
         let mut tools = Vec::new();
-        self.realand
+        self.clarion
             .seat
             .tablet_seat()
             .with_tools(|map| tools = map.values().cloned().collect());
@@ -3469,7 +3469,7 @@ impl State {
                         .focus
                         .as_ref()
                         .is_some_and(|(focused, _)| {
-                            self.realand.find_root_shell_surface(focused) == surface
+                            self.clarion.find_root_shell_surface(focused) == surface
                         })
                 })
                 .unwrap_or(false);
@@ -3477,13 +3477,13 @@ impl State {
                 tool.unset_grab(self, SERIAL_COUNTER.next_serial(), time);
             }
         }
-        if self.realand.layout.minimize_window(&window) {
+        if self.clarion.layout.minimize_window(&window) {
             self.update_keyboard_focus();
             self.update_pointer_contents();
-            if let Some(pointer) = self.realand.seat.get_pointer() {
+            if let Some(pointer) = self.clarion.seat.get_pointer() {
                 pointer.frame(self);
             }
-            self.realand.queue_redraw_all();
+            self.clarion.queue_redraw_all();
         }
     }
 
@@ -3492,7 +3492,7 @@ impl State {
     pub(crate) fn cancel_overview_grabs(&mut self) {
         self.cancel_layout_gestures();
         let time = get_monotonic_time().as_millis() as u32;
-        if let Some(pointer) = self.realand.seat.get_pointer() {
+        if let Some(pointer) = self.clarion.seat.get_pointer() {
             let compositor_grab = pointer
                 .with_grab(|_, grab| {
                     let grab = grab.as_any();
@@ -3505,7 +3505,7 @@ impl State {
                 pointer.unset_grab(self, SERIAL_COUNTER.next_serial(), time);
             }
         }
-        if let Some(touch) = self.realand.seat.get_touch() {
+        if let Some(touch) = self.clarion.seat.get_touch() {
             let compositor_grab = touch
                 .with_grab(|_, grab| {
                     let grab = grab.as_any();
@@ -3519,7 +3519,7 @@ impl State {
             }
         }
         let mut tools = Vec::new();
-        self.realand.seat.tablet_seat().with_tools(|map| {
+        self.clarion.seat.tablet_seat().with_tools(|map| {
             tools = map.values().cloned().collect();
         });
         for tool in tools {
@@ -3538,16 +3538,16 @@ impl State {
     }
 
     fn cancel_layout_gestures(&mut self) {
-        self.realand.gesture_swipe_3f_cumulative = None;
-        self.realand.overview_scroll_swipe_gesture.reset();
+        self.clarion.gesture_swipe_3f_cumulative = None;
+        self.clarion.overview_scroll_swipe_gesture.reset();
         while self
-            .realand
+            .clarion
             .layout
             .workspace_switch_gesture_cancel(None)
             .is_some()
         {}
         while self
-            .realand
+            .clarion
             .layout
             .view_offset_gesture_cancel(None)
             .is_some()
@@ -3559,16 +3559,16 @@ impl State {
     pub(crate) fn cancel_grabs_for_lock(&mut self) {
         self.cancel_layout_gestures();
         let time = get_monotonic_time().as_millis() as u32;
-        if let Some(pointer) = self.realand.seat.get_pointer() {
+        if let Some(pointer) = self.clarion.seat.get_pointer() {
             pointer.unset_grab(self, SERIAL_COUNTER.next_serial(), time);
         }
-        if let Some(touch) = self.realand.seat.get_touch() {
+        if let Some(touch) = self.clarion.seat.get_touch() {
             if touch.is_grabbed() {
                 touch.cancel(self);
             }
         }
         let mut tools = Vec::new();
-        self.realand.seat.tablet_seat().with_tools(|map| {
+        self.clarion.seat.tablet_seat().with_tools(|map| {
             tools = map.values().cloned().collect();
         });
         for tool in tools {
@@ -3577,16 +3577,16 @@ impl State {
     }
 
     pub fn toggle_settings_gui(&mut self) {
-        let existing = self.realand.layout.windows().find(|(_, m)| {
+        let existing = self.clarion.layout.windows().find(|(_, m)| {
             crate::utils::with_toplevel_role(m.toplevel(), |role| {
-                role.app_id.as_deref() == Some("realand-settings")
-                    || role.app_id.as_deref() == Some("rs.bxt.realand.settings")
-                    || role.title.as_deref() == Some("Realand Settings")
+                role.app_id.as_deref() == Some("clarion-settings")
+                    || role.app_id.as_deref() == Some("rs.bxt.clarion.settings")
+                    || role.title.as_deref() == Some("Clarion Settings")
             })
         });
 
         if let Some((_, mapped)) = existing {
-            if let Some(focused) = self.realand.layout.focus() {
+            if let Some(focused) = self.clarion.layout.focus() {
                 if focused.id() == mapped.id() {
                     mapped.toplevel().send_close();
                     return;
@@ -3595,13 +3595,13 @@ impl State {
             let window = mapped.window.clone();
             self.focus_window(&window);
         } else {
-            let (token, _) = self.realand.activation_state.create_external_token(None);
-            spawn(vec![String::from("realand-settings")], Some(token.clone()));
+            let (token, _) = self.clarion.activation_state.create_external_token(None);
+            spawn(vec![String::from("clarion-settings")], Some(token.clone()));
         }
     }
 
     fn on_pointer_button<I: InputBackend>(&mut self, event: I::PointerButtonEvent) {
-        let pointer = self.realand.seat.get_pointer().unwrap();
+        let pointer = self.clarion.seat.get_pointer().unwrap();
 
         let serial = SERIAL_COUNTER.next_serial();
 
@@ -3611,53 +3611,53 @@ impl State {
 
         let button_state = event.state();
 
-        let mod_key = self.backend.mod_key(&self.realand.config.borrow());
+        let mod_key = self.backend.mod_key(&self.clarion.config.borrow());
 
         // Ignore release events for mouse clicks that triggered a bind.
-        if self.realand.suppressed_buttons.remove(&button_code) {
+        if self.clarion.suppressed_buttons.remove(&button_code) {
             return;
         }
 
-        let mods = self.realand.seat.get_keyboard().unwrap().modifier_state();
+        let mods = self.clarion.seat.get_keyboard().unwrap().modifier_state();
         let modifiers = modifiers_from_state(mods);
         let mod_down = modifiers.contains(mod_key.to_modifiers());
 
         if ButtonState::Pressed == button_state {
             // A new click/drag takes control from a coasting canvas before hit testing.
-            if !self.realand.is_locked() {
-                for ws in self.realand.layout.workspaces_mut() {
+            if !self.clarion.is_locked() {
+                for ws in self.clarion.layout.workspaces_mut() {
                     ws.stop_canvas_pan();
                 }
             }
 
             let mut is_mru_open = false;
-            if let Some(mru_output) = self.realand.window_mru_ui.output() {
+            if let Some(mru_output) = self.clarion.window_mru_ui.output() {
                 is_mru_open = true;
                 if let Some(MouseButton::Left) = button {
                     let location = pointer.current_location();
-                    let Some((output, pos_within_output)) = self.realand.output_under(location)
+                    let Some((output, pos_within_output)) = self.clarion.output_under(location)
                     else {
-                        self.realand.cancel_mru();
-                        self.realand.suppressed_buttons.insert(button_code);
+                        self.clarion.cancel_mru();
+                        self.clarion.suppressed_buttons.insert(button_code);
                         return;
                     };
                     if mru_output == output {
-                        let id = self.realand.window_mru_ui.pointer_motion(pos_within_output);
+                        let id = self.clarion.window_mru_ui.pointer_motion(pos_within_output);
                         if id.is_some() {
                             self.confirm_mru();
                         } else {
-                            self.realand.cancel_mru();
+                            self.clarion.cancel_mru();
                         }
                     } else {
-                        self.realand.cancel_mru();
+                        self.clarion.cancel_mru();
                     }
 
-                    self.realand.suppressed_buttons.insert(button_code);
+                    self.clarion.suppressed_buttons.insert(button_code);
                     return;
                 }
             }
 
-            if is_mru_open || self.realand.mods_with_mouse_binds.contains(&modifiers) {
+            if is_mru_open || self.clarion.mods_with_mouse_binds.contains(&modifiers) {
                 if let Some(bind) = match button {
                     Some(MouseButton::Left) => Some(Trigger::MouseLeft),
                     Some(MouseButton::Right) => Some(Trigger::MouseRight),
@@ -3667,57 +3667,57 @@ impl State {
                     _ => None,
                 }
                 .and_then(|trigger| {
-                    let config = self.realand.config.borrow();
+                    let config = self.clarion.config.borrow();
                     let bindings =
-                        make_binds_iter(&config, &mut self.realand.window_mru_ui, modifiers);
+                        make_binds_iter(&config, &mut self.clarion.window_mru_ui, modifiers);
                     find_configured_bind(bindings, mod_key, trigger, mods)
                 })
                 .filter(|bind| {
-                    !self.realand.screenshot_ui.is_open() || allowed_during_screenshot(&bind.action)
+                    !self.clarion.screenshot_ui.is_open() || allowed_during_screenshot(&bind.action)
                 }) {
-                    self.realand.suppressed_buttons.insert(button_code);
+                    self.clarion.suppressed_buttons.insert(button_code);
                     self.handle_bind(bind.clone());
                     return;
                 };
             }
 
             // We received an event for the regular pointer, so show it now.
-            self.realand.pointer_visibility = PointerVisibility::Visible;
-            self.realand.tablet_cursor_location = None;
+            self.clarion.pointer_visibility = PointerVisibility::Visible;
+            self.clarion.tablet_cursor_location = None;
 
-            if self.realand.overview_mode_transition_active()
-                && self.realand.pointer_contents.layer.is_none()
+            if self.clarion.overview_mode_transition_active()
+                && self.clarion.pointer_contents.layer.is_none()
             {
-                self.realand.suppressed_buttons.insert(button_code);
+                self.clarion.suppressed_buttons.insert(button_code);
                 return;
             }
 
-            let is_overview_open = self.realand.layout.is_overview_open();
+            let is_overview_open = self.clarion.layout.is_overview_open();
 
-            if self.realand.layout.is_stage_open()
+            if self.clarion.layout.is_stage_open()
                 && !pointer.is_grabbed()
                 && button == Some(MouseButton::Left)
-                && self.realand.pointer_contents.layer.is_none()
-                && !self.realand.is_locked()
-                && !self.realand.screenshot_ui.is_open()
+                && self.clarion.pointer_contents.layer.is_none()
+                && !self.clarion.is_locked()
+                && !self.clarion.screenshot_ui.is_open()
             {
                 let location = pointer.current_location();
-                if let Some((output, position)) = self.realand.output_under(location) {
+                if let Some((output, position)) = self.clarion.output_under(location) {
                     let output = output.clone();
                     if self.overview_command(OverviewCommand::StageSelect { output, position }) {
-                        self.realand.suppressed_buttons.insert(button_code);
-                        self.realand.queue_redraw_all();
+                        self.clarion.suppressed_buttons.insert(button_code);
+                        self.clarion.queue_redraw_all();
                         return;
                     }
                 }
             }
 
             if is_overview_open && !pointer.is_grabbed() && button == Some(MouseButton::Right) {
-                if let Some((output, ws)) = self.realand.workspace_under_cursor(true) {
+                if let Some((output, ws)) = self.clarion.workspace_under_cursor(true) {
                     let ws_id = ws.id();
-                    let ws_idx = self.realand.layout.find_workspace_by_id(ws_id).unwrap().0;
+                    let ws_idx = self.clarion.layout.find_workspace_by_id(ws_id).unwrap().0;
 
-                    self.realand.layout.focus_output(&output);
+                    self.clarion.layout.focus_output(&output);
 
                     let location = pointer.current_location();
                     let start_data = PointerGrabStartData {
@@ -3725,17 +3725,17 @@ impl State {
                         button: button_code,
                         location,
                     };
-                    self.realand
+                    self.clarion
                         .layout
                         .view_offset_gesture_begin(&output, Some(ws_idx), false);
                     let grab = SpatialMovementGrab::new(start_data, output, ws_id, true, false);
                     pointer.set_grab(self, grab, serial, Focus::Clear);
-                    self.realand
+                    self.clarion
                         .cursor_manager
                         .set_cursor_image(CursorImageStatus::Named(CursorIcon::AllScroll));
 
                     // FIXME: granular.
-                    self.realand.queue_redraw_all();
+                    self.clarion.queue_redraw_all();
                     return;
                 }
             }
@@ -3743,15 +3743,15 @@ impl State {
             if button == Some(MouseButton::Middle)
                 && !pointer.is_grabbed()
                 && mod_down
-                && !self.realand.layout.is_window_spread_closing()
+                && !self.clarion.layout.is_window_spread_closing()
             {
                 let output_ws = if is_overview_open {
-                    self.realand.workspace_under_cursor(true)
+                    self.clarion.workspace_under_cursor(true)
                 } else {
                     // We don't want to accidentally "catch" the wrong workspace during
                     // animations.
-                    self.realand.output_under_cursor().and_then(|output| {
-                        let mon = self.realand.layout.monitor_for_output(&output)?;
+                    self.clarion.output_under_cursor().and_then(|output| {
+                        let mon = self.clarion.layout.monitor_for_output(&output)?;
                         Some((output, mon.active_workspace_ref()))
                     })
                 };
@@ -3760,7 +3760,7 @@ impl State {
                     let ws_id = ws.id();
                     let canvas = ws.canvas_enabled() && !is_overview_open;
 
-                    self.realand.layout.focus_output(&output);
+                    self.clarion.layout.focus_output(&output);
 
                     let location = pointer.current_location();
                     let start_data = PointerGrabStartData {
@@ -3770,12 +3770,12 @@ impl State {
                     };
                     let grab = SpatialMovementGrab::new(start_data, output, ws_id, false, canvas);
                     pointer.set_grab(self, grab, serial, Focus::Clear);
-                    self.realand
+                    self.clarion
                         .cursor_manager
                         .set_cursor_image(CursorImageStatus::Named(CursorIcon::AllScroll));
 
                     // FIXME: granular.
-                    self.realand.queue_redraw_all();
+                    self.clarion.queue_redraw_all();
 
                     // Don't activate the window under the cursor to avoid unnecessary
                     // scrolling when e.g. Mod+MMB clicking on a partially off-screen window.
@@ -3783,9 +3783,9 @@ impl State {
                 }
             }
 
-            if self.realand.screenshot_ui.is_open() {
+            if self.clarion.screenshot_ui.is_open() {
                 // Screenshot UI handles this click below; don't activate the layout underneath.
-            } else if let Some(mapped) = self.realand.window_under_cursor() {
+            } else if let Some(mapped) = self.clarion.window_under_cursor() {
                 let window = mapped.window.clone();
 
                 // Check if we need to start an interactive move.
@@ -3794,7 +3794,7 @@ impl State {
                         let location = pointer.current_location();
 
                         if !is_overview_open {
-                            self.realand.layout.activate_window(&window);
+                            self.clarion.layout.activate_window(&window);
                         }
 
                         let start_data = PointerGrabStartData {
@@ -3815,7 +3815,7 @@ impl State {
                             // In the overview, we click to activate window and close the overview,
                             // in this case setting the cursor right away would be distracting.
                             if !is_overview_open {
-                                self.realand
+                                self.clarion
                                     .cursor_manager
                                     .set_cursor_image(CursorImageStatus::Named(icon));
                             }
@@ -3825,7 +3825,7 @@ impl State {
                 // Check if we need to start an interactive resize.
                 else if button == Some(MouseButton::Right) && !pointer.is_grabbed() && mod_down {
                     let location = pointer.current_location();
-                    let Some((output, pos_within_output)) = self.realand.output_under(location)
+                    let Some((output, pos_within_output)) = self.clarion.output_under(location)
                     else {
                         // A pointer can briefly be in the gap between outputs (or outside all
                         // outputs while they are being reconfigured).  There is no output on
@@ -3833,7 +3833,7 @@ impl State {
                         return;
                     };
                     let edges = self
-                        .realand
+                        .clarion
                         .layout
                         .resize_edges_under(output, pos_within_output)
                         .unwrap_or(ResizeEdge::empty());
@@ -3862,23 +3862,23 @@ impl State {
                                 if intersection.intersects(ResizeEdge::LEFT_RIGHT) {
                                     // FIXME: don't activate once we can pass specific windows
                                     // to actions.
-                                    self.realand.layout.activate_window(&window);
-                                    self.realand.layout.toggle_full_width();
+                                    self.clarion.layout.activate_window(&window);
+                                    self.clarion.layout.toggle_full_width();
                                 }
                                 if intersection.intersects(ResizeEdge::TOP_BOTTOM) {
-                                    self.realand.layout.activate_window(&window);
-                                    self.realand.layout.reset_window_height(Some(&window));
+                                    self.clarion.layout.activate_window(&window);
+                                    self.clarion.layout.reset_window_height(Some(&window));
                                 }
                                 // FIXME: granular.
-                                self.realand.queue_redraw_all();
+                                self.clarion.queue_redraw_all();
                                 return;
                             }
                         }
 
-                        self.realand.layout.activate_window(&window);
+                        self.clarion.layout.activate_window(&window);
 
                         if self
-                            .realand
+                            .clarion
                             .layout
                             .interactive_resize_begin(window.clone(), edges)
                         {
@@ -3890,7 +3890,7 @@ impl State {
                             let start_data = AnyStartData::Pointer(start_data);
                             let grab = ResizeGrab::new(start_data, window.clone());
                             pointer.set_grab(self, grab, serial, Focus::Clear);
-                            self.realand
+                            self.clarion
                                 .cursor_manager
                                 .set_cursor_image(CursorImageStatus::Named(edges.cursor_icon()));
                         }
@@ -3898,49 +3898,49 @@ impl State {
                 }
 
                 if !is_overview_open {
-                    self.realand.layout.activate_window(&window);
+                    self.clarion.layout.activate_window(&window);
                 }
 
                 // FIXME: granular.
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             } else if let Some((output, ws)) = is_overview_open
-                .then(|| self.realand.workspace_under_cursor(false))
+                .then(|| self.clarion.workspace_under_cursor(false))
                 .flatten()
             {
-                let ws_idx = self.realand.layout.find_workspace_by_id(ws.id()).unwrap().0;
+                let ws_idx = self.clarion.layout.find_workspace_by_id(ws.id()).unwrap().0;
 
                 self.overview_command(OverviewCommand::EnterWorkspace {
                     output,
                     index: ws_idx,
                 });
-            } else if let Some(output) = self.realand.output_under_cursor() {
-                self.realand.layout.focus_output(&output);
+            } else if let Some(output) = self.clarion.output_under_cursor() {
+                self.clarion.layout.focus_output(&output);
 
                 // FIXME: granular.
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
         };
 
         self.update_pointer_contents();
 
         if ButtonState::Pressed == button_state {
-            let layer_under = self.realand.pointer_contents.layer.clone();
-            self.realand.focus_layer_surface_if_on_demand(layer_under);
+            let layer_under = self.clarion.pointer_contents.layer.clone();
+            self.clarion.focus_layer_surface_if_on_demand(layer_under);
         }
 
-        if button == Some(MouseButton::Left) && self.realand.screenshot_ui.is_open() {
+        if button == Some(MouseButton::Left) && self.clarion.screenshot_ui.is_open() {
             if button_state == ButtonState::Pressed {
                 let pos = pointer.current_location();
 
                 // If we'll be moving the existing selection, use the selection output.
                 let output = if mod_down {
-                    self.realand.screenshot_ui.selection_output()
+                    self.clarion.screenshot_ui.selection_output()
                 } else {
-                    self.realand.output_under(pos).map(|(out, _)| out)
+                    self.clarion.output_under(pos).map(|(out, _)| out)
                 };
 
                 if let Some(output) = output.cloned() {
-                    let Some(geom) = self.realand.global_space.output_geometry(&output) else {
+                    let Some(geom) = self.clarion.global_space.output_geometry(&output) else {
                         return;
                     };
                     let point = (pos - geom.loc.to_f64())
@@ -3948,18 +3948,18 @@ impl State {
                         .to_i32_round();
 
                     if self
-                        .realand
+                        .clarion
                         .screenshot_ui
                         .pointer_down(output, point, None, mod_down)
                     {
-                        self.realand.queue_redraw_all();
+                        self.clarion.queue_redraw_all();
                     }
                 }
-            } else if let Some(capture) = self.realand.screenshot_ui.pointer_up(None) {
+            } else if let Some(capture) = self.clarion.screenshot_ui.pointer_up(None) {
                 if capture {
                     self.confirm_screenshot(true);
                 } else {
-                    self.realand.queue_redraw_all();
+                    self.clarion.queue_redraw_all();
                 }
             }
         }
@@ -3977,42 +3977,42 @@ impl State {
     }
 
     fn on_pointer_axis<I: InputBackend>(&mut self, event: I::PointerAxisEvent) {
-        let pointer = &self.realand.seat.get_pointer().unwrap();
+        let pointer = &self.clarion.seat.get_pointer().unwrap();
 
         let source = event.source();
 
-        let mod_key = self.backend.mod_key(&self.realand.config.borrow());
+        let mod_key = self.backend.mod_key(&self.clarion.config.borrow());
 
         // We received an event for the regular pointer, so show it now. This is also needed for
         // update_pointer_contents() below to return the real contents, necessary for the pointer
         // axis event to reach the window.
-        self.realand.pointer_visibility = PointerVisibility::Visible;
-        self.realand.tablet_cursor_location = None;
+        self.clarion.pointer_visibility = PointerVisibility::Visible;
+        self.clarion.tablet_cursor_location = None;
 
         let timestamp = Duration::from_micros(event.time());
 
         let horizontal_amount_v120 = event.amount_v120(Axis::Horizontal);
         let vertical_amount_v120 = event.amount_v120(Axis::Vertical);
 
-        let is_overview_open = self.realand.layout.is_overview_open();
+        let is_overview_open = self.clarion.layout.is_overview_open();
 
         // We should only handle scrolling in the overview if the pointer is not over a (top or
         // overlay) layer surface.
         let should_handle_in_overview = if is_overview_open
-            && !self.realand.is_locked()
-            && !self.realand.screenshot_ui.is_open()
-            && !self.realand.window_mru_ui.is_open()
-            && !self.realand.exit_confirm_dialog.is_open()
+            && !self.clarion.is_locked()
+            && !self.clarion.screenshot_ui.is_open()
+            && !self.clarion.window_mru_ui.is_open()
+            && !self.clarion.exit_confirm_dialog.is_open()
         {
             // FIXME: ideally this should happen after updating the pointer contents, which happens
             // below. However, our pointer actions are supposed to act on the old surface, before
             // updating the pointer contents.
             pointer
                 .current_focus()
-                .map(|surface| self.realand.find_root_shell_surface(&surface))
+                .map(|surface| self.clarion.find_root_shell_surface(&surface))
                 .is_none_or(|root| {
                     !self
-                        .realand
+                        .clarion
                         .mapped_layer_surfaces
                         .keys()
                         .any(|layer| *layer.wl_surface() == root)
@@ -4021,20 +4021,20 @@ impl State {
             false
         };
 
-        let is_mru_open = self.realand.window_mru_ui.is_open();
+        let is_mru_open = self.clarion.window_mru_ui.is_open();
 
         if should_handle_in_overview
-            && self.realand.overview_mode_transition_active()
+            && self.clarion.overview_mode_transition_active()
             && !pointer.is_grabbed()
         {
             return;
         }
 
-        let stage_modifiers = self.realand.seat.get_keyboard().unwrap().modifier_state();
-        if self.realand.layout.is_stage_open()
+        let stage_modifiers = self.clarion.seat.get_keyboard().unwrap().modifier_state();
+        if self.clarion.layout.is_stage_open()
             && should_handle_in_overview
-            && !self.realand.is_locked()
-            && !self.realand.screenshot_ui.is_open()
+            && !self.clarion.is_locked()
+            && !self.clarion.screenshot_ui.is_open()
             && !is_mru_open
             && !pointer.is_grabbed()
             && modifiers_from_state(stage_modifiers).is_empty()
@@ -4050,35 +4050,35 @@ impl State {
                 event.amount(Axis::Vertical).unwrap_or(0.) * 3.
             };
             let ticks = if horizontal.abs() > vertical.abs() {
-                self.realand.vertical_wheel_tracker.reset();
-                self.realand.horizontal_wheel_tracker.accumulate(horizontal)
+                self.clarion.vertical_wheel_tracker.reset();
+                self.clarion.horizontal_wheel_tracker.accumulate(horizontal)
             } else {
-                self.realand.horizontal_wheel_tracker.reset();
-                self.realand.vertical_wheel_tracker.accumulate(vertical)
+                self.clarion.horizontal_wheel_tracker.reset();
+                self.clarion.vertical_wheel_tracker.accumulate(vertical)
             };
             if ticks != 0 {
-                if let Some(output) = self.realand.output_under_cursor() {
-                    self.realand
+                if let Some(output) = self.clarion.output_under_cursor() {
+                    self.clarion
                         .layout
                         .stage_navigate(Some(&output), isize::from(ticks));
-                    self.realand.queue_redraw(&output);
+                    self.clarion.queue_redraw(&output);
                 }
             }
             return;
         }
 
-        let mods = self.realand.seat.get_keyboard().unwrap().modifier_state();
+        let mods = self.clarion.seat.get_keyboard().unwrap().modifier_state();
         let canvas_mod = modifiers_from_state(mods) == mod_key.to_modifiers();
         if canvas_mod
-            && !self.realand.is_locked()
+            && !self.clarion.is_locked()
             && !is_overview_open
-            && !self.realand.layout.is_window_spread_closing()
+            && !self.clarion.layout.is_window_spread_closing()
             && !is_mru_open
-            && !self.realand.screenshot_ui.is_open()
+            && !self.clarion.screenshot_ui.is_open()
             && !pointer.is_grabbed()
         {
-            if let Some(output) = self.realand.output_under_cursor() {
-                if let Some(mon) = self.realand.layout.monitor_for_output_mut(&output) {
+            if let Some(output) = self.clarion.output_under_cursor() {
+                if let Some(mon) = self.clarion.layout.monitor_for_output_mut(&output) {
                     let ws = mon.active_workspace();
                     if ws.canvas_enabled() {
                         let x = event
@@ -4089,7 +4089,7 @@ impl State {
                             .unwrap_or_else(|| vertical_amount_v120.unwrap_or(0.) / 120. * 80.);
                         if x != 0. || y != 0. {
                             ws.pan_canvas(Point::from((x, y)), source == AxisSource::Finger);
-                            self.realand.queue_redraw(&output);
+                            self.clarion.queue_redraw(&output);
                         }
                         return;
                     }
@@ -4101,14 +4101,14 @@ impl State {
         if source == AxisSource::Wheel {
             // If we have a scroll bind with current modifiers, then accumulate and don't pass to
             // Wayland. If there's no bind, reset the accumulator.
-            let mods = self.realand.seat.get_keyboard().unwrap().modifier_state();
+            let mods = self.clarion.seat.get_keyboard().unwrap().modifier_state();
             let modifiers = modifiers_from_state(mods);
             let should_handle = should_handle_in_overview
                 || is_mru_open
-                || self.realand.mods_with_wheel_binds.contains(&modifiers);
+                || self.clarion.mods_with_wheel_binds.contains(&modifiers);
             if should_handle {
                 let horizontal = horizontal_amount_v120.unwrap_or(0.);
-                let ticks = self.realand.horizontal_wheel_tracker.accumulate(horizontal);
+                let ticks = self.clarion.horizontal_wheel_tracker.accumulate(horizontal);
                 if ticks != 0 {
                     let (bind_left, bind_right) = if should_handle_in_overview
                         && modifiers.is_empty()
@@ -4139,9 +4139,9 @@ impl State {
                         });
                         (bind_left, bind_right)
                     } else {
-                        let config = self.realand.config.borrow();
+                        let config = self.clarion.config.borrow();
                         let bindings =
-                            make_binds_iter(&config, &mut self.realand.window_mru_ui, modifiers);
+                            make_binds_iter(&config, &mut self.clarion.window_mru_ui, modifiers);
                         let bind_left = find_configured_bind(
                             bindings.clone(),
                             mod_key,
@@ -4149,7 +4149,7 @@ impl State {
                             mods,
                         )
                         .filter(|bind| {
-                            !self.realand.screenshot_ui.is_open()
+                            !self.clarion.screenshot_ui.is_open()
                                 || allowed_during_screenshot(&bind.action)
                         });
                         let bind_right = find_configured_bind(
@@ -4159,7 +4159,7 @@ impl State {
                             mods,
                         )
                         .filter(|bind| {
-                            !self.realand.screenshot_ui.is_open()
+                            !self.clarion.screenshot_ui.is_open()
                                 || allowed_during_screenshot(&bind.action)
                         });
                         (bind_left, bind_right)
@@ -4178,7 +4178,7 @@ impl State {
                 }
 
                 let vertical = vertical_amount_v120.unwrap_or(0.);
-                let ticks = self.realand.vertical_wheel_tracker.accumulate(vertical);
+                let ticks = self.clarion.vertical_wheel_tracker.accumulate(vertical);
                 if ticks != 0 {
                     let (bind_up, bind_down) = if should_handle_in_overview && modifiers.is_empty()
                     {
@@ -4234,9 +4234,9 @@ impl State {
                         });
                         (bind_up, bind_down)
                     } else {
-                        let config = self.realand.config.borrow();
+                        let config = self.clarion.config.borrow();
                         let bindings =
-                            make_binds_iter(&config, &mut self.realand.window_mru_ui, modifiers);
+                            make_binds_iter(&config, &mut self.clarion.window_mru_ui, modifiers);
                         let bind_up = find_configured_bind(
                             bindings.clone(),
                             mod_key,
@@ -4244,13 +4244,13 @@ impl State {
                             mods,
                         )
                         .filter(|bind| {
-                            !self.realand.screenshot_ui.is_open()
+                            !self.clarion.screenshot_ui.is_open()
                                 || allowed_during_screenshot(&bind.action)
                         });
                         let bind_down =
                             find_configured_bind(bindings, mod_key, Trigger::WheelScrollDown, mods)
                                 .filter(|bind| {
-                                    !self.realand.screenshot_ui.is_open()
+                                    !self.clarion.screenshot_ui.is_open()
                                         || allowed_during_screenshot(&bind.action)
                                 });
                         (bind_up, bind_down)
@@ -4270,8 +4270,8 @@ impl State {
 
                 return;
             } else {
-                self.realand.horizontal_wheel_tracker.reset();
-                self.realand.vertical_wheel_tracker.reset();
+                self.clarion.horizontal_wheel_tracker.reset();
+                self.clarion.vertical_wheel_tracker.reset();
             }
         }
 
@@ -4280,7 +4280,7 @@ impl State {
 
         // Handle touchpad and continuous scroll bindings.
         if source == AxisSource::Finger || source == AxisSource::Continuous {
-            let mods = self.realand.seat.get_keyboard().unwrap().modifier_state();
+            let mods = self.clarion.seat.get_keyboard().unwrap().modifier_state();
             let modifiers = modifiers_from_state(mods);
 
             let horizontal = horizontal_amount.unwrap_or(0.);
@@ -4290,21 +4290,21 @@ impl State {
                 let mut redraw = false;
 
                 let action = self
-                    .realand
+                    .clarion
                     .overview_scroll_swipe_gesture
                     .update(horizontal, vertical);
-                let is_vertical = self.realand.overview_scroll_swipe_gesture.is_vertical();
+                let is_vertical = self.clarion.overview_scroll_swipe_gesture.is_vertical();
 
                 if action.end() {
                     if is_vertical {
                         redraw |= self
-                            .realand
+                            .clarion
                             .layout
                             .workspace_switch_gesture_end(Some(true))
                             .is_some();
                     } else {
                         redraw |= self
-                            .realand
+                            .clarion
                             .layout
                             .view_offset_gesture_end(Some(true))
                             .is_some();
@@ -4313,8 +4313,8 @@ impl State {
                     // Maybe begin, then update.
                     if is_vertical {
                         if action.begin() {
-                            if let Some(output) = self.realand.output_under_cursor() {
-                                self.realand
+                            if let Some(output) = self.clarion.output_under_cursor() {
+                                self.clarion
                                     .layout
                                     .workspace_switch_gesture_begin(&output, true);
                                 redraw = true;
@@ -4322,7 +4322,7 @@ impl State {
                         }
 
                         let res = self
-                            .realand
+                            .clarion
                             .layout
                             .workspace_switch_gesture_update(vertical, timestamp, true);
                         if let Some(Some(_)) = res {
@@ -4330,12 +4330,12 @@ impl State {
                         }
                     } else {
                         if action.begin() {
-                            if let Some((output, ws)) = self.realand.workspace_under_cursor(true) {
+                            if let Some((output, ws)) = self.clarion.workspace_under_cursor(true) {
                                 let ws_id = ws.id();
                                 let ws_idx =
-                                    self.realand.layout.find_workspace_by_id(ws_id).unwrap().0;
+                                    self.clarion.layout.find_workspace_by_id(ws_id).unwrap().0;
 
-                                self.realand.layout.view_offset_gesture_begin(
+                                self.clarion.layout.view_offset_gesture_begin(
                                     &output,
                                     Some(ws_idx),
                                     true,
@@ -4345,7 +4345,7 @@ impl State {
                         }
 
                         let res = self
-                            .realand
+                            .clarion
                             .layout
                             .view_offset_gesture_update(horizontal, timestamp, true);
                         if let Some(Some(_)) = res {
@@ -4355,46 +4355,46 @@ impl State {
                 }
 
                 if redraw {
-                    self.realand.queue_redraw_all();
+                    self.clarion.queue_redraw_all();
                 }
 
                 return;
             } else {
                 let mut redraw = false;
-                if self.realand.overview_scroll_swipe_gesture.reset() {
-                    if self.realand.overview_scroll_swipe_gesture.is_vertical() {
+                if self.clarion.overview_scroll_swipe_gesture.reset() {
+                    if self.clarion.overview_scroll_swipe_gesture.is_vertical() {
                         redraw |= self
-                            .realand
+                            .clarion
                             .layout
                             .workspace_switch_gesture_end(Some(true))
                             .is_some();
                     } else {
                         redraw |= self
-                            .realand
+                            .clarion
                             .layout
                             .view_offset_gesture_end(Some(true))
                             .is_some();
                     }
                 }
                 if redraw {
-                    self.realand.queue_redraw_all();
+                    self.clarion.queue_redraw_all();
                 }
             }
 
             if is_mru_open
                 || self
-                    .realand
+                    .clarion
                     .mods_with_finger_scroll_binds
                     .contains(&modifiers)
             {
                 let ticks = self
-                    .realand
+                    .clarion
                     .horizontal_finger_scroll_tracker
                     .accumulate(horizontal);
                 if ticks != 0 {
-                    let config = self.realand.config.borrow();
+                    let config = self.clarion.config.borrow();
                     let bindings =
-                        make_binds_iter(&config, &mut self.realand.window_mru_ui, modifiers);
+                        make_binds_iter(&config, &mut self.clarion.window_mru_ui, modifiers);
                     let bind_left = find_configured_bind(
                         bindings.clone(),
                         mod_key,
@@ -4402,13 +4402,13 @@ impl State {
                         mods,
                     )
                     .filter(|bind| {
-                        !self.realand.screenshot_ui.is_open()
+                        !self.clarion.screenshot_ui.is_open()
                             || allowed_during_screenshot(&bind.action)
                     });
                     let bind_right =
                         find_configured_bind(bindings, mod_key, Trigger::TouchpadScrollRight, mods)
                             .filter(|bind| {
-                                !self.realand.screenshot_ui.is_open()
+                                !self.clarion.screenshot_ui.is_open()
                                     || allowed_during_screenshot(&bind.action)
                             });
                     drop(config);
@@ -4426,13 +4426,13 @@ impl State {
                 }
 
                 let ticks = self
-                    .realand
+                    .clarion
                     .vertical_finger_scroll_tracker
                     .accumulate(vertical);
                 if ticks != 0 {
-                    let config = self.realand.config.borrow();
+                    let config = self.clarion.config.borrow();
                     let bindings =
-                        make_binds_iter(&config, &mut self.realand.window_mru_ui, modifiers);
+                        make_binds_iter(&config, &mut self.clarion.window_mru_ui, modifiers);
                     let bind_up = find_configured_bind(
                         bindings.clone(),
                         mod_key,
@@ -4440,13 +4440,13 @@ impl State {
                         mods,
                     )
                     .filter(|bind| {
-                        !self.realand.screenshot_ui.is_open()
+                        !self.clarion.screenshot_ui.is_open()
                             || allowed_during_screenshot(&bind.action)
                     });
                     let bind_down =
                         find_configured_bind(bindings, mod_key, Trigger::TouchpadScrollDown, mods)
                             .filter(|bind| {
-                                !self.realand.screenshot_ui.is_open()
+                                !self.clarion.screenshot_ui.is_open()
                                     || allowed_during_screenshot(&bind.action)
                             });
                     drop(config);
@@ -4465,15 +4465,15 @@ impl State {
 
                 return;
             } else {
-                self.realand.horizontal_finger_scroll_tracker.reset();
-                self.realand.vertical_finger_scroll_tracker.reset();
+                self.clarion.horizontal_finger_scroll_tracker.reset();
+                self.clarion.vertical_finger_scroll_tracker.reset();
             }
         }
 
         self.update_pointer_contents();
 
         let device_scroll_factor = {
-            let config = self.realand.config.borrow();
+            let config = self.clarion.config.borrow();
             match source {
                 AxisSource::Wheel => config.input.mouse.scroll_factor,
                 AxisSource::Finger => config.input.touchpad.scroll_factor,
@@ -4484,8 +4484,8 @@ impl State {
         // Get window-specific scroll factor
         let window_scroll_factor = pointer
             .current_focus()
-            .map(|focused| self.realand.find_root_shell_surface(&focused))
-            .and_then(|root| self.realand.layout.find_window_and_output(&root).unzip().0)
+            .map(|focused| self.clarion.find_root_shell_surface(&focused))
+            .and_then(|root| self.clarion.layout.find_window_and_output(&root).unzip().0)
             .and_then(|window| window.rules().scroll_factor)
             .unwrap_or(1.);
 
@@ -4550,28 +4550,28 @@ impl State {
             return;
         };
 
-        if let Some(output) = self.realand.screenshot_ui.selection_output() {
-            let Some(geom) = self.realand.global_space.output_geometry(output) else {
+        if let Some(output) = self.clarion.screenshot_ui.selection_output() {
+            let Some(geom) = self.clarion.global_space.output_geometry(output) else {
                 return;
             };
             let point = (pos - geom.loc.to_f64())
                 .to_physical(output.current_scale().fractional_scale())
                 .to_i32_round::<i32>();
 
-            self.realand.screenshot_ui.pointer_motion(point, None);
+            self.clarion.screenshot_ui.pointer_motion(point, None);
         }
 
-        if let Some(mru_output) = self.realand.window_mru_ui.output() {
-            if let Some((output, pos_within_output)) = self.realand.output_under(pos) {
+        if let Some(mru_output) = self.clarion.window_mru_ui.output() {
+            if let Some((output, pos_within_output)) = self.clarion.output_under(pos) {
                 if mru_output == output {
-                    self.realand.window_mru_ui.pointer_motion(pos_within_output);
+                    self.clarion.window_mru_ui.pointer_motion(pos_within_output);
                 }
             }
         }
 
-        let under = self.realand.contents_under(pos);
+        let under = self.clarion.contents_under(pos);
 
-        let tablet_seat = self.realand.seat.tablet_seat();
+        let tablet_seat = self.clarion.seat.tablet_seat();
         let tool = tablet_seat.get_tool(&event.tool());
         if let Some(tool) = tool {
             let time = event.time_msec();
@@ -4600,17 +4600,17 @@ impl State {
 
             tool.frame(self, time);
 
-            self.realand.pointer_visibility = PointerVisibility::Visible;
-            self.realand.tablet_cursor_location = Some(pos);
+            self.clarion.pointer_visibility = PointerVisibility::Visible;
+            self.clarion.tablet_cursor_location = Some(pos);
         }
 
         // Redraw to update the cursor position.
         // FIXME: redraw only outputs overlapping the cursor.
-        self.realand.queue_redraw_all();
+        self.clarion.queue_redraw_all();
     }
 
     fn on_tablet_tool_tip<I: InputBackend>(&mut self, event: I::TabletToolTipEvent) {
-        let tool = self.realand.seat.tablet_seat().get_tool(&event.tool());
+        let tool = self.clarion.seat.tablet_seat().get_tool(&event.tool());
 
         let Some(tool) = tool else {
             return;
@@ -4622,24 +4622,24 @@ impl State {
 
         match tip_state {
             TabletToolTipState::Down => {
-                if let Some(pos) = self.realand.tablet_cursor_location {
-                    let under = self.realand.contents_under(pos);
+                if let Some(pos) = self.clarion.tablet_cursor_location {
+                    let under = self.clarion.contents_under(pos);
 
-                    let mod_key = self.backend.mod_key(&self.realand.config.borrow());
-                    let mods = self.realand.seat.get_keyboard().unwrap().modifier_state();
+                    let mod_key = self.backend.mod_key(&self.clarion.config.borrow());
+                    let mods = self.clarion.seat.get_keyboard().unwrap().modifier_state();
                     let modifiers = modifiers_from_state(mods);
                     let mod_down = modifiers.contains(mod_key.to_modifiers());
 
-                    if self.realand.screenshot_ui.is_open() {
+                    if self.clarion.screenshot_ui.is_open() {
                         // If we'll be moving the existing selection, use the selection output.
                         let output = if mod_down {
-                            self.realand.screenshot_ui.selection_output()
+                            self.clarion.screenshot_ui.selection_output()
                         } else {
                             under.output.as_ref()
                         };
 
                         if let Some(output) = output.cloned() {
-                            let Some(geom) = self.realand.global_space.output_geometry(&output)
+                            let Some(geom) = self.clarion.global_space.output_geometry(&output)
                             else {
                                 return;
                             };
@@ -4648,51 +4648,51 @@ impl State {
                                 .to_i32_round();
 
                             if self
-                                .realand
+                                .clarion
                                 .screenshot_ui
                                 .pointer_down(output, point, None, mod_down)
                             {
-                                self.realand.queue_redraw_all();
+                                self.clarion.queue_redraw_all();
                             }
                         }
-                    } else if let Some(mru_output) = self.realand.window_mru_ui.output() {
-                        if let Some((output, pos_within_output)) = self.realand.output_under(pos) {
+                    } else if let Some(mru_output) = self.clarion.window_mru_ui.output() {
+                        if let Some((output, pos_within_output)) = self.clarion.output_under(pos) {
                             if mru_output == output {
                                 let id =
-                                    self.realand.window_mru_ui.pointer_motion(pos_within_output);
+                                    self.clarion.window_mru_ui.pointer_motion(pos_within_output);
                                 if id.is_some() {
                                     self.confirm_mru();
                                 } else {
-                                    self.realand.cancel_mru();
+                                    self.clarion.cancel_mru();
                                 }
                             } else {
-                                self.realand.cancel_mru();
+                                self.clarion.cancel_mru();
                             }
                         }
                     } else if !tool.is_grabbed() {
-                        if self.realand.layout.is_overview_open()
+                        if self.clarion.layout.is_overview_open()
                             && !mod_down
                             && under.layer.is_none()
                             && under.output.is_some()
                         {
-                            if self.realand.overview_mode_transition_active() {
+                            if self.clarion.overview_mode_transition_active() {
                                 return;
                             }
-                            let Some((output, pos_within_output)) = self.realand.output_under(pos)
+                            let Some((output, pos_within_output)) = self.clarion.output_under(pos)
                             else {
                                 return;
                             };
                             let output = output.clone();
 
                             let mut matched_narrow = true;
-                            let mut ws = self.realand.workspace_under(false, pos);
+                            let mut ws = self.clarion.workspace_under(false, pos);
                             if ws.is_none() {
                                 matched_narrow = false;
-                                ws = self.realand.workspace_under(true, pos);
+                                ws = self.clarion.workspace_under(true, pos);
                             }
                             let ws_id = ws.map(|(_, ws)| ws.id());
 
-                            let mapped = self.realand.window_under(pos);
+                            let mapped = self.clarion.window_under(pos);
                             let window = mapped.map(|mapped| mapped.window.clone());
 
                             let start_data = TabletToolGrabStartData {
@@ -4710,11 +4710,11 @@ impl State {
                                 ws_id,
                                 matched_narrow,
                                 window,
-                                self.realand.layout.overview_mode(),
+                                self.clarion.layout.overview_mode(),
                             );
                             tool.set_grab(self, grab, time, serial, Focus::Clear);
                         } else if let Some((window, _)) = under.window {
-                            self.realand.layout.activate_window(&window);
+                            self.clarion.layout.activate_window(&window);
 
                             // Check if we need to start a tablet tool move grab.
                             if mod_down {
@@ -4737,25 +4737,25 @@ impl State {
                             }
 
                             // FIXME: granular.
-                            self.realand.queue_redraw_all();
+                            self.clarion.queue_redraw_all();
                         } else if let Some(output) = under.output {
-                            self.realand.layout.focus_output(&output);
+                            self.clarion.layout.focus_output(&output);
 
                             // FIXME: granular.
-                            self.realand.queue_redraw_all();
+                            self.clarion.queue_redraw_all();
                         }
-                        self.realand.focus_layer_surface_if_on_demand(under.layer);
+                        self.clarion.focus_layer_surface_if_on_demand(under.layer);
                     }
                 }
 
                 tool.down(self, &tablet::tool::DownEvent { serial, time });
             }
             TabletToolTipState::Up => {
-                if let Some(capture) = self.realand.screenshot_ui.pointer_up(None) {
+                if let Some(capture) = self.clarion.screenshot_ui.pointer_up(None) {
                     if capture {
                         self.confirm_screenshot(true);
                     } else {
-                        self.realand.queue_redraw_all();
+                        self.clarion.queue_redraw_all();
                     }
                 }
 
@@ -4774,10 +4774,10 @@ impl State {
             return;
         };
 
-        let under = self.realand.contents_under(pos);
+        let under = self.clarion.contents_under(pos);
 
-        let tablet_seat = self.realand.seat.tablet_seat();
-        let display_handle = self.realand.display_handle.clone();
+        let tablet_seat = self.clarion.seat.tablet_seat();
+        let display_handle = self.clarion.display_handle.clone();
         let tool = tablet_seat
             .get_tool(&event.tool())
             .unwrap_or_else(|| tablet_seat.add_wp_tool(self, &display_handle, &event.tool()));
@@ -4816,8 +4816,8 @@ impl State {
                     // batch all of them in.
                     tool.frame(self, time);
 
-                    self.realand.pointer_visibility = PointerVisibility::Visible;
-                    self.realand.tablet_cursor_location = Some(pos);
+                    self.clarion.pointer_visibility = PointerVisibility::Visible;
+                    self.clarion.tablet_cursor_location = Some(pos);
                 }
                 ProximityState::Out => {
                     tool.proximity_out(self, &tablet::tool::ProximityOutEvent { serial, time });
@@ -4827,17 +4827,17 @@ impl State {
                     //
                     // Plus, Wayland SDL2 currently warps the pointer into some weird
                     // location on proximity out, so this should help it a little.
-                    if let Some(pos) = self.realand.tablet_cursor_location {
+                    if let Some(pos) = self.clarion.tablet_cursor_location {
                         self.move_cursor(pos);
                     }
 
-                    self.realand.pointer_visibility = PointerVisibility::Visible;
-                    self.realand.tablet_cursor_location = None;
+                    self.clarion.pointer_visibility = PointerVisibility::Visible;
+                    self.clarion.tablet_cursor_location = None;
                 }
             }
 
             // FIXME: granular.
-            self.realand.queue_redraw_all();
+            self.clarion.queue_redraw_all();
         }
     }
 
@@ -4846,12 +4846,12 @@ impl State {
         const BTN_STYLUS: u32 = 0x14b;
         const BTN_STYLUS2: u32 = 0x14c;
 
-        let tool = self.realand.seat.tablet_seat().get_tool(&event.tool());
+        let tool = self.clarion.seat.tablet_seat().get_tool(&event.tool());
 
         if let Some(tool) = tool {
             let button = event.button();
 
-            if self.realand.suppressed_buttons.remove(&button) {
+            if self.clarion.suppressed_buttons.remove(&button) {
                 return;
             }
 
@@ -4864,26 +4864,26 @@ impl State {
 
             if let Some(trigger) = trigger {
                 if event.button_state() == ButtonState::Pressed {
-                    let mod_key = self.backend.mod_key(&self.realand.config.borrow());
-                    let mods = self.realand.seat.get_keyboard().unwrap().modifier_state();
+                    let mod_key = self.backend.mod_key(&self.clarion.config.borrow());
+                    let mods = self.clarion.seat.get_keyboard().unwrap().modifier_state();
                     let modifiers = modifiers_from_state(mods);
 
                     if self
-                        .realand
+                        .clarion
                         .mods_with_tablet_stylus_binds
                         .contains(&modifiers)
                     {
                         let bind = {
-                            let config = self.realand.config.borrow();
+                            let config = self.clarion.config.borrow();
                             let bindings = config.binds.0.iter();
                             find_configured_bind(bindings, mod_key, trigger, mods)
                         }
                         .filter(|bind| {
-                            !self.realand.screenshot_ui.is_open()
+                            !self.clarion.screenshot_ui.is_open()
                                 || allowed_during_screenshot(&bind.action)
                         });
                         if let Some(bind) = bind {
-                            self.realand.suppressed_buttons.insert(button);
+                            self.clarion.suppressed_buttons.insert(button);
                             self.handle_bind(bind.clone());
                             return;
                         }
@@ -4908,13 +4908,13 @@ impl State {
     }
 
     fn on_gesture_swipe_begin<I: InputBackend>(&mut self, event: I::GestureSwipeBeginEvent) {
-        if self.realand.window_mru_ui.is_open()
-            || self.realand.screenshot_ui.is_open()
-            || self.realand.is_locked()
-            || self.realand.exit_confirm_dialog.is_open()
-            || self.realand.overview_mode_transition_active()
+        if self.clarion.window_mru_ui.is_open()
+            || self.clarion.screenshot_ui.is_open()
+            || self.clarion.is_locked()
+            || self.clarion.exit_confirm_dialog.is_open()
+            || self.clarion.overview_mode_transition_active()
             || self
-                .realand
+                .clarion
                 .seat
                 .get_pointer()
                 .is_some_and(|pointer| pointer.is_grabbed())
@@ -4924,20 +4924,20 @@ impl State {
         }
 
         if event.fingers() == 3 {
-            self.realand.gesture_swipe_3f_cumulative = Some((0., 0.));
+            self.clarion.gesture_swipe_3f_cumulative = Some((0., 0.));
 
             // We handled this event.
             return;
         } else if event.fingers() == 4 {
             self.overview_command(OverviewCommand::GestureBegin);
-            self.realand.queue_redraw_all();
+            self.clarion.queue_redraw_all();
 
             // We handled this event.
             return;
         }
 
         let serial = SERIAL_COUNTER.next_serial();
-        let pointer = self.realand.seat.get_pointer().unwrap();
+        let pointer = self.clarion.seat.get_pointer().unwrap();
 
         if self.update_pointer_contents() {
             pointer.frame(self);
@@ -4959,19 +4959,19 @@ impl State {
     ) where
         I::Device: 'static,
     {
-        if self.realand.window_mru_ui.is_open()
-            || self.realand.screenshot_ui.is_open()
-            || self.realand.is_locked()
-            || self.realand.exit_confirm_dialog.is_open()
-            || self.realand.overview_mode_transition_active()
+        if self.clarion.window_mru_ui.is_open()
+            || self.clarion.screenshot_ui.is_open()
+            || self.clarion.is_locked()
+            || self.clarion.exit_confirm_dialog.is_open()
+            || self.clarion.overview_mode_transition_active()
         {
-            self.realand.gesture_swipe_3f_cumulative = None;
-            self.realand
+            self.clarion.gesture_swipe_3f_cumulative = None;
+            self.clarion
                 .layout
                 .workspace_switch_gesture_cancel(Some(true));
-            self.realand.layout.view_offset_gesture_cancel(Some(true));
+            self.clarion.layout.view_offset_gesture_cancel(Some(true));
             self.overview_command(OverviewCommand::GestureEnd { cancelled: true });
-            self.realand.queue_redraw_all();
+            self.clarion.queue_redraw_all();
             return;
         }
         let mut delta_x = event.delta_x();
@@ -4994,18 +4994,18 @@ impl State {
             }
         }
 
-        let is_overview_open = self.realand.layout.is_overview_open();
+        let is_overview_open = self.clarion.layout.is_overview_open();
 
-        if let Some((cx, cy)) = &mut self.realand.gesture_swipe_3f_cumulative {
-            if self.realand.layout.is_stage_open() {
+        if let Some((cx, cy)) = &mut self.clarion.gesture_swipe_3f_cumulative {
+            if self.clarion.layout.is_stage_open() {
                 *cx += delta_x;
                 *cy += delta_y;
                 let steps = (-*cx / 64.).trunc() as isize;
                 if steps != 0 {
                     *cx %= 64.;
-                    if let Some(output) = self.realand.output_under_cursor() {
-                        self.realand.layout.stage_navigate(Some(&output), steps);
-                        self.realand.queue_redraw(&output);
+                    if let Some(output) = self.clarion.output_under_cursor() {
+                        self.clarion.layout.stage_navigate(Some(&output), steps);
+                        self.clarion.queue_redraw(&output);
                     }
                 }
                 return;
@@ -5016,32 +5016,32 @@ impl State {
             // Check if the gesture moved far enough to decide. Threshold copied from GNOME Shell.
             let (cx, cy) = (*cx, *cy);
             if cx * cx + cy * cy >= 16. * 16. {
-                self.realand.gesture_swipe_3f_cumulative = None;
+                self.clarion.gesture_swipe_3f_cumulative = None;
 
-                if let Some(output) = self.realand.output_under_cursor() {
+                if let Some(output) = self.clarion.output_under_cursor() {
                     if cx.abs() > cy.abs() {
                         let output_ws = if is_overview_open {
-                            self.realand.workspace_under_cursor(true)
+                            self.clarion.workspace_under_cursor(true)
                         } else {
                             // We don't want to accidentally "catch" the wrong workspace during
                             // animations.
-                            self.realand.output_under_cursor().and_then(|output| {
-                                let mon = self.realand.layout.monitor_for_output(&output)?;
+                            self.clarion.output_under_cursor().and_then(|output| {
+                                let mon = self.clarion.layout.monitor_for_output(&output)?;
                                 Some((output, mon.active_workspace_ref()))
                             })
                         };
 
                         if let Some((output, ws)) = output_ws {
                             let ws_idx =
-                                self.realand.layout.find_workspace_by_id(ws.id()).unwrap().0;
-                            self.realand.layout.view_offset_gesture_begin(
+                                self.clarion.layout.find_workspace_by_id(ws.id()).unwrap().0;
+                            self.clarion.layout.view_offset_gesture_begin(
                                 &output,
                                 Some(ws_idx),
                                 true,
                             );
                         }
                     } else {
-                        self.realand
+                        self.clarion
                             .layout
                             .workspace_switch_gesture_begin(&output, true);
                     }
@@ -5053,23 +5053,23 @@ impl State {
 
         let mut handled = false;
         let res = self
-            .realand
+            .clarion
             .layout
             .workspace_switch_gesture_update(delta_y, timestamp, true);
         if let Some(output) = res {
             if let Some(output) = output {
-                self.realand.queue_redraw(&output);
+                self.clarion.queue_redraw(&output);
             }
             handled = true;
         }
 
         let res = self
-            .realand
+            .clarion
             .layout
             .view_offset_gesture_update(delta_x, timestamp, true);
         if let Some(output) = res {
             if let Some(output) = output {
-                self.realand.queue_redraw(&output);
+                self.clarion.queue_redraw(&output);
             }
             handled = true;
         }
@@ -5086,7 +5086,7 @@ impl State {
             return;
         }
 
-        let pointer = self.realand.seat.get_pointer().unwrap();
+        let pointer = self.clarion.seat.get_pointer().unwrap();
 
         if self.update_pointer_contents() {
             pointer.frame(self);
@@ -5102,32 +5102,32 @@ impl State {
     }
 
     fn on_gesture_swipe_end<I: InputBackend>(&mut self, event: I::GestureSwipeEndEvent) {
-        let mut handled = self.realand.gesture_swipe_3f_cumulative.take().is_some();
+        let mut handled = self.clarion.gesture_swipe_3f_cumulative.take().is_some();
         let cancelled = event.cancelled()
-            || self.realand.is_locked()
-            || self.realand.screenshot_ui.is_open()
-            || self.realand.window_mru_ui.is_open()
-            || self.realand.exit_confirm_dialog.is_open()
-            || self.realand.overview_mode_transition_active();
+            || self.clarion.is_locked()
+            || self.clarion.screenshot_ui.is_open()
+            || self.clarion.window_mru_ui.is_open()
+            || self.clarion.exit_confirm_dialog.is_open()
+            || self.clarion.overview_mode_transition_active();
         let res = if cancelled {
-            self.realand
+            self.clarion
                 .layout
                 .workspace_switch_gesture_cancel(Some(true))
         } else {
-            self.realand.layout.workspace_switch_gesture_end(Some(true))
+            self.clarion.layout.workspace_switch_gesture_end(Some(true))
         };
         if let Some(output) = res {
-            self.realand.queue_redraw(&output);
+            self.clarion.queue_redraw(&output);
             handled = true;
         }
 
         let res = if cancelled {
-            self.realand.layout.view_offset_gesture_cancel(Some(true))
+            self.clarion.layout.view_offset_gesture_cancel(Some(true))
         } else {
-            self.realand.layout.view_offset_gesture_end(Some(true))
+            self.clarion.layout.view_offset_gesture_end(Some(true))
         };
         if let Some(output) = res {
-            self.realand.queue_redraw(&output);
+            self.clarion.queue_redraw(&output);
             handled = true;
         }
 
@@ -5141,7 +5141,7 @@ impl State {
         }
 
         let serial = SERIAL_COUNTER.next_serial();
-        let pointer = self.realand.seat.get_pointer().unwrap();
+        let pointer = self.clarion.seat.get_pointer().unwrap();
 
         if self.update_pointer_contents() {
             pointer.frame(self);
@@ -5159,7 +5159,7 @@ impl State {
 
     fn on_gesture_pinch_begin<I: InputBackend>(&mut self, event: I::GesturePinchBeginEvent) {
         let serial = SERIAL_COUNTER.next_serial();
-        let pointer = self.realand.seat.get_pointer().unwrap();
+        let pointer = self.clarion.seat.get_pointer().unwrap();
 
         if self.update_pointer_contents() {
             pointer.frame(self);
@@ -5176,7 +5176,7 @@ impl State {
     }
 
     fn on_gesture_pinch_update<I: InputBackend>(&mut self, event: I::GesturePinchUpdateEvent) {
-        let pointer = self.realand.seat.get_pointer().unwrap();
+        let pointer = self.clarion.seat.get_pointer().unwrap();
 
         if self.update_pointer_contents() {
             pointer.frame(self);
@@ -5195,7 +5195,7 @@ impl State {
 
     fn on_gesture_pinch_end<I: InputBackend>(&mut self, event: I::GesturePinchEndEvent) {
         let serial = SERIAL_COUNTER.next_serial();
-        let pointer = self.realand.seat.get_pointer().unwrap();
+        let pointer = self.clarion.seat.get_pointer().unwrap();
 
         if self.update_pointer_contents() {
             pointer.frame(self);
@@ -5213,7 +5213,7 @@ impl State {
 
     fn on_gesture_hold_begin<I: InputBackend>(&mut self, event: I::GestureHoldBeginEvent) {
         let serial = SERIAL_COUNTER.next_serial();
-        let pointer = self.realand.seat.get_pointer().unwrap();
+        let pointer = self.clarion.seat.get_pointer().unwrap();
 
         if self.update_pointer_contents() {
             pointer.frame(self);
@@ -5231,7 +5231,7 @@ impl State {
 
     fn on_gesture_hold_end<I: InputBackend>(&mut self, event: I::GestureHoldEndEvent) {
         let serial = SERIAL_COUNTER.next_serial();
-        let pointer = self.realand.seat.get_pointer().unwrap();
+        let pointer = self.clarion.seat.get_pointer().unwrap();
 
         if self.update_pointer_contents() {
             pointer.frame(self);
@@ -5253,9 +5253,9 @@ impl State {
         fallback_output: Option<&Output>,
     ) -> Option<Point<f64, Logical>> {
         let output = evt.device().output(self);
-        let output = output.filter(|output| self.realand.output_exists(output));
+        let output = output.filter(|output| self.clarion.output_exists(output));
         let output = output.as_ref().or(fallback_output)?;
-        let output_geo = self.realand.global_space.output_geometry(output)?;
+        let output_geo = self.clarion.global_space.output_geometry(output)?;
         let transform = output.current_transform();
         let size = transform.invert().transform_size(output_geo.size);
         Some(
@@ -5271,11 +5271,11 @@ impl State {
         &self,
         evt: &impl AbsolutePositionEvent<I>,
     ) -> Option<Point<f64, Logical>> {
-        self.compute_absolute_location(evt, self.realand.output_for_touch())
+        self.compute_absolute_location(evt, self.clarion.output_for_touch())
     }
 
     fn on_touch_down<I: InputBackend>(&mut self, evt: I::TouchDownEvent) {
-        let Some(handle) = self.realand.seat.get_touch() else {
+        let Some(handle) = self.clarion.seat.get_touch() else {
             return;
         };
         let Some(pos) = self.compute_touch_location(&evt) else {
@@ -5285,23 +5285,23 @@ impl State {
 
         let serial = SERIAL_COUNTER.next_serial();
 
-        let under = self.realand.contents_under(pos);
+        let under = self.clarion.contents_under(pos);
 
-        let mod_key = self.backend.mod_key(&self.realand.config.borrow());
-        let mods = self.realand.seat.get_keyboard().unwrap().modifier_state();
+        let mod_key = self.backend.mod_key(&self.clarion.config.borrow());
+        let mods = self.clarion.seat.get_keyboard().unwrap().modifier_state();
         let mods = modifiers_from_state(mods);
         let mod_down = mods.contains(mod_key.to_modifiers());
 
-        if self.realand.screenshot_ui.is_open() {
+        if self.clarion.screenshot_ui.is_open() {
             // If we'll be moving the existing selection, use the selection output.
             let output = if mod_down {
-                self.realand.screenshot_ui.selection_output()
+                self.clarion.screenshot_ui.selection_output()
             } else {
                 under.output.as_ref()
             };
 
             if let Some(output) = output.cloned() {
-                let Some(geom) = self.realand.global_space.output_geometry(&output) else {
+                let Some(geom) = self.clarion.global_space.output_geometry(&output) else {
                     return;
                 };
                 let point = (pos - geom.loc.to_f64())
@@ -5309,49 +5309,49 @@ impl State {
                     .to_i32_round();
 
                 if self
-                    .realand
+                    .clarion
                     .screenshot_ui
                     .pointer_down(output, point, Some(slot), mod_down)
                 {
-                    self.realand.queue_redraw_all();
+                    self.clarion.queue_redraw_all();
                 }
             }
-        } else if let Some(mru_output) = self.realand.window_mru_ui.output() {
-            if let Some((output, pos_within_output)) = self.realand.output_under(pos) {
+        } else if let Some(mru_output) = self.clarion.window_mru_ui.output() {
+            if let Some((output, pos_within_output)) = self.clarion.output_under(pos) {
                 if mru_output == output {
-                    let id = self.realand.window_mru_ui.pointer_motion(pos_within_output);
+                    let id = self.clarion.window_mru_ui.pointer_motion(pos_within_output);
                     if id.is_some() {
                         self.confirm_mru();
                     } else {
-                        self.realand.cancel_mru();
+                        self.clarion.cancel_mru();
                     }
                 } else {
-                    self.realand.cancel_mru();
+                    self.clarion.cancel_mru();
                 }
             }
         } else if !handle.is_grabbed() {
-            if self.realand.layout.is_overview_open()
+            if self.clarion.layout.is_overview_open()
                 && !mod_down
                 && under.layer.is_none()
                 && under.output.is_some()
             {
-                if self.realand.overview_mode_transition_active() {
+                if self.clarion.overview_mode_transition_active() {
                     return;
                 }
-                let Some((output, pos_within_output)) = self.realand.output_under(pos) else {
+                let Some((output, pos_within_output)) = self.clarion.output_under(pos) else {
                     return;
                 };
                 let output = output.clone();
 
                 let mut matched_narrow = true;
-                let mut ws = self.realand.workspace_under(false, pos);
+                let mut ws = self.clarion.workspace_under(false, pos);
                 if ws.is_none() {
                     matched_narrow = false;
-                    ws = self.realand.workspace_under(true, pos);
+                    ws = self.clarion.workspace_under(true, pos);
                 }
                 let ws_id = ws.map(|(_, ws)| ws.id());
 
-                let mapped = self.realand.window_under(pos);
+                let mapped = self.clarion.window_under(pos);
                 let window = mapped.map(|mapped| mapped.window.clone());
 
                 let start_data = TouchGrabStartData {
@@ -5369,11 +5369,11 @@ impl State {
                     ws_id,
                     matched_narrow,
                     window,
-                    self.realand.layout.overview_mode(),
+                    self.clarion.layout.overview_mode(),
                 );
                 handle.set_grab(self, grab, serial);
             } else if let Some((window, _)) = under.window {
-                self.realand.layout.activate_window(&window);
+                self.clarion.layout.activate_window(&window);
 
                 // Check if we need to start a touch move grab.
                 if mod_down {
@@ -5390,14 +5390,14 @@ impl State {
                 }
 
                 // FIXME: granular.
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             } else if let Some(output) = under.output {
-                self.realand.layout.focus_output(&output);
+                self.clarion.layout.focus_output(&output);
 
                 // FIXME: granular.
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
-            self.realand.focus_layer_surface_if_on_demand(under.layer);
+            self.clarion.focus_layer_surface_if_on_demand(under.layer);
         };
 
         handle.down(
@@ -5412,19 +5412,19 @@ impl State {
         );
 
         // We're using touch, hide the pointer.
-        self.realand.pointer_visibility = PointerVisibility::Disabled;
+        self.clarion.pointer_visibility = PointerVisibility::Disabled;
     }
     fn on_touch_up<I: InputBackend>(&mut self, evt: I::TouchUpEvent) {
-        let Some(handle) = self.realand.seat.get_touch() else {
+        let Some(handle) = self.clarion.seat.get_touch() else {
             return;
         };
         let slot = evt.slot();
 
-        if let Some(capture) = self.realand.screenshot_ui.pointer_up(Some(slot)) {
+        if let Some(capture) = self.clarion.screenshot_ui.pointer_up(Some(slot)) {
             if capture {
                 self.confirm_screenshot(true);
             } else {
-                self.realand.queue_redraw_all();
+                self.clarion.queue_redraw_all();
             }
         }
 
@@ -5439,7 +5439,7 @@ impl State {
         )
     }
     fn on_touch_motion<I: InputBackend>(&mut self, evt: I::TouchMotionEvent) {
-        let Some(handle) = self.realand.seat.get_touch() else {
+        let Some(handle) = self.clarion.seat.get_touch() else {
             return;
         };
         let Some(pos) = self.compute_touch_location(&evt) else {
@@ -5447,19 +5447,19 @@ impl State {
         };
         let slot = evt.slot();
 
-        if let Some(output) = self.realand.screenshot_ui.selection_output().cloned() {
-            let Some(geom) = self.realand.global_space.output_geometry(&output) else {
+        if let Some(output) = self.clarion.screenshot_ui.selection_output().cloned() {
+            let Some(geom) = self.clarion.global_space.output_geometry(&output) else {
                 return;
             };
             let point = (pos - geom.loc.to_f64())
                 .to_physical(output.current_scale().fractional_scale())
                 .to_i32_round::<i32>();
 
-            self.realand.screenshot_ui.pointer_motion(point, Some(slot));
-            self.realand.queue_redraw(&output);
+            self.clarion.screenshot_ui.pointer_motion(point, Some(slot));
+            self.clarion.queue_redraw(&output);
         }
 
-        let under = self.realand.contents_under(pos);
+        let under = self.clarion.contents_under(pos);
         handle.motion(
             self,
             under.surface,
@@ -5475,20 +5475,20 @@ impl State {
             .with_grab(|_, grab| Self::is_dnd_grab(grab.as_any()))
             .unwrap_or(false);
         if is_dnd_grab {
-            if let Some((output, pos_within_output)) = self.realand.output_under(pos) {
+            if let Some((output, pos_within_output)) = self.clarion.output_under(pos) {
                 let output = output.clone();
-                self.realand.layout.dnd_update(output, pos_within_output);
+                self.clarion.layout.dnd_update(output, pos_within_output);
             }
         }
     }
     fn on_touch_frame<I: InputBackend>(&mut self, _evt: I::TouchFrameEvent) {
-        let Some(handle) = self.realand.seat.get_touch() else {
+        let Some(handle) = self.clarion.seat.get_touch() else {
             return;
         };
         handle.frame(self);
     }
     fn on_touch_cancel<I: InputBackend>(&mut self, _evt: I::TouchCancelEvent) {
-        let Some(handle) = self.realand.seat.get_touch() else {
+        let Some(handle) = self.clarion.seat.get_touch() else {
             return;
         };
         handle.cancel(self);
@@ -5506,7 +5506,7 @@ impl State {
         }
 
         let action = {
-            let bindings = &self.realand.config.borrow().switch_events;
+            let bindings = &self.clarion.config.borrow().switch_events;
             find_configured_switch_action(bindings, switch, evt.state())
         };
 
@@ -5960,7 +5960,7 @@ fn hardcoded_overview_bind(raw: Keysym, mods: ModifiersState, is_expo: bool) -> 
     })
 }
 
-pub fn apply_libinput_settings(config: &realand_config::Input, device: &mut input::Device) {
+pub fn apply_libinput_settings(config: &clarion_config::Input, device: &mut input::Device) {
     // According to Mutter code, this setting is specific to touchpads.
     let is_touchpad = device.config_tap_finger_count() > 0;
     if is_touchpad {
@@ -6001,7 +6001,7 @@ pub fn apply_libinput_settings(config: &realand_config::Input, device: &mut inpu
         if let Some(method) = c.scroll_method {
             let _ = device.config_scroll_set_method(method.into());
 
-            if method == realand_config::ScrollMethod::OnButtonDown {
+            if method == clarion_config::ScrollMethod::OnButtonDown {
                 if let Some(button) = c.scroll_button {
                     let _ = device.config_scroll_set_button(button);
                 }
@@ -6079,7 +6079,7 @@ pub fn apply_libinput_settings(config: &realand_config::Input, device: &mut inpu
         if let Some(method) = c.scroll_method {
             let _ = device.config_scroll_set_method(method.into());
 
-            if method == realand_config::ScrollMethod::OnButtonDown {
+            if method == clarion_config::ScrollMethod::OnButtonDown {
                 if let Some(button) = c.scroll_button {
                     let _ = device.config_scroll_set_button(button);
                 }
@@ -6126,7 +6126,7 @@ pub fn apply_libinput_settings(config: &realand_config::Input, device: &mut inpu
         if let Some(method) = c.scroll_method {
             let _ = device.config_scroll_set_method(method.into());
 
-            if method == realand_config::ScrollMethod::OnButtonDown {
+            if method == clarion_config::ScrollMethod::OnButtonDown {
                 if let Some(button) = c.scroll_button {
                     let _ = device.config_scroll_set_button(button);
                 }
@@ -6173,7 +6173,7 @@ pub fn apply_libinput_settings(config: &realand_config::Input, device: &mut inpu
         if let Some(method) = c.scroll_method {
             let _ = device.config_scroll_set_method(method.into());
 
-            if method == realand_config::ScrollMethod::OnButtonDown {
+            if method == clarion_config::ScrollMethod::OnButtonDown {
                 if let Some(button) = c.scroll_button {
                     let _ = device.config_scroll_set_button(button);
                 }

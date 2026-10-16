@@ -1,20 +1,20 @@
 use std::fmt::Write as _;
 use std::time::Duration;
 
+use clarion_config::animations::{Curve, EasingParams, Kind};
+use clarion_config::Config;
+use clarion_ipc::SizeChange;
 use insta::assert_snapshot;
-use realand_config::animations::{Curve, EasingParams, Kind};
-use realand_config::Config;
-use realand_ipc::SizeChange;
 use smithay::utils::{Point, Size};
 use wayland_client::protocol::wl_surface::WlSurface;
 
 use super::client::ClientId;
 use super::*;
-use crate::compositor::Realand;
+use crate::compositor::Clarion;
 
-fn format_tiles(realand: &Realand) -> String {
+fn format_tiles(clarion: &Clarion) -> String {
     let mut buf = String::new();
-    let ws = realand.layout.active_workspace().unwrap();
+    let ws = clarion.layout.active_workspace().unwrap();
     let mut tiles: Vec<_> = ws.tiles_with_render_positions().collect();
 
     // We sort by id since that gives us a consistent order (from first opened to last), but we
@@ -44,26 +44,26 @@ fn create_window(f: &mut Fixture, id: ClientId, w: u16, h: u16) -> WlSurface {
     surface
 }
 
-fn set_time(realand: &mut Realand, time: Duration) {
+fn set_time(clarion: &mut Clarion, time: Duration) {
     // This is a bit involved because we're dealing with an AdjustableClock that maintains its own
     // internal current_time.
 
     // First, reset current_time to zero by matching unadjusted time to it (at rate 0.0), then
     // setting unadjusted time to zero at rate 1.0 (causing current_time to also go to zero).
-    let now = realand.clock.now();
-    realand.clock.set_unadjusted(now);
-    let _ = realand.clock.now();
-    realand.clock.set_unadjusted(Duration::ZERO);
-    realand.clock.set_rate(1.0);
-    let _ = realand.clock.now();
+    let now = clarion.clock.now();
+    clarion.clock.set_unadjusted(now);
+    let _ = clarion.clock.now();
+    clarion.clock.set_unadjusted(Duration::ZERO);
+    clarion.clock.set_rate(1.0);
+    let _ = clarion.clock.now();
 
     // Now, set the desired time at rate 1.0.
-    realand.clock.set_unadjusted(time);
-    let _ = realand.clock.now();
+    clarion.clock.set_unadjusted(time);
+    let _ = clarion.clock.now();
 
-    // Freeze the clock so that clear() inside the realand loop callback followed by some get()
+    // Freeze the clock so that clear() inside the clarion loop callback followed by some get()
     // doesn't replace it with the monotonic time.
-    realand.clock.set_rate(0.0);
+    clarion.clock.set_rate(0.0);
 }
 
 // Sets up a fixture with linear animations, a renderer, and an output.
@@ -99,8 +99,8 @@ fn set_up_two_in_column() -> (Fixture, ClientId, WlSurface, WlSurface) {
     let _ = f.client(id).window(&surface2).recent_configures();
 
     // Consume into one column.
-    f.realand().layout.focus_left();
-    f.realand().layout.consume_into_column();
+    f.clarion().layout.focus_left();
+    f.clarion().layout.consume_into_column();
     f.double_roundtrip(id);
 
     // Commit for the column consume.
@@ -112,8 +112,8 @@ fn set_up_two_in_column() -> (Fixture, ClientId, WlSurface, WlSurface) {
 
     f.double_roundtrip(id);
 
-    set_time(f.realand(), Duration::ZERO);
-    f.realand_complete_animations();
+    set_time(f.clarion(), Duration::ZERO);
+    f.clarion_complete_animations();
 
     (f, id, surface1, surface2)
 }
@@ -123,7 +123,7 @@ fn egl_height_resize_animates_next_y() {
     let (mut f, id, surface1, surface2) = set_up_two_in_column();
 
     // Issue a resize.
-    f.realand()
+    f.clarion()
         .layout
         .set_window_height(None, SizeChange::AdjustFixed(-50));
     f.double_roundtrip(id);
@@ -139,27 +139,27 @@ fn egl_height_resize_animates_next_y() {
     f.roundtrip(id);
 
     // No time had passed yet, so we're at the initial state.
-    assert_snapshot!(format_tiles(f.realand()), @r"
+    assert_snapshot!(format_tiles(f.clarion()), @r"
     100 × 100 at x:  0 y:  0
     200 × 200 at x:  0 y:100
     ");
 
     // Advance the time halfway.
-    set_time(f.realand(), Duration::from_millis(500));
-    f.realand().advance_animations();
+    set_time(f.clarion(), Duration::from_millis(500));
+    f.clarion().advance_animations();
 
     // Top window is half-resized at 75 px tall, bottom window is at y=75 matching it.
-    assert_snapshot!(format_tiles(f.realand()), @r"
+    assert_snapshot!(format_tiles(f.clarion()), @r"
     100 ×  75 at x:  0 y:  0
     200 × 200 at x:  0 y: 75
     ");
 
     // Advance the time to completion.
-    set_time(f.realand(), Duration::from_millis(1000));
-    f.realand().advance_animations();
+    set_time(f.clarion(), Duration::from_millis(1000));
+    f.clarion().advance_animations();
 
     // Final state at 50 px.
-    assert_snapshot!(format_tiles(f.realand()), @r"
+    assert_snapshot!(format_tiles(f.clarion()), @r"
     100 ×  50 at x:  0 y:  0
     200 × 200 at x:  0 y: 50
     ");
@@ -204,7 +204,7 @@ fn egl_single_pixel_resize_snapshot_keeps_premultiplied_color_and_old_viewport()
     window.ack_last_and_commit();
     f.double_roundtrip(id);
     let server = f
-        .realand()
+        .clarion()
         .layout
         .windows()
         .next()
@@ -230,7 +230,7 @@ fn egl_single_pixel_resize_snapshot_keeps_premultiplied_color_and_old_viewport()
             );
         });
         let (mapped, _) = state
-            .realand
+            .clarion
             .layout
             .find_window_and_output_mut(surface)
             .unwrap();
@@ -291,12 +291,12 @@ fn egl_clientside_height_change_doesnt_animate() {
     let (mut f, id, surface1, _surface2) = set_up_two_in_column();
 
     // The initial state.
-    assert_snapshot!(format_tiles(f.realand()), @r"
+    assert_snapshot!(format_tiles(f.clarion()), @r"
     100 × 100 at x:  0 y:  0
     200 × 200 at x:  0 y:100
     ");
 
-    // The top window shrinks by itself, without a realand-issued resize.
+    // The top window shrinks by itself, without a clarion-issued resize.
     let window = f.client(id).window(&surface1);
     window.set_size(100, 50);
     window.commit();
@@ -305,7 +305,7 @@ fn egl_clientside_height_change_doesnt_animate() {
     f.roundtrip(id);
 
     // No time had passed yet, but we are at the final state right away.
-    assert_snapshot!(format_tiles(f.realand()), @r"
+    assert_snapshot!(format_tiles(f.clarion()), @r"
     100 ×  50 at x:  0 y:  0
     200 × 200 at x:  0 y: 50
     ");
@@ -335,20 +335,20 @@ fn egl_window_spread_renders_offscreen_clients_and_search_empty_state() {
         window.commit();
         f.roundtrip(client);
     }
-    f.realand_complete_animations();
-    f.realand().layout.toggle_window_spread();
-    f.realand_complete_animations();
+    f.clarion_complete_animations();
+    f.clarion().layout.toggle_window_spread();
+    f.clarion_complete_animations();
     let render = |f: &mut Fixture| {
-        let state = f.realand_state();
-        let realand = &mut state.realand;
-        realand.update_render_elements(None);
-        let output = realand.layout.outputs().next().unwrap().clone();
+        let state = f.clarion_state();
+        let clarion = &mut state.clarion;
+        clarion.update_render_elements(None);
+        let output = clarion.layout.outputs().next().unwrap().clone();
         state
             .backend
             .headless()
             .with_primary_renderer(|renderer| {
                 let mut elements = Vec::new();
-                realand
+                clarion
                     .layout
                     .monitor_for_output(&output)
                     .unwrap()
@@ -386,7 +386,7 @@ fn egl_window_spread_renders_offscreen_clients_and_search_empty_state() {
         colored(&pixels) > 500_000,
         "all nine client thumbnails must contribute visible color"
     );
-    if let Some(path) = std::env::var_os("REALAND_SPREAD_TEST_PNG") {
+    if let Some(path) = std::env::var_os("CLARION_SPREAD_TEST_PNG") {
         let file = std::fs::File::create(path).unwrap();
         let mut encoder = png::Encoder::new(file, 1920, 1080);
         encoder.set_color(png::ColorType::Rgba);
@@ -397,7 +397,7 @@ fn egl_window_spread_renders_offscreen_clients_and_search_empty_state() {
             .unwrap();
     }
     for c in "no-such-window".chars() {
-        f.realand()
+        f.clarion()
             .layout
             .spread_key(smithay::input::keyboard::Keysym::from_char(c));
     }
@@ -423,25 +423,25 @@ fn egl_canvas_pan_culls_and_restores_window_pixels() {
     window.surface.attach(Some(&buffer), 0, 0);
     window.commit();
     f.roundtrip(client);
-    f.realand_complete_animations();
-    f.realand()
+    f.clarion_complete_animations();
+    f.clarion()
         .layout
         .active_workspace_mut()
         .unwrap()
         .toggle_canvas();
     f.double_roundtrip(client);
-    f.realand_complete_animations();
+    f.clarion_complete_animations();
     let render = |f: &mut Fixture| {
-        let state = f.realand_state();
-        let realand = &mut state.realand;
-        realand.update_render_elements(None);
-        let output = realand.layout.outputs().next().unwrap().clone();
+        let state = f.clarion_state();
+        let clarion = &mut state.clarion;
+        clarion.update_render_elements(None);
+        let output = clarion.layout.outputs().next().unwrap().clone();
         state
             .backend
             .headless()
             .with_primary_renderer(|renderer| {
                 let mut elements = Vec::new();
-                realand
+                clarion
                     .layout
                     .monitor_for_output(&output)
                     .unwrap()
@@ -477,13 +477,13 @@ fn egl_canvas_pan_culls_and_restores_window_pixels() {
     };
     let before = red(&render(&mut f));
     assert!(before > 1000);
-    f.realand()
+    f.clarion()
         .layout
         .active_workspace_mut()
         .unwrap()
         .pan_canvas((10000., 10000.).into(), false);
     assert_eq!(red(&render(&mut f)), 0);
-    f.realand()
+    f.clarion()
         .layout
         .active_workspace_mut()
         .unwrap()

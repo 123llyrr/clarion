@@ -18,7 +18,7 @@ type SessionRegistry = Mutex<Vec<(Session, InterfaceRef<Session>)>>;
 #[derive(Clone)]
 pub struct ScreenCast {
     ipc_outputs: Arc<Mutex<IpcOutputMap>>,
-    to_realand: calloop::channel::Sender<ScreenCastToRealand>,
+    to_clarion: calloop::channel::Sender<ScreenCastToClarion>,
     sessions: Arc<SessionRegistry>,
 }
 
@@ -26,7 +26,7 @@ pub struct ScreenCast {
 pub struct Session {
     id: CastSessionId,
     ipc_outputs: Arc<Mutex<IpcOutputMap>>,
-    to_realand: calloop::channel::Sender<ScreenCastToRealand>,
+    to_clarion: calloop::channel::Sender<ScreenCastToClarion>,
     #[allow(clippy::type_complexity)]
     streams: Arc<Mutex<Vec<(Stream, InterfaceRef<Stream>)>>>,
     stopped: Arc<AtomicBool>,
@@ -68,13 +68,13 @@ pub struct Stream {
     target: StreamTarget,
     cursor_mode: CursorMode,
     was_started: Arc<AtomicBool>,
-    to_realand: calloop::channel::Sender<ScreenCastToRealand>,
+    to_clarion: calloop::channel::Sender<ScreenCastToClarion>,
 }
 
 #[derive(Clone)]
 enum StreamTarget {
     // FIXME: update on scale changes and whatnot.
-    Output(realand_ipc::Output),
+    Output(clarion_ipc::Output),
     Window { id: u64 },
 }
 
@@ -93,7 +93,7 @@ struct StreamParameters {
     size: (i32, i32),
 }
 
-pub enum ScreenCastToRealand {
+pub enum ScreenCastToClarion {
     StartCast {
         session_id: CastSessionId,
         stream_id: CastStreamId,
@@ -126,7 +126,7 @@ impl ScreenCast {
         let session = Session::new(
             session_id,
             self.ipc_outputs.clone(),
-            self.to_realand.clone(),
+            self.to_clarion.clone(),
             Arc::downgrade(&self.sessions),
         );
         match server.at(&path, session.clone()).await {
@@ -179,10 +179,10 @@ impl Session {
 
         Session::closed(&ctxt).await.unwrap();
 
-        if let Err(err) = self.to_realand.send(ScreenCastToRealand::StopCast {
+        if let Err(err) = self.to_clarion.send(ScreenCastToClarion::StopCast {
             session_id: self.id,
         }) {
-            warn!("error sending StopCast to realand: {err:?}");
+            warn!("error sending StopCast to clarion: {err:?}");
         }
 
         let streams = mem::take(&mut *self.streams.lock().unwrap());
@@ -234,7 +234,7 @@ impl Session {
             self.id,
             target,
             cursor_mode,
-            self.to_realand.clone(),
+            self.to_clarion.clone(),
         );
         match server.at(&path, stream.clone()).await {
             Ok(true) => {
@@ -273,7 +273,7 @@ impl Session {
             self.id,
             target,
             cursor_mode,
-            self.to_realand.clone(),
+            self.to_clarion.clone(),
         );
         match server.at(&path, stream.clone()).await {
             Ok(true) => {
@@ -325,11 +325,11 @@ impl Stream {
 impl ScreenCast {
     pub fn new(
         ipc_outputs: Arc<Mutex<IpcOutputMap>>,
-        to_realand: calloop::channel::Sender<ScreenCastToRealand>,
+        to_clarion: calloop::channel::Sender<ScreenCastToClarion>,
     ) -> Self {
         Self {
             ipc_outputs,
-            to_realand,
+            to_clarion,
             sessions: Arc::new(Mutex::new(vec![])),
         }
     }
@@ -354,14 +354,14 @@ impl Session {
     fn new(
         id: CastSessionId,
         ipc_outputs: Arc<Mutex<IpcOutputMap>>,
-        to_realand: calloop::channel::Sender<ScreenCastToRealand>,
+        to_clarion: calloop::channel::Sender<ScreenCastToClarion>,
         sessions: Weak<SessionRegistry>,
     ) -> Self {
         Self {
             id,
             ipc_outputs,
             streams: Arc::new(Mutex::new(vec![])),
-            to_realand,
+            to_clarion,
             stopped: Arc::new(AtomicBool::new(false)),
             sessions,
         }
@@ -370,7 +370,7 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        let _ = self.to_realand.send(ScreenCastToRealand::StopCast {
+        let _ = self.to_clarion.send(ScreenCastToClarion::StopCast {
             session_id: self.id,
         });
     }
@@ -382,7 +382,7 @@ impl Stream {
         session_id: CastSessionId,
         target: StreamTarget,
         cursor_mode: CursorMode,
-        to_realand: calloop::channel::Sender<ScreenCastToRealand>,
+        to_clarion: calloop::channel::Sender<ScreenCastToClarion>,
     ) -> Self {
         Self {
             id,
@@ -390,7 +390,7 @@ impl Stream {
             target,
             cursor_mode,
             was_started: Arc::new(AtomicBool::new(false)),
-            to_realand,
+            to_clarion,
         }
     }
 
@@ -399,7 +399,7 @@ impl Stream {
             return;
         }
 
-        let msg = ScreenCastToRealand::StartCast {
+        let msg = ScreenCastToClarion::StartCast {
             session_id: self.session_id,
             stream_id: self.id,
             target: self.target.make_id(),
@@ -407,9 +407,9 @@ impl Stream {
             signal_ctx: ctxt,
         };
 
-        if let Err(err) = self.to_realand.send(msg) {
+        if let Err(err) = self.to_clarion.send(msg) {
             self.was_started.store(false, Ordering::SeqCst);
-            warn!("error sending StartCast to realand: {err:?}");
+            warn!("error sending StartCast to clarion: {err:?}");
         }
     }
 }
@@ -465,7 +465,7 @@ mod tests {
         stream.clone().start(ctxt);
         assert!(matches!(
             receiver.try_recv(),
-            Ok(ScreenCastToRealand::StartCast { .. })
+            Ok(ScreenCastToClarion::StartCast { .. })
         ));
         assert!(receiver.try_recv().is_err());
     }

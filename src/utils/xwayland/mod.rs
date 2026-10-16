@@ -113,7 +113,7 @@ fn open_display_sockets(
 }
 
 fn setup_connection() -> anyhow::Result<X11Connection> {
-    let _span = realand_tracy_span!("open_x11_sockets");
+    let _span = clarion_tracy_span!("open_x11_sockets");
 
     ensure_x11_unix_dir()?;
 

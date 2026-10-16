@@ -188,8 +188,8 @@ fn unfullscreen_with_large_border() {
     ];
 
     let options = Options {
-        layout: realand_config::Layout {
-            border: realand_config::Border {
+        layout: clarion_config::Layout {
+            border: clarion_config::Border {
                 off: false,
                 width: 10000.,
                 ..Default::default()

@@ -3,9 +3,9 @@ use super::*;
 fn opening_expo(scale: f64) -> Layout<TestWindow> {
     let mut options = Options::default();
     options.animations.overview_open_close.0.kind =
-        realand_config::animations::Kind::Easing(realand_config::animations::EasingParams {
+        clarion_config::animations::Kind::Easing(clarion_config::animations::EasingParams {
             duration_ms: 1000,
-            curve: realand_config::animations::Curve::Linear,
+            curve: clarion_config::animations::Curve::Linear,
         });
     let mut ops = vec![Op::AddScaledOutput {
         id: 1,
@@ -41,7 +41,7 @@ fn expo_spring_reversal_preserves_card_velocity_instead_of_freezing() {
     for scale in [1., 1.25, 1.5, 2.] {
         for closing in [false, true] {
             let mut layout = opening_expo(scale);
-            let config = realand_config::Animations::default().overview_open_close.0;
+            let config = clarion_config::Animations::default().overview_open_close.0;
             let mut options = Options::clone(&layout.options);
             options.animations.overview_open_close.0 = config;
             layout.update_options(options);
@@ -89,7 +89,7 @@ fn spring_overview_retargeting_keeps_finite_cards_and_finishes_at_both_refresh_r
         for scale in [1., 1.25, 1.5, 2.] {
             for hz in [60, 144] {
                 let mut layout = opening_expo(scale);
-                let config = realand_config::Animations::default().overview_open_close.0;
+                let config = clarion_config::Animations::default().overview_open_close.0;
                 let mut options = Options::clone(&layout.options);
                 options.animations.overview_open_close.0 = config;
                 layout.update_options(options);
@@ -157,7 +157,7 @@ fn spring_early_anchor_change_cannot_magnify_or_invert_workspace_cards() {
             let mut layout = opening_expo(2.);
             let mut options = Options::clone(&layout.options);
             options.animations.overview_open_close =
-                realand_config::Animations::default().overview_open_close;
+                clarion_config::Animations::default().overview_open_close;
             layout.update_options(options);
             Op::CompleteAnimations.apply(&mut layout);
             layout.close_overview();
@@ -420,7 +420,7 @@ fn newly_connected_outputs_inherit_the_overview_mode_during_the_transition() {
             OverviewMode::Windows => layout.toggle_window_spread(),
             OverviewMode::Strip => {
                 let mut options = (*layout.options).clone();
-                options.overview.style = realand_config::OverviewStyle::Strip;
+                options.overview.style = clarion_config::OverviewStyle::Strip;
                 layout.update_options(options);
                 layout.toggle_overview();
             }

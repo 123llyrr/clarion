@@ -1,6 +1,6 @@
 //! One fixed pure compiler worker. Capacity includes results awaiting owner delivery.
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex, Weak};
 
 use calloop::channel::Channel;
 
@@ -11,12 +11,18 @@ impl Drop for Permit {
         self.0.fetch_sub(1, Ordering::Release);
     }
 }
+enum Message<P> {
+    Work(Request<P>),
+    Wake(super::super::lifecycle::Wake),
+}
+struct Cancellation(Arc<AtomicBool>);
 struct Request<P> {
     renderer: u64,
     kind: u8,
     generation: u64,
     source: String,
     cancelled: Arc<AtomicBool>,
+    _cancellation: Arc<Cancellation>,
     permit: Permit,
     reply: calloop::channel::SyncSender<CompileCompletion<P>>,
 }
@@ -57,42 +63,76 @@ impl<P> CompileCompletion<P> {
     }
 }
 pub(super) struct Compiler<P> {
-    requests: mpsc::SyncSender<Request<P>>,
+    requests: Arc<mpsc::SyncSender<Message<P>>>,
     slots: Arc<AtomicUsize>,
+    cancellations: Arc<Mutex<Vec<Weak<Cancellation>>>>,
 }
 pub(crate) struct Endpoint<P> {
-    requests: mpsc::SyncSender<Request<P>>,
+    requests: Arc<mpsc::SyncSender<Message<P>>>,
     slots: Arc<AtomicUsize>,
+    cancellations: Arc<Mutex<Vec<Weak<Cancellation>>>>,
     reply: calloop::channel::SyncSender<CompileCompletion<P>>,
 }
 impl<P: Send + 'static> Compiler<P> {
     pub fn new(prepare: fn(&str, &AtomicBool) -> Result<P, String>) -> std::io::Result<Self> {
-        let (requests, rx) = mpsc::sync_channel::<Request<P>>(CAPACITY);
-        let slots = Arc::new(AtomicUsize::new(0));
-        std::thread::Builder::new()
-            .name("vulkan-shader-compiler".into())
-            .spawn(move || {
-                while let Ok(request) = rx.recv() {
-                    let result = if request.cancelled.load(Ordering::Acquire) {
-                        Err("shader compile cancelled".to_owned())
+        let (requests, rx) = mpsc::sync_channel(CAPACITY + 1);
+        let requests = Arc::new(requests);
+        let cancellations: Arc<Mutex<Vec<Weak<Cancellation>>>> = Arc::default();
+        let weak_cancel = Arc::downgrade(&cancellations);
+        let queue_wake = super::super::lifecycle::queue_waker(&requests, Message::Wake);
+        let wake = move || {
+            if let Some(cancellations) = weak_cancel.upgrade() {
+                cancellations.lock().unwrap().retain(|cancel| {
+                    if let Some(cancel) = cancel.upgrade() {
+                        cancel.0.store(true, Ordering::Release);
+                        true
                     } else {
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            prepare(&request.source, &request.cancelled)
-                        }))
-                        .unwrap_or_else(|_| Err("shader compiler worker panicked".to_owned()))
-                    };
-                    // A retired renderer's closed receiver never terminates the shared worker.
-                    let _ = request.reply.send(CompileCompletion {
-                        renderer: request.renderer,
-                        kind: request.kind,
-                        generation: request.generation,
-                        source: request.source,
-                        result,
-                        _permit: request.permit,
-                    });
-                }
-            })?;
-        Ok(Self { requests, slots })
+                        false
+                    }
+                });
+            }
+            queue_wake();
+        };
+        let slots = Arc::new(AtomicUsize::new(0));
+        super::super::lifecycle::spawn_worker("vulkan-shader-compiler", wake, move |stop| {
+            while let Ok(message) = rx.recv() {
+                let request = match message {
+                    Message::Work(request) => request,
+                    Message::Wake(wake) => {
+                        drop(wake);
+                        if stop.should_exit() {
+                            for message in rx.try_iter() {
+                                drop(message);
+                            }
+                            break;
+                        }
+                        continue;
+                    }
+                };
+                let result = if stop.is_closing() || request.cancelled.load(Ordering::Acquire) {
+                    Err("shader compile cancelled".to_owned())
+                } else {
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        prepare(&request.source, &request.cancelled)
+                    }))
+                    .unwrap_or_else(|_| Err("shader compiler worker panicked".to_owned()))
+                };
+                // A retired renderer's closed receiver never terminates the shared worker.
+                let _ = request.reply.send(CompileCompletion {
+                    renderer: request.renderer,
+                    kind: request.kind,
+                    generation: request.generation,
+                    source: request.source,
+                    result,
+                    _permit: request.permit,
+                });
+            }
+        })?;
+        Ok(Self {
+            requests,
+            slots,
+            cancellations,
+        })
     }
     pub fn endpoint(&self) -> (Endpoint<P>, Channel<CompileCompletion<P>>) {
         let (reply, completions) = calloop::channel::sync_channel(CAPACITY);
@@ -100,6 +140,7 @@ impl<P: Send + 'static> Compiler<P> {
             Endpoint {
                 requests: self.requests.clone(),
                 slots: self.slots.clone(),
+                cancellations: self.cancellations.clone(),
                 reply,
             },
             completions,
@@ -115,22 +156,33 @@ impl<P: Send + 'static> Endpoint<P> {
         source: String,
         cancelled: Arc<AtomicBool>,
     ) -> Result<(), String> {
+        if super::super::lifecycle::is_closing() {
+            return Err("shader compiler is shutting down".into());
+        }
         self.slots
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |slots| {
                 (slots < CAPACITY).then_some(slots + 1)
             })
             .map_err(|_| "shader compiler capacity reached".to_owned())?;
         let permit = Permit(self.slots.clone());
+        let cancellation = Arc::new(Cancellation(cancelled.clone()));
+        {
+            let mut active = self.cancellations.lock().unwrap();
+            active.retain(|entry| entry.strong_count() != 0);
+            active.push(Arc::downgrade(&cancellation));
+        }
+
         self.requests
-            .try_send(Request {
+            .try_send(Message::Work(Request {
                 renderer,
                 kind,
                 generation,
                 source,
                 cancelled,
+                _cancellation: cancellation,
                 permit,
                 reply: self.reply.clone(),
-            })
+            }))
             .map_err(|_| "shader compiler unavailable".to_owned())
     }
 }

@@ -2,9 +2,13 @@
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-project_dir="$(cd -- "$script_dir/../realand-shell" && pwd)"
-sdk_dir="${REALAND_FLUTTER_SDK:-${HOME}/.cache/realand/toolchains/flutter}"
-flutter_bin="${REALAND_FLUTTER_BIN:-${sdk_dir}/bin/flutter}"
+project_dir="$(cd -- "$script_dir/../clarion-shell" && pwd)"
+sdk_dir="${CLARION_FLUTTER_SDK:-${REALAND_FLUTTER_SDK:-${HOME}/.cache/clarion/toolchains/flutter}}"
+if [[ -z "${CLARION_FLUTTER_SDK:-}" && -z "${REALAND_FLUTTER_SDK:-}" &&
+      ! -x "${sdk_dir}/bin/flutter" && -x "${HOME}/.cache/realand/toolchains/flutter/bin/flutter" ]]; then
+  sdk_dir="${HOME}/.cache/realand/toolchains/flutter"
+fi
+flutter_bin="${CLARION_FLUTTER_BIN:-${REALAND_FLUTTER_BIN:-${sdk_dir}/bin/flutter}}"
 build_mode="release"
 if [[ "${1:-}" == "--debug" || "${1:-}" == "--profile" || "${1:-}" == "--release" ]]; then
   build_mode="${1#--}"
@@ -12,11 +16,11 @@ if [[ "${1:-}" == "--debug" || "${1:-}" == "--profile" || "${1:-}" == "--release
 fi
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   printf '%s\n' 'Usage: scripts/build-shell.sh [--release|--profile|--debug] [Flutter build options]' \
-    'REALAND_FLUTTER_SDK selects an independent official Flutter SDK.'
+    'CLARION_FLUTTER_SDK selects an independent official Flutter SDK.'
   exit 0
 fi
 if [[ ! -x "$flutter_bin" ]]; then
-  printf 'Flutter SDK not found at %s. Set REALAND_FLUTTER_SDK to an official SDK.\n' "$sdk_dir" >&2
+  printf 'Flutter SDK not found at %s. Set CLARION_FLUTTER_SDK to an official SDK.\n' "$sdk_dir" >&2
   exit 1
 fi
 for dependency in clang cmake ninja pkg-config; do

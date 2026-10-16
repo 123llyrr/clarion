@@ -34,7 +34,7 @@ impl Satellite {
 /// Startup performs its bounded capability check before exporting DISPLAY or launching clients.
 /// Reload uses the same probe on owned-data workers, keeping the running event loop responsive.
 pub fn setup_startup(state: &mut State) {
-    let config = state.realand.config.borrow();
+    let config = state.clarion.config.borrow();
     let setting = &config.xwayland_satellite;
     if setting.off || !test_ondemand(&setting.path) {
         return;
@@ -44,39 +44,39 @@ pub fn setup_startup(state: &mut State) {
 }
 
 pub fn setup(state: &mut State) {
-    state.realand.satellite_probe_request = state.realand.satellite_probe_request.wrapping_add(1);
-    let request = state.realand.satellite_probe_request;
-    if state.realand.satellite.is_some() {
+    state.clarion.satellite_probe_request = state.clarion.satellite_probe_request.wrapping_add(1);
+    let request = state.clarion.satellite_probe_request;
+    if state.clarion.satellite.is_some() {
         return;
     }
-    let setting = state.realand.config.borrow().xwayland_satellite.clone();
+    let setting = state.clarion.config.borrow().xwayland_satellite.clone();
     if setting.off {
         return;
     }
     let path = setting.path;
     let probe_path = path.clone();
     let task = state
-        .realand
+        .clarion
         .owned_tasks
         .submit(move || Ok(test_ondemand(&probe_path)));
-    let event_loop = state.realand.event_loop.clone();
+    let event_loop = state.clarion.event_loop.clone();
     let future = async move {
         let result = match task {
             Ok(task) => task.finish().await,
             Err(err) => Err(err),
         };
         event_loop.insert_idle(move |state| {
-            if state.realand.satellite_probe_request != request {
+            if state.clarion.satellite_probe_request != request {
                 return;
             }
-            let current = state.realand.config.borrow().xwayland_satellite.clone();
-            if current.off || current.path != path || state.realand.satellite.is_some() {
+            let current = state.clarion.config.borrow().xwayland_satellite.clone();
+            if current.off || current.path != path || state.clarion.satellite.is_some() {
                 return;
             }
             match result {
                 Ok(true) => {
                     finish_setup(state);
-                    if let Some(satellite) = &state.realand.satellite {
+                    if let Some(satellite) = &state.clarion.satellite {
                         let name = satellite.display_name().to_owned();
                         info!("listening on X11 socket: {name}");
                         *crate::utils::spawning::CHILD_DISPLAY.write().unwrap() = Some(name);
@@ -87,13 +87,13 @@ pub fn setup(state: &mut State) {
             }
         });
     };
-    if let Err(err) = state.realand.scheduler.schedule(future) {
+    if let Err(err) = state.clarion.scheduler.schedule(future) {
         warn!("error scheduling xwayland-satellite probe: {err:?}");
     }
 }
 
 fn finish_setup(state: &mut State) {
-    if state.realand.satellite.is_some() {
+    if state.clarion.satellite.is_some() {
         return;
     }
     let x11 = match super::setup_connection() {
@@ -104,7 +104,7 @@ fn finish_setup(state: &mut State) {
         }
     };
 
-    let event_loop = &state.realand.event_loop;
+    let event_loop = &state.clarion.event_loop;
     let (to_main, rx) = calloop::channel::channel();
     event_loop
         .insert_source(rx, move |event, _, state| match event {
@@ -115,7 +115,7 @@ fn finish_setup(state: &mut State) {
         })
         .unwrap();
 
-    state.realand.satellite = Some(Satellite {
+    state.clarion.satellite = Some(Satellite {
         x11,
         abstract_token: None,
         unix_token: None,
@@ -126,7 +126,7 @@ fn finish_setup(state: &mut State) {
 }
 
 fn test_ondemand(path: &str) -> bool {
-    let _span = realand_tracy_span!("satellite::test_ondemand");
+    let _span = clarion_tracy_span!("satellite::test_ondemand");
 
     // Expand `~` at the start.
     let mut path = Path::new(path);
@@ -244,11 +244,11 @@ fn clear_out_pending_connections(fd: OwnedFd) -> OwnedFd {
 }
 
 fn setup_watch(state: &mut State) {
-    let Some(satellite) = state.realand.satellite.as_mut() else {
+    let Some(satellite) = state.clarion.satellite.as_mut() else {
         return;
     };
 
-    let event_loop = &state.realand.event_loop;
+    let event_loop = &state.clarion.event_loop;
 
     if let Some(token) = satellite.abstract_token.take() {
         error!("abstract_token must be None in setup_watch()");
@@ -265,17 +265,17 @@ fn setup_watch(state: &mut State) {
         let source = Generic::new(fd, Interest::READ, Mode::Level);
         let token = event_loop
             .insert_source(source, move |_, _, state| {
-                if let Some(satellite) = &mut state.realand.satellite {
+                if let Some(satellite) = &mut state.clarion.satellite {
                     // Remove the other source.
                     if let Some(token) = satellite.unix_token.take() {
-                        state.realand.event_loop.remove(token);
+                        state.clarion.event_loop.remove(token);
                     }
                     // Clear this source.
                     satellite.abstract_token = None;
 
                     debug!("connection to X11 abstract socket; spawning xwayland-satellite");
                     let path = state
-                        .realand
+                        .clarion
                         .config
                         .borrow()
                         .xwayland_satellite
@@ -294,17 +294,17 @@ fn setup_watch(state: &mut State) {
     let source = Generic::new(fd, Interest::READ, Mode::Level);
     let token = event_loop
         .insert_source(source, move |_, _, state| {
-            if let Some(satellite) = &mut state.realand.satellite {
+            if let Some(satellite) = &mut state.clarion.satellite {
                 // Remove the other source.
                 if let Some(token) = satellite.abstract_token.take() {
-                    state.realand.event_loop.remove(token);
+                    state.clarion.event_loop.remove(token);
                 }
                 // Clear this source.
                 satellite.unix_token = None;
 
                 debug!("connection to X11 unix socket; spawning xwayland-satellite");
                 let path = state
-                    .realand
+                    .clarion
                     .config
                     .borrow()
                     .xwayland_satellite
@@ -319,7 +319,7 @@ fn setup_watch(state: &mut State) {
 }
 
 fn spawn(path: String, xwl: &Satellite) {
-    let _span = realand_tracy_span!("satellite::spawn");
+    let _span = clarion_tracy_span!("satellite::spawn");
 
     let abstract_fd = xwl
         .x11
@@ -397,7 +397,7 @@ fn spawn_and_wait(
     };
 
     let mut child = {
-        let _span = realand_tracy_span!();
+        let _span = clarion_tracy_span!();
         match process.spawn() {
             Ok(child) => child,
             Err(err) => {

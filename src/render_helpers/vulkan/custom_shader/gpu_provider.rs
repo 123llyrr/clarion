@@ -26,7 +26,7 @@ impl<W, R> Drop for CapacityWake<W, R> {
     }
 }
 struct Shared<W, R> {
-    jobs: mpsc::SyncSender<Job<W, R>>,
+    jobs: Arc<mpsc::SyncSender<Job<W, R>>>,
     slots: AtomicUsize,
     listeners: Mutex<Vec<Weak<Listener<W, R>>>>,
 }
@@ -62,6 +62,7 @@ struct Request<W, R> {
     listener: Arc<Listener<W, R>>,
 }
 enum Job<W, R> {
+    Wake(super::super::lifecycle::Wake),
     Work(Request<W, R>),
     Retire {
         result: Result<R, String>,
@@ -82,12 +83,18 @@ pub(crate) struct Completion<W, R> {
 impl<W, R> Completion<W, R> {
     /// Only a validated current owner may consume GPU resources into its active caches.
     pub fn consume(mut self) -> Result<R, String> {
+        if super::super::lifecycle::is_closing() {
+            return Err("GPU preparation is shutting down".into());
+        }
         let result = self.result.take().unwrap();
         drop(self.slot.take());
         result
     }
     /// Reuses the existing slot when a new format appeared during preparation.
     pub fn retry(mut self, transform: impl FnOnce(R) -> W) -> Result<(), String> {
+        if super::super::lifecycle::is_closing() {
+            return Err("GPU preparation is shutting down".into());
+        }
         let result = self.result.take().unwrap()?;
         let slot = self.slot.take().unwrap();
         let shared = slot.0.clone();
@@ -118,6 +125,7 @@ fn enqueue_retained<W, R>(shared: &Shared<W, R>, job: Job<W, R>) -> Result<(), S
             // rather than run a last-context GPU idle wait on the owner. Their occupied
             // slots stop all further preparation; no replacement worker is spawned.
             let (mpsc::TrySendError::Full(job) | mpsc::TrySendError::Disconnected(job)) = error;
+            super::super::lifecycle::record_quarantine();
             std::mem::forget(job);
             Err("GPU preparation worker unavailable; bounded retained resources quarantined".into())
         }
@@ -136,55 +144,61 @@ pub(crate) struct Rejected<W> {
 }
 impl<W: Send + 'static, R: Send + 'static> Service<W, R> {
     pub fn new(prepare: fn(W, &AtomicBool) -> Result<R, String>) -> std::io::Result<Self> {
-        let (jobs, receiver) = mpsc::sync_channel(CAPACITY);
+        let (jobs, receiver) = mpsc::sync_channel(CAPACITY + 1);
+        let jobs = Arc::new(jobs);
         let shared = Arc::new(Shared {
             jobs,
             slots: AtomicUsize::new(0),
             listeners: Mutex::new(Vec::new()),
         });
-        std::thread::Builder::new()
-            .name("vulkan-program-preparation".into())
-            .spawn(move || {
-                while let Ok(job) = receiver.recv() {
-                    match job {
-                        Job::Retire { result, slot } => {
+        let wake = super::super::lifecycle::queue_waker(&shared.jobs, Job::Wake);
+        super::super::lifecycle::spawn_worker("vulkan-program-preparation", wake, move |stop| {
+            while let Ok(job) = receiver.recv() {
+                match job {
+                    Job::Wake(wake) => {
+                        drop(wake);
+                        if stop.should_exit() {
+                            for job in receiver.try_iter() {
+                                drop(job);
+                            }
+                            break;
+                        }
+                    }
+                    Job::Retire { result, slot } => {
+                        let _ =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(result)));
+                        drop(slot);
+                    }
+                    Job::Work(request) => {
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            if stop.is_closing() || request.cancelled.load(Ordering::Acquire) {
+                                drop(request.work);
+                                return Err("GPU preparation cancelled".into());
+                            }
+                            prepare(request.work, &request.cancelled)
+                        }))
+                        .unwrap_or_else(|_| Err("GPU preparation worker panicked".into()));
+                        if stop.is_closing() || request.cancelled.load(Ordering::Acquire) {
                             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                 drop(result)
                             }));
-                            drop(slot);
+                            drop(request.slot);
+                            continue;
                         }
-                        Job::Work(request) => {
-                            let result =
-                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                    if request.cancelled.load(Ordering::Acquire) {
-                                        drop(request.work);
-                                        return Err("GPU preparation cancelled".into());
-                                    }
-                                    prepare(request.work, &request.cancelled)
-                                }))
-                                .unwrap_or_else(|_| Err("GPU preparation worker panicked".into()));
-                            if request.cancelled.load(Ordering::Acquire) {
-                                let _ =
-                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                        drop(result)
-                                    }));
-                                drop(request.slot);
-                                continue;
-                            }
-                            let listener = request.listener;
-                            let completion = Completion {
-                                identity: request.identity,
-                                result: Some(result),
-                                cancelled: request.cancelled,
-                                slot: Some(request.slot),
-                                listener: listener.clone(),
-                            };
-                            // Closed receivers drop Completion on this worker and enqueue bounded retirement.
-                            let _ = listener.reply.send(Event::Ready(completion));
-                        }
+                        let listener = request.listener;
+                        let completion = Completion {
+                            identity: request.identity,
+                            result: Some(result),
+                            cancelled: request.cancelled,
+                            slot: Some(request.slot),
+                            listener: listener.clone(),
+                        };
+                        // Closed receivers drop Completion on this worker and enqueue bounded retirement.
+                        let _ = listener.reply.send(Event::Ready(completion));
                     }
                 }
-            })?;
+            }
+        })?;
         Ok(Self { shared })
     }
     pub fn endpoint(&self) -> (Endpoint<W, R>, Channel<Event<W, R>>) {
@@ -214,6 +228,12 @@ impl<W: Send + 'static, R: Send + 'static> Endpoint<W, R> {
         work: W,
         cancelled: Arc<AtomicBool>,
     ) -> Result<(), Rejected<W>> {
+        if super::super::lifecycle::is_closing() {
+            return Err(Rejected {
+                work,
+                unavailable: true,
+            });
+        }
         if self
             .shared
             .slots

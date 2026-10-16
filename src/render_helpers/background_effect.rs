@@ -1,16 +1,16 @@
 use std::sync::{Arc, Mutex};
 
-use realand_config::CornerRadius;
+use clarion_config::CornerRadius;
 use smithay::utils::{Logical, Point, Rectangle, Scale};
 use smithay::wayland::compositor::{with_states, SurfaceData};
 use wayland_server::protocol::wl_surface::WlSurface;
 
+use crate::clarion_render_elements;
 use crate::handlers::background_effect::get_cached_blur_region;
-use crate::realand_render_elements;
 use crate::render_helpers::blur::BlurOptions;
 use crate::render_helpers::damage::ExtraDamage;
 use crate::render_helpers::framebuffer_effect::{FramebufferEffect, FramebufferEffectElement};
-use crate::render_helpers::renderer::RealandRenderer;
+use crate::render_helpers::renderer::ClarionRenderer;
 use crate::render_helpers::xray::{XrayElement, XrayPos};
 use crate::render_helpers::RenderCtx;
 use crate::utils::region::TransformedRegion;
@@ -26,7 +26,7 @@ pub struct BackgroundEffect {
     /// Stored here in addition to `RenderParams` to damage when it changes.
     // FIXME: would be good to remove this duplication of radius.
     corner_radius: CornerRadius,
-    blur_config: realand_config::Blur,
+    blur_config: clarion_config::Blur,
     options: Options,
 }
 
@@ -74,7 +74,7 @@ impl RenderParams {
     }
 }
 
-realand_render_elements! {
+clarion_render_elements! {
     BackgroundEffectElement => {
         FramebufferEffect = FramebufferEffectElement,
         Xray = XrayElement,
@@ -94,7 +94,7 @@ impl BackgroundEffect {
             nonxray: FramebufferEffect::new(),
             damage: ExtraDamage::new(),
             corner_radius: CornerRadius::default(),
-            blur_config: realand_config::Blur::default(),
+            blur_config: clarion_config::Blur::default(),
             options: Options::default(),
         }
     }
@@ -105,7 +105,7 @@ impl BackgroundEffect {
         self.nonxray.damage();
     }
 
-    pub fn update_config(&mut self, config: realand_config::Blur) {
+    pub fn update_config(&mut self, config: clarion_config::Blur) {
         if self.blur_config == config {
             return;
         }
@@ -118,7 +118,7 @@ impl BackgroundEffect {
     pub fn update_render_elements(
         &mut self,
         corner_radius: CornerRadius,
-        effect: realand_config::BackgroundEffect,
+        effect: clarion_config::BackgroundEffect,
         has_blur_region: bool,
     ) {
         // If the surface explicitly requests a blur region, default blur to true.
@@ -163,7 +163,7 @@ impl BackgroundEffect {
         self.options.is_visible()
     }
 
-    pub fn render<R: RealandRenderer>(
+    pub fn render<R: ClarionRenderer>(
         &self,
         ctx: RenderCtx<R>,
         ns: Option<usize>,
@@ -327,7 +327,7 @@ pub fn damage_surface(states: &SurfaceData) {
 // Silence, Clippy
 // A Smithay user is talking
 #[allow(clippy::too_many_arguments)]
-pub fn render_for_tile<R: RealandRenderer>(
+pub fn render_for_tile<R: ClarionRenderer>(
     ctx: RenderCtx<R>,
     ns: Option<usize>,
     geometry: Rectangle<f64, Logical>,
@@ -336,9 +336,9 @@ pub fn render_for_tile<R: RealandRenderer>(
     surface: &WlSurface,
     surface_off: Point<f64, Logical>,
     surface_anim_scale: Scale<f64>,
-    blur_config: realand_config::Blur,
+    blur_config: clarion_config::Blur,
     radius: CornerRadius,
-    effect: realand_config::BackgroundEffect,
+    effect: clarion_config::BackgroundEffect,
     should_block_out: bool,
     xray_pos: XrayPos,
     push: &mut dyn FnMut(BackgroundEffectElement),
@@ -384,7 +384,7 @@ mod tests {
     #[test]
     fn glass_requires_requested_blur_and_empty_launcher_masks_stay_clear() {
         let mut background = BackgroundEffect::new();
-        let glass = realand_config::BackgroundEffect {
+        let glass = clarion_config::BackgroundEffect {
             liquid_glass: Some(true),
             ..Default::default()
         };
@@ -396,15 +396,15 @@ mod tests {
         assert!(background.options.liquid_glass && background.options.blur);
         assert!(!background.options.xray);
         for rule in [
-            realand_config::BackgroundEffect {
+            clarion_config::BackgroundEffect {
                 blur: Some(false),
                 ..glass
             },
-            realand_config::BackgroundEffect {
+            clarion_config::BackgroundEffect {
                 xray: Some(true),
                 ..glass
             },
-            realand_config::BackgroundEffect {
+            clarion_config::BackgroundEffect {
                 liquid_glass: Some(false),
                 ..glass
             },
@@ -431,7 +431,7 @@ mod tests {
         let radius = CornerRadius::default();
         background.update_render_elements(
             radius,
-            realand_config::BackgroundEffect::default(),
+            clarion_config::BackgroundEffect::default(),
             true,
         );
         assert_eq!(
@@ -444,7 +444,7 @@ mod tests {
 
         background.update_render_elements(
             radius,
-            realand_config::BackgroundEffect {
+            clarion_config::BackgroundEffect {
                 xray: Some(true),
                 ..Default::default()
             },
@@ -454,7 +454,7 @@ mod tests {
 
         background.update_render_elements(
             radius,
-            realand_config::BackgroundEffect {
+            clarion_config::BackgroundEffect {
                 blur: Some(true),
                 ..Default::default()
             },
@@ -464,7 +464,7 @@ mod tests {
 
         background.update_render_elements(
             radius,
-            realand_config::BackgroundEffect {
+            clarion_config::BackgroundEffect {
                 blur: Some(false),
                 ..Default::default()
             },

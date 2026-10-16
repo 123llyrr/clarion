@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only Realand frame-budget capture.
+"""Read-only Clarion frame-budget capture.
 
 Collects IPC snapshots without sending input or changing a session. Exact run
 percentiles require complete CPU sequence coverage. Hardware smoothness requires
@@ -409,7 +409,7 @@ def run_json(args, env):
 
 def process_identity(socket_path):
     if not socket_path:
-        return {"error": "REALAND_SOCKET is unset; select a running Realand IPC socket"}
+        return {"error": "CLARION_SOCKET is unset; select a running Clarion IPC socket"}
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stream:
             stream.settimeout(1)
@@ -431,13 +431,13 @@ def scoped_service(identity):
     if not identity or identity.get("error"):
         return {"scoped_to_socket_peer": False, "reason": "socket peer identity unavailable"}
     try:
-        result = subprocess.run(["systemctl", "--user", "show", "realand.service",
+        result = subprocess.run(["systemctl", "--user", "show", "clarion.service",
                                  "-p", "MainPID", "-p", "ActiveState", "-p", "InvocationID",
                                  "-p", "ExecMainStartTimestampMonotonic"],
                                 capture_output=True, text=True, timeout=3)
         values = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
         if result.returncode or int(values.get("MainPID", "0")) != identity["pid"]:
-            return {"scoped_to_socket_peer": False, "reason": "realand.service does not own this socket peer"}
+            return {"scoped_to_socket_peer": False, "reason": "clarion.service does not own this socket peer"}
         return {"scoped_to_socket_peer": True, "properties": values}
     except (OSError, ValueError, subprocess.TimeoutExpired) as error:
         return {"scoped_to_socket_peer": False, "reason": str(error)}
@@ -446,9 +446,11 @@ def scoped_service(identity):
 def capture(args):
     env = os.environ.copy()
     if args.socket:
-        env["REALAND_SOCKET"] = args.socket
-    socket_path = env.get("REALAND_SOCKET")
-    command = shutil.which(args.realand) or args.realand
+        env["CLARION_SOCKET"] = args.socket
+    socket_path = env.get("CLARION_SOCKET") or env.get("REALAND_SOCKET")
+    if socket_path:
+        env["CLARION_SOCKET"] = socket_path
+    command = shutil.which(args.clarion) or args.clarion
     version_before, version_before_error = run_json([command, "msg", "--json", "version"], env)
     metadata = {"scenario": args.scenario, "seconds_requested": args.seconds,
                 "poll_interval_seconds": args.interval, "cli": command, "socket": socket_path,
@@ -493,7 +495,7 @@ def main():
     parser.add_argument("--interval", type=positive, default=.2)
     parser.add_argument("--scenario", default="unspecified operator workload")
     parser.add_argument("--outputPath", type=Path)
-    parser.add_argument("--realand", default="realand")
+    parser.add_argument("--clarion", "--realand", dest="clarion", default="clarion")
     parser.add_argument("--socket")
     args = parser.parse_args()
     report = capture(args)

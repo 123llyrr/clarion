@@ -1,5 +1,5 @@
-use realand_config::utils::MergeWith as _;
-use realand_config::{Config, LayerRule};
+use clarion_config::utils::MergeWith as _;
+use clarion_config::{Config, LayerRule};
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::Kind;
 use smithay::desktop::{LayerSurface, PopupKind, PopupManager};
@@ -9,10 +9,10 @@ use smithay::wayland::shell::wlr_layer::{ExclusiveZone, Layer};
 
 use super::ResolvedLayerRules;
 use crate::animation::Clock;
+use crate::clarion_render_elements;
 use crate::layout::shadow::Shadow;
-use crate::realand_render_elements;
 use crate::render_helpers::background_effect::BackgroundEffectElement;
-use crate::render_helpers::renderer::RealandRenderer;
+use crate::render_helpers::renderer::ClarionRenderer;
 use crate::render_helpers::shadow::ShadowRenderElement;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::surface::push_elements_from_surface_tree;
@@ -43,7 +43,7 @@ pub struct MappedLayer {
     shadow: Shadow,
 
     /// The blur config, passed for background effect rendering.
-    blur_config: realand_config::Blur,
+    blur_config: clarion_config::Blur,
 
     /// The view size for the layer surface's output.
     view_size: Size<f64, Logical>,
@@ -59,7 +59,7 @@ pub struct MappedLayer {
     last_deco_size: Option<Size<f64, Logical>>,
 }
 
-realand_render_elements! {
+clarion_render_elements! {
     LayerSurfaceRenderElement<R> => {
         Wayland = WaylandSurfaceRenderElement<R>,
         SolidColor = SolidColorRenderElement,
@@ -197,7 +197,7 @@ impl MappedLayer {
         Point::from((0., y))
     }
 
-    pub fn render_normal<R: RealandRenderer>(
+    pub fn render_normal<R: ClarionRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         ns: Option<usize>,
@@ -268,7 +268,7 @@ impl MappedLayer {
         );
     }
 
-    pub fn render_popups<R: RealandRenderer>(
+    pub fn render_popups<R: ClarionRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         ns: Option<usize>,
@@ -292,7 +292,7 @@ impl MappedLayer {
             let popup_rules = match popup {
                 PopupKind::Xdg(_) => self.rules.popups,
                 // IME popups aren't affected by rules for regular popups.
-                PopupKind::InputMethod(_) => realand_config::ResolvedPopupsRules::default(),
+                PopupKind::InputMethod(_) => clarion_config::ResolvedPopupsRules::default(),
             };
             let alpha = alpha * popup_rules.opacity.unwrap_or(1.).clamp(0., 1.);
 

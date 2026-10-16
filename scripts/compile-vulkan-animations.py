@@ -8,8 +8,8 @@ output = root / 'vulkan/shaders'
 
 
 def translate(source):
-    lines = ['#version 450', 'layout(location=0) in vec2 realand_v_coords;',
-             'layout(location=0) out vec4 realand_out;', '#define gl_FragColor realand_out',
+    lines = ['#version 450', 'layout(location=0) in vec2 clarion_v_coords;',
+             'layout(location=0) out vec4 clarion_out;', '#define gl_FragColor clarion_out',
              '#define texture2D texture']
     slots = samplers = 0
     for line in source.splitlines():

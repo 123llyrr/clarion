@@ -1,7 +1,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use realand_config::WindowWobble;
+use clarion_config::WindowWobble;
 use smithay::backend::renderer::element::Id;
 use smithay::backend::renderer::utils::CommitCounter;
 use smithay::utils::{Logical, Point, Rectangle, Size};
@@ -1107,7 +1107,7 @@ mod tests {
         assert!(!Rc::ptr_eq(&resized.vertices, &restarted.vertices));
     }
 
-    /// Run manually with `cargo test --release -p realand --lib
+    /// Run manually with `cargo test --release -p clarion --lib
     /// layout::wobble::tests::stable_mesh_cache_microbenchmark -- --ignored --nocapture`.
     #[test]
     #[ignore = "manual CPU microbenchmark"]

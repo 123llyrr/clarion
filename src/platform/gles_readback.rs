@@ -191,8 +191,8 @@ mod tests {
     use std::sync::Arc;
 
     fn setup(with_fences: bool) -> GlesRenderer {
-        let path = std::env::var("REALAND_GLES_TEST_NODE")
-            .expect("set REALAND_GLES_TEST_NODE to a DRM render node");
+        let path = std::env::var("CLARION_GLES_TEST_NODE")
+            .expect("set CLARION_GLES_TEST_NODE to a DRM render node");
         let file = OpenOptions::new()
             .read(true)
             .write(true)

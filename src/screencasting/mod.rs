@@ -18,15 +18,16 @@ use smithay::reexports::gbm::Modifier;
 use smithay::utils::{Physical, Point, Scale, Size};
 use zbus::object_server::SignalEmitter;
 
-use crate::compositor::{CastTarget, OutputRenderElements, PointerRenderElements, Realand, State};
-use crate::dbus::mutter_screen_cast::{self, CursorMode, ScreenCastToRealand, StreamTargetId};
-use crate::realand_render_elements;
+use crate::clarion_render_elements;
+use crate::compositor::{CastTarget, Clarion, State};
+use crate::dbus::mutter_screen_cast::{self, CursorMode, ScreenCastToClarion, StreamTargetId};
 use crate::render_helpers::{RenderCtx, RenderTarget};
+use crate::scene::{OutputRenderElements, PointerRenderElements};
 use crate::utils::{get_monotonic_time, CastSessionId, CastStreamId};
 use crate::window::mapped::{MappedId, WindowCastRenderElements};
 
 mod pw_utils;
-use pw_utils::{Cast, CastSizeChange, CursorData, PipeWire, PwToRealand};
+use pw_utils::{Cast, CastSizeChange, CursorData, PipeWire, PwToClarion};
 
 pub struct Screencasting {
     pub casts: Vec<Cast>,
@@ -34,7 +35,7 @@ pub struct Screencasting {
     /// Dynamic-target casts waiting for their first target to start.
     pub pending_dynamic_casts: Vec<PendingCast>,
 
-    pub pw_to_realand: calloop::channel::Sender<PwToRealand>,
+    pub pw_to_clarion: calloop::channel::Sender<PwToClarion>,
 
     /// Screencast output for each mapped window.
     pub mapped_cast_output: HashMap<Window, Output>,
@@ -56,21 +57,21 @@ pub struct PendingCast {
 
 impl Screencasting {
     pub fn new(event_loop: &LoopHandle<'static, State>) -> Self {
-        let pw_to_realand = {
-            let (pw_to_realand, from_pipewire) = calloop::channel::channel();
+        let pw_to_clarion = {
+            let (pw_to_clarion, from_pipewire) = calloop::channel::channel();
             event_loop
                 .insert_source(from_pipewire, move |event, _, state| match event {
                     calloop::channel::Event::Msg(msg) => state.on_pw_msg(msg),
                     calloop::channel::Event::Closed => (),
                 })
                 .unwrap();
-            pw_to_realand
+            pw_to_clarion
         };
 
         Self {
             casts: vec![],
             pending_dynamic_casts: vec![],
-            pw_to_realand,
+            pw_to_clarion,
             mapped_cast_output: HashMap::new(),
             dynamic_cast_id_for_portal: MappedId::next(),
             pipewire: None,
@@ -86,13 +87,13 @@ impl State {
             .context("no GBM device available")?;
 
         // Ensure PipeWire is initialized.
-        if self.realand.casting.pipewire.is_none() {
+        if self.clarion.casting.pipewire.is_none() {
             let pw = PipeWire::new(
-                self.realand.event_loop.clone(),
-                self.realand.casting.pw_to_realand.clone(),
+                self.clarion.event_loop.clone(),
+                self.clarion.casting.pw_to_clarion.clone(),
             )
             .context("error initializing PipeWire")?;
-            self.realand.casting.pipewire = Some(pw);
+            self.clarion.casting.pipewire = Some(pw);
         }
 
         let mut render_formats = self
@@ -109,7 +110,7 @@ impl State {
             .unwrap_or_default();
 
         {
-            let config = self.realand.config.borrow();
+            let config = self.clarion.config.borrow();
             if config.debug.force_pipewire_invalid_modifier {
                 render_formats = render_formats
                     .into_iter()
@@ -121,13 +122,13 @@ impl State {
         Ok((gbm, render_formats))
     }
 
-    pub fn on_pw_msg(&mut self, msg: PwToRealand) {
+    pub fn on_pw_msg(&mut self, msg: PwToClarion) {
         match msg {
-            PwToRealand::StopCast { session_id } => self.realand.stop_cast(session_id),
-            PwToRealand::Redraw { stream_id } => self.redraw_cast(stream_id),
-            PwToRealand::FatalError => {
+            PwToClarion::StopCast { session_id } => self.clarion.stop_cast(session_id),
+            PwToClarion::Redraw { stream_id } => self.redraw_cast(stream_id),
+            PwToClarion::FatalError => {
                 warn!("stopping PipeWire due to fatal error");
-                let casting = &mut self.realand.casting;
+                let casting = &mut self.clarion.casting;
                 if let Some(pw) = casting.pipewire.take() {
                     let mut ids = HashSet::new();
                     for cast in &casting.pending_dynamic_casts {
@@ -137,18 +138,18 @@ impl State {
                         ids.insert(cast.session_id);
                     }
                     for id in ids {
-                        self.realand.stop_cast(id);
+                        self.clarion.stop_cast(id);
                     }
-                    self.realand.event_loop.remove(pw.token);
+                    self.clarion.event_loop.remove(pw.token);
                 }
             }
         }
     }
 
     fn redraw_cast(&mut self, stream_id: CastStreamId) {
-        let _span = realand_tracy_span!("State::redraw_cast");
+        let _span = clarion_tracy_span!("State::redraw_cast");
 
-        let casts = &mut self.realand.casting.casts;
+        let casts = &mut self.clarion.casting.casts;
         let Some(idx) = casts.iter().position(|cast| cast.stream_id == stream_id) else {
             warn!("cast to redraw is missing");
             return;
@@ -166,7 +167,7 @@ impl State {
             }
             CastTarget::Output { output, .. } => {
                 if let Some(output) = output.upgrade() {
-                    self.realand.queue_redraw(&output);
+                    self.clarion.queue_redraw(&output);
                 }
                 return;
             }
@@ -174,20 +175,20 @@ impl State {
         };
 
         // Lack of partial borrowing strikes again...
-        let mut casts = mem::take(&mut self.realand.casting.casts);
+        let mut casts = mem::take(&mut self.clarion.casting.casts);
         let cast = &mut casts[idx];
         let mut stop = false;
         // Use a loop {} so we can break instead of early-return.
         #[allow(clippy::never_loop)]
         loop {
-            let mut windows = self.realand.layout.windows();
+            let mut windows = self.clarion.layout.windows();
             let Some((_, mapped)) = windows.find(|(_, mapped)| mapped.id().get() == id) else {
                 break;
             };
 
             // Use the cached output since it will be present even if the output was
             // currently disconnected.
-            let Some(output) = self.realand.casting.mapped_cast_output.get(&mapped.window) else {
+            let Some(output) = self.clarion.casting.mapped_cast_output.get(&mapped.window) else {
                 break;
             };
 
@@ -211,9 +212,9 @@ impl State {
                 let mut elements = Vec::new();
                 let mut pointer_location = Point::default();
 
-                if self.realand.pointer_visibility.is_visible() {
+                if self.clarion.pointer_visibility.is_visible() {
                     if let Some((pointer_pos, win_pos)) =
-                        self.realand.pointer_pos_for_window_cast(mapped)
+                        self.clarion.pointer_pos_for_window_cast(mapped)
                     {
                         // Pointer location must be relative to the screencast buffer.
                         // - win_pos is the position of the main window surface in output-local
@@ -221,7 +222,7 @@ impl State {
                         // - bbox.loc moves us relative to the screencast buffer
                         let buf_pos = win_pos + bbox.loc.to_f64().to_logical(scale);
                         let output_pos = self
-                            .realand
+                            .clarion
                             .global_space
                             .output_geometry(output)
                             .unwrap()
@@ -229,7 +230,7 @@ impl State {
                         pointer_location = pointer_pos - output_pos.to_f64() - buf_pos;
 
                         let pos = buf_pos.to_physical_precise_round(scale).upscale(-1);
-                        self.realand.render_pointer(renderer, output, &mut |elem| {
+                        self.clarion.render_pointer(renderer, output, &mut |elem| {
                             let elem =
                                 RelocateRenderElement::from_element(elem, pos, Relocate::Relative);
                             elements.push(CastRenderElement::from(elem));
@@ -252,25 +253,25 @@ impl State {
                     bbox.size,
                     scale,
                     output,
-                    &mut || self.realand.capture_permit(),
+                    &mut || self.clarion.capture_permit(),
                 ) {
                     cast.last_frame_time = get_monotonic_time();
                 }
-                self.realand.submit_cursor_readback(cast, output);
+                self.clarion.submit_cursor_readback(cast, output);
             });
 
             break;
         }
         let session_id = cast.session_id;
-        self.realand.casting.casts = casts;
+        self.clarion.casting.casts = casts;
 
         if stop {
-            self.realand.stop_cast(session_id);
+            self.clarion.stop_cast(session_id);
         }
     }
 
     pub fn set_dynamic_cast_target(&mut self, target: CastTarget) {
-        let _span = realand_tracy_span!("State::set_dynamic_cast_target");
+        let _span = clarion_tracy_span!("State::set_dynamic_cast_target");
 
         let mut refresh = None;
         match &target {
@@ -283,10 +284,10 @@ impl State {
                 }
             }
             CastTarget::Window { id } => {
-                let mut windows = self.realand.layout.windows();
+                let mut windows = self.clarion.layout.windows();
                 if let Some((_, mapped)) = windows.find(|(_, mapped)| mapped.id().get() == *id) {
                     if let Some(output) =
-                        self.realand.casting.mapped_cast_output.get(&mapped.window)
+                        self.clarion.casting.mapped_cast_output.get(&mapped.window)
                     {
                         refresh = Some(output.current_mode().unwrap().refresh as u32);
                     }
@@ -296,7 +297,7 @@ impl State {
 
         let mut to_redraw = Vec::new();
         let mut to_stop = Vec::new();
-        for cast in &mut self.realand.casting.casts {
+        for cast in &mut self.clarion.casting.casts {
             if !cast.dynamic_target {
                 continue;
             }
@@ -325,13 +326,13 @@ impl State {
     }
 
     fn start_pending_dynamic_casts(&mut self, target: &CastTarget) {
-        let pending = &self.realand.casting.pending_dynamic_casts;
+        let pending = &self.clarion.casting.pending_dynamic_casts;
         if pending.is_empty() {
             return;
         }
         debug!("starting {} pending dynamic cast(s)", pending.len());
 
-        let _span = realand_tracy_span!("State::start_pending_dynamic_casts");
+        let _span = clarion_tracy_span!("State::start_pending_dynamic_casts");
 
         // We don't stop dynamic casts on missing output/window.
         let (size, refresh) = match target {
@@ -343,7 +344,7 @@ impl State {
                 cast_params_for_output(&output)
             }
             CastTarget::Window { id } => {
-                let Some((size, refresh)) = self.realand.cast_params_for_window(*id) else {
+                let Some((size, refresh)) = self.clarion.cast_params_for_window(*id) else {
                     return;
                 };
                 (size, refresh)
@@ -355,23 +356,23 @@ impl State {
             Err(err) => {
                 warn!("error starting pending screencasts: {err:?}");
                 let mut ids = HashSet::new();
-                for pending in self.realand.casting.pending_dynamic_casts.drain(..) {
+                for pending in self.clarion.casting.pending_dynamic_casts.drain(..) {
                     ids.insert(pending.session_id);
                 }
                 for id in ids {
-                    self.realand.stop_cast(id);
+                    self.clarion.stop_cast(id);
                 }
                 return;
             }
         };
-        let pw = self.realand.casting.pipewire.as_ref().unwrap();
+        let pw = self.clarion.casting.pipewire.as_ref().unwrap();
 
         // Alpha is always true since the dynamic target can change between window & output.
         let alpha = true;
 
         // Start each pending cast.
         let mut to_stop = HashSet::new();
-        for pending in self.realand.casting.pending_dynamic_casts.drain(..) {
+        for pending in self.clarion.casting.pending_dynamic_casts.drain(..) {
             let res = pw.start_cast(
                 gbm.clone(),
                 render_formats.clone(),
@@ -387,7 +388,7 @@ impl State {
             match res {
                 Ok(mut cast) => {
                     cast.dynamic_target = true;
-                    self.realand.casting.casts.push(cast);
+                    self.clarion.casting.casts.push(cast);
                 }
                 Err(err) => {
                     warn!("error starting pending screencast: {err:?}");
@@ -397,29 +398,29 @@ impl State {
         }
 
         for session_id in to_stop {
-            self.realand.stop_cast(session_id);
+            self.clarion.stop_cast(session_id);
         }
     }
 
-    pub fn on_screen_cast_msg(&mut self, msg: ScreenCastToRealand) {
+    pub fn on_screen_cast_msg(&mut self, msg: ScreenCastToClarion) {
         match msg {
-            ScreenCastToRealand::StartCast {
+            ScreenCastToClarion::StartCast {
                 session_id,
                 stream_id,
                 target,
                 cursor_mode,
                 signal_ctx,
             } => {
-                let _span = realand_tracy_span!("StartCast");
+                let _span = clarion_tracy_span!("StartCast");
                 let _span = debug_span!("StartCast", %session_id, %stream_id).entered();
 
                 let (target, size, refresh, alpha) = match target {
                     StreamTargetId::Output { name } => {
-                        let global_space = &self.realand.global_space;
+                        let global_space = &self.clarion.global_space;
                         let output = global_space.outputs().find(|out| out.name() == name);
                         let Some(output) = output else {
                             warn!("error starting screencast: requested output is missing");
-                            self.realand.stop_cast(session_id);
+                            self.clarion.stop_cast(session_id);
                             return;
                         };
 
@@ -427,10 +428,10 @@ impl State {
                         (CastTarget::output(output), size, refresh, false)
                     }
                     StreamTargetId::Window { id }
-                        if id == self.realand.casting.dynamic_cast_id_for_portal.get() =>
+                        if id == self.clarion.casting.dynamic_cast_id_for_portal.get() =>
                     {
                         debug!("delaying dynamic cast until target is set");
-                        self.realand
+                        self.clarion
                             .casting
                             .pending_dynamic_casts
                             .push(PendingCast {
@@ -442,9 +443,9 @@ impl State {
                         return;
                     }
                     StreamTargetId::Window { id } => {
-                        let Some((size, refresh)) = self.realand.cast_params_for_window(id) else {
+                        let Some((size, refresh)) = self.clarion.cast_params_for_window(id) else {
                             warn!("error starting screencast: requested window is missing");
-                            self.realand.stop_cast(session_id);
+                            self.clarion.stop_cast(session_id);
                             return;
                         };
                         (CastTarget::Window { id }, size, refresh, true)
@@ -455,11 +456,11 @@ impl State {
                     Ok(x) => x,
                     Err(err) => {
                         warn!("error starting screencast: {err:?}");
-                        self.realand.stop_cast(session_id);
+                        self.clarion.stop_cast(session_id);
                         return;
                     }
                 };
-                let pw = self.realand.casting.pipewire.as_ref().unwrap();
+                let pw = self.clarion.casting.pipewire.as_ref().unwrap();
 
                 let res = pw.start_cast(
                     gbm,
@@ -475,20 +476,20 @@ impl State {
                 );
                 match res {
                     Ok(cast) => {
-                        self.realand.casting.casts.push(cast);
+                        self.clarion.casting.casts.push(cast);
                     }
                     Err(err) => {
                         warn!("error starting screencast: {err:?}");
-                        self.realand.stop_cast(session_id);
+                        self.clarion.stop_cast(session_id);
                     }
                 }
             }
-            ScreenCastToRealand::StopCast { session_id } => self.realand.stop_cast(session_id),
+            ScreenCastToClarion::StopCast { session_id } => self.clarion.stop_cast(session_id),
         }
     }
 }
 
-impl Realand {
+impl Clarion {
     fn submit_cursor_readback(&self, cast: &mut Cast, output: &Output) {
         let Some(request) = cast.take_cursor_readback() else {
             return;
@@ -498,7 +499,7 @@ impl Realand {
         if let Err(error) =
             self.enqueue_pixel_readback(Some(output.clone()), request.job, move |state, result| {
                 if completion.complete(result) {
-                    state.on_pw_msg(PwToRealand::Redraw { stream_id });
+                    state.on_pw_msg(PwToClarion::Redraw { stream_id });
                 }
             })
         {
@@ -584,7 +585,7 @@ impl Realand {
         CastRenderElement<R>: RenderElement<R>,
         for<'a> R::Framebuffer<'a>: Texture,
     {
-        let _span = realand_tracy_span!("Realand::render_for_screen_cast");
+        let _span = clarion_tracy_span!("Clarion::render_for_screen_cast");
 
         let weak = output.downgrade();
         let size = output.current_mode().unwrap().size;
@@ -688,7 +689,7 @@ impl Realand {
         CastRenderElement<R>: RenderElement<R>,
         for<'a> R::Framebuffer<'a>: Texture,
     {
-        let _span = realand_tracy_span!("Realand::render_windows_for_screen_cast");
+        let _span = clarion_tracy_span!("Clarion::render_windows_for_screen_cast");
 
         let scale = Scale::from(output.current_scale().fractional_scale());
 
@@ -777,7 +778,7 @@ impl Realand {
     }
 
     pub fn stop_cast(&mut self, session_id: CastSessionId) {
-        let _span = realand_tracy_span!("Realand::stop_cast");
+        let _span = clarion_tracy_span!("Clarion::stop_cast");
         let _span = debug_span!("stop_cast", %session_id).entered();
 
         self.casting
@@ -800,7 +801,7 @@ impl Realand {
         let server = dbus.conn_screen_cast.as_ref().unwrap().object_server();
         let path = format!("/org/gnome/Mutter/ScreenCast/Session/u{}", session_id.get());
         if let Ok(iface) = server.interface::<_, mutter_screen_cast::Session>(path) {
-            let _span = realand_tracy_span!("invoking Session::stop");
+            let _span = clarion_tracy_span!("invoking Session::stop");
 
             async_io::block_on(async move {
                 iface
@@ -812,7 +813,7 @@ impl Realand {
     }
 
     pub fn stop_casts_for_target(&mut self, target: CastTarget) {
-        let _span = realand_tracy_span!("Realand::stop_casts_for_target");
+        let _span = clarion_tracy_span!("Clarion::stop_casts_for_target");
 
         // This is O(N^2) but it shouldn't be a problem I think.
         let mut saw_dynamic = false;
@@ -865,7 +866,7 @@ fn cast_params_for_output(output: &Output) -> (Size<i32, Physical>, u32) {
     (size, refresh)
 }
 
-realand_render_elements! {
+clarion_render_elements! {
     CastRenderElement<R> => {
         Output = OutputRenderElements<R>,
         Window = WindowCastRenderElements<R>,

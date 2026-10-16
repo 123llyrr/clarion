@@ -73,15 +73,15 @@ layer-rule {
 }
 ```
 
-You can find the namespaces of all open layer-shell surfaces by running `realand msg layers`.
+You can find the namespaces of all open layer-shell surfaces by running `clarion msg layers`.
 
 #### `at-startup`
 
 Can be `true` or `false`.
-Matches during the first 60 seconds after starting realand.
+Matches during the first 60 seconds after starting clarion.
 
 ```kdl
-// Show layer-shell surfaces with 0.5 opacity at realand startup, but not afterwards.
+// Show layer-shell surfaces with 0.5 opacity at clarion startup, but not afterwards.
 layer-rule {
     match at-startup=true
 
@@ -158,10 +158,10 @@ Unlike window shadows, layer surface shadows always need to be enabled with a la
 That is, enabling shadows in the layout config section won't automatically enable them for layer surfaces.
 
 > [!NOTE]
-> Layer surfaces have no way to tell realand about their *visual geometry*.
-> For example, if a layer surface includes some invisible margins (like mako), realand has no way of knowing that, and will draw the shadow behind the entire surface, including the invisible margins.
+> Layer surfaces have no way to tell clarion about their *visual geometry*.
+> For example, if a layer surface includes some invisible margins (like mako), clarion has no way of knowing that, and will draw the shadow behind the entire surface, including the invisible margins.
 >
-> So to use realand shadows, you'll need to configure layer-shell clients to remove their own margins or shadows.
+> So to use clarion shadows, you'll need to configure layer-shell clients to remove their own margins or shadows.
 
 ```kdl
 // Add a shadow for fuzzel.
@@ -255,8 +255,8 @@ layer-rule {
 }
 ```
 
-Realand enables liquid glass by default for the integrated `realand-shell` and
-`realand-shell-dock` namespaces, including with older user configuration files.
+Clarion enables liquid glass by default for the integrated `clarion-shell` and
+`clarion-shell-dock` namespaces, including with older user configuration files.
 Material Shell and Launchpad do not request these glass regions. Each separated
 region has its own bounded background capture; no continuous animation is added.
 Highly fragmented masks and surfaces with an additional window clip retain the
@@ -264,7 +264,7 @@ ordinary background effect. To disable the material while keeping normal blur:
 
 ```kdl
 layer-rule {
-    match namespace="^realand-shell(-dock)?$"
+    match namespace="^clarion-shell(-dock)?$"
     background-effect { liquid-glass false; }
 }
 ```
@@ -287,7 +287,7 @@ Other properties apply independently.
 > This block affects only pop-ups created by the app via Wayland's [xdg-popup](https://wayland.app/protocols/xdg-shell#xdg_popup) (which should be most of them).
 >
 > Some desktop shells will emulate pop-ups by drawing something that looks like a pop-up inside a regular layer surface.
-> As far as realand is concerned, those are just layer surfaces and not pop-ups, so this block won't apply to them.
+> As far as clarion is concerned, those are just layer surfaces and not pop-ups, so this block won't apply to them.
 >
 > This block also does not affect input-method pop-ups, such as Fcitx.
 

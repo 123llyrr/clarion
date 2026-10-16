@@ -157,7 +157,7 @@ layout {
 
 <sup>Since: 0.1.9</sup>
 
-If set, realand will always center a single column on a workspace, regardless of the `center-focused-column` option.
+If set, clarion will always center a single column on a workspace, regardless of the `center-focused-column` option.
 
 ```kdl
 layout {
@@ -169,7 +169,7 @@ layout {
 
 <sup>Since: 25.01</sup>
 
-If set, realand will always add an empty workspace at the very start, in addition to the empty workspace at the very end.
+If set, clarion will always add an empty workspace at the very start, in addition to the empty workspace at the very end.
 
 ```kdl
 layout {
@@ -243,7 +243,7 @@ layout {
 ```
 
 > [!NOTE]
-> `default-column-width {}` causes realand to send a (0, H) size in the initial configure request.
+> `default-column-width {}` causes clarion to send a (0, H) size in the initial configure request.
 >
 > This is a bit [unclearly defined](https://gitlab.freedesktop.org/wayland/wayland-protocols/-/issues/155) in the Wayland protocol, so some clients may misinterpret it.
 > Either way, `default-column-width {}` is most useful for specific windows, in form of a [window rule](./Configuration:-Window-Rules.md#default-column-width) with the same syntax.
@@ -289,7 +289,7 @@ The difference is that the focus ring is drawn only around the active window, wh
 > This is because windows using client-side decorations can have an arbitrary shape.
 >
 > If you don't like that, you should uncomment the [`prefer-no-csd` setting](./Configuration:-Miscellaneous.md#prefer-no-csd) at the top level of the config.
-> Realand will draw focus rings and borders *around* windows that agree to omit their client-side decorations.
+> Clarion will draw focus rings and borders *around* windows that agree to omit their client-side decorations.
 >
 > Alternatively, you can override this behavior with the [`draw-border-with-background` window rule](./Configuration:-Window-Rules.md#draw-border-with-background).
 
@@ -420,12 +420,12 @@ Setting `softness 0` will give you hard shadows.
 For example, `offset x=2 y=2` will move the shadow 2 logical pixels downwards and to the right.
 
 Set `draw-behind-window` to `true` to make shadows draw behind the window rather than just around it.
-Note that realand has no way of knowing about the CSD window corner radius.
+Note that clarion has no way of knowing about the CSD window corner radius.
 It has to assume that windows have square corners, leading to shadow artifacts inside the CSD rounded corners.
 This setting fixes those artifacts.
 
 However, instead you may want to set `prefer-no-csd` and/or `geometry-corner-radius`.
-Then, realand will know the corner radius and draw the shadow correctly, without having to draw it behind the window.
+Then, clarion will know the corner radius and draw the shadow correctly, without having to draw it behind the window.
 These will also remove client-side shadows if the window draws any.
 
 `color` is the shadow color and opacity.
@@ -489,7 +489,7 @@ Tab colors are picked in this order:
 
 1. Colors from the `tab-indicator` window rule, if set.
 1. Colors from the `tab-indicator` layout options, if set (you're here).
-1. If neither are set, realand picks the color matching the window border or focus ring, whichever one is active.
+1. If neither are set, clarion picks the color matching the window border or focus ring, whichever one is active.
 
 ```kdl
 // Make the tab indicator wider and match the window height,
@@ -574,7 +574,7 @@ layout {
 
 <sup>Since: 25.05</sup>
 
-Set the default background color that realand draws for workspaces.
+Set the default background color that clarion draws for workspaces.
 This is visible when you're not using any background tools like swaybg.
 
 ```kdl

@@ -2,7 +2,7 @@
 use ash::vk;
 use calloop::channel::Channel;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use super::{gpu_provider, PreparedShader, Program};
 use crate::render_helpers::vulkan::device::VulkanContext;
@@ -181,14 +181,12 @@ pub(crate) fn thread_cpu() -> Option<std::time::Duration> {
     ))
 }
 pub(crate) fn endpoint() -> Result<(Endpoint, Channel<Event>), String> {
-    static SERVICE: OnceLock<Result<gpu_provider::Service<Work, Prepared>, String>> =
-        OnceLock::new();
-    match SERVICE
-        .get_or_init(|| gpu_provider::Service::new(prepare).map_err(|error| error.to_string()))
-    {
-        Ok(service) => Ok(service.endpoint()),
-        Err(error) => Err(error.clone()),
-    }
+    static SERVICE: super::super::lifecycle::ServiceCell<gpu_provider::Service<Work, Prepared>> =
+        super::super::lifecycle::ServiceCell::new();
+    SERVICE
+        .get_or_try_init(|| gpu_provider::Service::new(prepare))
+        .map(|service| service.endpoint())
+        .map_err(|error| error.to_string())
 }
 
 /// Prepared attachment formats and individual format failures.

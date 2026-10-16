@@ -9,7 +9,7 @@ use std::rc::{Rc, Weak};
 use std::time::Duration;
 use std::{mem, slice};
 
-use crate::render_helpers::renderer::RealandRenderer;
+use crate::render_helpers::renderer::ClarionRenderer;
 use anyhow::Context as _;
 use calloop::timer::{TimeoutAction, Timer};
 use calloop::RegistrationToken;
@@ -78,10 +78,10 @@ pub struct PipeWire {
     _context: ContextRc,
     pub token: RegistrationToken,
     event_loop: LoopHandle<'static, State>,
-    to_realand: calloop::channel::Sender<PwToRealand>,
+    to_clarion: calloop::channel::Sender<PwToClarion>,
 }
 
-pub enum PwToRealand {
+pub enum PwToClarion {
     StopCast { session_id: CastSessionId },
     Redraw { stream_id: CastStreamId },
     FatalError,
@@ -407,13 +407,13 @@ macro_rules! make_params {
 impl PipeWire {
     pub fn new(
         event_loop: LoopHandle<'static, State>,
-        to_realand: calloop::channel::Sender<PwToRealand>,
+        to_clarion: calloop::channel::Sender<PwToClarion>,
     ) -> anyhow::Result<Self> {
         let main_loop = MainLoopRc::new(None).context("error creating MainLoop")?;
         let context = ContextRc::new(&main_loop, None).context("error creating Context")?;
         let core = context.connect_rc(None).context("error creating Core")?;
 
-        let to_realand_ = to_realand.clone();
+        let to_clarion_ = to_clarion.clone();
         let listener = core
             .add_listener_local()
             .error(move |id, seq, res, message| {
@@ -421,8 +421,8 @@ impl PipeWire {
 
                 // Reset PipeWire on connection errors.
                 if id == PW_ID_CORE && res == -32 {
-                    if let Err(err) = to_realand_.send(PwToRealand::FatalError) {
-                        warn!("error sending FatalError to realand: {err:?}");
+                    if let Err(err) = to_clarion_.send(PwToClarion::FatalError) {
+                        warn!("error sending FatalError to clarion: {err:?}");
                     }
                 }
             })
@@ -436,7 +436,7 @@ impl PipeWire {
         let generic = Generic::new(AsFdWrapper(main_loop), Interest::READ, Mode::Level);
         let token = event_loop
             .insert_source(generic, move |_, wrapper, _| {
-                let _span = realand_tracy_span!("pipewire iteration");
+                let _span = clarion_tracy_span!("pipewire iteration");
                 wrapper.0.loop_().iterate(Timeout::None);
                 Ok(PostAction::Continue)
             })
@@ -448,7 +448,7 @@ impl PipeWire {
             _context: context,
             token,
             event_loop,
-            to_realand,
+            to_clarion,
         })
     }
 
@@ -466,25 +466,25 @@ impl PipeWire {
         mut cursor_mode: CursorMode,
         signal_ctx: SignalEmitter<'static>,
     ) -> anyhow::Result<Cast> {
-        let _span = realand_tracy_span!("PipeWire::start_cast");
+        let _span = clarion_tracy_span!("PipeWire::start_cast");
 
-        let to_realand_ = self.to_realand.clone();
+        let to_clarion_ = self.to_clarion.clone();
         let stop_cast = move || {
-            if let Err(err) = to_realand_.send(PwToRealand::StopCast { session_id }) {
-                warn!(%session_id, "error sending StopCast to realand: {err:?}");
+            if let Err(err) = to_clarion_.send(PwToClarion::StopCast { session_id }) {
+                warn!(%session_id, "error sending StopCast to clarion: {err:?}");
             }
         };
-        let to_realand_ = self.to_realand.clone();
+        let to_clarion_ = self.to_clarion.clone();
         let redraw = move || {
-            if let Err(err) = to_realand_.send(PwToRealand::Redraw { stream_id }) {
-                warn!(%stream_id, "error sending Redraw to realand: {err:?}");
+            if let Err(err) = to_clarion_.send(PwToClarion::Redraw { stream_id }) {
+                warn!(%stream_id, "error sending Redraw to clarion: {err:?}");
             }
         };
         let redraw_ = redraw.clone();
 
         let stream = StreamRc::new(
             self.core.clone(),
-            "realand-screen-cast-src",
+            "clarion-screen-cast-src",
             PropertiesBox::new(),
         )
         .context("error creating Stream")?;
@@ -528,7 +528,7 @@ impl PipeWire {
                                 inner.node_id = Some(id);
                                 debug!("sending signal with {id}");
 
-                                let _span = realand_tracy_span!("sending PipeWireStreamAdded");
+                                let _span = clarion_tracy_span!("sending PipeWireStreamAdded");
                                 async_io::block_on(async {
                                     let res = mutter_screen_cast::Stream::pipe_wire_stream_added(
                                         &signal_ctx,
@@ -1035,7 +1035,7 @@ impl Cast {
             return Ok(CastSizeChange::Pending);
         }
 
-        let _span = realand_tracy_span!("Cast::ensure_size");
+        let _span = clarion_tracy_span!("Cast::ensure_size");
         debug!("cast size changed, updating stream size");
 
         self.cursor_bitmap.borrow_mut().invalidate();
@@ -1066,7 +1066,7 @@ impl Cast {
             return Ok(());
         }
 
-        let _span = realand_tracy_span!("Cast::set_refresh");
+        let _span = clarion_tracy_span!("Cast::set_refresh");
         debug!("cast FPS changed, updating stream FPS");
         inner.refresh = refresh;
 
@@ -1130,8 +1130,8 @@ impl Cast {
             .event_loop
             .insert_source(timer, move |_, _, state| {
                 // Guard against output disconnecting before the timer has a chance to run.
-                if state.realand.output_state.contains_key(&output) {
-                    state.realand.queue_redraw(&output);
+                if state.clarion.output_state.contains_key(&output) {
+                    state.clarion.queue_redraw(&output);
                 }
 
                 TimeoutAction::Drop
@@ -1195,7 +1195,7 @@ impl Cast {
     }
 
     unsafe fn queue_after_sync(&mut self, pw_buffer: NonNull<pw_buffer>, sync_point: SyncPoint) {
-        let _span = realand_tracy_span!("Cast::queue_after_sync");
+        let _span = clarion_tracy_span!("Cast::queue_after_sync");
 
         let mut inner = self.inner.borrow_mut();
 
@@ -1223,7 +1223,7 @@ impl Cast {
                         sync,
                         move |state| {
                             fence_sources.borrow_mut().remove(&buffer_key);
-                            for cast in &mut state.realand.casting.casts {
+                            for cast in &mut state.clarion.casting.casts {
                                 if cast.stream_id == stream_id {
                                     cast.queue_completed_buffers();
                                 }
@@ -1247,7 +1247,7 @@ impl Cast {
                     .event_loop
                     .insert_source(source, move |_, _, state| {
                         fence_sources.borrow_mut().remove(&buffer_key);
-                        for cast in &mut state.realand.casting.casts {
+                        for cast in &mut state.clarion.casting.casts {
                             if cast.stream_id == stream_id {
                                 cast.queue_completed_buffers();
                             }
@@ -1495,7 +1495,7 @@ impl Cast {
         self.cursor_bitmap.borrow_mut().invalidate();
     }
 
-    pub fn dequeue_buffer_and_clear<R: RealandRenderer>(&mut self, renderer: &mut R) -> bool {
+    pub fn dequeue_buffer_and_clear<R: ClarionRenderer>(&mut self, renderer: &mut R) -> bool {
         self.invalidate_cursor_bitmap();
         let mut inner = self.inner.borrow_mut();
 
@@ -2196,7 +2196,7 @@ mod cursor_bitmap_tests {
         use std::fs::OpenOptions;
         use std::sync::Arc;
 
-        let node = std::env::var("REALAND_GLES_TEST_NODE").expect("set REALAND_GLES_TEST_NODE");
+        let node = std::env::var("CLARION_GLES_TEST_NODE").expect("set CLARION_GLES_TEST_NODE");
         let file = OpenOptions::new()
             .read(true)
             .write(true)

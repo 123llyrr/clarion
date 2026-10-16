@@ -15,7 +15,7 @@ use smithay::backend::renderer::Texture;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Size};
 
 use crate::animation::Animation;
-use crate::realand_render_elements;
+use crate::clarion_render_elements;
 use crate::render_helpers::offscreen::{
     NativeOffscreenBuffer, OffscreenBuffer, OffscreenData, OffscreenRenderElement,
 };
@@ -29,7 +29,7 @@ use crate::render_helpers::vulkan::native::NativeRenderer;
 pub struct OpenAnimation {
     anim: Animation,
     popin_ratio: Option<f64>,
-    glide: realand_config::Glide,
+    glide: clarion_config::Glide,
     denial_reveal: bool,
     lightweight: bool,
     random_seed: f32,
@@ -40,7 +40,7 @@ pub struct OpenAnimation {
     native_buffer: NativeOffscreenBuffer,
 }
 
-realand_render_elements! {
+clarion_render_elements! {
     OpeningWindowRenderElement => {
         Offscreen = RelocateRenderElement<RescaleRenderElement<OffscreenRenderElement>>,
         Texture = RelocateRenderElement<RescaleRenderElement<PrimaryGpuTextureRenderElement>>,
@@ -52,9 +52,9 @@ impl OpenAnimation {
     pub fn new(
         anim: Animation,
         popin_ratio: Option<f64>,
-        glide: realand_config::Glide,
+        glide: clarion_config::Glide,
         denial_reveal: bool,
-        effect: realand_config::animations::WindowOpenEffect,
+        effect: clarion_config::animations::WindowOpenEffect,
     ) -> Self {
         // Mapping already waits for the first committed buffer. Texture/fence
         // readiness belongs to the renderer; an extra fixed delay only hides
@@ -65,21 +65,26 @@ impl OpenAnimation {
             glide,
             denial_reveal,
             lightweight: denial_reveal
-                && effect == realand_config::animations::WindowOpenEffect::Fade,
+                && effect == clarion_config::animations::WindowOpenEffect::Fade,
             random_seed: fastrand::f32(),
             buffer: OffscreenBuffer::default(),
             native_buffer: NativeOffscreenBuffer::default(),
         }
     }
 
+    /// Device replacement invalidates GPU pixels, not the animation trajectory.
+    pub(crate) fn clear_native_cache(&self) {
+        self.native_buffer.clear();
+    }
+
     pub fn is_done(&self) -> bool {
-        if self.denial_reveal {
-            // The reveal, Glide and pop-in all stop at clamped progress 1. Waiting for an
-            // underdamped spring to settle would keep redrawing the completed window and retain
-            // its offscreen buffer even though none of the built-in effects can change anymore.
+        if self.denial_reveal && !self.keeps_scale_tail() {
+            // Reveal and physical springs finish at first arrival. In particular, an
+            // undamped spring must not retain its snapshot and redraw indefinitely.
             self.anim.is_clamped_done()
         } else {
-            // A custom shader may use the full spring trajectory, including its overshoot.
+            // Timed fades keep their small scale rebound through the final resting pose.
+            // Custom shaders retain their complete trajectory as before.
             self.anim.is_done()
         }
     }
@@ -91,7 +96,7 @@ impl OpenAnimation {
     pub fn popin_ratio(&self) -> f64 {
         self.popin_ratio
             .unwrap_or(if self.lightweight {
-                0.98
+                0.94
             } else if self.denial_reveal {
                 1.
             } else {
@@ -100,8 +105,22 @@ impl OpenAnimation {
             .clamp(0.01, 1.)
     }
 
-    fn scale(&self) -> f64 {
-        self.popin_ratio() + (1. - self.popin_ratio()) * f64::from(self.progress())
+    fn keeps_scale_tail(&self) -> bool {
+        self.lightweight && self.popin_ratio() < 1. && self.anim.has_fixed_duration()
+    }
+
+    pub(crate) fn scale(&self) -> f64 {
+        if self.is_done() {
+            return 1.;
+        }
+        let progress = if self.keeps_scale_tail() {
+            // Opacity stops at first arrival, while geometry can briefly pass its
+            // resting size. Bound user curves without extending the texture canvas.
+            self.anim.value().clamp(0., 1.12)
+        } else {
+            f64::from(self.progress())
+        };
+        self.popin_ratio() + (1. - self.popin_ratio()) * progress
     }
 
     // We can't depend on view_rect here, because the result of window opening can be snapshot and
@@ -191,29 +210,29 @@ impl OpenAnimation {
                 scale.x as f32,
                 alpha,
                 Rc::new([
-                    mat3_uniform("realand_input_to_geo", input_to_geo),
-                    Uniform::new("realand_geo_size", effect_size.to_array()),
-                    mat3_uniform("realand_geo_to_tex", geo_to_tex),
-                    Uniform::new("realand_progress", progress as f32),
-                    Uniform::new("realand_clamped_progress", clamped_progress as f32),
-                    Uniform::new("realand_random_seed", self.random_seed),
+                    mat3_uniform("clarion_input_to_geo", input_to_geo),
+                    Uniform::new("clarion_geo_size", effect_size.to_array()),
+                    mat3_uniform("clarion_geo_to_tex", geo_to_tex),
+                    Uniform::new("clarion_progress", progress as f32),
+                    Uniform::new("clarion_clamped_progress", clamped_progress as f32),
+                    Uniform::new("clarion_random_seed", self.random_seed),
                     Uniform::new(
-                        "realand_glide_enabled",
+                        "clarion_glide_enabled",
                         if self.glide.off { 0. } else { 1. },
                     ),
                     Uniform::new(
-                        "realand_glide_tilt",
+                        "clarion_glide_tilt",
                         (self.glide.tilt_deg.to_radians()) as f32,
                     ),
-                    Uniform::new("realand_glide_depth", self.glide.depth as f32),
+                    Uniform::new("clarion_glide_depth", self.glide.depth as f32),
                     Uniform::new(
-                        "realand_popin_ratio",
+                        "clarion_popin_ratio",
                         self.popin_ratio
                             .unwrap_or(if self.denial_reveal { 1. } else { 0.8 })
                             .clamp(0.01, 1.) as f32,
                     ),
                 ]),
-                HashMap::from([(String::from("realand_tex"), texture.clone())]),
+                HashMap::from([(String::from("clarion_tex"), texture.clone())]),
                 Kind::Unspecified,
             )
             .with_location(area.loc);
@@ -236,7 +255,11 @@ impl OpenAnimation {
         } else {
             progress
         };
-        let current_scale = (start_ratio + (1.0 - start_ratio) * scale_progress).max(0.0);
+        let current_scale = if self.lightweight {
+            self.scale()
+        } else {
+            (start_ratio + (1.0 - start_ratio) * scale_progress).max(0.0)
+        };
 
         let center = geo_size.to_point().downscale(2.);
         let elem = RescaleRenderElement::from_element(
@@ -374,29 +397,29 @@ impl OpenAnimation {
             scale.x as f32,
             alpha,
             Rc::new([
-                mat3_uniform("realand_input_to_geo", input_to_geo),
-                Uniform::new("realand_geo_size", effect_size.to_array()),
-                mat3_uniform("realand_geo_to_tex", geo_to_tex),
-                Uniform::new("realand_progress", progress as f32),
-                Uniform::new("realand_clamped_progress", clamped_progress as f32),
-                Uniform::new("realand_random_seed", self.random_seed),
+                mat3_uniform("clarion_input_to_geo", input_to_geo),
+                Uniform::new("clarion_geo_size", effect_size.to_array()),
+                mat3_uniform("clarion_geo_to_tex", geo_to_tex),
+                Uniform::new("clarion_progress", progress as f32),
+                Uniform::new("clarion_clamped_progress", clamped_progress as f32),
+                Uniform::new("clarion_random_seed", self.random_seed),
                 Uniform::new(
-                    "realand_glide_enabled",
+                    "clarion_glide_enabled",
                     if self.glide.off { 0. } else { 1. },
                 ),
                 Uniform::new(
-                    "realand_glide_tilt",
+                    "clarion_glide_tilt",
                     (self.glide.tilt_deg.to_radians()) as f32,
                 ),
-                Uniform::new("realand_glide_depth", self.glide.depth as f32),
+                Uniform::new("clarion_glide_depth", self.glide.depth as f32),
                 Uniform::new(
-                    "realand_popin_ratio",
+                    "clarion_popin_ratio",
                     self.popin_ratio
                         .unwrap_or(if self.denial_reveal { 1. } else { 0.8 })
                         .clamp(0.01, 1.) as f32,
                 ),
             ]),
-            HashMap::from([(String::from("realand_tex"), texture.clone())]),
+            HashMap::from([(String::from("clarion_tex"), texture.clone())]),
             Kind::Unspecified,
         )?
         .with_location(area.loc);
@@ -470,12 +493,12 @@ mod tests {
     #[test]
     fn builtin_reveal_stops_at_the_first_bouncy_easing_endpoint() {
         let mut clock = Clock::with_time(Duration::ZERO);
-        let config = realand_config::Animation {
+        let config = clarion_config::Animation {
             off: false,
-            kind: realand_config::animations::Kind::Easing(
-                realand_config::animations::EasingParams {
+            kind: clarion_config::animations::Kind::Easing(
+                clarion_config::animations::EasingParams {
                     duration_ms: 1000,
-                    curve: realand_config::animations::Curve::CubicBezier(0.68, -0.55, 0.265, 1.55),
+                    curve: clarion_config::animations::Curve::CubicBezier(0.68, -0.55, 0.265, 1.55),
                 },
             ),
         };
@@ -485,7 +508,7 @@ mod tests {
             None,
             Default::default(),
             true,
-            Default::default(),
+            clarion_config::animations::WindowOpenEffect::Reveal,
         );
         let custom = OpenAnimation::new(
             animation.clone(),
@@ -536,7 +559,7 @@ mod tests {
     fn mapped_window_reveals_on_the_first_refresh_without_shortening_the_animation() {
         for hz in [60., 120., 144., 240., 360.] {
             let mut clock = Clock::with_time(Duration::ZERO);
-            let config = realand_config::animations::WindowOpenAnim::default();
+            let config = clarion_config::animations::WindowOpenAnim::default();
             let anim = Animation::new(clock.clone(), 0., 1., 0., config.anim);
             let open =
                 OpenAnimation::new(anim, config.popin_ratio, config.glide, true, config.effect);
@@ -547,11 +570,96 @@ mod tests {
                 "hz={hz}: first refresh has no feedback"
             );
             assert!(!open.is_done());
-            clock.set_unadjusted(Duration::from_millis(179));
+            clock.set_unadjusted(Duration::from_millis(199));
             assert!(!open.is_done());
-            clock.set_unadjusted(Duration::from_millis(180));
+            clock.set_unadjusted(Duration::from_millis(200));
             assert!(open.is_done());
             assert_eq!(open.progress(), 1.);
+            assert_eq!(open.scale(), 1.);
+        }
+    }
+
+    #[test]
+    fn timed_fade_keeps_the_rebound_while_opacity_stays_at_full_strength() {
+        let mut clock = Clock::with_time(Duration::ZERO);
+        let config = clarion_config::animations::WindowOpenAnim::default();
+        let open = OpenAnimation::new(
+            Animation::new(clock.clone(), 0., 1., 0., config.anim),
+            config.popin_ratio,
+            config.glide,
+            true,
+            config.effect,
+        );
+        assert_eq!(open.scale(), 0.94);
+        let mut previous_opacity = 0.;
+        let mut peak_scale = 1.;
+        for millis in 0..=200 {
+            clock.set_unadjusted(Duration::from_millis(millis));
+            let opacity = open.progress();
+            assert!(
+                opacity >= previous_opacity,
+                "opacity reversed at {millis}ms"
+            );
+            previous_opacity = opacity;
+            peak_scale = f64::max(peak_scale, open.scale());
+            assert_eq!(open.is_done(), millis == 200);
+        }
+        assert!((1.002..1.005).contains(&peak_scale));
+        clock.set_unadjusted(Duration::from_millis(50));
+        assert!(open.progress() < 1.);
+        clock.set_unadjusted(Duration::from_millis(60));
+        assert_eq!(open.progress(), 1.);
+        assert!(
+            !open.is_done(),
+            "the geometry still needs its settling frame"
+        );
+        clock.set_unadjusted(Duration::from_millis(90));
+        assert!(open.scale() > 1.);
+        clock.set_unadjusted(Duration::from_millis(199));
+        assert!((open.scale() - 1.).abs() < 0.00001);
+        clock.set_unadjusted(Duration::from_millis(200));
+        assert_eq!(open.scale(), 1.);
+        assert_eq!(open.anim.velocity(), 0.);
+    }
+
+    #[test]
+    fn opacity_only_fade_does_not_retain_an_invisible_scale_tail() {
+        let mut clock = Clock::with_time(Duration::ZERO);
+        let config = clarion_config::animations::WindowOpenAnim::default();
+        let open = OpenAnimation::new(
+            Animation::new(clock.clone(), 0., 1., 0., config.anim),
+            Some(1.),
+            config.glide,
+            true,
+            config.effect,
+        );
+        clock.set_unadjusted(Duration::from_millis(60));
+        assert_eq!(open.progress(), 1.);
+        assert_eq!(open.scale(), 1.);
+        assert!(open.is_done());
+    }
+
+    #[test]
+    fn timed_fade_obeys_off_and_reduced_motion_without_a_residual_transform() {
+        for (disabled, millis) in [(false, 0), (false, 16), (true, 0), (true, 16)] {
+            let mut clock = Clock::with_time(Duration::ZERO);
+            let mut config = clarion_config::animations::WindowOpenAnim::default();
+            config.anim.off = disabled;
+            let open = OpenAnimation::new(
+                Animation::new(clock.clone(), 0., 1., 0., config.anim),
+                config.popin_ratio,
+                config.glide,
+                true,
+                config.effect,
+            );
+            clock.set_unadjusted(Duration::from_millis(millis));
+            if !disabled {
+                assert!(!open.is_done());
+                clock.set_complete_instantly(true);
+            }
+            assert!(open.is_done());
+            assert_eq!(open.progress(), 1.);
+            assert_eq!(open.scale(), 1.);
         }
     }
 }

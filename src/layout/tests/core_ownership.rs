@@ -1,5 +1,5 @@
 use super::*;
-use realand_core::{CoreEvent, LayoutMode, SpaceId};
+use clarion_core::{CoreEvent, LayoutMode, SpaceId};
 
 fn desktop() -> Layout<TestWindow> {
     check_ops([
@@ -54,7 +54,7 @@ fn production_mode_dispatch_reads_the_independent_core() {
     }
     .apply(&mut layout);
     let workspace = layout.active_workspace().unwrap();
-    assert_eq!(workspace.tiling_mode(), realand_ipc::TilingMode::Dwindle);
+    assert_eq!(workspace.tiling_mode(), clarion_ipc::TilingMode::Dwindle);
     assert!(workspace.dwindle.has_window(&0));
     assert!(workspace.scrolling().is_empty());
     verify_core(&layout);
@@ -218,8 +218,8 @@ fn floating_geometry_is_committed_at_mutations_and_survives_tiling_switches() {
         Some(resized)
     );
     for mode in [
-        realand_ipc::TilingMode::Dwindle,
-        realand_ipc::TilingMode::Scrolling,
+        clarion_ipc::TilingMode::Dwindle,
+        clarion_ipc::TilingMode::Scrolling,
     ] {
         Op::SwitchTilingMode(Some(mode)).apply(&mut layout);
         assert_eq!(
@@ -240,8 +240,8 @@ fn floating_geometry_is_committed_at_mutations_and_survives_tiling_switches() {
 fn tiled_geometry_commits_target_slots_without_animation_offsets() {
     let mut layout = desktop();
     for mode in [
-        realand_ipc::TilingMode::Dwindle,
-        realand_ipc::TilingMode::Scrolling,
+        clarion_ipc::TilingMode::Dwindle,
+        clarion_ipc::TilingMode::Scrolling,
     ] {
         Op::SwitchTilingMode(Some(mode)).apply(&mut layout);
         let workspace = layout.active_workspace().unwrap();
@@ -257,10 +257,10 @@ fn tiled_geometry_commits_target_slots_without_animation_offsets() {
             );
         };
         match mode {
-            realand_ipc::TilingMode::Dwindle => {
+            clarion_ipc::TilingMode::Dwindle => {
                 workspace.dwindle.with_layout_geometry(&mut compare)
             }
-            realand_ipc::TilingMode::Scrolling => {
+            clarion_ipc::TilingMode::Scrolling => {
                 workspace.scrolling().with_layout_geometry(&mut compare)
             }
         }
@@ -317,8 +317,8 @@ fn policy_round_trip_preserves_scrolling_groups_sizes_tabs_and_view() {
         .scrolling()
         .policy_snapshot();
     for _ in 0..3 {
-        Op::SwitchTilingMode(Some(realand_ipc::TilingMode::Dwindle)).apply(&mut layout);
-        Op::SwitchTilingMode(Some(realand_ipc::TilingMode::Scrolling)).apply(&mut layout);
+        Op::SwitchTilingMode(Some(clarion_ipc::TilingMode::Dwindle)).apply(&mut layout);
+        Op::SwitchTilingMode(Some(clarion_ipc::TilingMode::Scrolling)).apply(&mut layout);
         layout.verify_invariants();
         assert_eq!(
             layout
@@ -335,15 +335,15 @@ fn policy_round_trip_preserves_scrolling_groups_sizes_tabs_and_view() {
 #[test]
 fn policy_history_prunes_closed_ids_and_inserts_new_members_once() {
     let mut layout = desktop();
-    Op::SwitchTilingMode(Some(realand_ipc::TilingMode::Dwindle)).apply(&mut layout);
+    Op::SwitchTilingMode(Some(clarion_ipc::TilingMode::Dwindle)).apply(&mut layout);
     let original = layout.active_workspace().unwrap().dwindle.policy_snapshot();
-    Op::SwitchTilingMode(Some(realand_ipc::TilingMode::Scrolling)).apply(&mut layout);
+    Op::SwitchTilingMode(Some(clarion_ipc::TilingMode::Scrolling)).apply(&mut layout);
     assert!(layout.remove_window(&0, Transaction::new()).is_some());
     Op::AddWindow {
         params: TestWindowParams::new(5),
     }
     .apply(&mut layout);
-    Op::SwitchTilingMode(Some(realand_ipc::TilingMode::Dwindle)).apply(&mut layout);
+    Op::SwitchTilingMode(Some(clarion_ipc::TilingMode::Dwindle)).apply(&mut layout);
     layout.verify_invariants();
     assert_ne!(
         layout
@@ -449,8 +449,8 @@ fn moving_focus_survives_source_output_removal_without_a_new_pointer_packet() {
 #[test]
 fn minimized_canvas_restore_preserves_original_layer_before_and_after_exit() {
     for mode in [
-        realand_ipc::TilingMode::Scrolling,
-        realand_ipc::TilingMode::Dwindle,
+        clarion_ipc::TilingMode::Scrolling,
+        clarion_ipc::TilingMode::Dwindle,
     ] {
         for originally_floating in [false, true] {
             for exit_before_restore in [false, true] {
@@ -603,7 +603,7 @@ fn canvas_exit_keeps_runtime_expanded_window_from_an_original_normal_group() {
         assert_eq!(original.windows.len(), 2);
         assert_eq!(
             original.display,
-            realand_core::policy_memory::ColumnDisplay::Normal
+            clarion_core::policy_memory::ColumnDisplay::Normal
         );
         workspace.toggle_canvas();
         if fullscreen {

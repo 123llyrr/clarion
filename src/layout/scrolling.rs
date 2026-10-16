@@ -3,16 +3,16 @@ use std::iter::{self, zip};
 use std::rc::Rc;
 use std::time::Duration;
 
-use ordered_float::NotNan;
-use realand_config::utils::MergeWith as _;
-use realand_config::{CenterFocusedColumn, PresetSize, Struts};
-use realand_core::layout::LiveLayoutPolicy;
-use realand_core::scrolling::{
+use clarion_config::utils::MergeWith as _;
+use clarion_config::{CenterFocusedColumn, PresetSize, Struts};
+use clarion_core::layout::LiveLayoutPolicy;
+use clarion_core::scrolling::{
     ColumnArrangement, ColumnDisplay, ColumnOrder, ColumnPolicy, DimensionChange, HeightContext,
     WidthContext,
 };
-pub use realand_core::scrolling::{ColumnWidth, WindowHeight};
-use realand_ipc::{ColumnDisplay as IpcColumnDisplay, SizeChange, WindowLayout};
+pub use clarion_core::scrolling::{ColumnWidth, WindowHeight};
+use clarion_ipc::{ColumnDisplay as IpcColumnDisplay, SizeChange, WindowLayout};
+use ordered_float::NotNan;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size};
 
@@ -24,9 +24,9 @@ use super::wobble::WobbleAnchor;
 use super::workspace::ResolvedSize;
 use super::{ConfigureIntent, HitType, InteractiveResizeData, LayoutElement, Options, RemovedTile};
 use crate::animation::{Animation, Clock};
+use crate::clarion_render_elements;
 use crate::layout::{RenderLayer, SizingMode};
-use crate::realand_render_elements;
-use crate::render_helpers::renderer::RealandRenderer;
+use crate::render_helpers::renderer::ClarionRenderer;
 use crate::render_helpers::xray::XrayPos;
 use crate::render_helpers::RenderCtx;
 use crate::utils::transaction::{Transaction, TransactionBlocker};
@@ -60,7 +60,7 @@ pub struct ScrollingSpace<W: LayoutElement> {
 
     /// Working area for this space.
     ///
-    /// Takes into account layer-shell exclusive zones and realand struts.
+    /// Takes into account layer-shell exclusive zones and clarion struts.
     working_area: Rectangle<f64, Logical>,
 
     /// Working area for this space excluding struts.
@@ -79,7 +79,7 @@ pub struct ScrollingSpace<W: LayoutElement> {
     options: Rc<Options>,
 }
 
-realand_render_elements! {
+clarion_render_elements! {
     ScrollingSpaceRenderElement<R> => {
         Tile = TileRenderElement<R>,
         ClosingWindow = ClosingWindowRenderElement,
@@ -98,7 +98,7 @@ struct ColumnData {
 /// gesture state and lifecycle clocks belong to the single pure policy.
 #[derive(Debug)]
 pub(super) struct ViewOffset {
-    policy: realand_core::viewport::Viewport,
+    policy: clarion_core::viewport::Viewport,
     clock: Clock,
 }
 
@@ -107,7 +107,7 @@ pub struct ColumnId(u64);
 
 impl ColumnId {
     fn next() -> ColumnId {
-        ColumnId(realand_core::scrolling::allocate_column_id())
+        ColumnId(clarion_core::scrolling::allocate_column_id())
     }
 
     pub fn get(self) -> u64 {
@@ -116,7 +116,7 @@ impl ColumnId {
 
     pub fn specific(id: u64) -> Self {
         assert!(
-            realand_core::scrolling::reserve_column_id(id),
+            clarion_core::scrolling::reserve_column_id(id),
             "column identity exhausted"
         );
         Self(id)
@@ -206,7 +206,7 @@ impl MoveAnimation {
         previous: Option<Self>,
         offset: f64,
         clock: Clock,
-        config: realand_config::Animation,
+        config: clarion_config::Animation,
     ) -> Option<Self> {
         // Moving the other axis must not restart this axis, especially when a
         // custom easing curve is already in its slow final part.
@@ -337,8 +337,8 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         self.closing_windows.extend(closing);
     }
 
-    pub(super) fn policy_snapshot(&self) -> realand_core::policy_memory::ScrollingSnapshot<u64> {
-        use realand_core::policy_memory::{
+    pub(super) fn policy_snapshot(&self) -> clarion_core::policy_memory::ScrollingSnapshot<u64> {
+        use clarion_core::policy_memory::{
             ColumnDisplay as Display, ColumnSnapshot, Height, ScrollingSnapshot, Width,
         };
         ScrollingSnapshot {
@@ -395,11 +395,11 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     /// Closed windows are pruned; newly mapped windows append in input order.
     pub(super) fn restore_policy(
         &mut self,
-        snapshot: &realand_core::policy_memory::ScrollingSnapshot<u64>,
+        snapshot: &clarion_core::policy_memory::ScrollingSnapshot<u64>,
         tiles: Vec<Tile<W>>,
         active: Option<u64>,
     ) {
-        use realand_core::policy_memory::{ColumnDisplay as Display, Height, Width};
+        use clarion_core::policy_memory::{ColumnDisplay as Display, Height, Width};
         use std::collections::{HashMap, HashSet};
         let order: Vec<_> = tiles.iter().map(|tile| tile.window().core_id()).collect();
         let snapshot = snapshot.retain(&order.iter().cloned().collect::<HashSet<_>>());
@@ -728,16 +728,16 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     }
 
     pub fn is_centering_focused_column(&self) -> bool {
-        realand_core::viewport::focus_columns_centered(
+        clarion_core::viewport::focus_columns_centered(
             self.viewport_focus_context(),
             self.columns.len(),
         )
     }
 
-    fn viewport_focus_context(&self) -> realand_core::viewport::FocusContext {
-        use realand_core::viewport::{FocusCentering, FocusContext};
+    fn viewport_focus_context(&self) -> clarion_core::viewport::FocusContext {
+        use clarion_core::viewport::{FocusCentering, FocusContext};
         let rect = |area: Rectangle<f64, Logical>| {
-            realand_core::Rect::new(area.loc.x, area.loc.y, area.size.w, area.size.h)
+            clarion_core::Rect::new(area.loc.x, area.loc.y, area.size.w, area.size.h)
         };
         FocusContext {
             working: rect(self.working_area),
@@ -752,9 +752,9 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         }
     }
 
-    fn viewport_column(&self, index: usize) -> realand_core::viewport::PositionedColumn {
+    fn viewport_column(&self, index: usize) -> clarion_core::viewport::PositionedColumn {
         let column = &self.columns[index];
-        realand_core::viewport::PositionedColumn {
+        clarion_core::viewport::PositionedColumn {
             x: self.column_x(index),
             width: column.width(),
             sizing: core_column_sizing(column.sizing_mode()),
@@ -768,9 +768,9 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         width: f64,
         mode: SizingMode,
     ) -> f64 {
-        realand_core::viewport::fit_column_offset(
+        clarion_core::viewport::fit_column_offset(
             target_x.unwrap_or_else(|| self.target_view_pos()),
-            realand_core::viewport::PositionedColumn {
+            clarion_core::viewport::PositionedColumn {
                 x: col_x,
                 width,
                 sizing: core_column_sizing(mode),
@@ -787,9 +787,9 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         width: f64,
         mode: SizingMode,
     ) -> f64 {
-        realand_core::viewport::center_column_offset(
+        clarion_core::viewport::center_column_offset(
             target_x.unwrap_or_else(|| self.target_view_pos()),
-            realand_core::viewport::PositionedColumn {
+            clarion_core::viewport::PositionedColumn {
                 x: col_x,
                 width,
                 sizing: core_column_sizing(mode),
@@ -804,7 +804,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         target_x: Option<f64>,
         index: usize,
     ) -> f64 {
-        realand_core::viewport::center_column_offset(
+        clarion_core::viewport::center_column_offset(
             target_x.unwrap_or_else(|| self.target_view_pos()),
             self.viewport_column(index),
             self.viewport_focus_context(),
@@ -818,7 +818,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         index: usize,
         previous: Option<usize>,
     ) -> f64 {
-        realand_core::viewport::focus_column_offset(
+        clarion_core::viewport::focus_column_offset(
             target_x.unwrap_or_else(|| self.target_view_pos()),
             index,
             previous,
@@ -841,7 +841,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         &mut self,
         idx: usize,
         new_view_offset: f64,
-        config: realand_config::Animation,
+        config: clarion_config::Animation,
     ) {
         let new_col_x = self.column_x(idx);
         let old_col_x = self.column_x(self.order.active_index());
@@ -856,7 +856,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         &mut self,
         target_x: Option<f64>,
         idx: usize,
-        config: realand_config::Animation,
+        config: clarion_config::Animation,
     ) {
         let new_view_offset = self.compute_new_view_offset_for_column_centered(target_x, idx);
         self.animate_view_offset_with_config(idx, new_view_offset, config);
@@ -867,7 +867,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         target_x: Option<f64>,
         idx: usize,
         prev_idx: Option<usize>,
-        config: realand_config::Animation,
+        config: clarion_config::Animation,
     ) {
         let new_view_offset = self.compute_new_view_offset_for_column(target_x, idx, prev_idx);
         self.animate_view_offset_with_config(idx, new_view_offset, config);
@@ -894,14 +894,14 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         );
     }
 
-    fn activate_column_with_anim_config(&mut self, idx: usize, config: realand_config::Animation) {
+    fn activate_column_with_anim_config(&mut self, idx: usize, config: clarion_config::Animation) {
         self.activate_column_from_with_anim_config(idx, config, self.order.active_index());
     }
 
     fn activate_column_from_with_anim_config(
         &mut self,
         idx: usize,
-        config: realand_config::Animation,
+        config: clarion_config::Animation,
         previous: usize,
     ) {
         if previous == idx
@@ -1000,7 +1000,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         activate: bool,
         width: ColumnWidth,
         is_full_width: bool,
-        anim: Option<realand_config::Animation>,
+        anim: Option<clarion_config::Animation>,
     ) {
         let column = Column::new_with_tile(
             tile,
@@ -1117,7 +1117,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         activate: bool,
         width: ColumnWidth,
         is_full_width: bool,
-        anim: Option<realand_config::Animation>,
+        anim: Option<clarion_config::Animation>,
     ) {
         let Some(right_of_idx) = self.columns.iter().position(|col| col.contains(right_of)) else {
             self.add_tile(None, tile, activate, width, is_full_width, anim);
@@ -1133,7 +1133,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         idx: Option<usize>,
         mut column: Column<W>,
         activate: bool,
-        anim_config: Option<realand_config::Animation>,
+        anim_config: Option<clarion_config::Animation>,
     ) {
         let was_empty = self.columns.is_empty();
 
@@ -1209,7 +1209,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         column_idx: usize,
         tile_idx: usize,
         transaction: Transaction,
-        anim_config: Option<realand_config::Animation>,
+        anim_config: Option<clarion_config::Animation>,
     ) -> RemovedTile<W> {
         // If this is the only tile in the column, remove the whole column.
         if self.columns[column_idx].tiles.len() == 1 {
@@ -1323,7 +1323,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     pub fn remove_column_by_idx(
         &mut self,
         column_idx: usize,
-        anim_config: Option<realand_config::Animation>,
+        anim_config: Option<clarion_config::Animation>,
     ) -> Column<W> {
         // Animate movement of the other columns.
         let movement_config = anim_config.unwrap_or(self.options.animations.window_movement.0);
@@ -2667,7 +2667,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     fn column_xs(&self, data: impl Iterator<Item = ColumnData>) -> impl Iterator<Item = f64> {
         // Include the end origin for insertion after the last column.
         let widths = data.map(|data| data.width).chain(iter::once(0.));
-        realand_core::layout::column_origins(0., 0., self.options.layout.gaps, widths)
+        clarion_core::layout::column_origins(0., 0., self.options.layout.gaps, widths)
     }
 
     fn column_x(&self, column_idx: usize) -> f64 {
@@ -3297,7 +3297,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             .is_fullscreen()
     }
 
-    pub fn render<R: RealandRenderer>(
+    pub fn render<R: ClarionRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         xray_pos: XrayPos,
@@ -3411,9 +3411,9 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             return;
         }
         let kind = if is_touchpad {
-            realand_core::viewport::GestureKind::Touchpad
+            clarion_core::viewport::GestureKind::Touchpad
         } else {
-            realand_core::viewport::GestureKind::Pointer
+            clarion_core::viewport::GestureKind::Pointer
         };
         self.view_offset.begin(
             kind,
@@ -3424,7 +3424,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
     pub fn dnd_scroll_gesture_begin(&mut self) {
         if !self.view_offset.begin(
-            realand_core::viewport::GestureKind::Dnd,
+            clarion_core::viewport::GestureKind::Dnd,
             self.working_area.size.w,
             self.options.animations.horizontal_view_movement.0,
         ) {
@@ -3446,11 +3446,11 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
     pub fn dnd_scroll_gesture_scroll(&mut self, delta: f64) -> bool {
         let area = self.working_area;
-        let bounds = realand_core::viewport::dnd_bounds(
+        let bounds = clarion_core::viewport::dnd_bounds(
             self.columns.iter().map(Column::width),
             self.order.active_index(),
             self.options.layout.gaps,
-            realand_core::Rect::new(area.loc.x, area.loc.y, area.size.w, area.size.h),
+            clarion_core::Rect::new(area.loc.x, area.loc.y, area.size.w, area.size.h),
         );
         let config = &self.options.gestures.dnd_edge_view_scroll;
         self.view_offset.policy.dnd_scroll(
@@ -3474,7 +3474,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     }
 
     pub fn view_offset_gesture_end(&mut self, is_touchpad: Option<bool>) -> bool {
-        use realand_core::viewport::{ColumnGeometry, SnapContext};
+        use clarion_core::viewport::{ColumnGeometry, SnapContext};
         let time = self.view_offset.time();
         let Some(release) =
             self.view_offset
@@ -3501,7 +3501,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             })
             .collect();
         let rect = |area: Rectangle<f64, Logical>| {
-            realand_core::Rect::new(area.loc.x, area.loc.y, area.size.w, area.size.h)
+            clarion_core::Rect::new(area.loc.x, area.loc.y, area.size.w, area.size.h)
         };
         let context = SnapContext {
             working: rect(self.working_area),
@@ -3514,7 +3514,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 CenterFocusedColumn::OnOverflow
             ),
         };
-        let Some(decision) = realand_core::viewport::snap_gesture(
+        let Some(decision) = clarion_core::viewport::snap_gesture(
             &columns,
             self.order.active_index(),
             context,
@@ -3570,9 +3570,9 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         let original_window_size = tile.window_size();
         tile.start_wobble(WobbleAnchor::from_resize_edges(edges));
 
-        let resize = realand_core::resize::Resize::new(
+        let resize = clarion_core::resize::Resize::new(
             tile.window().core_id(),
-            realand_core::Size::new(original_window_size.w, original_window_size.h),
+            clarion_core::Size::new(original_window_size.w, original_window_size.h),
             edges.bits(),
         );
         self.order.resize = Some(resize);
@@ -3826,9 +3826,9 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
 fn convert_viewport_motion(
     clock: Clock,
-    config: realand_config::Animation,
-    intent: realand_core::viewport::MotionIntent,
-) -> realand_core::trajectory::Trajectory {
+    config: clarion_config::Animation,
+    intent: clarion_core::viewport::MotionIntent,
+) -> clarion_motion::trajectory::Trajectory {
     Animation::new(clock, intent.from, intent.to, intent.velocity, config).into_trajectory()
 }
 
@@ -3836,11 +3836,11 @@ impl ViewOffset {
     fn new(clock: Clock, offset: f64) -> Self {
         Self {
             clock,
-            policy: realand_core::viewport::Viewport::new(offset),
+            policy: clarion_core::viewport::Viewport::new(offset),
         }
     }
-    fn time(&self) -> realand_core::viewport::ViewportTime {
-        realand_core::viewport::ViewportTime {
+    fn time(&self) -> clarion_core::viewport::ViewportTime {
+        clarion_core::viewport::ViewportTime {
             animation: self.clock.now(),
             event: self.clock.now_unadjusted(),
             rate: self.clock.rate(),
@@ -3877,9 +3877,9 @@ impl ViewOffset {
     }
     fn begin(
         &mut self,
-        kind: realand_core::viewport::GestureKind,
+        kind: clarion_core::viewport::GestureKind,
         width: f64,
-        config: realand_config::Animation,
+        config: clarion_config::Animation,
     ) -> bool {
         let time = self.time();
         let clock = self.clock.clone();
@@ -3889,15 +3889,15 @@ impl ViewOffset {
     }
     fn settle(
         &mut self,
-        intent: realand_core::viewport::MotionIntent,
-        config: realand_config::Animation,
+        intent: clarion_core::viewport::MotionIntent,
+        config: clarion_config::Animation,
     ) {
         let clock = self.clock.clone();
         self.policy.settle(intent, |intent| {
             convert_viewport_motion(clock, config, intent)
         });
     }
-    fn animate_to(&mut self, to: f64, pixel: f64, config: realand_config::Animation) {
+    fn animate_to(&mut self, to: f64, pixel: f64, config: clarion_config::Animation) {
         let time = self.time();
         let clock = self.clock.clone();
         self.policy.animate_to(to, pixel, time, |intent| {
@@ -4278,7 +4278,7 @@ impl<W: LayoutElement> Column<W> {
     pub fn animate_move_from_with_config(
         &mut self,
         from: Point<f64, Logical>,
-        config: realand_config::Animation,
+        config: clarion_config::Animation,
     ) {
         self.animate_move_x_from_with_config(from.x, config);
         self.animate_move_y_from_with_config(from.y, config);
@@ -4294,7 +4294,7 @@ impl<W: LayoutElement> Column<W> {
     pub fn animate_move_x_from_with_config(
         &mut self,
         from_x_offset: f64,
-        config: realand_config::Animation,
+        config: clarion_config::Animation,
     ) {
         self.move_x_animation = MoveAnimation::retarget(
             self.move_x_animation.take(),
@@ -4314,7 +4314,7 @@ impl<W: LayoutElement> Column<W> {
     pub fn animate_move_y_from_with_config(
         &mut self,
         from_y_offset: f64,
-        config: realand_config::Animation,
+        config: clarion_config::Animation,
     ) {
         self.move_y_animation = MoveAnimation::retarget(
             self.move_y_animation.take(),
@@ -4542,9 +4542,9 @@ impl<W: LayoutElement> Column<W> {
         let sizing_mode = self.pending_sizing_mode();
         if matches!(sizing_mode, SizingMode::Fullscreen | SizingMode::Maximized) {
             let bounds = if sizing_mode == SizingMode::Fullscreen {
-                realand_core::Rect::new(0., 0., self.view_size.w, self.view_size.h)
+                clarion_core::Rect::new(0., 0., self.view_size.w, self.view_size.h)
             } else {
-                realand_core::Rect::new(
+                clarion_core::Rect::new(
                     self.parent_area.loc.x,
                     self.parent_area.loc.y,
                     self.parent_area.size.w,
@@ -4701,12 +4701,12 @@ impl<W: LayoutElement> Column<W> {
             |((tile, height), (minimum, maximum))| {
                 let height = match height {
                     WindowHeight::Auto { weight } => {
-                        realand_core::column::Height::Automatic { weight }
+                        clarion_core::column::Height::Automatic { weight }
                     }
-                    WindowHeight::Fixed(height) => realand_core::column::Height::Fixed(height),
+                    WindowHeight::Fixed(height) => clarion_core::column::Height::Fixed(height),
                     WindowHeight::Preset(_) => unreachable!(),
                 };
-                realand_core::column::HeightConstraint {
+                clarion_core::column::HeightConstraint {
                     height,
                     minimum: minimum.h,
                     maximum: maximum.h,
@@ -4782,14 +4782,14 @@ impl<W: LayoutElement> Column<W> {
         let index = self.policy.active_index();
         let active = self.tile_offsets().nth(index)?;
         let size = self.data.get(index)?.size;
-        let active = realand_core::Rect::new(active.x, active.y, size.w, size.h);
+        let active = clarion_core::Rect::new(active.x, active.y, size.w, size.h);
         self.policy
             .directional_neighbor(active, self.policy_geometry(), vertical, positive)
     }
 
-    fn policy_geometry(&self) -> impl Iterator<Item = realand_core::Rect> + '_ {
+    fn policy_geometry(&self) -> impl Iterator<Item = clarion_core::Rect> + '_ {
         zip(self.tile_offsets(), &self.data).map(|(offset, data)| {
-            realand_core::Rect::new(offset.x, offset.y, data.size.w, data.size.h)
+            clarion_core::Rect::new(offset.x, offset.y, data.size.w, data.size.h)
         })
     }
 
@@ -4914,7 +4914,7 @@ impl<W: LayoutElement> Column<W> {
     }
 
     fn toggle_width(&mut self, tile_idx: Option<usize>, forwards: bool) {
-        use realand_core::scrolling::PresetExtent;
+        use clarion_core::scrolling::PresetExtent;
         let tile_idx = tile_idx.unwrap_or(self.policy.active_index());
         let tile = &self.tiles[tile_idx];
         let presets: Vec<_> = self
@@ -5404,8 +5404,8 @@ impl<W: LayoutElement> Column<W> {
     }
 }
 
-fn core_column_sizing(mode: SizingMode) -> realand_core::viewport::ColumnSizing {
-    use realand_core::viewport::ColumnSizing;
+fn core_column_sizing(mode: SizingMode) -> clarion_core::viewport::ColumnSizing {
+    use clarion_core::viewport::ColumnSizing;
     if mode.is_fullscreen() {
         ColumnSizing::Fullscreen
     } else if mode.is_maximized() {
@@ -5446,7 +5446,7 @@ fn compute_working_area(
 }
 
 fn compute_toplevel_bounds(
-    border_config: realand_config::Border,
+    border_config: clarion_config::Border,
     working_area_size: Size<f64, Logical>,
     extra_size: Size<f64, Logical>,
     gaps: f64,
@@ -5464,7 +5464,7 @@ fn compute_toplevel_bounds(
 }
 
 fn cancel_resize_for_column<W: LayoutElement>(
-    interactive_resize: &mut Option<realand_core::resize::Resize>,
+    interactive_resize: &mut Option<clarion_core::resize::Resize>,
     column: &mut Column<W>,
 ) {
     if let Some(resize) = interactive_resize {
@@ -5493,8 +5493,8 @@ fn resolve_preset_size(
 }
 
 impl<W: LayoutElement> Column<W> {
-    pub(super) fn session_sizing(&self, row: usize) -> realand_ipc::management::SessionSizing {
-        use realand_ipc::management::{SessionHeight, SessionSizing};
+    pub(super) fn session_sizing(&self, row: usize) -> clarion_ipc::management::SessionSizing {
+        use clarion_ipc::management::{SessionHeight, SessionSizing};
         let (width, proportional) = match self.policy.width {
             ColumnWidth::Fixed(w) => (w, false),
             ColumnWidth::Proportion(w) => (w, true),
@@ -5515,9 +5515,9 @@ impl<W: LayoutElement> Column<W> {
 impl<W: LayoutElement> ScrollingSpace<W> {
     pub(super) fn restore_session_sizing(
         &mut self,
-        sizing: &[(W::Id, realand_ipc::management::SessionSizing)],
+        sizing: &[(W::Id, clarion_ipc::management::SessionSizing)],
     ) {
-        use realand_ipc::management::SessionHeight;
+        use clarion_ipc::management::SessionHeight;
         for col in &mut self.columns {
             let mut updated = false;
             for (index, tile) in col.tiles.iter().enumerate() {
@@ -5559,8 +5559,8 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
 #[cfg(test)]
 mod tests {
-    use realand_config::animations::{Curve, EasingParams, Kind, WindowMovementAnim};
-    use realand_config::FloatOrInt;
+    use clarion_config::animations::{Curve, EasingParams, Kind, WindowMovementAnim};
+    use clarion_config::FloatOrInt;
 
     use super::*;
     use crate::utils::round_logical_in_physical;
@@ -5573,8 +5573,8 @@ mod tests {
         gap: f64,
     ) -> Vec<Rectangle<f64, Logical>> {
         let mut result = Vec::new();
-        realand_core::geometry::spiral_rects_into(
-            realand_core::Rect::new(area.loc.x, area.loc.y, area.size.w, area.size.h),
+        clarion_core::geometry::spiral_rects_into(
+            clarion_core::Rect::new(area.loc.x, area.loc.y, area.size.w, area.size.h),
             count,
             gap,
             &mut result,
@@ -5638,7 +5638,7 @@ mod tests {
     #[test]
     fn column_zero_offset_keeps_existing_curve_and_idle_axis() {
         let mut clock = Clock::with_time(Duration::ZERO);
-        let config = realand_config::Animation {
+        let config = clarion_config::Animation {
             off: false,
             kind: Kind::Easing(EasingParams {
                 duration_ms: 400,
@@ -5691,7 +5691,7 @@ mod tests {
         clock.set_unadjusted(Duration::from_millis(60));
         let current = movement.from * movement.anim.value();
         let velocity = movement.from * movement.anim.velocity();
-        let linear = realand_config::Animation {
+        let linear = clarion_config::Animation {
             off: false,
             kind: Kind::Easing(EasingParams {
                 duration_ms: 600,
@@ -5709,7 +5709,7 @@ mod tests {
         // endpoint/velocity equation is p0/2 + v0 * duration/8 (p1 = v1 = 0).
         let expected = (current + 100.) / 2. + velocity * 0.6 / 8.;
         assert!((movement.from * movement.anim.value() - expected).abs() < 1e-10);
-        let disabled = realand_config::Animation {
+        let disabled = clarion_config::Animation {
             off: true,
             ..linear
         };

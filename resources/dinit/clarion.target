@@ -1,0 +1,6 @@
+type           = internal
+restart        = false
+depends-on:    clarion
+waits-for.d:   $XDG_CONFIG_HOME/dinit.d/clarion.d/
+waits-for.d:   $HOME/.config/dinit.d/clarion.d/
+waits-for.d:   /etc/dinit.d/user/clarion.d/

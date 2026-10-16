@@ -14,7 +14,7 @@ use crate::utils::{is_mapped, output_size, send_scale_transform};
 
 impl WlrLayerShellHandler for State {
     fn shell_state(&mut self) -> &mut WlrLayerShellState {
-        &mut self.realand.layer_shell_state
+        &mut self.clarion.layer_shell_state
     }
 
     fn new_layer_surface(
@@ -25,9 +25,9 @@ impl WlrLayerShellHandler for State {
         namespace: String,
     ) {
         let output = if let Some(wl_output) = &wl_output {
-            self.realand.output_from_resource(wl_output)
+            self.clarion.output_from_resource(wl_output)
         } else {
-            self.realand.layout.active_output().cloned()
+            self.clarion.layout.active_output().cloned()
         };
         let Some(output) = output else {
             warn!("no output for new layer surface, closing");
@@ -36,7 +36,7 @@ impl WlrLayerShellHandler for State {
         };
 
         let wl_surface = surface.wl_surface().clone();
-        let is_new = self.realand.unmapped_layer_surfaces.insert(wl_surface);
+        let is_new = self.clarion.unmapped_layer_surfaces.insert(wl_surface);
         assert!(is_new);
 
         let layer = LayerSurface::new(surface, namespace);
@@ -53,10 +53,10 @@ impl WlrLayerShellHandler for State {
 
     fn layer_destroyed(&mut self, surface: WlrLayerSurface) {
         let wl_surface = surface.wl_surface();
-        self.realand.unmapped_layer_surfaces.remove(wl_surface);
+        self.clarion.unmapped_layer_surfaces.remove(wl_surface);
 
         let output = if let Some((output, mut map, layer)) =
-            self.realand.layout.outputs().find_map(|o| {
+            self.clarion.layout.outputs().find_map(|o| {
                 let map = layer_map_for_output(o);
                 let layer = map
                     .layers()
@@ -65,13 +65,13 @@ impl WlrLayerShellHandler for State {
                 layer.map(|layer| (o.clone(), map, layer))
             }) {
             map.unmap_layer(&layer);
-            self.realand.mapped_layer_surfaces.remove(&layer);
+            self.clarion.mapped_layer_surfaces.remove(&layer);
             Some(output)
         } else {
             None
         };
         if let Some(output) = output {
-            self.realand.output_resized(&output);
+            self.clarion.output_resized(&output);
         }
     }
 
@@ -88,7 +88,7 @@ impl State {
         }
 
         let output = self
-            .realand
+            .clarion
             .layout
             .outputs()
             .find(|o| {
@@ -103,7 +103,7 @@ impl State {
 
         if surface != &root_surface {
             // This is an unsync layer-shell subsurface.
-            self.realand.queue_redraw(&output);
+            self.clarion.queue_redraw(&output);
             return true;
         }
 
@@ -121,14 +121,14 @@ impl State {
 
         let mut privacy_changed = false;
         if is_mapped(surface) {
-            let was_unmapped = self.realand.unmapped_layer_surfaces.remove(surface);
+            let was_unmapped = self.clarion.unmapped_layer_surfaces.remove(surface);
 
             // Resolve rules for newly mapped layer surfaces.
             if was_unmapped {
-                let config = self.realand.config.borrow();
+                let config = self.clarion.config.borrow();
 
                 let rules = &config.layer_rules;
-                let rules = ResolvedLayerRules::compute(rules, layer, self.realand.is_at_startup);
+                let rules = ResolvedLayerRules::compute(rules, layer, self.clarion.is_at_startup);
                 // A remapped layer may have been visible in a captured frame
                 // before it changed to a protected layer while unmapped.
                 privacy_changed = rules.block_out_from.is_some();
@@ -143,12 +143,12 @@ impl State {
                     rules,
                     output_size,
                     scale,
-                    self.realand.clock.clone(),
+                    self.clarion.clock.clone(),
                     &config,
                 );
 
                 let prev = self
-                    .realand
+                    .clarion
                     .mapped_layer_surfaces
                     .insert(layer.clone(), mapped);
                 if prev.is_some() {
@@ -156,13 +156,13 @@ impl State {
                 }
             } else {
                 // The surface remains mapped.
-                if let Some(mapped) = self.realand.mapped_layer_surfaces.get_mut(layer) {
+                if let Some(mapped) = self.clarion.mapped_layer_surfaces.get_mut(layer) {
                     // Check if the layer changed.
                     if mapped.take_recompute_rules_on_commit() {
-                        let config = self.realand.config.borrow();
+                        let config = self.clarion.config.borrow();
                         let previous_privacy = mapped.rules().block_out_from;
                         if mapped
-                            .recompute_layer_rules(&config.layer_rules, self.realand.is_at_startup)
+                            .recompute_layer_rules(&config.layer_rules, self.clarion.is_at_startup)
                         {
                             privacy_changed = previous_privacy != mapped.rules().block_out_from;
                             mapped.update_config(&config);
@@ -188,18 +188,18 @@ impl State {
             // The persistent desktop maps when the shell starts or an output is
             // connected. It must wait for user interaction rather than taking
             // focus away from the current application.
-            if was_unmapped && on_demand && layer.namespace() != "realand-desktop" {
+            if was_unmapped && on_demand && layer.namespace() != "clarion-desktop" {
                 // I guess it'd make sense to check that no higher-layer on-demand surface
                 // has focus, but Smithay's Layer doesn't implement Ord so this would be a
                 // little annoying.
-                self.realand.layer_shell_on_demand_focus = Some(layer.clone());
+                self.clarion.layer_shell_on_demand_focus = Some(layer.clone());
             }
         } else {
             // The surface is unmapped.
-            if self.realand.mapped_layer_surfaces.remove(layer).is_some() {
+            if self.clarion.mapped_layer_surfaces.remove(layer).is_some() {
                 // A mapped surface got unmapped via a null commit. Now it needs to do a new
                 // initial commit again.
-                self.realand.unmapped_layer_surfaces.insert(surface.clone());
+                self.clarion.unmapped_layer_surfaces.insert(surface.clone());
             } else {
                 // An unmapped surface remains unmapped. If we haven't sent an initial configure
                 // yet, we should do so.
@@ -235,8 +235,8 @@ impl State {
         if privacy_changed {
             // Ordinary repaints retain handoffs, but a privacy rule change must
             // never retain pixels captured under the previous rules.
-            self.realand.clear_screen_transition_snapshots();
-            self.realand.queue_redraw_all();
+            self.clarion.clear_screen_transition_snapshots();
+            self.clarion.queue_redraw_all();
         }
 
         // Buffer-only commits (video wallpaper, meters, clocks) need a redraw,
@@ -244,9 +244,9 @@ impl State {
         // only a changed exclusive zone requires relaying out the workspaces.
         // Actual mode/scale/transform changes still go through output_resized().
         if working_area_changed {
-            self.realand.layout.update_output_size(&output);
+            self.clarion.layout.update_output_size(&output);
         }
-        self.realand.queue_redraw(&output);
+        self.clarion.queue_redraw(&output);
 
         true
     }
@@ -262,7 +262,7 @@ fn add_mapped_layer_pre_commit_hook(layer: &LayerSurface) -> HookId {
         });
 
         if layer_changed {
-            for mapped in state.realand.mapped_layer_surfaces.values_mut() {
+            for mapped in state.clarion.mapped_layer_surfaces.values_mut() {
                 if mapped.surface().wl_surface() == surface {
                     mapped.set_recompute_rules_on_commit();
                     break;

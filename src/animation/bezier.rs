@@ -1,10 +1,10 @@
 use keyframe::EasingFunction;
 
 #[derive(Debug, Clone, Copy)]
-pub struct CubicBezier(realand_core::motion::CubicTiming);
+pub struct CubicBezier(clarion_motion::motion::CubicTiming);
 
 impl CubicBezier {
-    // Established Realand presets; decimal values preserve configuration behavior.
+    // Established Clarion presets; decimal values preserve configuration behavior.
     // The recovered generic Core Animation table uses float32 values. These
     // names do not establish which timing function private Dock animations use.
     pub const MACOS_DEFAULT: Self = Self::new(0.25, 0.1, 0.25, 1.);
@@ -19,14 +19,14 @@ impl CubicBezier {
     pub const CA_LINEAR: Self = Self::MACOS_LINEAR;
 
     pub const fn new(x1: f64, y1: f64, x2: f64, y2: f64) -> Self {
-        Self(realand_core::motion::CubicTiming::new(x1, y1, x2, y2))
+        Self(clarion_motion::motion::CubicTiming::new(x1, y1, x2, y2))
     }
 
     pub const fn control_points(&self) -> ((f64, f64), (f64, f64)) {
         self.0.control_points()
     }
 
-    pub(super) const fn into_core(self) -> realand_core::motion::CubicTiming {
+    pub(super) const fn into_core(self) -> clarion_motion::motion::CubicTiming {
         self.0
     }
 

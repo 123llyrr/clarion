@@ -1,7 +1,7 @@
 use std::cell::OnceCell;
 
 use anyhow::Context as _;
-use realand_config::BlockOutFrom;
+use clarion_config::BlockOutFrom;
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::element::{Kind, RenderElement};
 use smithay::backend::renderer::gles::GlesTexture;
@@ -178,7 +178,7 @@ where
     {
         if ctx.target.should_block_out(self.block_out_from) {
             self.blocked_out_texture.get_or_init(|| {
-                let _span = realand_tracy_span!("RenderSnapshot::texture");
+                let _span = clarion_tracy_span!("RenderSnapshot::texture");
 
                 let elements: Vec<_> = self
                     .blocked_out_contents
@@ -209,7 +209,7 @@ where
         {
             let contents = self.contents_with_blocked_out_bg.as_ref().unwrap();
             self.texture_with_blocked_out_bg.get_or_init(|| {
-                let _span = realand_tracy_span!("RenderSnapshot::texture");
+                let _span = clarion_tracy_span!("RenderSnapshot::texture");
 
                 let elements: Vec<_> = contents
                     .iter()
@@ -237,7 +237,7 @@ where
             })
         } else {
             self.texture.get_or_init(|| {
-                let _span = realand_tracy_span!("RenderSnapshot::texture");
+                let _span = clarion_tracy_span!("RenderSnapshot::texture");
 
                 let elements: Vec<_> = self
                     .contents

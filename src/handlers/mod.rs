@@ -95,22 +95,22 @@ impl SeatHandler for State {
     type TouchFocus = WlSurface;
 
     fn seat_state(&mut self) -> &mut SeatState<State> {
-        &mut self.realand.seat_state
+        &mut self.clarion.seat_state
     }
 
     fn cursor_image(&mut self, _seat: &Seat<Self>, mut image: CursorImageStatus) {
         // FIXME: this hack should be removable once the screenshot UI is tracked with a
         // PointerFocus properly.
-        if self.realand.screenshot_ui.is_open() {
+        if self.clarion.screenshot_ui.is_open() {
             image = CursorImageStatus::Named(CursorIcon::Crosshair);
         }
-        self.realand.cursor_manager.set_cursor_image(image);
+        self.clarion.cursor_manager.set_cursor_image(image);
         // FIXME: more granular
-        self.realand.queue_redraw_all();
+        self.clarion.queue_redraw_all();
     }
 
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
-        let dh = &self.realand.display_handle;
+        let dh = &self.clarion.display_handle;
         let client = focused.and_then(|s| dh.get_client(s.id()).ok());
         set_data_device_focus(dh, seat, client.clone());
         set_primary_focus(dh, seat, client);
@@ -118,7 +118,7 @@ impl SeatHandler for State {
 
     fn led_state_changed(&mut self, _seat: &Seat<Self>, led_state: keyboard::LedState) {
         let keyboards = self
-            .realand
+            .clarion
             .devices
             .iter()
             .filter(|device| device.has_capability(input::DeviceCapability::Keyboard))
@@ -142,9 +142,9 @@ impl TabletSeatHandler for State {
 
     fn tablet_tool_image(&mut self, _tool: &TabletToolDescriptor, image: CursorImageStatus) {
         // FIXME: tablet tools should have their own cursors.
-        self.realand.cursor_manager.set_cursor_image(image);
+        self.clarion.cursor_manager.set_cursor_image(image);
         // FIXME: granular.
-        self.realand.queue_redraw_all();
+        self.clarion.queue_redraw_all();
     }
 }
 
@@ -154,7 +154,7 @@ impl PointerConstraintsHandler for State {
         // activating a new one.
         self.refresh_pointer_contents();
 
-        self.realand.maybe_activate_pointer_constraint();
+        self.clarion.maybe_activate_pointer_constraint();
     }
 
     fn cursor_position_hint(
@@ -180,7 +180,7 @@ impl PointerConstraintsHandler for State {
         // more of a hack because pointer contents has the surface origin available.
         //
         // FIXME: use the constraint surface somehow, don't use pointer contents.
-        let Some((ref surface_under_pointer, origin)) = self.realand.pointer_contents.surface
+        let Some((ref surface_under_pointer, origin)) = self.clarion.pointer_contents.surface
         else {
             return;
         };
@@ -195,15 +195,15 @@ impl PointerConstraintsHandler for State {
         }
 
         let target = self
-            .realand
+            .clarion
             .output_for_root(&root)
-            .and_then(|output| self.realand.global_space.output_geometry(output))
+            .and_then(|output| self.clarion.global_space.output_geometry(output))
             .map_or(origin + location, |mut output_geometry| {
                 // i32 sizes are exclusive, but f64 sizes are inclusive.
                 output_geometry.size -= (1, 1).into();
                 (origin + location).constrain(output_geometry.to_f64())
             });
-        self.realand.pointer_constraint_position_hint = Some(target);
+        self.clarion.pointer_constraint_position_hint = Some(target);
     }
 
     fn remove_constraint(
@@ -216,7 +216,7 @@ impl PointerConstraintsHandler for State {
         // can only have a single pointer constraint at once, assume there can be only one
         // constraint active at once, and therefore the global position hint should come from that
         // one constraint that just got removed.
-        let Some(target) = self.realand.pointer_constraint_position_hint.take() else {
+        let Some(target) = self.clarion.pointer_constraint_position_hint.take() else {
             // The client never sent a position hint.
             return;
         };
@@ -234,9 +234,9 @@ impl PointerConstraintsHandler for State {
         pointer.set_location(target);
 
         // Redraw to update the cursor position if it's visible.
-        if self.realand.pointer_visibility.is_visible() {
+        if self.clarion.pointer_visibility.is_visible() {
             // FIXME: redraw only outputs overlapping the cursor.
-            self.realand.queue_redraw_all();
+            self.clarion.queue_redraw_all();
         }
     }
 }
@@ -248,7 +248,7 @@ impl InputMethodHandler for State {
 
         self.unconstrain_popup(&popup);
 
-        if let Err(err) = self.realand.popups.track_popup(popup) {
+        if let Err(err) = self.clarion.popups.track_popup(popup) {
             warn!("error tracking ime popup {err:?}");
         }
     }
@@ -259,28 +259,28 @@ impl InputMethodHandler for State {
 
         // A text-input cursor update can move the popup without committing a new buffer.
         // Redraw both its previous output and its new output when focus crosses monitors.
-        self.realand.queue_redraw_all();
+        self.clarion.queue_redraw_all();
     }
 
     fn dismiss_popup(&mut self, surface: PopupSurface) {
         if let Some(parent) = surface.get_parent().map(|parent| parent.surface.clone()) {
-            let root = self.realand.find_root_shell_surface(&parent);
+            let root = self.clarion.find_root_shell_surface(&parent);
             let _ = PopupManager::dismiss_popup(&root, &PopupKind::from(surface));
         }
 
         // Deactivation may already have cleared the parent, and need not be followed by
         // a surface commit. Invalidate the old popup pixels even in that case.
-        self.realand.queue_redraw_all();
+        self.clarion.queue_redraw_all();
     }
 
     fn parent_geometry(&self, parent: &WlSurface) -> Rectangle<i32, Logical> {
-        let root = self.realand.find_root_shell_surface(parent);
+        let root = self.clarion.find_root_shell_surface(parent);
 
-        if let Some((mapped, _)) = self.realand.layout.find_window_and_output(&root) {
+        if let Some((mapped, _)) = self.clarion.layout.find_window_and_output(&root) {
             return mapped.window.geometry();
         }
 
-        for output in self.realand.layout.outputs() {
+        for output in self.clarion.layout.outputs() {
             let map = layer_map_for_output(output);
             if let Some(layer) = map.layer_for_surface(&root, WindowSurfaceType::ALL) {
                 if let Some(geo) = map.layer_geometry(layer) {
@@ -295,19 +295,19 @@ impl InputMethodHandler for State {
 
 impl KeyboardShortcutsInhibitHandler for State {
     fn keyboard_shortcuts_inhibit_state(&mut self) -> &mut KeyboardShortcutsInhibitState {
-        &mut self.realand.keyboard_shortcuts_inhibit_state
+        &mut self.clarion.keyboard_shortcuts_inhibit_state
     }
 
     fn new_inhibitor(&mut self, inhibitor: KeyboardShortcutsInhibitor) {
         // FIXME: show a confirmation dialog with a "remember for this application" kind of toggle.
         inhibitor.activate();
-        self.realand
+        self.clarion
             .keyboard_shortcuts_inhibiting_surfaces
             .insert(inhibitor.wl_surface().clone(), inhibitor);
     }
 
     fn inhibitor_destroyed(&mut self, inhibitor: KeyboardShortcutsInhibitor) {
-        self.realand
+        self.clarion
             .keyboard_shortcuts_inhibiting_surfaces
             .remove(&inhibitor.wl_surface().clone());
     }
@@ -324,7 +324,7 @@ impl SelectionHandler for State {
         _seat: Seat<Self>,
         user_data: &Self::SelectionUserData,
     ) {
-        let _span = realand_tracy_span!("send_selection");
+        let _span = clarion_tracy_span!("send_selection");
 
         let buf = user_data.clone();
         thread::spawn(move || {
@@ -341,7 +341,7 @@ impl SelectionHandler for State {
 
 impl DataDeviceHandler for State {
     fn data_device_state(&mut self) -> &mut DataDeviceState {
-        &mut self.realand.data_device_state
+        &mut self.clarion.data_device_state
     }
 }
 
@@ -354,7 +354,7 @@ impl WaylandDndGrabHandler for State {
         serial: Serial,
         type_: dnd::GrabType,
     ) {
-        self.realand.dnd_icon = icon.map(|surface| DndIcon {
+        self.clarion.dnd_icon = icon.map(|surface| DndIcon {
             surface,
             offset: Point::new(0, 0),
         });
@@ -364,20 +364,20 @@ impl WaylandDndGrabHandler for State {
                 let pointer = seat.get_pointer().unwrap();
                 let start_data = pointer.grab_start_data().unwrap();
                 let grab =
-                    DnDGrab::new_pointer(&self.realand.display_handle, start_data, source, seat);
+                    DnDGrab::new_pointer(&self.clarion.display_handle, start_data, source, seat);
                 pointer.set_grab(self, grab, serial, Focus::Keep);
             }
             dnd::GrabType::Touch => {
                 let touch = seat.get_touch().unwrap();
                 let start_data = touch.grab_start_data().unwrap();
                 let grab =
-                    DnDGrab::new_touch(&self.realand.display_handle, start_data, source, seat);
+                    DnDGrab::new_touch(&self.clarion.display_handle, start_data, source, seat);
                 touch.set_grab(self, grab, serial);
             }
         }
 
         // FIXME: more granular
-        self.realand.queue_redraw_all();
+        self.clarion.queue_redraw_all();
     }
 }
 
@@ -393,26 +393,26 @@ impl DndGrabHandler for State {
         trace!("dnd dropped, target: {target:?}, validated: {validated}");
 
         // End DnD before activating a specific window below so that it takes precedence.
-        self.realand.on_maybe_dnd_ended();
+        self.clarion.on_maybe_dnd_ended();
 
         // Activate the target output, since that's how Firefox drag-tab-into-new-window works for
         // example. On successful drop, additionally activate the target window.
         let mut activate_output = true;
         if let Some(target) = validated.then_some(target).flatten() {
-            let root = self.realand.find_root_shell_surface(target);
-            if let Some((mapped, _)) = self.realand.layout.find_window_and_output(&root) {
+            let root = self.clarion.find_root_shell_surface(target);
+            if let Some((mapped, _)) = self.clarion.layout.find_window_and_output(&root) {
                 let window = mapped.window.clone();
-                self.realand.layout.activate_window(&window);
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layout.activate_window(&window);
+                self.clarion.layer_shell_on_demand_focus = None;
                 activate_output = false;
             }
         }
 
         if activate_output {
             // Find the output from drop coordinates.
-            if let Some((output, _)) = self.realand.output_under(location) {
+            if let Some((output, _)) = self.clarion.output_under(location) {
                 let output = output.clone();
-                self.realand.layout.focus_output(&output);
+                self.clarion.layout.focus_output(&output);
             }
         }
     }
@@ -420,11 +420,11 @@ impl DndGrabHandler for State {
     fn cancelled(&mut self, _seat: Seat<Self>, _location: Point<f64, Logical>) {
         trace!("dnd cancelled");
 
-        self.realand.on_maybe_dnd_ended();
+        self.clarion.on_maybe_dnd_ended();
     }
 }
 
-impl crate::compositor::Realand {
+impl crate::compositor::Clarion {
     fn on_maybe_dnd_ended(&mut self) {
         self.layout.dnd_end();
         self.dnd_icon = None;
@@ -435,19 +435,19 @@ impl crate::compositor::Realand {
 
 impl PrimarySelectionHandler for State {
     fn primary_selection_state(&mut self) -> &mut PrimarySelectionState {
-        &mut self.realand.primary_selection_state
+        &mut self.clarion.primary_selection_state
     }
 }
 
 impl WlrDataControlHandler for State {
     fn data_control_state(&mut self) -> &mut WlrDataControlState {
-        &mut self.realand.wlr_data_control_state
+        &mut self.clarion.wlr_data_control_state
     }
 }
 
 impl ExtDataControlHandler for State {
     fn data_control_state(&mut self) -> &mut ExtDataControlState {
-        &mut self.realand.ext_data_control_state
+        &mut self.clarion.ext_data_control_state
     }
 }
 
@@ -460,7 +460,7 @@ impl OutputHandler for State {
 
 impl DmabufHandler for State {
     fn dmabuf_state(&mut self) -> &mut DmabufState {
-        &mut self.realand.dmabuf_state
+        &mut self.clarion.dmabuf_state
     }
 
     fn dmabuf_imported(
@@ -479,19 +479,19 @@ impl DmabufHandler for State {
 
 impl DrmSyncobjHandler for State {
     fn drm_syncobj_state(&mut self) -> Option<&mut DrmSyncobjState> {
-        self.realand.drm_syncobj_state.as_mut()
+        self.clarion.drm_syncobj_state.as_mut()
     }
 }
 
 impl SessionLockHandler for State {
     fn lock_state(&mut self) -> &mut SessionLockManagerState {
-        &mut self.realand.session_lock_state
+        &mut self.clarion.session_lock_state
     }
 
     fn lock(&mut self, confirmation: SessionLocker) {
-        self.realand.lock(confirmation);
+        self.clarion.lock(confirmation);
         if !matches!(
-            self.realand.lock_state,
+            self.clarion.lock_state,
             crate::compositor::LockState::Unlocked
         ) {
             self.cancel_grabs_for_lock();
@@ -499,19 +499,19 @@ impl SessionLockHandler for State {
     }
 
     fn unlock(&mut self) {
-        self.realand.unlock();
-        self.realand.activate_monitors(&mut self.backend);
-        self.realand.notify_activity();
+        self.clarion.unlock();
+        self.clarion.activate_monitors(&mut self.backend);
+        self.clarion.notify_activity();
     }
 
     fn new_surface(&mut self, surface: LockSurface, output: WlOutput) {
-        let Some(output) = self.realand.output_from_resource(&output) else {
+        let Some(output) = self.clarion.output_from_resource(&output) else {
             warn!("no Output matching WlOutput");
             return;
         };
 
         configure_lock_surface(&surface, &output);
-        self.realand.new_lock_surface(surface, &output);
+        self.clarion.new_lock_surface(surface, &output);
     }
 }
 
@@ -531,11 +531,11 @@ pub fn configure_lock_surface(surface: &LockSurface, output: &Output) {
 
 impl SecurityContextHandler for State {
     fn context_created(&mut self, source: SecurityContextListenerSource, context: SecurityContext) {
-        self.realand
+        self.clarion
             .event_loop
             .insert_source(source, move |client, _, state| {
                 trace!("inserting a new restricted client, context={context:?}");
-                state.realand.insert_client(NewClient {
+                state.clarion.insert_client(NewClient {
                     client,
                     restricted: true,
                     credentials_unknown: false,
@@ -547,51 +547,51 @@ impl SecurityContextHandler for State {
 
 impl IdleNotifierHandler for State {
     fn idle_notifier_state(&mut self) -> &mut IdleNotifierState<Self> {
-        &mut self.realand.idle_notifier_state
+        &mut self.clarion.idle_notifier_state
     }
 }
 
 impl IdleInhibitHandler for State {
     fn inhibit(&mut self, surface: WlSurface) {
-        self.realand.idle_inhibiting_surfaces.insert(surface);
+        self.clarion.idle_inhibiting_surfaces.insert(surface);
     }
 
     fn uninhibit(&mut self, surface: WlSurface) {
-        self.realand.idle_inhibiting_surfaces.remove(&surface);
+        self.clarion.idle_inhibiting_surfaces.remove(&surface);
     }
 }
 
 impl ForeignToplevelHandler for State {
     fn foreign_toplevel_manager_state(&mut self) -> &mut ForeignToplevelManagerState {
-        &mut self.realand.foreign_toplevel_state
+        &mut self.clarion.foreign_toplevel_state
     }
 
     fn activate(&mut self, wl_surface: WlSurface) {
-        if let Some((mapped, _)) = self.realand.layout.find_window_and_output(&wl_surface) {
+        if let Some((mapped, _)) = self.clarion.layout.find_window_and_output(&wl_surface) {
             let window = mapped.window.clone();
-            self.realand.layout.activate_window(&window);
-            self.realand.layer_shell_on_demand_focus = None;
-            self.realand.queue_redraw_all();
+            self.clarion.layout.activate_window(&window);
+            self.clarion.layer_shell_on_demand_focus = None;
+            self.clarion.queue_redraw_all();
         }
     }
 
     fn close(&mut self, wl_surface: WlSurface) {
-        if let Some((mapped, _)) = self.realand.layout.find_window_and_output(&wl_surface) {
+        if let Some((mapped, _)) = self.clarion.layout.find_window_and_output(&wl_surface) {
             mapped.toplevel().send_close();
         }
     }
 
     fn set_fullscreen(&mut self, wl_surface: WlSurface, wl_output: Option<WlOutput>) {
         if let Some((mapped, current_output)) =
-            self.realand.layout.find_window_and_output(&wl_surface)
+            self.clarion.layout.find_window_and_output(&wl_surface)
         {
             let window = mapped.window.clone();
 
             if let Some(requested_output) =
-                wl_output.and_then(|o| self.realand.output_from_resource(&o))
+                wl_output.and_then(|o| self.clarion.output_from_resource(&o))
             {
                 if Some(&requested_output) != current_output {
-                    self.realand.layout.move_to_output(
+                    self.clarion.layout.move_to_output(
                         Some(&window),
                         &requested_output,
                         None,
@@ -600,62 +600,62 @@ impl ForeignToplevelHandler for State {
                 }
             }
 
-            self.realand.layout.set_fullscreen(&window, true);
+            self.clarion.layout.set_fullscreen(&window, true);
         }
     }
 
     fn unset_fullscreen(&mut self, wl_surface: WlSurface) {
-        if let Some((mapped, _)) = self.realand.layout.find_window_and_output(&wl_surface) {
+        if let Some((mapped, _)) = self.clarion.layout.find_window_and_output(&wl_surface) {
             let window = mapped.window.clone();
-            self.realand.layout.set_fullscreen(&window, false);
+            self.clarion.layout.set_fullscreen(&window, false);
         }
     }
 
     fn set_maximized(&mut self, wl_surface: WlSurface) {
-        if let Some((mapped, _)) = self.realand.layout.find_window_and_output(&wl_surface) {
+        if let Some((mapped, _)) = self.clarion.layout.find_window_and_output(&wl_surface) {
             let window = mapped.window.clone();
-            self.realand.layout.set_maximized(&window, true);
+            self.clarion.layout.set_maximized(&window, true);
         }
     }
 
     fn unset_maximized(&mut self, wl_surface: WlSurface) {
-        if let Some((mapped, _)) = self.realand.layout.find_window_and_output(&wl_surface) {
+        if let Some((mapped, _)) = self.clarion.layout.find_window_and_output(&wl_surface) {
             let window = mapped.window.clone();
-            self.realand.layout.set_maximized(&window, false);
+            self.clarion.layout.set_maximized(&window, false);
         }
     }
 }
 
 impl ExtWorkspaceHandler for State {
     fn ext_workspace_manager_state(&mut self) -> &mut ExtWorkspaceManagerState {
-        &mut self.realand.ext_workspace_state
+        &mut self.clarion.ext_workspace_state
     }
 
     fn activate_workspace(&mut self, id: WorkspaceId) {
-        let reference = realand_config::WorkspaceReference::Id(id.get());
-        if let Some((mut output, index)) = self.realand.find_output_and_workspace_index(reference) {
-            if let Some(active) = self.realand.layout.active_output() {
+        let reference = clarion_config::WorkspaceReference::Id(id.get());
+        if let Some((mut output, index)) = self.clarion.find_output_and_workspace_index(reference) {
+            if let Some(active) = self.clarion.layout.active_output() {
                 if output.as_ref() == Some(active) {
                     output = None;
                 }
             }
 
             if let Some(output) = output {
-                self.realand.layout.focus_output(&output);
+                self.clarion.layout.focus_output(&output);
             }
-            self.realand.layout.switch_workspace(index);
+            self.clarion.layout.switch_workspace(index);
             // No mouse warp: assuming the layer-shell bar workspaces use-case.
 
             // FIXME: granular
-            self.realand.queue_redraw_all();
+            self.clarion.queue_redraw_all();
         }
     }
 
     fn assign_workspace(&mut self, ws_id: WorkspaceId, output: Output) {
-        let reference = realand_config::WorkspaceReference::Id(ws_id.get());
-        if let Some((old_output, old_idx)) = self.realand.find_output_and_workspace_index(reference)
+        let reference = clarion_config::WorkspaceReference::Id(ws_id.get());
+        if let Some((old_output, old_idx)) = self.clarion.find_output_and_workspace_index(reference)
         {
-            self.realand
+            self.clarion
                 .layout
                 .move_workspace_to_output_by_id(old_idx, old_output, &output);
         }
@@ -665,7 +665,7 @@ impl ExtWorkspaceHandler for State {
 impl ScreencopyHandler for State {
     fn frame(&mut self, manager: &ZwlrScreencopyManagerV1, screencopy: Screencopy) {
         // This can happen if the output was removed before this was called.
-        if !self.realand.output_exists(screencopy.output()) {
+        if !self.clarion.output_exists(screencopy.output()) {
             trace!("screencopy output no longer exists");
             return;
         }
@@ -673,17 +673,17 @@ impl ScreencopyHandler for State {
         // If with_damage then push it onto the queue for redraw of the output,
         // otherwise render it immediately.
         if screencopy.with_damage() {
-            self.realand.screencopy_state.push(manager, screencopy);
+            self.clarion.screencopy_state.push(manager, screencopy);
         } else {
             let output = screencopy.output().clone();
             self.backend
                 .with_renderer_for_output(Some(&output), |renderer| {
                     let res = match renderer {
                         crate::render_helpers::renderer::AnyRenderer::Gles(gles) => self
-                            .realand
+                            .clarion
                             .render_for_screencopy_without_damage(gles, manager, screencopy),
                         crate::render_helpers::renderer::AnyRenderer::Native(native) => self
-                            .realand
+                            .clarion
                             .render_for_screencopy_without_damage(native, manager, screencopy),
                     };
                     if let Err(err) = res {
@@ -694,13 +694,13 @@ impl ScreencopyHandler for State {
     }
 
     fn screencopy_state(&mut self) -> &mut ScreencopyManagerState {
-        &mut self.realand.screencopy_state
+        &mut self.clarion.screencopy_state
     }
 }
 
 impl VirtualPointerHandler for State {
     fn virtual_pointer_manager_state(&mut self) -> &mut VirtualPointerManagerState {
-        &mut self.realand.virtual_pointer_state
+        &mut self.clarion.virtual_pointer_state
     }
 
     fn on_virtual_pointer_motion(&mut self, event: VirtualPointerMotionEvent) {
@@ -770,7 +770,7 @@ impl DrmLeaseHandler for State {
 
 impl GammaControlHandler for State {
     fn gamma_control_manager_state(&mut self) -> &mut GammaControlManagerState {
-        &mut self.realand.gamma_control_manager_state
+        &mut self.clarion.gamma_control_manager_state
     }
 
     fn get_gamma_size(&mut self, output: &Output) -> Option<u32> {
@@ -802,7 +802,7 @@ struct UrgentOnlyMarker;
 
 impl XdgActivationHandler for State {
     fn activation_state(&mut self) -> &mut XdgActivationState {
-        &mut self.realand.activation_state
+        &mut self.clarion.activation_state
     }
 
     fn token_created(&mut self, _token: XdgActivationToken, data: XdgActivationTokenData) -> bool {
@@ -825,7 +825,7 @@ impl XdgActivationHandler for State {
         // Clicking on a notification sends clients a perfectly valid activation token from the
         // notification daemon, but alas they ignore it. Maybe in the future the clients are fixed,
         // and we can remove this debug flag.
-        let config = self.realand.config.borrow();
+        let config = self.clarion.config.borrow();
         if config.debug.honor_xdg_activation_with_invalid_serial {
             return true;
         }
@@ -852,36 +852,36 @@ impl XdgActivationHandler for State {
         surface: WlSurface,
     ) {
         if token_data.timestamp.elapsed() < XDG_ACTIVATION_TOKEN_TIMEOUT {
-            if let Some((mapped, _)) = self.realand.layout.find_window_and_output_mut(&surface) {
+            if let Some((mapped, _)) = self.clarion.layout.find_window_and_output_mut(&surface) {
                 let window = mapped.window.clone();
                 match mapped.rules().on_xdg_activate {
-                    Some(realand_config::OnXdgActivate::Ignore) => {}
-                    Some(realand_config::OnXdgActivate::SetUrgent) => {
+                    Some(clarion_config::OnXdgActivate::Ignore) => {}
+                    Some(clarion_config::OnXdgActivate::SetUrgent) => {
                         mapped.set_urgent(true);
-                        self.realand.queue_redraw_all();
+                        self.clarion.queue_redraw_all();
                     }
-                    Some(realand_config::OnXdgActivate::Focus) => {
-                        self.realand.layout.activate_window(&window);
-                        self.realand.layer_shell_on_demand_focus = None;
-                        self.realand.queue_redraw_all();
+                    Some(clarion_config::OnXdgActivate::Focus) => {
+                        self.clarion.layout.activate_window(&window);
+                        self.clarion.layer_shell_on_demand_focus = None;
+                        self.clarion.queue_redraw_all();
                     }
                     None => {
                         if token_data.user_data.get::<UrgentOnlyMarker>().is_some() {
                             mapped.set_urgent(true);
-                            self.realand.queue_redraw_all();
+                            self.clarion.queue_redraw_all();
                         } else {
-                            self.realand.layout.activate_window(&window);
-                            self.realand.layer_shell_on_demand_focus = None;
-                            self.realand.queue_redraw_all();
+                            self.clarion.layout.activate_window(&window);
+                            self.clarion.layer_shell_on_demand_focus = None;
+                            self.clarion.queue_redraw_all();
                         }
                     }
                 }
-            } else if let Some(unmapped) = self.realand.unmapped_windows.get_mut(&surface) {
+            } else if let Some(unmapped) = self.clarion.unmapped_windows.get_mut(&surface) {
                 unmapped.activation_token_data = Some(token_data);
             }
         }
 
-        self.realand.activation_state.remove_token(&token);
+        self.clarion.activation_state.remove_token(&token);
     }
 }
 
@@ -889,12 +889,12 @@ impl FractionalScaleHandler for State {}
 
 impl OutputManagementHandler for State {
     fn output_management_state(&mut self) -> &mut OutputManagementManagerState {
-        &mut self.realand.output_management_state
+        &mut self.clarion.output_management_state
     }
 
-    fn apply_output_config(&mut self, config: realand_config::Outputs) {
+    fn apply_output_config(&mut self, config: clarion_config::Outputs) {
         self.cancel_output_preview();
-        self.realand.config.borrow_mut().outputs = config;
+        self.clarion.config.borrow_mut().outputs = config;
         self.reload_output_config();
     }
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only checks for Realand launch paths, configuration and the live session.
+"""Read-only checks for Clarion launch paths, configuration and the live session.
 
 Never starts/stops services, reloads compositor configuration, or prints config
 contents. Exit 1 on an error; --strict also treats warnings as a failure.
@@ -78,7 +78,7 @@ def parse_service(text):
 
 def check_running_binary(pid, installed, proc_root=Path("/proc")):
     if not pid:
-        return Check("运行版本", "warn", "没有检测到正在运行的 Realand 会话")
+        return Check("运行版本", "warn", "没有检测到正在运行的 Clarion 会话")
     try:
         if binary_digest(proc_root / str(pid) / "exe") != binary_digest(installed):
             return Check("运行版本", "warn", "运行会话与启动版本不同；如需使用该版本，请保存工作后重新登录")
@@ -89,8 +89,8 @@ def check_running_binary(pid, installed, proc_root=Path("/proc")):
 
 def collect_checks(config=None, runner=run, which=shutil.which):
     checks = []
-    compositor = which("realand")
-    for name in ("realand", "realand-settings", "realand-session"):
+    compositor = which("clarion")
+    for name in ("clarion", "clarion-settings", "clarion-session"):
         checks.append(check_launcher(name, which(name), Path("/usr/local/bin") / name))
     if compositor:
         code, _ = runner([compositor, "--version"])
@@ -99,7 +99,7 @@ def collect_checks(config=None, runner=run, which=shutil.which):
         if config is not None:
             command.extend(["--config", str(config)])
         code, _ = runner(command)
-        checks.append(Check("配置", "ok" if code == 0 else "error", "配置校验通过（未写入文件）" if code == 0 else "配置校验失败或超时；请运行 realand validate 查看详情"))
+        checks.append(Check("配置", "ok" if code == 0 else "error", "配置校验通过（未写入文件）" if code == 0 else "配置校验失败或超时；请运行 clarion validate 查看详情"))
         code, content = runner([compositor, "msg", "--json", "outputs"])
         try:
             outputs = json.loads(content) if code == 0 else None
@@ -108,22 +108,22 @@ def collect_checks(config=None, runner=run, which=shutil.which):
         if isinstance(outputs, dict):
             checks.append(Check("桌面 IPC", "ok" if outputs else "warn", f"IPC 可用，连接输出 {len(outputs)} 个"))
         else:
-            checks.append(Check("桌面 IPC", "warn", "当前环境无法连接 Realand IPC；会话可能未启动或环境变量不同"))
+            checks.append(Check("桌面 IPC", "warn", "当前环境无法连接 Clarion IPC；会话可能未启动或环境变量不同"))
     service = which("systemctl")
     pid = 0
     if service:
-        code, content = runner([service, "--user", "show", "realand.service", "-p", "ActiveState", "-p", "MainPID"])
+        code, content = runner([service, "--user", "show", "clarion.service", "-p", "ActiveState", "-p", "MainPID"])
         state, pid = parse_service(content if code == 0 else "")
-        checks.append(Check("用户服务", "ok" if state == "active" else "warn", "Realand 用户服务正在运行" if state == "active" else "Realand 用户服务未运行或无法查询；也可能是手动启动会话"))
+        checks.append(Check("用户服务", "ok" if state == "active" else "warn", "Clarion 用户服务正在运行" if state == "active" else "Clarion 用户服务未运行或无法查询；也可能是手动启动会话"))
     if not pid and which("pgrep"):
-        code, content = runner([which("pgrep"), "-u", str(os.getuid()), "-x", "realand"])
+        code, content = runner([which("pgrep"), "-u", str(os.getuid()), "-x", "clarion"])
         candidates = content.split() if code == 0 else []
         if len(candidates) == 1:
             _, pid = parse_service("MainPID=" + candidates[0])
         elif len(candidates) > 1:
-            checks.append(Check("运行版本", "warn", "检测到多个 Realand 进程，无法确定当前会话版本"))
+            checks.append(Check("运行版本", "warn", "检测到多个 Clarion 进程，无法确定当前会话版本"))
     if compositor and pid:
-        installed = Path("/usr/local/bin/realand")
+        installed = Path("/usr/local/bin/clarion")
         checks.append(check_running_binary(pid, installed if installed.is_file() else compositor))
     elif compositor:
         checks.append(Check("运行版本", "warn", "未确定当前会话进程；不据此宣称运行版本已更新"))
@@ -131,10 +131,10 @@ def collect_checks(config=None, runner=run, which=shutil.which):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Realand 桌面状态自检（只读，不改配置或重启会话）")
+    parser = argparse.ArgumentParser(description="Clarion 桌面状态自检（只读，不改配置或重启会话）")
     parser.add_argument("--json", action="store_true", help="输出结构化结果，不包含配置内容")
     parser.add_argument("--strict", action="store_true", help="警告也返回失败状态")
-    parser.add_argument("--config", type=Path, help="校验指定配置；默认使用 Realand 的配置搜索规则")
+    parser.add_argument("--config", type=Path, help="校验指定配置；默认使用 Clarion 的配置搜索规则")
     args = parser.parse_args(argv)
     checks = collect_checks(args.config)
     failed = any(check.status == "error" or (args.strict and check.status == "warn") for check in checks)

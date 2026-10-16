@@ -1,6 +1,0 @@
-type           = internal
-restart        = false
-depends-on:    realand
-waits-for.d:   $XDG_CONFIG_HOME/dinit.d/realand.d/
-waits-for.d:   $HOME/.config/dinit.d/realand.d/
-waits-for.d:   /etc/dinit.d/user/realand.d/

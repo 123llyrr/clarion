@@ -2,8 +2,8 @@ use std::array;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use clarion_config::CornerRadius;
 use glam::{Mat3, Vec2};
-use realand_config::CornerRadius;
 use smithay::backend::renderer::element::{Element, Id, RenderElement};
 use smithay::backend::renderer::gles::{
     GlesError, GlesFrame, GlesRenderer, GlesTexProgram, Uniform,
@@ -100,8 +100,16 @@ impl Xray {
         }
     }
 
+    /// Context replacement retires every display/capture cache, including
+    /// targets that may never render again after a screenshot or overlay closes.
+    pub(crate) fn invalidate_native_resources(&self) {
+        for buffer in self.background.iter().chain(&self.backdrop) {
+            buffer.borrow_mut().invalidate_native_resources();
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
-    pub fn render<R: crate::render_helpers::renderer::RealandRenderer>(
+    pub fn render<R: crate::render_helpers::renderer::ClarionRenderer>(
         &self,
         ctx: RenderCtx<R>,
         params: RenderParams,
@@ -150,7 +158,7 @@ impl Xray {
                 // covered.
                 //
                 // FIXME: also implement some way to check if the background elements are fully
-                // covered in opaque regions, and not just the realand background color is opaque
+                // covered in opaque regions, and not just the clarion background color is opaque
                 let crop = if bg_color.is_opaque() && ws_geo.contains_rect(geo_in_backdrop) {
                     skip_backdrop = true;
                     // No need to intersect, we know it's fully covered.
@@ -271,7 +279,7 @@ impl Xray {
 impl XrayElement {
     fn compute_uniforms(&self) -> [Uniform<'static>; 8] {
         [
-            Uniform::new("realand_scale", self.scale),
+            Uniform::new("clarion_scale", self.scale),
             Uniform::new("geo_size", <[f32; 2]>::from(self.clip_geo_size)),
             Uniform::new("corner_radius", <[f32; 4]>::from(self.corner_radius)),
             mat3_uniform("input_to_geo", self.input_to_clip_geo),

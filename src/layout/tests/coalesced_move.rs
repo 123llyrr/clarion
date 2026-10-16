@@ -1,6 +1,6 @@
 use super::*;
 
-fn desktop(mode: realand_ipc::TilingMode, floating: bool) -> Layout<TestWindow> {
+fn desktop(mode: clarion_ipc::TilingMode, floating: bool) -> Layout<TestWindow> {
     let mut options = Options::default();
     options.animations.off = true;
     options.layout.auto_stack_new_windows = false;
@@ -31,8 +31,8 @@ fn begin(layout: &mut Layout<TestWindow>) -> Output {
 #[test]
 fn coalesced_move_releases_at_the_latest_pose_in_every_layout() {
     for mode in [
-        realand_ipc::TilingMode::Scrolling,
-        realand_ipc::TilingMode::Dwindle,
+        clarion_ipc::TilingMode::Scrolling,
+        clarion_ipc::TilingMode::Dwindle,
     ] {
         for floating in [false, true] {
             let mut queued = desktop(mode, floating);
@@ -79,7 +79,7 @@ fn coalesced_move_releases_at_the_latest_pose_in_every_layout() {
 #[test]
 fn cancel_and_destroy_discard_pending_motion_without_resurrection() {
     for destroy in [false, true] {
-        let mut layout = desktop(realand_ipc::TilingMode::Scrolling, true);
+        let mut layout = desktop(clarion_ipc::TilingMode::Scrolling, true);
         let output = begin(&mut layout);
         layout.queue_interactive_move_update(&0, (400., 50.).into(), output, (500., 150.).into());
         if destroy {
@@ -98,7 +98,7 @@ fn cancel_and_destroy_discard_pending_motion_without_resurrection() {
 
 #[test]
 fn output_removal_flushes_motion_before_detaching_the_destination() {
-    let mut layout = desktop(realand_ipc::TilingMode::Dwindle, true);
+    let mut layout = desktop(clarion_ipc::TilingMode::Dwindle, true);
     let output = begin(&mut layout);
     layout.queue_interactive_move_update(
         &0,

@@ -196,6 +196,11 @@ impl Work {
     }
 }
 
+enum Message {
+    Work(Submission),
+    Wake(super::lifecycle::Wake),
+}
+
 struct Submission {
     work: Work,
     wakeup: Option<Ping>,
@@ -215,16 +220,16 @@ impl Drop for CompletionPermit {
 
 #[derive(Debug)]
 pub(super) struct CompletionQueue {
-    sender: mpsc::SyncSender<Submission>,
+    sender: Arc<mpsc::SyncSender<Message>>,
     outstanding: Arc<AtomicUsize>,
     capacity: usize,
 }
 
 impl CompletionQueue {
     #[cfg(test)]
-    fn paused(sender: mpsc::SyncSender<Submission>, capacity: usize) -> Self {
+    fn paused(sender: mpsc::SyncSender<Message>, capacity: usize) -> Self {
         Self {
-            sender,
+            sender: Arc::new(sender),
             outstanding: Arc::new(AtomicUsize::new(0)),
             capacity,
         }
@@ -233,37 +238,44 @@ impl CompletionQueue {
         // Bound completed-but-not-yet-destroyed work as well as pending GPU
         // work. A busy teardown worker must not turn fast GPU submissions into
         // an unbounded queue of client buffers and textures.
-        let (sender, receiver) = mpsc::sync_channel::<Submission>(16);
-        std::thread::Builder::new()
-            .name("realand-vk-completion".into())
-            .spawn(move || {
-                while let Ok(Submission {
+        let (sender, receiver) = mpsc::sync_channel::<Message>(17);
+        let sender = Arc::new(sender);
+        let wake = super::lifecycle::queue_waker(&sender, Message::Wake);
+        super::lifecycle::spawn_worker("clarion-vk-completion", wake, move |stop| {
+            fn retire(submission: Submission) {
+                let Submission {
                     work,
                     wakeup,
                     _permit,
-                }) = receiver.recv()
-                {
-                    // Never hold the queue/command-pool lock while waiting. A
-                    // busy GPU may legitimately take longer than the bounded
-                    // synchronous renderer wait. Renderer teardown disconnects
-                    // this channel without joining a possibly stalled device;
-                    // each owner keeps its context alive until completion.
-                    if let Err(err) = work.wait() {
-                        warn!(?err, "Vulkan completion worker fence wait failed");
-                    }
-                    // The owners' existing Drop path handles failed waits by
-                    // retaining in-flight resources instead of freeing them.
-                    drop(work);
-                    // Capacity must be visible before the wakeup retries a frame.
-                    drop(_permit);
-                    if let Some(wakeup) = wakeup {
-                        // Buffer::drop queues wl_buffer.release and signals an
-                        // explicit release point. Wake only after those drops,
-                        // so the event loop's ordinary client flush sees them.
-                        wakeup.ping();
+                } = submission;
+                // The lifecycle join acknowledgement follows wait, GPU/lease
+                // retirement, permit release and thread-local destructors.
+                if let Err(error) = work.wait() {
+                    warn!(?error, "Vulkan completion worker fence wait failed");
+                }
+                drop(work);
+                drop(_permit);
+                if let Some(wakeup) = wakeup {
+                    wakeup.ping();
+                }
+            }
+            while let Ok(message) = receiver.recv() {
+                match message {
+                    Message::Work(submission) => retire(submission),
+                    Message::Wake(wake) => {
+                        drop(wake);
+                        if stop.should_exit() {
+                            for message in receiver.try_iter() {
+                                if let Message::Work(submission) = message {
+                                    retire(submission);
+                                }
+                            }
+                            break;
+                        }
                     }
                 }
-            })?;
+            }
+        })?;
         Ok(Self {
             sender,
             outstanding: Arc::new(AtomicUsize::new(0)),
@@ -272,6 +284,9 @@ impl CompletionQueue {
     }
 
     pub(super) fn reserve(&self) -> Option<CompletionPermit> {
+        if super::lifecycle::is_closing() {
+            return None;
+        }
         self.outstanding
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                 (count < self.capacity).then_some(count + 1)
@@ -311,16 +326,19 @@ impl CompletionQueue {
         wakeup: Option<Ping>,
         permit: CompletionPermit,
     ) -> Result<(), &'static str> {
-        match self.sender.try_send(Submission {
+        match self.sender.try_send(Message::Work(Submission {
             work,
             wakeup,
             _permit: permit,
-        }) {
+        })) {
             Ok(()) => Ok(()),
             Err(error) => {
                 let (submission, disconnected) = match error {
                     mpsc::TrySendError::Full(submission) => (submission, false),
                     mpsc::TrySendError::Disconnected(submission) => (submission, true),
+                };
+                let Message::Work(submission) = submission else {
+                    unreachable!()
                 };
                 // Reservations make Full unreachable in normal operation. On
                 // an exceptional worker failure, never run a GPU wait from an
@@ -342,6 +360,7 @@ impl CompletionQueue {
                         wakeup.ping();
                     }
                 } else {
+                    super::lifecycle::record_quarantine();
                     std::mem::forget(submission);
                 }
                 Err(if disconnected {
@@ -429,7 +448,10 @@ mod tests {
         );
         // The queued worker still exists after immediate render-thread cleanup.
         // It must use its independent sync file, not the recycled VkFence.
-        receiver.recv().unwrap().work.wait().unwrap();
+        let Message::Work(submission) = receiver.recv().unwrap() else {
+            panic!("paused queue received an unexpected control message")
+        };
+        submission.work.wait().unwrap();
         assert!(pending.retire_completed().unwrap());
         assert!(sync.is_reached());
         assert!(sync.export().is_some());

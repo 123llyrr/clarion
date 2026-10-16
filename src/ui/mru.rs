@@ -6,12 +6,12 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use anyhow::ensure;
-use pango::FontDescription;
-use pangocairo::cairo::{self, ImageSurface};
-use realand_config::{
+use clarion_config::{
     Action, Bind, Color, Config, CornerRadius, GradientInterpolation, Key, Modifiers, MruDirection,
     MruFilter, MruScope, Trigger,
 };
+use pango::FontDescription;
+use pangocairo::cairo::{self, ImageSurface};
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::element::utils::{
     Relocate, RelocateRenderElement, RescaleRenderElement,
@@ -24,10 +24,11 @@ use smithay::output::Output;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Size, Transform};
 
 use crate::animation::{Animation, Clock};
-use crate::compositor::Realand;
+use crate::clarion_render_elements;
+use crate::compositor::Clarion;
 use crate::layout::focus_ring::{FocusRing, FocusRingRenderElement};
+use crate::layout::scene_source::WindowLookup;
 use crate::layout::{Layout, LayoutElement as _, LayoutElementRenderElement};
-use crate::realand_render_elements;
 use crate::render_helpers::border::BorderRenderElement;
 use crate::render_helpers::clipped_surface::ClippedSurfaceRenderElement;
 use crate::render_helpers::gradient_fade_texture::{
@@ -35,7 +36,7 @@ use crate::render_helpers::gradient_fade_texture::{
 };
 use crate::render_helpers::offscreen::{OffscreenBuffer, OffscreenData, OffscreenRenderElement};
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
-use crate::render_helpers::renderer::RealandRenderer;
+use crate::render_helpers::renderer::ClarionRenderer;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
 use crate::render_helpers::vulkan::VulkanTexture;
@@ -110,7 +111,7 @@ pub enum MruCloseRequest {
     Confirm,
 }
 
-realand_render_elements! {
+clarion_render_elements! {
     ThumbnailRenderElement<R> => {
         LayoutElement = LayoutElementRenderElement<R>,
         ClippedSurface = ClippedSurfaceRenderElement<R>,
@@ -118,7 +119,7 @@ realand_render_elements! {
     }
 }
 
-realand_render_elements! {
+clarion_render_elements! {
     WindowMruUiRenderElement<R> => {
         SolidColor = SolidColorRenderElement,
         TextureElement = PrimaryGpuTextureRenderElement,
@@ -220,7 +221,7 @@ impl MruTexture {
 
 /// Upload rasterized ARGB8888 text to the active renderer backend.
 fn upload_text_texture(
-    renderer: &mut impl RealandRenderer,
+    renderer: &mut impl ClarionRenderer,
     data: &[u8],
     width: i32,
     height: i32,
@@ -293,7 +294,7 @@ struct Thumbnail {
     size: Size<i32, Logical>,
 
     clock: Clock,
-    config: realand_config::MruPreviews,
+    config: clarion_config::MruPreviews,
     open_animation: Option<Animation>,
     move_animation: Option<MoveAnimation>,
     title_texture: RefCell<TitleTexture>,
@@ -302,16 +303,16 @@ struct Thumbnail {
 }
 
 impl Thumbnail {
-    fn from_mapped(mapped: &Mapped, clock: Clock, config: realand_config::MruPreviews) -> Self {
+    fn from_mapped(mapped: &Mapped, clock: Clock, config: clarion_config::MruPreviews) -> Self {
         let app_id = with_toplevel_role(mapped.toplevel(), |role| role.app_id.clone());
 
-        let background = FocusRing::new(realand_config::FocusRing {
+        let background = FocusRing::new(clarion_config::FocusRing {
             off: false,
             width: 0.,
             active_gradient: None,
             ..Default::default()
         });
-        let border = FocusRing::new(realand_config::FocusRing {
+        let border = FocusRing::new(clarion_config::FocusRing {
             off: false,
             active_gradient: None,
             ..Default::default()
@@ -345,7 +346,7 @@ impl Thumbnail {
     }
 
     /// Animate thumbnail motion from given location.
-    fn animate_move_from_with_config(&mut self, from: f64, config: realand_config::Animation) {
+    fn animate_move_from_with_config(&mut self, from: f64, config: clarion_config::Animation) {
         // Scope/filter updates also visit thumbnails whose target hasn't moved.
         // Keep their existing motion and deadline, or stay idle if already settled.
         if from == 0. {
@@ -369,7 +370,7 @@ impl Thumbnail {
         });
     }
 
-    fn animate_open_with_config(&mut self, config: realand_config::Animation) {
+    fn animate_open_with_config(&mut self, config: clarion_config::Animation) {
         self.open_animation = Some(Animation::new(self.clock.clone(), 0., 1., 0., config));
     }
 
@@ -406,7 +407,7 @@ impl Thumbnail {
 
     fn title_texture(
         &self,
-        renderer: &mut impl RealandRenderer,
+        renderer: &mut impl ClarionRenderer,
         mapped: &Mapped,
         scale: f64,
     ) -> Option<MruTexture> {
@@ -418,11 +419,11 @@ impl Thumbnail {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn render<R: RealandRenderer>(
+    fn render<R: ClarionRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
-        config: &realand_config::RecentWindows,
-        layout: &realand_config::Layout,
+        config: &clarion_config::RecentWindows,
+        layout: &clarion_config::Layout,
         mapped: &Mapped,
         preview_geo: Rectangle<f64, Logical>,
         scale: f64,
@@ -430,7 +431,7 @@ impl Thumbnail {
         bob_y: f64,
         push: &mut dyn FnMut(WindowMruUiRenderElement<R>),
     ) {
-        let _span = realand_tracy_span!("Thumbnail::render");
+        let _span = clarion_tracy_span!("Thumbnail::render");
 
         let round = move |logical: f64| round_logical_in_physical(scale, logical);
         let padding = round(config.highlight.padding);
@@ -680,8 +681,8 @@ impl Thumbnail {
 }
 
 impl WindowMru {
-    pub fn new(realand: &Realand) -> Self {
-        let Some(output) = realand.layout.active_output() else {
+    pub fn new(clarion: &Clarion) -> Self {
+        let Some(output) = clarion.layout.active_output() else {
             return Self {
                 thumbnails: Vec::new(),
                 current_id: None,
@@ -690,15 +691,15 @@ impl WindowMru {
             };
         };
 
-        let config = realand.config.borrow().recent_windows.previews;
+        let config = clarion.config.borrow().recent_windows.previews;
         let mut thumbnails = Vec::new();
-        for (mon, ws_idx, ws) in realand.layout.workspaces() {
+        for (mon, ws_idx, ws) in clarion.layout.workspaces() {
             let mon = mon.expect("an active output exists so all workspaces have a monitor");
             let on_current_output = mon.output() == output;
             let on_current_workspace = on_current_output && mon.active_workspace_idx() == ws_idx;
 
             for mapped in ws.windows() {
-                let mut thumbnail = Thumbnail::from_mapped(mapped, realand.clock.clone(), config);
+                let mut thumbnail = Thumbnail::from_mapped(mapped, clarion.clock.clone(), config);
                 thumbnail.on_current_output = on_current_output;
                 thumbnail.on_current_workspace = on_current_workspace;
                 thumbnails.push(thumbnail);
@@ -999,7 +1000,7 @@ impl ViewPos {
     fn animate_from_with_config(
         &mut self,
         from: f64,
-        config: realand_config::Animation,
+        config: clarion_config::Animation,
         clock: Clock,
     ) {
         let velocity = match self {
@@ -1246,9 +1247,9 @@ impl WindowMruUi {
         }
     }
 
-    pub fn render_output<R: RealandRenderer>(
+    pub fn render_output<R: ClarionRenderer>(
         &self,
-        realand: &Realand,
+        windows: &dyn WindowLookup<Mapped>,
         output: &Output,
         mut ctx: RenderCtx<R>,
         push: &mut dyn FnMut(WindowMruUiRenderElement<R>),
@@ -1269,7 +1270,7 @@ impl WindowMruUi {
             }
         };
 
-        let _span = realand_tracy_span!("WindowMruUi::render_output");
+        let _span = clarion_tracy_span!("WindowMruUi::render_output");
 
         let alpha = progress.clamp(0., 1.) as f32;
         self.record_offscreen_render(output, ctx.target, None);
@@ -1295,7 +1296,7 @@ impl WindowMruUi {
         if *output == inner.output && alpha < 1. {
             if let Some(mut gles_ctx) = ctx.as_gles() {
                 let mut elems = Vec::new();
-                inner.render(realand, gles_ctx.r(), &mut |elem| elems.push(elem));
+                inner.render(windows, gles_ctx.r(), &mut |elem| elems.push(elem));
                 elems.push(WindowMruUiRenderElement::SolidColor(render_backdrop(1.)));
 
                 let scale = output.current_scale().fractional_scale();
@@ -1314,7 +1315,7 @@ impl WindowMruUi {
                 }
             } else if let Some(mut native_ctx) = ctx.as_native() {
                 let mut elems = Vec::new();
-                inner.render(realand, native_ctx.r(), &mut |elem| elems.push(elem));
+                inner.render(windows, native_ctx.r(), &mut |elem| elems.push(elem));
                 elems.push(WindowMruUiRenderElement::SolidColor(render_backdrop(1.)));
 
                 let scale = output.current_scale().fractional_scale();
@@ -1370,7 +1371,7 @@ impl WindowMruUi {
         // This is not used as fallback when offscreen fails to render because it looks better to
         // hide the previews immediately than to render them with alpha = 1. during a fade-out.
         if *output == inner.output && alpha == 1. {
-            inner.render(realand, ctx, &mut |elem| push(elem));
+            inner.render(windows, ctx, &mut |elem| push(elem));
         }
 
         // This is used for both normal elems and for other outputs.
@@ -1427,6 +1428,39 @@ impl WindowMruUi {
             }
             _ => self.are_animations_ongoing(),
         }
+    }
+
+    /// Live thumbnails can be rebuilt; discard the old device's composed fade.
+    pub(crate) fn on_native_renderer_replaced(&self) {
+        let inner = match &self.state {
+            UiState::Open(inner) | UiState::Closing { inner, .. } => inner,
+            UiState::Closed { .. } => return,
+        };
+        // Include filtered/out-of-view thumbnails: they may never render again
+        // before the next device replacement, but still own native text images.
+        for thumbnail in &inner.wmru.thumbnails {
+            let mut title = thumbnail.title_texture.borrow_mut();
+            if matches!(&title.texture, Some(Some(MruTexture::Vulkan(_)))) {
+                title.texture = None;
+                title.renderer_context = None;
+            }
+        }
+        let mut panel = inner.scope_panel.borrow_mut();
+        if panel
+            .textures
+            .as_ref()
+            .and_then(Option::as_ref)
+            .is_some_and(|textures| {
+                textures
+                    .iter()
+                    .any(|texture| matches!(texture, MruTexture::Vulkan(_)))
+            })
+        {
+            panel.textures = None;
+            panel.renderer_context = None;
+        }
+        inner.native_offscreen.clear();
+        inner.offscreen_data.borrow_mut().take();
     }
 
     /// Discard an overlay whose output disappeared, including a closing fade's textures.
@@ -1820,9 +1854,9 @@ impl Inner {
         })
     }
 
-    fn render<R: RealandRenderer>(
+    fn render<R: ClarionRenderer>(
         &self,
-        realand: &Realand,
+        windows: &dyn WindowLookup<Mapped>,
         mut ctx: RenderCtx<R>,
         push: &mut dyn FnMut(WindowMruUiRenderElement<R>),
     ) {
@@ -1872,7 +1906,7 @@ impl Inner {
 
         for (thumbnail, geo) in self.thumbnails_in_view_render() {
             let id = thumbnail.id;
-            let Some((_, mapped)) = realand.layout.windows().find(|(_, m)| m.id() == id) else {
+            let Some(mapped) = windows.window(id.get()) else {
                 error!("window in the MRU must be present in the layout");
                 continue;
             };
@@ -1929,7 +1963,7 @@ impl Inner {
 impl TitleTexture {
     fn get(
         &mut self,
-        renderer: &mut impl RealandRenderer,
+        renderer: &mut impl ClarionRenderer,
         title: &str,
         scale: f64,
     ) -> Option<MruTexture> {
@@ -1959,11 +1993,11 @@ impl TitleTexture {
 }
 
 pub(crate) fn generate_title_texture(
-    renderer: &mut impl RealandRenderer,
+    renderer: &mut impl ClarionRenderer,
     title: &str,
     scale: f64,
 ) -> anyhow::Result<MruTexture> {
-    let _span = realand_tracy_span!("mru::generate_title_texture");
+    let _span = clarion_tracy_span!("mru::generate_title_texture");
 
     let mut font = FontDescription::from_string(FONT);
     font.set_absolute_size(to_physical_precise_round(scale, font.size()));
@@ -1998,7 +2032,7 @@ pub(crate) fn generate_title_texture(
 impl ScopePanel {
     fn get(
         &mut self,
-        renderer: &mut impl RealandRenderer,
+        renderer: &mut impl ClarionRenderer,
         scale: f64,
         scope: MruScope,
     ) -> Option<MruTexture> {
@@ -2017,7 +2051,7 @@ impl ScopePanel {
 }
 
 fn generate_scope_panels(
-    renderer: &mut impl RealandRenderer,
+    renderer: &mut impl ClarionRenderer,
     scale: f64,
 ) -> anyhow::Result<[MruTexture; 3]> {
     fn make_panel_text(idx: usize) -> String {
@@ -2058,11 +2092,11 @@ fn generate_scope_panels(
 }
 
 fn render_panel(
-    renderer: &mut impl RealandRenderer,
+    renderer: &mut impl ClarionRenderer,
     scale: f64,
     text: &str,
 ) -> anyhow::Result<MruTexture> {
-    let _span = realand_tracy_span!("mru::render_panel");
+    let _span = clarion_tracy_span!("mru::render_panel");
 
     let mut font = FontDescription::from_string(FONT);
     font.set_absolute_size(to_physical_precise_round(scale, font.size()));

@@ -26,11 +26,11 @@ pub struct Manager {
     pub pointer_locator: PointerLocator,
 }
 
-pub enum A11yManagerToRealand {
+pub enum A11yManagerToClarion {
     QueryPointer,
 }
 
-pub enum RealandToA11yManager {
+pub enum ClarionToA11yManager {
     PointerContents(Option<(PointerAppData, f64, f64)>),
 }
 
@@ -87,8 +87,8 @@ pub struct PointerAppData {
 pub struct PointerLocator {
     data: Arc<Mutex<PointerData>>,
     iface: Arc<OnceLock<InterfaceRef<Self>>>,
-    to_realand: calloop::channel::Sender<A11yManagerToRealand>,
-    from_realand: async_channel::Receiver<RealandToA11yManager>,
+    to_clarion: calloop::channel::Sender<A11yManagerToClarion>,
+    from_clarion: async_channel::Receiver<ClarionToA11yManager>,
 }
 
 #[derive(DBusError, Debug)]
@@ -261,7 +261,7 @@ impl KeyboardMonitor {
         keysym: Keysym,
         unichar: u32,
     ) -> KbMonBlock {
-        let _span = realand_tracy_span!("KeyboardMonitor::process_key");
+        let _span = clarion_tracy_span!("KeyboardMonitor::process_key");
 
         let mut ctxt = self.iface.get().unwrap().signal_emitter().clone();
 
@@ -270,7 +270,7 @@ impl KeyboardMonitor {
         // Emit key events as necessary.
         for (name, client) in &data.clients {
             if client.should_watch_keypress(&data.suppressed_keys, mods, keysym) {
-                let _span = realand_tracy_span!("emitting key event");
+                let _span = clarion_tracy_span!("emitting key event");
 
                 // Emit to that client only.
                 ctxt = ctxt.set_destination(BusName::Unique(name.as_ref()));
@@ -442,16 +442,16 @@ impl PointerLocator {
         };
         let sender = OwnedUniqueName::from(sender.to_owned());
 
-        if let Err(err) = self.to_realand.send(A11yManagerToRealand::QueryPointer) {
-            warn!("error sending message to realand: {err:?}");
+        if let Err(err) = self.to_clarion.send(A11yManagerToClarion::QueryPointer) {
+            warn!("error sending message to clarion: {err:?}");
             return Err(A11yError::Failed("internal error".to_owned()));
         }
 
-        let rv = match self.from_realand.recv().await {
-            Ok(RealandToA11yManager::PointerContents(Some((data, x, y)))) => Ok((data, x, y)),
-            Ok(RealandToA11yManager::PointerContents(None)) => Err(A11yError::UnknownToplevel),
+        let rv = match self.from_clarion.recv().await {
+            Ok(ClarionToA11yManager::PointerContents(Some((data, x, y)))) => Ok((data, x, y)),
+            Ok(ClarionToA11yManager::PointerContents(None)) => Err(A11yError::UnknownToplevel),
             Err(err) => {
-                warn!("error receiving message from realand: {err:?}");
+                warn!("error receiving message from clarion: {err:?}");
                 Err(A11yError::Failed("internal error".to_owned()))
             }
         };
@@ -487,7 +487,7 @@ impl PointerLocator {
 
         let mut data = self.data.lock().unwrap();
         for name in &data.clients {
-            let _span = realand_tracy_span!("emitting pointer_position_changed");
+            let _span = clarion_tracy_span!("emitting pointer_position_changed");
 
             ctxt = ctxt.set_destination(BusName::Unique(name.as_ref()));
             let ctxt = &ctxt;
@@ -549,16 +549,16 @@ async fn monitor_disappeared_clients(
 
 impl Manager {
     pub fn new(
-        to_realand: calloop::channel::Sender<A11yManagerToRealand>,
-        from_realand: async_channel::Receiver<RealandToA11yManager>,
+        to_clarion: calloop::channel::Sender<A11yManagerToClarion>,
+        from_clarion: async_channel::Receiver<ClarionToA11yManager>,
     ) -> Self {
         Self {
             keyboard_monitor: KeyboardMonitor::default(),
             pointer_locator: PointerLocator {
                 data: Default::default(),
                 iface: Default::default(),
-                to_realand,
-                from_realand,
+                to_clarion,
+                from_clarion,
             },
         }
     }
@@ -633,11 +633,11 @@ impl State {
         keycode: Keycode,
         state: KeyState,
     ) -> KbMonBlock {
-        if self.realand.a11y_manager.is_none() {
+        if self.clarion.a11y_manager.is_none() {
             return KbMonBlock::Pass;
         }
 
-        let keyboard = self.realand.seat.get_keyboard().unwrap();
+        let keyboard = self.clarion.seat.get_keyboard().unwrap();
 
         let (mods, keysym, unichar) = keyboard.with_xkb_state(self, |context| {
             let xkb = context.xkb().lock().unwrap();
@@ -651,11 +651,11 @@ impl State {
             (mods, keysym, unichar)
         });
 
-        let config = self.realand.config.borrow();
+        let config = self.clarion.config.borrow();
         let repeat_delay = Duration::from_millis(u64::from(config.input.keyboard.repeat_delay));
         let released = state == KeyState::Released;
 
-        let Some(manager) = &self.realand.a11y_manager else {
+        let Some(manager) = &self.clarion.a11y_manager else {
             return KbMonBlock::Pass;
         };
         let monitor = &manager.keyboard_monitor;
@@ -663,7 +663,7 @@ impl State {
     }
 
     pub fn a11y_notify_pointer_motion(&mut self) {
-        let Some(manager) = &self.realand.a11y_manager else {
+        let Some(manager) = &self.clarion.a11y_manager else {
             return;
         };
 
@@ -672,18 +672,18 @@ impl State {
 
     pub fn on_a11y_manager_msg(
         &mut self,
-        to_a11y: &async_channel::Sender<RealandToA11yManager>,
-        msg: A11yManagerToRealand,
+        to_a11y: &async_channel::Sender<ClarionToA11yManager>,
+        msg: A11yManagerToClarion,
     ) {
-        let A11yManagerToRealand::QueryPointer = msg;
-        let _span = realand_tracy_span!("QueryPointer");
+        let A11yManagerToClarion::QueryPointer = msg;
+        let _span = clarion_tracy_span!("QueryPointer");
 
-        let pointer = &self.realand.seat.get_pointer().unwrap();
+        let pointer = &self.clarion.seat.get_pointer().unwrap();
         let pointer_pos = pointer.current_location();
 
         // Grabs can modify pointer focus, but here let's ignore them. I'm not entirely sure what's
         // expected by a11y users though.
-        let contents = match &self.realand.pointer_contents {
+        let contents = match &self.clarion.pointer_contents {
             PointContents {
                 surface: Some((surface, surface_pos)),
                 ..
@@ -709,12 +709,12 @@ impl State {
                 }
             }
             _ => {
-                // The focused client is realand itself.
+                // The focused client is clarion itself.
                 Some((PointerAppData::default(), pointer_pos.x, pointer_pos.y))
             }
         };
 
-        let msg = RealandToA11yManager::PointerContents(contents);
+        let msg = ClarionToA11yManager::PointerContents(contents);
         if let Err(err) = to_a11y.send_blocking(msg) {
             warn!("error sending pointer contents to a11y manager: {err:?}");
         }

@@ -4,10 +4,10 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
+use clarion_config::Config;
 use ordered_float::NotNan;
 use pangocairo::cairo::{self, ImageSurface};
 use pangocairo::pango::FontDescription;
-use realand_config::Config;
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::{ContextId, ImportMem, Texture};
 use smithay::output::Output;
@@ -17,7 +17,7 @@ use smithay::utils::{Point, Transform};
 
 use crate::animation::{Animation, Clock};
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
-use crate::render_helpers::renderer::RealandRenderer;
+use crate::render_helpers::renderer::ClarionRenderer;
 use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
 use crate::utils::{output_size, to_physical_precise_round};
 
@@ -143,7 +143,16 @@ impl ConfigErrorNotification {
         !matches!(self.state, State::Hidden)
     }
 
-    pub fn render<R: RealandRenderer>(
+    pub(crate) fn on_native_renderer_replaced(&self) {
+        if let Some(cache) = self
+            .buffers
+            .get::<NotificationTextures<crate::render_helpers::vulkan::VulkanTexture>>()
+        {
+            cache.0.borrow_mut().clear();
+        }
+    }
+
+    pub fn render<R: ClarionRenderer>(
         &self,
         renderer: &mut R,
         output: &Output,
@@ -224,7 +233,7 @@ where
     R: ImportMem,
     R::Error: std::error::Error + Send + Sync + 'static,
 {
-    let _span = realand_tracy_span!("config_error_notification::render");
+    let _span = clarion_tracy_span!("config_error_notification::render");
 
     let padding: i32 = to_physical_precise_round(scale, PADDING);
 
@@ -294,9 +303,9 @@ where
 
 pub fn error_text(markup: bool) -> String {
     let command = if markup {
-        "<span face='monospace' bgcolor='#000000'>realand validate</span>"
+        "<span face='monospace' bgcolor='#000000'>clarion validate</span>"
     } else {
-        "realand validate"
+        "clarion validate"
     };
 
     format!("Failed to parse the config file. Please run {command} to see the errors.")

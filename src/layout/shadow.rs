@@ -1,6 +1,6 @@
 use std::iter::zip;
 
-use realand_config::CornerRadius;
+use clarion_config::CornerRadius;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
 use crate::render_helpers::renderer::DecorationRenderer;
@@ -10,11 +10,11 @@ use crate::render_helpers::shadow::ShadowRenderElement;
 pub struct Shadow {
     shader_rects: Vec<Rectangle<f64, Logical>>,
     shaders: Vec<ShadowRenderElement>,
-    config: realand_config::Shadow,
+    config: clarion_config::Shadow,
 }
 
 impl Shadow {
-    pub fn new(config: realand_config::Shadow) -> Self {
+    pub fn new(config: clarion_config::Shadow) -> Self {
         Self {
             shader_rects: Vec::new(),
             shaders: Vec::new(),
@@ -22,7 +22,7 @@ impl Shadow {
         }
     }
 
-    pub fn update_config(&mut self, config: realand_config::Shadow) {
+    pub fn update_config(&mut self, config: clarion_config::Shadow) {
         self.config = config;
     }
 

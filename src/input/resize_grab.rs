@@ -39,11 +39,11 @@ impl ResizeGrab {
     }
 
     fn on_ungrab(&mut self, state: &mut State) {
-        state.realand.layout.interactive_resize_end(&self.window);
+        state.clarion.layout.interactive_resize_end(&self.window);
 
         if !self.start_data.is_touch() {
             state
-                .realand
+                .clarion
                 .cursor_manager
                 .set_cursor_image(CursorImageStatus::default_named());
         }
@@ -56,7 +56,7 @@ impl ResizeGrab {
         }
 
         let delta = self.new_location - self.start_data.location();
-        data.realand
+        data.clarion
             .layout
             .interactive_resize_update(&self.window, delta)
     }

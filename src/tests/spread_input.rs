@@ -1,5 +1,5 @@
-use realand_config::Config;
-use realand_ipc::PositionChange;
+use clarion_config::Config;
+use clarion_ipc::PositionChange;
 use smithay::desktop::Window;
 use smithay::input::keyboard::Keysym;
 use smithay::input::pointer::MotionEvent;
@@ -17,7 +17,7 @@ use crate::layout::HitType;
 fn setup() -> (Fixture, Window, Window) {
     let mut config = Config::default();
     config.layout.auto_stack_new_windows = false;
-    config.input.focus_follows_mouse = Some(realand_config::input::FocusFollowsMouse {
+    config.input.focus_follows_mouse = Some(clarion_config::input::FocusFollowsMouse {
         max_scroll_amount: None,
     });
     let mut f = Fixture::with_config(config);
@@ -34,8 +34,8 @@ fn setup() -> (Fixture, Window, Window) {
         window.set_size(100, 100);
         window.ack_last_and_commit();
         f.double_roundtrip(client);
-        let window = f.realand().layout.active_window().unwrap().window.clone();
-        let layout = &mut f.realand().layout;
+        let window = f.clarion().layout.active_window().unwrap().window.clone();
+        let layout = &mut f.clarion().layout;
         layout.set_window_floating(Some(&window), true);
         layout.move_floating_window(
             Some(&window),
@@ -47,11 +47,11 @@ fn setup() -> (Fixture, Window, Window) {
     }
     let first = windows.remove(0);
     let second = windows.remove(0);
-    f.realand().layout.activate_window(&first);
-    f.realand_complete_animations();
-    let pointer = f.realand().seat.get_pointer().unwrap();
+    f.clarion().layout.activate_window(&first);
+    f.clarion_complete_animations();
+    let pointer = f.clarion().seat.get_pointer().unwrap();
     pointer.motion(
-        f.realand_state(),
+        f.clarion_state(),
         None,
         &MotionEvent {
             location: Point::from((100., 100.)),
@@ -59,7 +59,7 @@ fn setup() -> (Fixture, Window, Window) {
             time: 1,
         },
     );
-    pointer.frame(f.realand_state());
+    pointer.frame(f.clarion_state());
     (f, first, second)
 }
 
@@ -70,7 +70,7 @@ fn preview_point(f: &mut Fixture, output: &Output, window: &Window) -> Point<f64
     for y in (80..800).step_by(16) {
         for x in (16..1280).step_by(16) {
             let point = Point::from((x as f64, y as f64));
-            if f.realand()
+            if f.clarion()
                 .layout
                 .window_under(output, point)
                 .is_some_and(|(mapped, _)| mapped.window == *window)
@@ -85,28 +85,28 @@ fn preview_point(f: &mut Fixture, output: &Output, window: &Window) -> Point<f64
 #[test]
 fn closing_spread_previews_do_not_activate_or_deliver_client_input() {
     let (mut f, first, second) = setup();
-    let output = f.realand_output(1);
-    f.realand().layout.toggle_window_spread();
-    f.realand_complete_animations();
+    let output = f.clarion_output(1);
+    f.clarion().layout.toggle_window_spread();
+    f.clarion_complete_animations();
     let point = preview_point(&mut f, &output, &second);
-    assert!(f.realand().contents_under(point).window.is_some());
-    f.realand().layout.spread_key(Keysym::Escape);
-    assert!(f.realand().layout.is_window_spread_closing());
+    assert!(f.clarion().contents_under(point).window.is_some());
+    f.clarion().layout.spread_key(Keysym::Escape);
+    assert!(f.clarion().layout.is_window_spread_closing());
 
     // The compositor still paints this preview, but it cannot receive a real
     // app click or become the target of a new move/resize grab on the way out.
-    let (mapped, hit) = f.realand().layout.window_under(&output, point).unwrap();
+    let (mapped, hit) = f.clarion().layout.window_under(&output, point).unwrap();
     assert_eq!(mapped.window, second);
     assert!(matches!(hit, HitType::Activate { .. }));
-    assert!(f.realand().window_under(point).is_none());
-    let under = f.realand().contents_under(point);
+    assert!(f.clarion().window_under(point).is_none());
+    let under = f.clarion().contents_under(point);
     assert_eq!(under.output.as_ref(), Some(&output));
     assert!(under.window.is_none());
     assert!(under.surface.is_none());
 
-    f.realand_complete_animations();
-    assert!(!f.realand().layout.is_window_spread_visible());
-    let normal = f.realand().contents_under(Point::from((220., 220.)));
+    f.clarion_complete_animations();
+    assert!(!f.clarion().layout.is_window_spread_visible());
+    let normal = f.clarion().contents_under(Point::from((220., 220.)));
     assert_eq!(normal.window.unwrap().0, first);
     assert!(
         normal.surface.is_some(),
@@ -117,23 +117,23 @@ fn closing_spread_previews_do_not_activate_or_deliver_client_input() {
 #[test]
 fn closing_spread_ignores_stale_hover_then_restores_focus_follows_mouse() {
     let (mut f, first, second) = setup();
-    let output = f.realand_output(1);
-    f.realand().layout.toggle_window_spread();
-    f.realand_complete_animations();
+    let output = f.clarion_output(1);
+    f.clarion().layout.toggle_window_spread();
+    f.clarion_complete_animations();
     let point = preview_point(&mut f, &output, &second);
     // This is the pointer snapshot computed just before the closing action.
-    let stale_hover = f.realand().contents_under(point);
+    let stale_hover = f.clarion().contents_under(point);
     assert_eq!(stale_hover.window.as_ref().unwrap().0, second);
-    f.realand().layout.spread_key(Keysym::Escape);
-    f.realand().handle_focus_follows_mouse(&stale_hover);
-    assert_eq!(f.realand().layout.active_window().unwrap().window, first);
+    f.clarion().layout.spread_key(Keysym::Escape);
+    f.clarion().handle_focus_follows_mouse(&stale_hover);
+    assert_eq!(f.clarion().layout.active_window().unwrap().window, first);
 
-    f.realand_complete_animations();
-    let normal = f.realand().contents_under(Point::from((620., 220.)));
+    f.clarion_complete_animations();
+    let normal = f.clarion().contents_under(Point::from((620., 220.)));
     assert_eq!(normal.window.as_ref().unwrap().0, second);
     assert!(normal.surface.is_some());
-    f.realand().handle_focus_follows_mouse(&normal);
-    assert_eq!(f.realand().layout.active_window().unwrap().window, second);
+    f.clarion().handle_focus_follows_mouse(&normal);
+    assert_eq!(f.clarion().layout.active_window().unwrap().window, second);
 }
 
 #[test]
@@ -157,16 +157,16 @@ fn closing_spread_keeps_top_panel_input_and_on_demand_hover_focus() {
     panel.set_size(1280, 60);
     panel.ack_last_and_commit();
     f.double_roundtrip(client);
-    f.realand_complete_animations();
+    f.clarion_complete_animations();
 
-    f.realand().layout.toggle_window_spread();
-    f.realand_complete_animations();
-    f.realand().layout.spread_key(Keysym::Escape);
-    assert!(f.realand().layout.is_window_spread_closing());
-    let under = f.realand().contents_under(Point::from((640., 20.)));
+    f.clarion().layout.toggle_window_spread();
+    f.clarion_complete_animations();
+    f.clarion().layout.spread_key(Keysym::Escape);
+    assert!(f.clarion().layout.is_window_spread_closing());
+    let under = f.clarion().contents_under(Point::from((640., 20.)));
     assert!(under.surface.is_some());
     assert!(under.layer.is_some());
     assert!(under.window.is_none());
-    f.realand().handle_focus_follows_mouse(&under);
-    assert_eq!(f.realand().layer_shell_on_demand_focus, under.layer);
+    f.clarion().handle_focus_follows_mouse(&under);
+    assert_eq!(f.clarion().layer_shell_on_demand_focus, under.layer);
 }

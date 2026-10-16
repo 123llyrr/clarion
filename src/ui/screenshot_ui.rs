@@ -7,10 +7,10 @@ use std::rc::Rc;
 
 use anyhow::Context;
 use arrayvec::ArrayVec;
+use clarion_config::{Action, Config};
+use clarion_ipc::SizeChange;
 use pango::{Alignment, FontDescription};
 use pangocairo::cairo::{self, ImageSurface};
-use realand_config::{Action, Config};
-use realand_ipc::SizeChange;
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::input::TouchSlot;
 use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement};
@@ -22,8 +22,8 @@ use smithay::output::{Output, WeakOutput};
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 
 use crate::animation::{Animation, Clock};
+use crate::clarion_render_elements;
 use crate::layout::floating::DIRECTIONAL_MOVE_PX;
-use crate::realand_render_elements;
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
@@ -156,7 +156,7 @@ pub struct OutputScreenshot {
     pointer: Option<PrimaryGpuTextureRenderElement>,
 }
 
-realand_render_elements! {
+clarion_render_elements! {
     ScreenshotUiRenderElement => {
         Screenshot = PrimaryGpuTextureRenderElement,
         SolidColor = SolidColorRenderElement,
@@ -884,7 +884,7 @@ impl ScreenshotUi {
         target: RenderTarget,
         push: &mut dyn FnMut(ScreenshotUiRenderElement),
     ) {
-        let _span = realand_tracy_span!("ScreenshotUi::render_output");
+        let _span = clarion_tracy_span!("ScreenshotUi::render_output");
 
         let Self::Open {
             output_data,
@@ -950,7 +950,7 @@ impl ScreenshotUi {
         &self,
         renderer: &mut GlesRenderer,
     ) -> anyhow::Result<PreparedCapture<GlesTexture>> {
-        let _span = realand_tracy_span!("ScreenshotUi::capture");
+        let _span = clarion_tracy_span!("ScreenshotUi::capture");
 
         let Self::Open {
             selection,
@@ -1042,7 +1042,7 @@ impl ScreenshotUi {
         renderer: &mut crate::render_helpers::vulkan::native::NativeRenderer,
     ) -> anyhow::Result<PreparedCapture<crate::render_helpers::vulkan::VulkanTexture>> {
         renderer.set_completion_export_required(false);
-        let _span = realand_tracy_span!("ScreenshotUi::capture_native");
+        let _span = clarion_tracy_span!("ScreenshotUi::capture_native");
 
         let Self::Open {
             selection,
@@ -1598,7 +1598,7 @@ where
     R::TextureId: smithay::backend::renderer::Texture + Clone + 'static,
     R::Error: std::error::Error + Send + Sync + 'static,
 {
-    let _span = realand_tracy_span!("screenshot_ui::render_panel");
+    let _span = clarion_tracy_span!("screenshot_ui::render_panel");
 
     let padding: i32 = to_physical_precise_round(scale, PADDING);
     // Keep the border width even to avoid blurry edges.
@@ -1695,7 +1695,7 @@ where
 mod tests {
     use std::time::Duration;
 
-    use realand_config::animations::{Kind, ScreenshotUiOpenAnim, WindowMovementAnim};
+    use clarion_config::animations::{Kind, ScreenshotUiOpenAnim, WindowMovementAnim};
     use smithay::output::{PhysicalProperties, Subpixel};
 
     use super::*;

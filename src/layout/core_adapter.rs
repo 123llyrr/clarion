@@ -1,5 +1,5 @@
 //! Device handles stay in the layout adapter; identity and desktop decisions
-//! belong to `realand-core` and are shared by every output and workspace.
+//! belong to `clarion-core` and are shared by every output and workspace.
 
 use std::cell::{Ref, RefCell, RefMut};
 use std::collections::HashMap;
@@ -7,7 +7,7 @@ use std::hash::Hash;
 use std::ops::Deref;
 use std::rc::Rc;
 
-use realand_core::{CoreEffect, CoreEvent, DesktopCore, LayoutMode, Rect, SpaceId};
+use clarion_core::{CoreEffect, CoreEvent, DesktopCore, LayoutMode, Rect, SpaceId};
 use smithay::output::Output;
 use smithay::utils::{Logical, Rectangle};
 
@@ -24,19 +24,19 @@ pub(crate) enum CoreProtocolOp {
 #[derive(Default)]
 struct CoreResponse {
     space_name_changed: bool,
-    overview: Option<realand_core::overview::OverviewOutcome>,
+    overview: Option<clarion_core::overview::OverviewOutcome>,
     spread_changed: bool,
     stage_drag_changed: bool,
-    stage_restore: Option<realand_core::stage_drag::StageRestoreIntent<u64>>,
-    workspace_switch: Option<realand_core::workspace_switch::WorkspaceSwitchOutcome>,
-    minimize: Option<realand_core::workspace_state::MinimizeIntent<u64>>,
-    canvas: Option<realand_core::workspace_state::CanvasTransition<u64>>,
-    management: Option<realand_core::management::ManagementOutcome<u64>>,
+    stage_restore: Option<clarion_core::stage_drag::StageRestoreIntent<u64>>,
+    workspace_switch: Option<clarion_core::workspace_switch::WorkspaceSwitchOutcome>,
+    minimize: Option<clarion_core::workspace_state::MinimizeIntent<u64>>,
+    canvas: Option<clarion_core::workspace_state::CanvasTransition<u64>>,
+    management: Option<clarion_core::management::ManagementOutcome<u64>>,
     scratchpad_return: Option<SpaceId>,
-    dnd_activate: Option<realand_core::dnd_hold::DndActivateIntent<u64>>,
-    move_start: Option<realand_core::move_controls::MoveStartIntent>,
+    dnd_activate: Option<clarion_core::dnd_hold::DndActivateIntent<u64>>,
+    move_start: Option<clarion_core::move_controls::MoveStartIntent>,
     move_detached: bool,
-    move_placement: Option<realand_core::move_controls::MovePlacement>,
+    move_placement: Option<clarion_core::move_controls::MovePlacement>,
 }
 
 pub(super) struct CoreAdapter<I> {
@@ -227,8 +227,8 @@ impl<I: Eq + Hash> CoreMutation<'_, I> {
     }
     pub(super) fn management_action(
         &mut self,
-        action: realand_core::management::ManagementAction<u64>,
-    ) -> realand_core::management::ManagementOutcome<u64> {
+        action: clarion_core::management::ManagementAction<u64>,
+    ) -> clarion_core::management::ManagementOutcome<u64> {
         self.adapter
             .apply_to(&mut self.core, CoreEvent::Management(action))
             .management
@@ -241,8 +241,8 @@ impl<I: Eq + Hash> CoreMutation<'_, I> {
     }
     pub(super) fn dnd_hold_action(
         &mut self,
-        action: realand_core::dnd_hold::DndHoldAction<u64>,
-    ) -> Option<realand_core::dnd_hold::DndActivateIntent<u64>> {
+        action: clarion_core::dnd_hold::DndHoldAction<u64>,
+    ) -> Option<clarion_core::dnd_hold::DndActivateIntent<u64>> {
         self.adapter
             .apply_to(&mut self.core, CoreEvent::DndHold(action))
             .dnd_activate
@@ -252,7 +252,7 @@ impl<I: Eq + Hash> CoreMutation<'_, I> {
         id: u64,
         delta: [f64; 2],
         zoom: f64,
-    ) -> Option<realand_core::move_controls::MoveStartIntent> {
+    ) -> Option<clarion_core::move_controls::MoveStartIntent> {
         self.adapter
             .apply_to(
                 &mut self.core,
@@ -263,7 +263,7 @@ impl<I: Eq + Hash> CoreMutation<'_, I> {
     pub(super) fn acknowledge_move_detached(
         &mut self,
         id: u64,
-        width: realand_core::policy_memory::Width,
+        width: clarion_core::policy_memory::Width,
         full_width: bool,
     ) -> bool {
         self.adapter
@@ -281,14 +281,14 @@ impl<I: Eq + Hash> CoreMutation<'_, I> {
         &mut self,
         id: u64,
         floating: bool,
-    ) -> Option<realand_core::move_controls::MovePlacement> {
+    ) -> Option<clarion_core::move_controls::MovePlacement> {
         self.adapter
             .apply_to(&mut self.core, CoreEvent::SetMoveFloating { id, floating })
             .move_placement
     }
     pub(super) fn stage_drag_action(
         &mut self,
-        action: realand_core::stage_drag::StageDragAction<u64>,
+        action: clarion_core::stage_drag::StageDragAction<u64>,
     ) -> bool {
         self.adapter
             .apply_to(&mut self.core, CoreEvent::StageDrag(action))
@@ -297,18 +297,18 @@ impl<I: Eq + Hash> CoreMutation<'_, I> {
     pub(super) fn take_stage_drag_restore(
         &mut self,
         window: u64,
-    ) -> Option<realand_core::stage_drag::StageRestoreIntent<u64>> {
+    ) -> Option<clarion_core::stage_drag::StageRestoreIntent<u64>> {
         self.adapter
             .apply_to(
                 &mut self.core,
-                CoreEvent::StageDrag(realand_core::stage_drag::StageDragAction::Take { window }),
+                CoreEvent::StageDrag(clarion_core::stage_drag::StageDragAction::Take { window }),
             )
             .stage_restore
     }
     pub(super) fn workspace_switch_action(
         &mut self,
-        action: realand_core::workspace_switch::WorkspaceSwitchAction,
-    ) -> realand_core::workspace_switch::WorkspaceSwitchOutcome {
+        action: clarion_core::workspace_switch::WorkspaceSwitchAction,
+    ) -> clarion_core::workspace_switch::WorkspaceSwitchOutcome {
         self.adapter
             .apply_to(&mut self.core, CoreEvent::WorkspaceSwitch(action))
             .workspace_switch
@@ -316,7 +316,7 @@ impl<I: Eq + Hash> CoreMutation<'_, I> {
     }
     pub(super) fn spread_action(
         &mut self,
-        action: realand_core::spread::SpreadAction<u64>,
+        action: clarion_core::spread::SpreadAction<u64>,
     ) -> bool {
         self.adapter
             .apply_to(&mut self.core, CoreEvent::Spread(action))
@@ -353,8 +353,8 @@ impl<I: Eq + Hash> CoreMutation<'_, I> {
     }
     pub(super) fn overview_action(
         &mut self,
-        action: realand_core::overview::OverviewAction,
-    ) -> realand_core::overview::OverviewOutcome {
+        action: clarion_core::overview::OverviewAction,
+    ) -> clarion_core::overview::OverviewOutcome {
         self.adapter
             .apply_to(&mut self.core, CoreEvent::Overview(action))
             .overview
@@ -363,7 +363,7 @@ impl<I: Eq + Hash> CoreMutation<'_, I> {
     pub(super) fn set_space_layer_focus(
         &mut self,
         space: SpaceId,
-        focus: realand_core::workspace_state::SpaceLayerFocus,
+        focus: clarion_core::workspace_state::SpaceLayerFocus,
     ) {
         self.apply(CoreEvent::SetSpaceLayerFocus { space, focus });
     }
@@ -373,7 +373,7 @@ impl<I: Eq + Hash> CoreMutation<'_, I> {
     pub(super) fn capture_canvas_policy(
         &mut self,
         space: SpaceId,
-        policy: realand_core::workspace_state::CanvasPolicyMemory<u64>,
+        policy: clarion_core::workspace_state::CanvasPolicyMemory<u64>,
     ) {
         self.apply(CoreEvent::CaptureCanvasPolicy { space, policy });
     }
@@ -381,11 +381,11 @@ impl<I: Eq + Hash> CoreMutation<'_, I> {
         &mut self,
         space: SpaceId,
         enabled: bool,
-    ) -> realand_core::workspace_state::CanvasTransition<u64> {
+    ) -> clarion_core::workspace_state::CanvasTransition<u64> {
         self.adapter
             .apply_to(&mut self.core, CoreEvent::SetCanvasMode { space, enabled })
             .canvas
-            .unwrap_or(realand_core::workspace_state::CanvasTransition {
+            .unwrap_or(clarion_core::workspace_state::CanvasTransition {
                 changed: false,
                 enabled,
                 restore_tiled: Vec::new(),
@@ -398,8 +398,8 @@ impl<I: Eq + Hash> CoreMutation<'_, I> {
     pub(super) fn minimize_window(
         &mut self,
         id: u64,
-        restoration: realand_core::workspace_state::MinimizeRestore<u64>,
-    ) -> Option<realand_core::workspace_state::MinimizeIntent<u64>> {
+        restoration: clarion_core::workspace_state::MinimizeRestore<u64>,
+    ) -> Option<clarion_core::workspace_state::MinimizeIntent<u64>> {
         self.adapter
             .apply_to(
                 &mut self.core,
@@ -410,8 +410,8 @@ impl<I: Eq + Hash> CoreMutation<'_, I> {
     pub(super) fn restore_window(
         &mut self,
         id: u64,
-        columns: Vec<realand_core::workspace_state::RestoreColumn<u64>>,
-    ) -> Option<realand_core::workspace_state::MinimizeIntent<u64>> {
+        columns: Vec<clarion_core::workspace_state::RestoreColumn<u64>>,
+    ) -> Option<clarion_core::workspace_state::MinimizeIntent<u64>> {
         self.adapter
             .apply_to(&mut self.core, CoreEvent::RestoreWindow { id, columns })
             .minimize
@@ -423,7 +423,7 @@ impl<I: Eq + Hash> CoreMutation<'_, I> {
         output: Option<String>,
         geometry: Rect,
     ) {
-        let mut window = realand_core::WindowRecord::new(id, space, geometry);
+        let mut window = clarion_core::WindowRecord::new(id, space, geometry);
         window.output = output.clone();
         window.preferred_output = output;
         self.apply(CoreEvent::MapWindow { window });
@@ -509,14 +509,14 @@ impl<I: Eq + Hash> CoreMutation<'_, I> {
     pub(super) fn capture_scrolling(
         &mut self,
         space: SpaceId,
-        snapshot: realand_core::policy_memory::ScrollingSnapshot<u64>,
+        snapshot: clarion_core::policy_memory::ScrollingSnapshot<u64>,
     ) {
         self.apply(CoreEvent::CaptureScrolling { space, snapshot });
     }
     pub(super) fn capture_dwindle(
         &mut self,
         space: SpaceId,
-        snapshot: realand_core::bsp::BspSnapshot<u64>,
+        snapshot: clarion_core::bsp::BspSnapshot<u64>,
     ) {
         self.apply(CoreEvent::CaptureDwindle { space, snapshot });
     }
@@ -578,12 +578,12 @@ pub(super) fn connect_output<I: Clone + Eq + Hash>(context: &DesktopContext<I>, 
     });
 }
 
-pub(super) fn output_identity(output: &Output) -> realand_core::output_identity::OutputIdentity {
+pub(super) fn output_identity(output: &Output) -> clarion_core::output_identity::OutputIdentity {
     let facts = output
         .user_data()
-        .get::<realand_config::OutputName>()
+        .get::<clarion_config::OutputName>()
         .unwrap();
-    realand_core::output_identity::OutputIdentity {
+    clarion_core::output_identity::OutputIdentity {
         connector: facts.connector.clone(),
         make: facts.make.clone(),
         model: facts.model.clone(),
@@ -681,7 +681,7 @@ mod tests {
         outputs.clear();
         context.borrow_mut().apply(CoreEvent::BeginMove {
             id: 1,
-            start: realand_core::move_controls::MoveStart::default(),
+            start: clarion_core::move_controls::MoveStart::default(),
         });
         context.drain_scene_outputs(&mut outputs);
         assert_eq!(outputs, ["DP-1"]);

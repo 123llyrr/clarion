@@ -12,7 +12,7 @@ fn ensure_tracy_client() {
     let _ = tracy_client::Client::running().unwrap_or_else(tracy_client::Client::start);
 }
 
-macro_rules! realand_tracy_span {
+macro_rules! clarion_tracy_span {
     ($($args:tt)*) => {{
         $crate::ensure_tracy_client();
         tracy_client::span!($($args)*)
@@ -46,6 +46,7 @@ pub(crate) mod platform;
 pub mod protocols;
 pub mod render_helpers;
 pub mod rubber_band;
+pub mod scene;
 #[cfg(feature = "xdp-gnome-screencast")]
 pub mod screencasting;
 pub mod ui;

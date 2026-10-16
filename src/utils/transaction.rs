@@ -111,10 +111,12 @@ impl Transaction {
 
             // Add a ping source that will be used to remove the timer automatically.
             let (ping, source) = make_ping().unwrap();
-            let loop_handle = event_loop.clone();
+            let loop_handle = event_loop.downgrade();
             event_loop
                 .insert_source(source, move |_, _, _| {
-                    loop_handle.remove(token);
+                    if let Some(loop_handle) = loop_handle.upgrade() {
+                        loop_handle.remove(token);
+                    }
                 })
                 .unwrap();
 

@@ -55,7 +55,7 @@ jobs:
         run: |
           mkdir -p .cargo
           cargo vendor --locked > .cargo/config.toml
-          tar cJf "realand-${RELEASE_VERSION}-vendored-dependencies.tar.xz" vendor/
+          tar cJf "clarion-${RELEASE_VERSION}-vendored-dependencies.tar.xz" vendor/
 
       - name: Build
         run: cargo build --all --frozen --release
@@ -71,5 +71,5 @@ jobs:
         with:
           draft: true
           tag_name: v${{ github.event.inputs.version }}
-          files: realand-${{ github.event.inputs.version }}-vendored-dependencies.tar.xz
+          files: clarion-${{ github.event.inputs.version }}-vendored-dependencies.tar.xz
           fail_on_unmatched_files: true

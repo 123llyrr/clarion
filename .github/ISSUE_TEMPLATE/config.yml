@@ -1,10 +1,10 @@
 contact_links:
   - name: Feature request
     url: https://github.com/123llyrr/realand/issues/new?title=Feature%20request%3A%20
-    about: Suggest features and improvements for Realand
+    about: Suggest features and improvements for Clarion
   - name: Ask a question
     url: https://github.com/123llyrr/realand/issues/new?title=Question%3A%20
-    about: Ask a question about Realand
+    about: Ask a question about Clarion
   - name: GitHub issues
     url: https://github.com/123llyrr/realand/issues
-    about: Report bugs or discuss Realand
+    about: Report bugs or discuss Clarion

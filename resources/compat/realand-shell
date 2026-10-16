@@ -1,0 +1,9 @@
+#!/bin/sh
+# Compatibility entry point: the Clarion executable owns the only runtime core.
+case "$0" in
+  */*)
+    canonical="${0%/*}/clarion-shell"
+    if [ -x "$canonical" ]; then exec "$canonical" "$@"; fi
+    ;;
+esac
+exec clarion-shell "$@"

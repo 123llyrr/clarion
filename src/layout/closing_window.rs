@@ -7,8 +7,8 @@ use std::f64::consts::PI;
 use std::rc::Rc;
 
 use anyhow::Context as _;
+use clarion_config::{BlockOutFrom, WindowCloseEffect};
 use glam::{Mat3, Vec2};
-use realand_config::{BlockOutFrom, WindowCloseEffect};
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::element::utils::{
     Relocate, RelocateRenderElement, RescaleRenderElement,
@@ -21,10 +21,10 @@ use smithay::utils::{Logical, Point, Rectangle, Scale, Size, Transform};
 use smithay::wayland::compositor::{Blocker, BlockerState};
 
 use crate::animation::Animation;
-use crate::realand_render_elements;
+use crate::clarion_render_elements;
 use crate::render_helpers::particles::{ParticleRenderElement, ParticleVertex};
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
-use crate::render_helpers::renderer::RealandRenderer;
+use crate::render_helpers::renderer::ClarionRenderer;
 use crate::render_helpers::shader_element::ShaderRenderElement;
 use crate::render_helpers::shaders::{mat3_uniform, ProgramType, Shaders};
 use crate::render_helpers::snapshot::RenderSnapshot;
@@ -128,7 +128,7 @@ pub struct ClosingWindow {
     random_seed: f32,
 
     /// Optional 3D Glide transform layered around the close shader.
-    glide: realand_config::Glide,
+    glide: clarion_config::Glide,
 
     /// Selected built-in effect. User shaders retain their historical full-view canvas.
     effect: WindowCloseEffect,
@@ -145,7 +145,7 @@ pub struct ClosingWindow {
     particle_commit: Cell<CommitCounter>,
 }
 
-realand_render_elements! {
+clarion_render_elements! {
     ClosingWindowRenderElement => {
         Texture = RelocateRenderElement<RescaleRenderElement<PrimaryGpuTextureRenderElement>>,
         Shader = ShaderRenderElement,
@@ -188,6 +188,10 @@ impl AnimationState {
 }
 
 impl ClosingWindow {
+    pub(crate) fn uses_native_renderer(&self) -> bool {
+        matches!(self.buffer, ClosingBuffer::Vulkan(_))
+    }
+
     pub fn translate(&mut self, delta: Point<f64, Logical>) {
         self.pos += delta;
     }
@@ -201,13 +205,13 @@ impl ClosingWindow {
         pos: Point<f64, Logical>,
         blocker: TransactionBlocker,
         anim: Animation,
-        glide: realand_config::Glide,
+        glide: clarion_config::Glide,
         effect: WindowCloseEffect,
         has_custom_shader: bool,
         is_vulkan: bool,
         dmabuf: Option<smithay::backend::allocator::dmabuf::Dmabuf>,
     ) -> anyhow::Result<Self> {
-        let _span = realand_tracy_span!("ClosingWindow::new");
+        let _span = clarion_tracy_span!("ClosingWindow::new");
 
         let mut render_to_texture = |elements: Vec<E>| -> anyhow::Result<_> {
             let (texture, _sync_point, geo) = render_to_encompassing_texture(
@@ -289,13 +293,13 @@ impl ClosingWindow {
         pos: Point<f64, Logical>,
         blocker: TransactionBlocker,
         anim: Animation,
-        glide: realand_config::Glide,
+        glide: clarion_config::Glide,
         effect: WindowCloseEffect,
         custom_shader: Option<&str>,
         snapshot: Option<super::tile::NativeTileSnapshot>,
         dmabuf: Option<smithay::backend::allocator::dmabuf::Dmabuf>,
     ) -> anyhow::Result<Self> {
-        let _span = realand_tracy_span!("ClosingWindow::new_native");
+        let _span = clarion_tracy_span!("ClosingWindow::new_native");
         let has_custom_shader = custom_shader.is_some();
 
         // A failed snapshot must never expose an unfiltered DMA-BUF to captures.
@@ -488,7 +492,7 @@ impl ClosingWindow {
         }
     }
 
-    pub fn render<R: RealandRenderer>(
+    pub fn render<R: ClarionRenderer>(
         &self,
         mut ctx: RenderCtx<'_, R>,
         view_rect: Rectangle<f64, Logical>,
@@ -648,23 +652,23 @@ impl ClosingWindow {
                         scale.x as f32,
                         1.,
                         Rc::new([
-                            mat3_uniform("realand_input_to_geo", input_to_geo),
-                            Uniform::new("realand_geo_size", effect_size.to_array()),
-                            mat3_uniform("realand_geo_to_tex", geo_to_tex),
-                            Uniform::new("realand_progress", progress as f32),
-                            Uniform::new("realand_clamped_progress", clamped_progress as f32),
-                            Uniform::new("realand_random_seed", self.random_seed),
+                            mat3_uniform("clarion_input_to_geo", input_to_geo),
+                            Uniform::new("clarion_geo_size", effect_size.to_array()),
+                            mat3_uniform("clarion_geo_to_tex", geo_to_tex),
+                            Uniform::new("clarion_progress", progress as f32),
+                            Uniform::new("clarion_clamped_progress", clamped_progress as f32),
+                            Uniform::new("clarion_random_seed", self.random_seed),
                             Uniform::new(
-                                "realand_glide_enabled",
+                                "clarion_glide_enabled",
                                 if self.glide.off { 0. } else { 1. },
                             ),
                             Uniform::new(
-                                "realand_glide_tilt",
+                                "clarion_glide_tilt",
                                 self.glide.tilt_deg.to_radians() as f32,
                             ),
-                            Uniform::new("realand_glide_depth", self.glide.depth as f32),
+                            Uniform::new("clarion_glide_depth", self.glide.depth as f32),
                         ]),
-                        HashMap::from([(String::from("realand_tex"), gles_buf.texture().clone())]),
+                        HashMap::from([(String::from("clarion_tex"), gles_buf.texture().clone())]),
                         Kind::Unspecified,
                     )
                     .with_location(element_location);
@@ -790,23 +794,23 @@ impl ClosingWindow {
                     scale.x as f32,
                     1.,
                     Rc::new([
-                        mat3_uniform("realand_input_to_geo", input_to_geo),
-                        Uniform::new("realand_geo_size", effect_size.to_array()),
-                        mat3_uniform("realand_geo_to_tex", geo_to_tex),
-                        Uniform::new("realand_progress", progress as f32),
-                        Uniform::new("realand_clamped_progress", clamped_progress as f32),
-                        Uniform::new("realand_random_seed", self.random_seed),
+                        mat3_uniform("clarion_input_to_geo", input_to_geo),
+                        Uniform::new("clarion_geo_size", effect_size.to_array()),
+                        mat3_uniform("clarion_geo_to_tex", geo_to_tex),
+                        Uniform::new("clarion_progress", progress as f32),
+                        Uniform::new("clarion_clamped_progress", clamped_progress as f32),
+                        Uniform::new("clarion_random_seed", self.random_seed),
                         Uniform::new(
-                            "realand_glide_enabled",
+                            "clarion_glide_enabled",
                             if self.glide.off { 0. } else { 1. },
                         ),
                         Uniform::new(
-                            "realand_glide_tilt",
+                            "clarion_glide_tilt",
                             self.glide.tilt_deg.to_radians() as f32,
                         ),
-                        Uniform::new("realand_glide_depth", self.glide.depth as f32),
+                        Uniform::new("clarion_glide_depth", self.glide.depth as f32),
                     ]),
-                    HashMap::from([(String::from("realand_tex"), buf.texture().clone())]),
+                    HashMap::from([(String::from("clarion_tex"), buf.texture().clone())]),
                     Kind::Unspecified,
                 )?
                 .with_location(element_location);
@@ -1010,7 +1014,7 @@ struct ParticleGlide {
 }
 
 impl ParticleGlide {
-    fn new(size: Size<f64, Logical>, glide: realand_config::Glide, amount: f64) -> Self {
+    fn new(size: Size<f64, Logical>, glide: clarion_config::Glide, amount: f64) -> Self {
         let enabled = !glide.off && amount > 0. && size.w > 0. && size.h > 0.;
         let (sine, cosine) = if enabled {
             (-glide.tilt_deg.to_radians() * amount).sin_cos()
@@ -1195,12 +1199,12 @@ mod tests {
     #[test]
     fn builtin_close_releases_its_snapshot_at_the_first_overshooting_easing_endpoint() {
         let mut clock = Clock::with_time(Duration::ZERO);
-        let config = realand_config::Animation {
+        let config = clarion_config::Animation {
             off: false,
-            kind: realand_config::animations::Kind::Easing(
-                realand_config::animations::EasingParams {
+            kind: clarion_config::animations::Kind::Easing(
+                clarion_config::animations::EasingParams {
                     duration_ms: 1000,
-                    curve: realand_config::animations::Curve::CubicBezier(0.05, 0.9, 0.1, 1.05),
+                    curve: clarion_config::animations::Curve::CubicBezier(0.05, 0.9, 0.1, 1.05),
                 },
             ),
         };
@@ -1270,7 +1274,7 @@ mod tests {
     #[test]
     fn close_glide_transforms_particle_geometry_with_the_snapshot() {
         let size = Size::from((800., 600.));
-        let glide = realand_config::Glide::default();
+        let glide = clarion_config::Glide::default();
         assert_eq!(
             ParticleGlide::new(size, glide, 0.7).transform([400., 300.]),
             [400., 300.]
@@ -1281,7 +1285,7 @@ mod tests {
         assert_ne!(transformed, [100., 80.]);
 
         assert_eq!(
-            ParticleGlide::new(size, realand_config::Glide { off: true, ..glide }, 0.7)
+            ParticleGlide::new(size, clarion_config::Glide { off: true, ..glide }, 0.7)
                 .transform([100., 80.]),
             [100., 80.]
         );

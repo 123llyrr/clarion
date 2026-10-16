@@ -8,9 +8,9 @@ fn stage_layout_with_privacy(scale: f64, zoom: f64, block_capture: bool) -> Layo
     let mut options = Options::default();
     options.overview.zoom = zoom;
     options.animations.overview_open_close.0.kind =
-        realand_config::animations::Kind::Easing(realand_config::animations::EasingParams {
+        clarion_config::animations::Kind::Easing(clarion_config::animations::EasingParams {
             duration_ms: 1000,
-            curve: realand_config::animations::Curve::Linear,
+            curve: clarion_config::animations::Curve::Linear,
         });
     let mut ops = vec![Op::AddScaledOutput {
         id: 1,
@@ -26,7 +26,7 @@ fn stage_layout_with_privacy(scale: f64, zoom: f64, block_capture: bool) -> Layo
         let mut params = TestWindowParams::new(id);
         if block_capture {
             let rules = ResolvedWindowRules {
-                block_out_from: Some(realand_config::BlockOutFrom::ScreenCapture),
+                block_out_from: Some(clarion_config::BlockOutFrom::ScreenCapture),
                 ..Default::default()
             };
             params.rules = Some(rules);
@@ -63,10 +63,10 @@ fn stage_reserved_bar_keeps_cards_and_entire_workspace_rail_in_the_working_area(
             Anchor::Left | Anchor::Top | Anchor::Bottom,
             Anchor::Right | Anchor::Top | Anchor::Bottom,
         ] {
-            let config = realand_config::Config {
+            let config = clarion_config::Config {
                 workspaces: ["first", "second", "third"]
                     .into_iter()
-                    .map(|name| realand_config::Workspace {
+                    .map(|name| clarion_config::Workspace {
                         name: WorkspaceName(name.into()),
                         open_on_output: None,
                         layout: None,
@@ -83,14 +83,14 @@ fn stage_reserved_bar_keeps_cards_and_entire_workspace_rail_in_the_working_area(
                     (1280, 800)
                 },
             );
-            let output = f.realand_output(1);
+            let output = f.clarion_output(1);
             output.change_current_state(
                 None,
                 None,
                 Some(smithay::output::Scale::Fractional(scale)),
                 None,
             );
-            f.realand().output_resized(&output);
+            f.clarion().output_resized(&output);
             let client = f.add_client();
             let panel = f.client(client).create_layer(None, Layer::Top, "stage-bar");
             let surface = panel.surface.clone();
@@ -109,10 +109,10 @@ fn stage_reserved_bar_keeps_cards_and_entire_workspace_rail_in_the_working_area(
             panel.set_size(w as u16, h as u16);
             panel.ack_last_and_commit();
             f.double_roundtrip(client);
-            f.realand().layout.open_overview();
-            f.realand_complete_animations();
+            f.clarion().layout.open_overview();
+            f.clarion_complete_animations();
 
-            let mon = f.realand().layout.monitor_for_output(&output).unwrap();
+            let mon = f.clarion().layout.monitor_for_output(&output).unwrap();
             let area = mon.working_area();
             let view = mon.view_size();
             let selected = mon.idx_of_ws(mon.stage_selected()).unwrap();
@@ -162,7 +162,7 @@ fn stage_reserved_bar_keeps_cards_and_entire_workspace_rail_in_the_working_area(
                     );
                 }
             }
-            f.realand().layout.verify_invariants();
+            f.clarion().layout.verify_invariants();
         }
     }
 }
@@ -183,14 +183,14 @@ fn stage_bar_edge_changes_refresh_cached_geometry_without_resizing_the_output() 
                 (1280, 800)
             },
         );
-        let output = f.realand_output(1);
+        let output = f.clarion_output(1);
         output.change_current_state(
             None,
             None,
             Some(smithay::output::Scale::Fractional(scale)),
             None,
         );
-        f.realand().output_resized(&output);
+        f.clarion().output_resized(&output);
         let client = f.add_client();
         let panel = f
             .client(client)
@@ -209,10 +209,10 @@ fn stage_bar_edge_changes_refresh_cached_geometry_without_resizing_the_output() 
         panel.set_size(w as u16, h as u16);
         panel.ack_last_and_commit();
         f.double_roundtrip(client);
-        f.realand().layout.open_overview();
-        f.realand_complete_animations();
+        f.clarion().layout.open_overview();
+        f.clarion_complete_animations();
 
-        let mon = f.realand().layout.monitor_for_output(&output).unwrap();
+        let mon = f.clarion().layout.monitor_for_output(&output).unwrap();
         let selected = mon.idx_of_ws(mon.stage_selected()).unwrap();
         let top_card = mon.workspaces_render_geo().nth(selected).unwrap();
         let top_area = mon.working_area();
@@ -226,7 +226,7 @@ fn stage_bar_edge_changes_refresh_cached_geometry_without_resizing_the_output() 
         panel.attach_new_buffer();
         panel.commit();
         f.double_roundtrip(client);
-        let mon = f.realand().layout.monitor_for_output(&output).unwrap();
+        let mon = f.clarion().layout.monitor_for_output(&output).unwrap();
         let bottom_area = mon.working_area();
         assert_eq!(bottom_area.loc.y, 0.);
         assert_eq!(bottom_area.size, top_area.size);
@@ -243,7 +243,7 @@ fn stage_bar_edge_changes_refresh_cached_geometry_without_resizing_the_output() 
             mon.stage_rail_under(Point::from((f64::from(x), rail_y)))
                 .is_some()
         }));
-        f.realand().layout.verify_invariants();
+        f.clarion().layout.verify_invariants();
     }
 }
 
@@ -261,14 +261,14 @@ fn stage_tiny_or_exhausted_working_area_has_no_invisible_rail_targets() {
         ] {
             let mut f = crate::tests::Fixture::new();
             f.add_output(1, (1280, 100));
-            let output = f.realand_output(1);
+            let output = f.clarion_output(1);
             output.change_current_state(
                 None,
                 None,
                 Some(smithay::output::Scale::Fractional(scale)),
                 None,
             );
-            f.realand().output_resized(&output);
+            f.clarion().output_resized(&output);
             let client = f.add_client();
             let panel = f
                 .client(client)
@@ -289,10 +289,10 @@ fn stage_tiny_or_exhausted_working_area_has_no_invisible_rail_targets() {
             panel.set_size(w as u16, h as u16);
             panel.ack_last_and_commit();
             f.double_roundtrip(client);
-            f.realand().layout.open_overview();
-            f.realand_complete_animations();
+            f.clarion().layout.open_overview();
+            f.clarion_complete_animations();
 
-            let mon = f.realand().layout.monitor_for_output(&output).unwrap();
+            let mon = f.clarion().layout.monitor_for_output(&output).unwrap();
             let view = mon.view_size();
             let exhausted = mon
                 .working_area()
@@ -313,7 +313,7 @@ fn stage_tiny_or_exhausted_working_area_has_no_invisible_rail_targets() {
                     }
                 }
             }
-            f.realand().layout.verify_invariants();
+            f.clarion().layout.verify_invariants();
         }
     }
 }
@@ -323,7 +323,7 @@ fn stage_spring_reversal_preserves_card_velocity_instead_of_freezing() {
     for scale in [1., 1.25, 1.5, 2.] {
         for closing in [false, true] {
             let mut layout = stage_layout(scale, 0.5);
-            let config = realand_config::Animations::default().overview_open_close.0;
+            let config = clarion_config::Animations::default().overview_open_close.0;
             let mut options = Options::clone(&layout.options);
             options.animations.overview_open_close.0 = config;
             layout.update_options(options);
@@ -372,7 +372,7 @@ fn stage_spring_preview_retargeting_preserves_card_momentum() {
             let mut layout = stage_layout(scale, 0.5);
             let mut options = Options::clone(&layout.options);
             options.animations.overview_open_close =
-                realand_config::Animations::default().overview_open_close;
+                clarion_config::Animations::default().overview_open_close;
             layout.update_options(options);
             Op::CompleteAnimations.apply(&mut layout);
             layout.clock.set_rate(rate);
@@ -416,7 +416,7 @@ fn stage_spring_confirm_and_cancel_preserve_preview_velocity() {
                 let mut layout = stage_layout(scale, 0.5);
                 let mut options = Options::clone(&layout.options);
                 options.animations.overview_open_close =
-                    realand_config::Animations::default().overview_open_close;
+                    clarion_config::Animations::default().overview_open_close;
                 layout.update_options(options);
                 Op::CompleteAnimations.apply(&mut layout);
                 layout.clock.set_rate(rate);
@@ -497,7 +497,7 @@ fn stage_spring_preview_momentum_stays_bounded_and_respects_disabled_motion() {
                 let mut layout = stage_layout(scale, 0.5);
                 let mut options = Options::clone(&layout.options);
                 options.animations.overview_open_close =
-                    realand_config::Animations::default().overview_open_close;
+                    clarion_config::Animations::default().overview_open_close;
                 options.animations.overview_open_close.0.off = off;
                 layout.update_options(options);
                 Op::CompleteAnimations.apply(&mut layout);
@@ -550,14 +550,14 @@ fn stage_hot_corner_rail_clicks_preview_confirm_and_enter_empty_desktops_at_two_
     };
     use wayland_client::protocol::wl_pointer::ButtonState;
     for click_new in [false, true] {
-        let mut config = realand_config::Config::default();
+        let mut config = clarion_config::Config::default();
         config.gestures.hot_corners.top_left = true;
         config.hotkey_overlay.skip_at_startup = true;
         let mut f = crate::tests::Fixture::with_config(config);
         f.add_output(1, (3840, 2400));
-        let output = f.realand_output(1);
+        let output = f.clarion_output(1);
         output.change_current_state(None, None, Some(smithay::output::Scale::Integer(2)), None);
-        f.realand().output_resized(&output);
+        f.clarion().output_resized(&output);
         let client = f.add_client();
         let window = f.client(client).create_window();
         let surface = window.surface.clone();
@@ -568,8 +568,8 @@ fn stage_hot_corner_rail_clicks_preview_confirm_and_enter_empty_desktops_at_two_
         window.set_size(500, 400);
         window.ack_last_and_commit();
         f.double_roundtrip(client);
-        f.realand_complete_animations();
-        let initial = f.realand().layout.active_workspace().unwrap().id();
+        f.clarion_complete_animations();
+        let initial = f.clarion().layout.active_workspace().unwrap().id();
         let c = f.client(client);
         let global = c
             .state
@@ -583,9 +583,9 @@ fn stage_hot_corner_rail_clicks_preview_confirm_and_enter_empty_desktops_at_two_
         pointer.motion_absolute(1, 4, 4, 1920, 1200);
         pointer.frame();
         f.double_roundtrip(client);
-        assert!(f.realand().layout.is_stage_open());
-        f.realand_complete_animations();
-        let mon = f.realand().layout.monitor_for_output(&output).unwrap();
+        assert!(f.clarion().layout.is_stage_open());
+        f.clarion_complete_animations();
+        let mon = f.clarion().layout.monitor_for_output(&output).unwrap();
         let target = mon.workspaces.last().unwrap().id();
         let preview_point = (0..1920)
             .find_map(|x| {
@@ -620,10 +620,10 @@ fn stage_hot_corner_rail_clicks_preview_confirm_and_enter_empty_desktops_at_two_
         pointer.button(4, 0x110, ButtonState::Released);
         pointer.frame();
         f.double_roundtrip(client);
-        assert!(f.realand().layout.is_stage_open(), "first click previews");
-        assert_eq!(f.realand().layout.active_workspace().unwrap().id(), initial);
+        assert!(f.clarion().layout.is_stage_open(), "first click previews");
+        assert_eq!(f.clarion().layout.active_workspace().unwrap().id(), initial);
         assert_eq!(
-            f.realand().layout.stage_selected_for_output(&output),
+            f.clarion().layout.stage_selected_for_output(&output),
             Some(target)
         );
         // Retarget a running preview using the same real input path, with no final motion.
@@ -636,12 +636,12 @@ fn stage_hot_corner_rail_clicks_preview_confirm_and_enter_empty_desktops_at_two_
         pointer.frame();
         f.double_roundtrip(client);
         assert!(
-            !f.realand().layout.is_overview_open(),
+            !f.clarion().layout.is_overview_open(),
             "selected workspace and New workspace must execute their click action"
         );
-        f.realand_complete_animations();
-        assert_eq!(f.realand().layout.active_workspace().unwrap().id(), target);
-        assert!(f.realand().layout.active_window().is_none());
+        f.clarion_complete_animations();
+        assert_eq!(f.clarion().layout.active_workspace().unwrap().id(), target);
+        assert!(f.clarion().layout.active_window().is_none());
     }
 }
 
@@ -652,7 +652,7 @@ fn stage_close_with_spring_and_cube_has_no_second_workspace_animation() {
             let mut layout = stage_layout(2., 0.5);
             let mut options = Options::clone(&layout.options);
             options.animations.overview_open_close =
-                realand_config::Animations::default().overview_open_close;
+                clarion_config::Animations::default().overview_open_close;
             options.animations.workspace_switch.1.off = false;
             layout.update_options(options);
             layout.clock.set_unadjusted(Duration::from_millis(close_at));
@@ -1200,11 +1200,11 @@ fn stage_pixels_share_card_occlusion_rail_and_privacy_on_gles_and_vulkan() {
         }
         let output = draw!(native, RenderTarget::Output);
         let expected = draw!(gles, RenderTarget::Output);
-        if let Some(directory) = std::env::var_os("REALAND_STAGE_PNG_DIR") {
+        if let Some(directory) = std::env::var_os("CLARION_STAGE_PNG_DIR") {
             for (name, pixels) in [("vulkan", &output), ("gles", &expected)] {
                 let file = std::fs::File::create(
                     std::path::Path::new(&directory)
-                        .join(format!("realand-stage-{scale}-{name}.png")),
+                        .join(format!("clarion-stage-{scale}-{name}.png")),
                 )
                 .unwrap();
                 let mut encoder = png::Encoder::new(file, 1280, 720);
@@ -1282,11 +1282,11 @@ fn stage_pixels_share_card_occlusion_rail_and_privacy_on_gles_and_vulkan() {
                 .any(|pixel| pixel[..3].iter().all(|channel| *channel > 200)),
             "workspace labels and counts must render as real text"
         );
-        if let Some(directory) = std::env::var_os("REALAND_STAGE_PNG_DIR") {
+        if let Some(directory) = std::env::var_os("CLARION_STAGE_PNG_DIR") {
             for (name, pixels) in [("output", &output), ("capture", &capture)] {
                 let file = std::fs::File::create(
                     std::path::Path::new(&directory)
-                        .join(format!("realand-stage-{scale}-{name}.png")),
+                        .join(format!("clarion-stage-{scale}-{name}.png")),
                 )
                 .unwrap();
                 let mut encoder = png::Encoder::new(file, 1280, 720);
@@ -1378,7 +1378,7 @@ fn stage_pixels_share_card_occlusion_rail_and_privacy_on_gles_and_vulkan() {
         Op::CompleteAnimations.apply(&mut layout);
         let mut options = Options::clone(&layout.options);
         options.animations.overview_open_close =
-            realand_config::Animations::default().overview_open_close;
+            clarion_config::Animations::default().overview_open_close;
         layout.update_options(options);
         assert!(layout.stage_navigate(None, 1));
         let start = layout.clock.now_unadjusted();

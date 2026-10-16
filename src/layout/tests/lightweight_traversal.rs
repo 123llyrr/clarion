@@ -18,7 +18,7 @@ fn membership(layout: &Layout<TestWindow>) -> Vec<(usize, Option<String>)> {
     lightweight
 }
 
-fn mixed_layout(mode: realand_ipc::TilingMode) -> Layout<TestWindow> {
+fn mixed_layout(mode: clarion_ipc::TilingMode) -> Layout<TestWindow> {
     let mut options = Options::default();
     options.layout.auto_stack_new_windows = false;
     let mut layout = check_ops_with_options(
@@ -72,8 +72,8 @@ fn mixed_layout(mode: realand_ipc::TilingMode) -> Layout<TestWindow> {
 #[test]
 fn lightweight_membership_keeps_ipc_order_and_parked_windows() {
     for mode in [
-        realand_ipc::TilingMode::Scrolling,
-        realand_ipc::TilingMode::Dwindle,
+        clarion_ipc::TilingMode::Scrolling,
+        clarion_ipc::TilingMode::Dwindle,
     ] {
         let mut layout = mixed_layout(mode);
         let members = membership(&layout);
@@ -142,7 +142,7 @@ fn lightweight_membership_keeps_inactive_tabs_and_disconnected_workspaces() {
 
 #[test]
 fn lightweight_membership_attributes_detached_move_once_to_its_current_output() {
-    let mut layout = mixed_layout(realand_ipc::TilingMode::Scrolling);
+    let mut layout = mixed_layout(clarion_ipc::TilingMode::Scrolling);
     check_ops_on_layout(
         &mut layout,
         [
@@ -178,8 +178,8 @@ fn lightweight_membership_attributes_detached_move_once_to_its_current_output() 
 #[test]
 fn lightweight_membership_does_not_read_window_geometry() {
     for mode in [
-        realand_ipc::TilingMode::Scrolling,
-        realand_ipc::TilingMode::Dwindle,
+        clarion_ipc::TilingMode::Scrolling,
+        clarion_ipc::TilingMode::Dwindle,
     ] {
         let mut layout = mixed_layout(mode);
         for disconnect in [false, true] {
@@ -223,8 +223,8 @@ fn lightweight_window_traversal_microbenchmark() {
 
     let mut results = Vec::new();
     for mode in [
-        realand_ipc::TilingMode::Scrolling,
-        realand_ipc::TilingMode::Dwindle,
+        clarion_ipc::TilingMode::Scrolling,
+        clarion_ipc::TilingMode::Dwindle,
     ] {
         for count in [16, 64, 128] {
             let mut options = Options::default();

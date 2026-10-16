@@ -1,11 +1,11 @@
 use std::iter::zip;
 use std::time::Duration;
 
-use realand_config::{CornerRadius, Gradient, GradientRelativeTo};
+use clarion_config::{CornerRadius, Gradient, GradientRelativeTo};
 use smithay::backend::renderer::element::{Element as _, Kind};
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
-use crate::realand_render_elements;
+use crate::clarion_render_elements;
 use crate::render_helpers::border::BorderRenderElement;
 use crate::render_helpers::renderer::DecorationRenderer;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
@@ -19,12 +19,12 @@ pub struct FocusRing {
     full_size: Size<f64, Logical>,
     is_border: bool,
     use_border_shader: bool,
-    config: realand_config::FocusRing,
+    config: clarion_config::FocusRing,
     thicken_corners: bool,
     rounding_power: f32,
 }
 
-realand_render_elements! {
+clarion_render_elements! {
     FocusRingRenderElement => {
         SolidColor = SolidColorRenderElement,
         Gradient = BorderRenderElement,
@@ -32,7 +32,7 @@ realand_render_elements! {
 }
 
 impl FocusRing {
-    pub fn new(config: realand_config::FocusRing) -> Self {
+    pub fn new(config: clarion_config::FocusRing) -> Self {
         Self {
             buffers: Default::default(),
             locations: Default::default(),
@@ -58,7 +58,7 @@ impl FocusRing {
         }
     }
 
-    pub fn update_config(&mut self, config: realand_config::FocusRing) {
+    pub fn update_config(&mut self, config: clarion_config::FocusRing) {
         self.config = config;
     }
 
@@ -311,7 +311,7 @@ impl FocusRing {
         self.thicken_corners = value;
     }
 
-    pub fn config(&self) -> &realand_config::FocusRing {
+    pub fn config(&self) -> &clarion_config::FocusRing {
         &self.config
     }
 }
@@ -319,11 +319,11 @@ impl FocusRing {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use realand_config::{Color, FloatOrInt, Gradient, GradientInterpolation, GradientRelativeTo};
+    use clarion_config::{Color, FloatOrInt, Gradient, GradientInterpolation, GradientRelativeTo};
 
     #[test]
     fn test_animated_gradient_detection() {
-        let config = realand_config::FocusRing {
+        let config = clarion_config::FocusRing {
             off: false,
             active_gradient: Some(Gradient {
                 from: Color::from_rgba8_unpremul(255, 0, 0, 255),
@@ -343,7 +343,7 @@ mod tests {
 
     #[test]
     fn static_or_invisible_gradients_do_not_request_frames() {
-        let mut config = realand_config::FocusRing::default();
+        let mut config = clarion_config::FocusRing::default();
         let mut gradient = Gradient::from(config.active_color);
         gradient.rotate_deg_per_sec = Some(FloatOrInt(0.));
         config.active_gradient = Some(gradient);

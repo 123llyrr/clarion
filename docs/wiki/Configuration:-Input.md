@@ -152,8 +152,8 @@ input {
 >
 > <sup>Since: 25.08</sup>
 >
-> If the `xkb` section is empty (like it is by default), realand will fetch xkb settings from systemd-localed at `org.freedesktop.locale1` over D-Bus.
-> This way, for example, system installers can dynamically set the realand keyboard layout.
+> If the `xkb` section is empty (like it is by default), clarion will fetch xkb settings from systemd-localed at `org.freedesktop.locale1` over D-Bus.
+> This way, for example, system installers can dynamically set the clarion keyboard layout.
 > You can see this layout in `localectl` and change it with `localectl set-x11-keymap`, for example:
 >
 > ```sh
@@ -176,7 +176,7 @@ input {
 >
 > These settings are picked up by some other programs too, like GDM.
 
-When using multiple layouts, realand can remember the current layout globally (the default) or per-window.
+When using multiple layouts, clarion can remember the current layout globally (the default) or per-window.
 You can control this with the `track-layout` option.
 
 - `global`: layout change is global for all windows.
@@ -299,7 +299,7 @@ These settings are not specific to a particular input device.
 
 #### `disable-power-key-handling`
 
-By default, realand will take over the power button to make it sleep instead of power off.
+By default, clarion will take over the power button to make it sleep instead of power off.
 Set this if you would like to configure the power button elsewhere (i.e. `logind.conf`).
 
 ```kdl
@@ -368,7 +368,7 @@ input {
 Normally, switching to the same workspace by index twice will do nothing (since you're already on that workspace).
 If this flag is enabled, switching to the same workspace by index twice will switch back to the previous workspace.
 
-Realand will correctly switch to the workspace you came from, even if workspaces were reordered in the meantime.
+Clarion will correctly switch to the workspace you came from, even if workspaces were reordered in the meantime.
 
 ```kdl
 input {
@@ -383,7 +383,7 @@ input {
 Customize the `Mod` key for [key bindings](./Configuration:-Key-Bindings.md).
 Only valid modifiers are allowed, e.g. `Super`, `Alt`, `Mod3`, `Mod5`, `Ctrl`, `Shift`.
 
-By default, `Mod` is equal to `Super` when running realand on a TTY, and to `Alt` when running realand as a nested winit window.
+By default, `Mod` is equal to `Super` when running clarion on a TTY, and to `Alt` when running clarion as a nested winit window.
 
 > [!NOTE]
 > There are a lot of default bindings with Mod, none of them "make it through" to the underlying window.

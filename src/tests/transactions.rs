@@ -1,18 +1,18 @@
 use std::fmt::Write as _;
 
+use clarion_config::Config;
+use clarion_ipc::SizeChange;
 use insta::assert_snapshot;
-use realand_config::Config;
-use realand_ipc::SizeChange;
 use wayland_client::protocol::wl_surface::WlSurface;
 
 use super::client::ClientId;
 use super::*;
-use crate::compositor::Realand;
+use crate::compositor::Clarion;
 use crate::layout::LayoutElement;
 
-fn format_window_sizes(realand: &Realand) -> String {
+fn format_window_sizes(clarion: &Clarion) -> String {
     let mut buf = String::new();
-    for (_out, mapped) in realand.layout.windows() {
+    for (_out, mapped) in clarion.layout.windows() {
         let size = mapped.size();
         writeln!(&mut buf, "{} × {}", size.w, size.h).unwrap();
     }
@@ -50,7 +50,7 @@ fn column_resize_waits_for_both_windows() {
     let _ = f.client(id).window(&surface2).recent_configures();
 
     // Consume into one column.
-    f.realand().layout.consume_or_expel_window_left(None);
+    f.clarion().layout.consume_or_expel_window_left(None);
     f.double_roundtrip(id);
 
     // Commit for the column consume.
@@ -71,13 +71,13 @@ fn column_resize_waits_for_both_windows() {
     f.double_roundtrip(id);
 
     // This should say 100 × 100 and 200 × 200.
-    assert_snapshot!(format_window_sizes(f.realand()), @r"
+    assert_snapshot!(format_window_sizes(f.clarion()), @r"
     100 × 100
     200 × 200
     ");
 
     // Issue a resize.
-    f.realand()
+    f.clarion()
         .layout
         .set_column_width(SizeChange::AdjustFixed(10));
     f.double_roundtrip(id);
@@ -89,7 +89,7 @@ fn column_resize_waits_for_both_windows() {
     f.double_roundtrip(id);
 
     // This should still say 100 × 100 as we're waiting in a transaction for the second window.
-    assert_snapshot!(format_window_sizes(f.realand()), @r"
+    assert_snapshot!(format_window_sizes(f.clarion()), @r"
     100 × 100
     200 × 200
     ");
@@ -101,7 +101,7 @@ fn column_resize_waits_for_both_windows() {
     f.double_roundtrip(id);
 
     // This should say 300 × 300 and 400 × 400 as the transaction completed.
-    assert_snapshot!(format_window_sizes(f.realand()), @r"
+    assert_snapshot!(format_window_sizes(f.clarion()), @r"
     300 × 300
     400 × 400
     ");

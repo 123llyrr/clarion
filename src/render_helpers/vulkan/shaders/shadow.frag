@@ -62,7 +62,7 @@ float roundedBoxShadow(vec2 lower, vec2 upper, vec2 point, float sigma, float co
   return value;
 }
 
-float realand_rounding_alpha(vec2 coords, vec2 size, vec4 corner_radius);
+float clarion_rounding_alpha(vec2 coords, vec2 size, vec4 corner_radius);
 
 void main() {
     vec3 coords_geo = vec3(in_coords - pc.geometry.xy, 1.0);
@@ -76,7 +76,7 @@ void main() {
         // Include straight-edge antialiasing as well as the rounded corners.
         vec2 edge = min(coords_geo.xy, pc.geometry.zw - coords_geo.xy);
         float coverage = clamp(min(edge.x, edge.y) * pc.params.y + 0.5, 0.0, 1.0);
-        shadow_value = coverage * realand_rounding_alpha(coords_geo.xy, pc.geometry.zw, pc.corner_radius);
+        shadow_value = coverage * clarion_rounding_alpha(coords_geo.xy, pc.geometry.zw, pc.corner_radius);
     } else {
         shadow_value = roundedBoxShadow(
             vec2(0.0, 0.0),
@@ -96,21 +96,21 @@ void main() {
     if (pc.window_geometry.zw != vec2(0.0, 0.0)) {
         vec2 edge = min(coords_window_geo.xy, pc.window_geometry.zw - coords_window_geo.xy);
         float coverage = clamp(min(edge.x, edge.y) * pc.params.y + 0.5, 0.0, 1.0);
-        float alpha = coverage * realand_rounding_alpha(coords_window_geo.xy, pc.window_geometry.zw, pc.window_radius);
+        float alpha = coverage * clarion_rounding_alpha(coords_window_geo.xy, pc.window_geometry.zw, pc.window_radius);
         color = color * (1.0 - alpha);
     }
 
     color = color * pc.params.z;
 
 #if defined(DEBUG_FLAGS)
-    if (realand_tint == 1.0)
+    if (clarion_tint == 1.0)
         color = vec4(0.0, 0.2, 0.0, 0.2) + color * 0.8;
 #endif
 
     out_color = color;
 }
 
-float realand_rounding_alpha(vec2 coords, vec2 size, vec4 corner_radius) {
+float clarion_rounding_alpha(vec2 coords, vec2 size, vec4 corner_radius) {
     vec2 center;
     float radius;
 

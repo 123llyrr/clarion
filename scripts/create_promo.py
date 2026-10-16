@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a self-contained 40-second Realand product film.
+"""Create a self-contained 40-second Clarion product film.
 
 The film is intentionally generated from primitives rather than external stock
 footage, so it can be rebuilt offline and kept in sync with the project.
@@ -199,7 +199,7 @@ def desktop_frame(image, x, y, width, height, scroll=0.0, focus=0, overview=Fals
     rounded(draw, (x + 10, y + 15, x + width + 10, y + height + 15), 20, (1, 3, 8, 160))
     rounded(draw, (x, y, x + width, y + height), 20, (18, 27, 44, 255), (90, 120, 160, 150), 1)
     draw.rectangle((x, y, x + width, y + 42), fill=(25, 36, 57, 255))
-    text(draw, (x + 20, y + 12), "realand", 14, (180, 198, 222), "semibold")
+    text(draw, (x + 20, y + 12), "clarion", 14, (180, 198, 222), "semibold")
     text(draw, (x + width - 102, y + 12), "● 3 workspaces", 12, (112, 143, 178), "regular")
     wx, wy = x + 13, y + 49
     ww, wh = width - 26, height - 62
@@ -267,7 +267,7 @@ def intro(image, local):
     logo_copy.thumbnail((size, size), Image.Resampling.LANCZOS)
     image.alpha_composite(logo_copy, (cx - logo_copy.width // 2, 118))
     alpha = int(255 * clamp((local - 0.25) / 0.8))
-    text(draw, (640, 350), "REALAND", 60, WHITE, "bold", anchor="mm")
+    text(draw, (640, 350), "CLARION", 60, WHITE, "bold", anchor="mm")
     text(draw, (640, 422), "让桌面，顺着你的思路流动", 27, CYAN, "semibold", anchor="mm")
     text(draw, (640, 625), "A modern Wayland compositor for focused work", 14, (159, 178, 207), "regular", anchor="mm")
     # Thin signal line.
@@ -409,7 +409,7 @@ def outro(image, local):
     logo_copy = logo.copy()
     logo_copy.thumbnail((155, 155), Image.Resampling.LANCZOS)
     image.alpha_composite(logo_copy, (WIDTH // 2 - logo_copy.width // 2, 138))
-    text(draw, (640, 342), "REALAND", 63, WHITE, "bold", anchor="mm")
+    text(draw, (640, 342), "CLARION", 63, WHITE, "bold", anchor="mm")
     text(draw, (640, 415), "让桌面，顺着你的思路流动", 26, CYAN, "semibold", anchor="mm")
     text(draw, (640, 482), "A modern Wayland compositor", 16, (173, 192, 218), "regular", anchor="mm")
     text(draw, (640, 590), "SCROLL  ·  SPLIT  ·  CREATE", 14, (134, 159, 190), "mono", anchor="mm")
@@ -422,7 +422,7 @@ LOGO: Image.Image | None = None
 def load_logo():
     global LOGO
     if LOGO is None:
-        logo_path = OUT / "realand-logo.png"
+        logo_path = OUT / "clarion-logo.png"
         svg_path = ROOT / "docs/wiki/_assets/icons/logo.svg"
         subprocess.run(["rsvg-convert", "-w", "512", "-h", "512", "-o", str(logo_path), str(svg_path)], check=True)
         LOGO = Image.open(logo_path).convert("RGBA")
@@ -497,7 +497,7 @@ def make_audio(path: Path):
 
 def write_shotlist():
     (OUT / "shotlist.md").write_text(
-        "# Realand 40s product film\n\n"
+        "# Clarion 40s product film\n\n"
         "| Time | Beat | On-screen message |\n"
         "| --- | --- | --- |\n"
         "| 00–05 | Opening | 让桌面，顺着你的思路流动 |\n"
@@ -505,15 +505,15 @@ def write_shotlist():
         "| 13–21 | Motion | Spring physics · Popin · Gradient focus ring |\n"
         "| 21–29 | Overview | 一眼看见全部空间，拖拽整理窗口 |\n"
         "| 29–35 | Performance | Rust · Smithay · Wayland · Vulkan |\n"
-        "| 35–40 | End card | Realand — A modern Wayland compositor |\n\n"
+        "| 35–40 | End card | Clarion — A modern Wayland compositor |\n\n"
         "The visuals are generated from the project's documented features; no external stock media is required.\n",
         encoding="utf-8",
     )
 
 
 def main():
-    video = OUT / "realand-40s.mp4"
-    audio = OUT / "realand-40s-audio.wav"
+    video = OUT / "clarion-40s.mp4"
+    audio = OUT / "clarion-40s-audio.wav"
     write_shotlist()
     make_audio(audio)
     load_logo()

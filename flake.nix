@@ -1,5 +1,5 @@
 {
-  description = "Realand: A Wayland compositor with an independent desktop core and native Vulkan backend.";
+  description = "Clarion: A Wayland compositor with an independent desktop core and native Vulkan backend.";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
@@ -10,7 +10,7 @@
     }:
     let
       revision = self.shortRev or self.dirtyShortRev or "unknown";
-      realand-package =
+      clarion-package =
         {
           lib,
           cairo,
@@ -22,6 +22,7 @@
           libxkbcommon,
           libgbm,
           pango,
+          python3,
           pipewire,
           pkg-config,
           rustPlatform,
@@ -35,20 +36,20 @@
         }:
 
         rustPlatform.buildRustPackage {
-          pname = "realand";
+          pname = "clarion";
           version = revision;
 
           src = lib.fileset.toSource {
             root = ./.;
             fileset = lib.fileset.unions [
               ./build.rs
-              ./realand-config
-              ./realand-core
-              ./realand-ipc
-              ./realand-settings
-              ./realand-shell/assets/macos/SFNS.ttf
-              ./realand-shell/assets/macos/PingFangSC-Regular.otf
-              ./realand-visual-tests
+              ./clarion-config
+              ./clarion-core
+              ./clarion-ipc
+              ./clarion-settings
+              ./clarion-shell/assets/macos/SFNS.ttf
+              ./clarion-shell/assets/macos/PingFangSC-Regular.otf
+              ./clarion-visual-tests
               ./resources
               ./src
               ./third_party/smithay
@@ -58,11 +59,11 @@
           };
 
           postPatch = ''
-            patchShebangs resources/realand-session
-            substituteInPlace resources/realand.desktop \
-              --replace-fail 'Exec=realand-session' "Exec=$out/bin/realand-session"
-            substituteInPlace resources/realand.service \
-              --replace-fail 'ExecStart=realand' "ExecStart=$out/bin/realand"
+            patchShebangs resources/clarion-session
+            substituteInPlace resources/clarion.desktop \
+              --replace-fail 'Exec=clarion-session' "Exec=$out/bin/clarion-session"
+            substituteInPlace resources/clarion.service \
+              --replace-fail 'ExecStart=clarion' "ExecStart=$out/bin/clarion"
           '';
 
           cargoLock = {
@@ -104,7 +105,7 @@
             ++ lib.optional withSystemd "systemd";
           buildNoDefaultFeatures = true;
 
-          # realand runs an actual instance of the compositor (with a mock backend) during
+          # clarion runs an actual instance of the compositor (with a mock backend) during
           # tests and thus creates a real socket file in the runtime dir.
           # this is fine for our build, we just need to make sure it has a directory to write to.
           preCheck = ''
@@ -120,33 +121,39 @@
           cargoBuildFlags = [
             "--workspace"
             "--exclude"
-            "realand-visual-tests"
+            "clarion-visual-tests"
           ];
           cargoTestFlags = [
             "--workspace"
             "--exclude"
-            "realand-visual-tests"
+            "clarion-visual-tests"
           ];
 
           postInstall =
             ''
-              installShellCompletion --cmd realand \
-                --bash <($out/bin/realand completions bash) \
-                --fish <($out/bin/realand completions fish) \
-                --nushell <($out/bin/realand completions nushell) \
-                --zsh <($out/bin/realand completions zsh)
+              installShellCompletion --cmd clarion \
+                --bash <($out/bin/clarion completions bash) \
+                --fish <($out/bin/clarion completions fish) \
+                --nushell <($out/bin/clarion completions nushell) \
+                --zsh <($out/bin/clarion completions zsh)
 
-              install -Dm755 target/release/realand-settings $out/bin/realand-settings
-              install -Dm755 resources/realand-session $out/bin/realand-session
-              install -Dm644 resources/realand.desktop -t $out/share/wayland-sessions
-              install -Dm644 resources/realand-portals.conf -t $out/share/xdg-desktop-portal
+              install -Dm755 target/release/clarion-settings $out/bin/clarion-settings
+              install -Dm755 resources/clarion-session $out/bin/clarion-session
+              install -Dm755 resources/clarion-shell-msg $out/bin/clarion-shell-msg
+              substituteInPlace $out/bin/clarion-shell-msg \
+                --replace-fail '#!/usr/bin/env python3' '#!${python3}/bin/python3'
+              for legacy in realand realand-session realand-settings realand-shell-msg; do
+                install -Dm755 resources/compat/$legacy $out/bin/$legacy
+              done
+              install -Dm644 resources/clarion.desktop -t $out/share/wayland-sessions
+              install -Dm644 resources/clarion-portals.conf -t $out/share/xdg-desktop-portal
             ''
             + lib.optionalString withSystemd ''
-              install -Dm644 resources/realand{.service,-shutdown.target} -t $out/lib/systemd/user
+              install -Dm644 resources/clarion{.service,-shutdown.target} -t $out/lib/systemd/user
             ''
             + lib.optionalString withDinit ''
-              install -Dm644 resources/dinit/realand $out/lib/dinit.d/user/realand
-              install -Dm644 resources/dinit/realand.target $out/lib/dinit.d/user/realand.target
+              install -Dm644 resources/dinit/clarion $out/lib/dinit.d/user/clarion
+              install -Dm644 resources/dinit/clarion.target $out/lib/dinit.d/user/clarion.target
             '';
 
           env = {
@@ -160,18 +167,18 @@
                 "-Wl,--pop-state"
               ]
             );
-            REALAND_BUILD_COMMIT = revision;
+            CLARION_BUILD_COMMIT = revision;
           };
 
           passthru = {
-            providedSessions = [ "realand" ];
+            providedSessions = [ "clarion" ];
           };
 
           meta = {
             description = "Wayland compositor with an independent desktop core and native Vulkan backend";
             homepage = "https://github.com/123llyrr/realand";
             license = lib.licenses.gpl3Plus;
-            mainProgram = "realand";
+            mainProgram = "clarion";
             platforms = lib.platforms.linux;
           };
         };
@@ -186,7 +193,7 @@
     {
       checks = forAllSystems (system: {
         # We use the debug build here to save a bit of time
-        inherit (self.packages.${system}) realand-debug;
+        inherit (self.packages.${system}) clarion-debug;
       });
 
       devShells = forAllSystems (
@@ -194,7 +201,7 @@
         let
           pkgs = nixpkgsFor.${system};
           rustfmt' = pkgs.rustfmt.override { asNightly = true; };
-          inherit (self.packages.${system}) realand;
+          inherit (self.packages.${system}) clarion;
         in
         {
           default = pkgs.mkShell {
@@ -211,11 +218,11 @@
             nativeBuildInputs = [
               pkgs.rustPlatform.bindgenHook
               pkgs.pkg-config
-              pkgs.wrapGAppsHook4 # For `realand-visual-tests`
+              pkgs.wrapGAppsHook4 # For `clarion-visual-tests`
             ];
 
-            buildInputs = realand.buildInputs ++ [
-              pkgs.libadwaita # For `realand-visual-tests`
+            buildInputs = clarion.buildInputs ++ [
+              pkgs.libadwaita # For `clarion-visual-tests`
             ];
 
             env = {
@@ -224,7 +231,7 @@
               # in the package expression
               #
               # This should only be set with `RUSTFLAGS="$RUSTFLAGS -C your-flags"`
-              RUSTFLAGS = realand.RUSTFLAGS;
+              RUSTFLAGS = clarion.RUSTFLAGS;
             };
           };
         }
@@ -235,17 +242,17 @@
       packages = forAllSystems (
         system:
         let
-          realand = nixpkgsFor.${system}.callPackage realand-package { };
+          clarion = nixpkgsFor.${system}.callPackage clarion-package { };
         in
         {
-          inherit realand;
+          inherit clarion;
 
           # NOTE: This is for development purposes only
           #
           # It is primarily to help with quickly iterating on
           # changes made to the above expression - though it is
-          # also not stripped in order to better debug realand itself
-          realand-debug = realand.overrideAttrs (
+          # also not stripped in order to better debug clarion itself
+          clarion-debug = clarion.overrideAttrs (
             newAttrs: oldAttrs: {
               pname = oldAttrs.pname + "-debug";
 
@@ -256,12 +263,12 @@
             }
           );
 
-          default = realand;
+          default = clarion;
         }
       );
 
       overlays.default = final: _: {
-        realand = final.callPackage realand-package { };
+        clarion = final.callPackage clarion-package { };
       };
     };
 }

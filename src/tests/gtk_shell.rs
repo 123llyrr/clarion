@@ -3,8 +3,8 @@
 
 use std::sync::{Arc, Mutex};
 
-use realand_config::Config;
-use realand_ipc::GtkAppMenu;
+use clarion_config::Config;
+use clarion_ipc::GtkAppMenu;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface as ServerSurface;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
@@ -84,7 +84,7 @@ fn map_window(f: &mut Fixture, client: ClientId) -> (WlSurface, ServerSurface) {
     window.ack_last_and_commit();
     f.double_roundtrip(client);
     let server = f
-        .realand()
+        .clarion()
         .layout
         .active_window()
         .unwrap()
@@ -105,7 +105,7 @@ fn gtk_menu_metadata_is_owned_bounded_updateable_and_never_grants_focus() {
     let (surface, server_surface) = map_window(&mut f, first);
     let second = f.add_client();
     let (_, second_surface) = map_window(&mut f, second);
-    let focused = f.realand().keyboard_focus.clone();
+    let focused = f.clarion().keyboard_focus.clone();
     let shell = bind_shell(&mut f, first);
     let c = f.client(first);
     let gtk_surface = shell.get_gtk_surface(&surface, &c.qh, ());
@@ -132,14 +132,14 @@ fn gtk_menu_metadata_is_owned_bounded_updateable_and_never_grants_focus() {
         None,
         "metadata must not follow active-window focus onto another client's surface"
     );
-    assert_eq!(f.realand().keyboard_focus, focused);
+    assert_eq!(f.clarion().keyboard_focus, focused);
 
     gtk_surface.present(0);
     shell.set_startup_id(Some("arbitrary-client-string".into()));
     shell.system_bell(Some(&gtk_surface));
     f.double_roundtrip(first);
     assert_eq!(
-        f.realand().keyboard_focus,
+        f.clarion().keyboard_focus,
         focused,
         "GTK metadata timestamps/startup IDs must not authorize focus"
     );
@@ -162,7 +162,7 @@ fn gtk_menu_metadata_is_owned_bounded_updateable_and_never_grants_focus() {
         Some("/org/example/Updated")
     );
     assert_eq!(updated.unique_bus_name.as_deref(), Some(":1.43"));
-    assert_eq!(f.realand().keyboard_focus, focused);
+    assert_eq!(f.clarion().keyboard_focus, focused);
 
     let window = f.client(first).window(&surface);
     window.xdg_toplevel.destroy();
@@ -179,7 +179,7 @@ fn gtk_menu_metadata_is_owned_bounded_updateable_and_never_grants_focus() {
     f.double_roundtrip(first);
     assert_eq!(surface_menu(&server_surface), None);
     assert_eq!(surface_menu(&second_surface), None);
-    assert_eq!(f.realand().keyboard_focus, focused);
+    assert_eq!(f.clarion().keyboard_focus, focused);
 }
 
 #[test]
@@ -195,9 +195,9 @@ fn macos_desktop_shortcut_identity_tracks_style_surface_focus_and_modal_owners()
     use smithay::utils::SERIAL_COUNTER;
 
     fn focus(f: &mut Fixture, logical: KeyboardFocus, actual: Option<ServerSurface>) {
-        let state = f.realand_state();
-        state.realand.keyboard_focus = logical;
-        state.realand.seat.get_keyboard().unwrap().set_focus(
+        let state = f.clarion_state();
+        state.clarion.keyboard_focus = logical;
+        state.clarion.seat.get_keyboard().unwrap().set_focus(
             state,
             actual,
             SERIAL_COUNTER.next_serial(),
@@ -212,8 +212,8 @@ fn macos_desktop_shortcut_identity_tracks_style_surface_focus_and_modal_owners()
     let client = f.add_client();
     let (_, application) = map_window(&mut f, client);
     let shell = bind_shell(&mut f, client);
-    let macos = "io.github.realand.Desktop.MacOS";
-    for namespace in ["realand-desktop", "realand-desktop-interaction"] {
+    let macos = "io.github.clarion.Desktop.MacOS";
+    for namespace in ["clarion-desktop", "clarion-desktop-interaction"] {
         let panel = f
             .client(client)
             .create_layer(None, Layer::Bottom, namespace);
@@ -233,7 +233,7 @@ fn macos_desktop_shortcut_identity_tracks_style_surface_focus_and_modal_owners()
         panel.ack_last_and_commit();
         f.double_roundtrip(client);
         let server = f
-            .realand()
+            .clarion()
             .mapped_layer_surfaces
             .keys()
             .find(|layer| layer.namespace() == namespace)
@@ -245,29 +245,29 @@ fn macos_desktop_shortcut_identity_tracks_style_surface_focus_and_modal_owners()
         };
         focus(&mut f, logical.clone(), Some(server.clone()));
         assert!(
-            !f.realand_state().desktop_owns_macos_shortcuts(),
+            !f.clarion_state().desktop_owns_macos_shortcuts(),
             "no GTK marker must fail closed"
         );
         let c = f.client(client);
         let metadata = shell.get_gtk_surface(&surface, &c.qh, ());
-        for application_id in [macos, "io.github.realand.Desktop.Material", macos] {
+        for application_id in [macos, "io.github.clarion.Desktop.Material", macos] {
             metadata.set_dbus_properties(Some(application_id.into()), None, None, None, None, None);
             f.double_roundtrip(client);
             focus(&mut f, logical.clone(), Some(server.clone()));
             assert!(surface_application_id_matches(&server, application_id));
             assert_eq!(
-                f.realand_state().desktop_owns_macos_shortcuts(),
-                namespace == "realand-desktop" && application_id == macos
+                f.clarion_state().desktop_owns_macos_shortcuts(),
+                namespace == "clarion-desktop" && application_id == macos
             );
         }
-        if namespace != "realand-desktop" {
+        if namespace != "clarion-desktop" {
             continue;
         }
 
         // A root's metadata cannot grant shortcuts to a popup (different actual
         // seat surface) or to an application through stale logical focus.
         focus(&mut f, logical.clone(), Some(application.clone()));
-        assert!(!f.realand_state().desktop_owns_macos_shortcuts());
+        assert!(!f.clarion_state().desktop_owns_macos_shortcuts());
         focus(
             &mut f,
             KeyboardFocus::Layout {
@@ -275,7 +275,7 @@ fn macos_desktop_shortcut_identity_tracks_style_surface_focus_and_modal_owners()
             },
             Some(server.clone()),
         );
-        assert!(!f.realand_state().desktop_owns_macos_shortcuts());
+        assert!(!f.clarion_state().desktop_owns_macos_shortcuts());
         for owner in [
             KeyboardFocus::ScreenshotUi,
             KeyboardFocus::Mru,
@@ -285,27 +285,27 @@ fn macos_desktop_shortcut_identity_tracks_style_surface_focus_and_modal_owners()
             },
         ] {
             focus(&mut f, owner, Some(server.clone()));
-            assert!(!f.realand_state().desktop_owns_macos_shortcuts());
+            assert!(!f.clarion_state().desktop_owns_macos_shortcuts());
         }
         focus(&mut f, logical.clone(), Some(server.clone()));
-        f.realand().hotkey_overlay.show();
-        assert!(!f.realand_state().desktop_owns_macos_shortcuts());
-        f.realand().hotkey_overlay.hide();
-        f.realand().exit_confirm_dialog.show();
-        assert!(!f.realand_state().desktop_owns_macos_shortcuts());
-        f.realand().exit_confirm_dialog.hide();
-        f.realand_complete_animations();
+        f.clarion().hotkey_overlay.show();
+        assert!(!f.clarion_state().desktop_owns_macos_shortcuts());
+        f.clarion().hotkey_overlay.hide();
+        f.clarion().exit_confirm_dialog.show();
+        assert!(!f.clarion_state().desktop_owns_macos_shortcuts());
+        f.clarion().exit_confirm_dialog.hide();
+        f.clarion_complete_animations();
         focus(&mut f, logical.clone(), Some(server.clone()));
-        assert!(!f.realand().exit_confirm_dialog.is_open());
-        let output = f.realand_output(1);
-        let realand = f.realand();
-        let mru = WindowMru::new(realand);
-        realand
+        assert!(!f.clarion().exit_confirm_dialog.is_open());
+        let output = f.clarion_output(1);
+        let clarion = f.clarion();
+        let mru = WindowMru::new(clarion);
+        clarion
             .window_mru_ui
-            .open(realand.clock.clone(), mru, output);
-        assert!(!f.realand_state().desktop_owns_macos_shortcuts());
-        f.realand().window_mru_ui.close(MruCloseRequest::Cancel);
-        assert!(f.realand_state().desktop_owns_macos_shortcuts());
+            .open(clarion.clock.clone(), mru, output);
+        assert!(!f.clarion_state().desktop_owns_macos_shortcuts());
+        f.clarion().window_mru_ui.close(MruCloseRequest::Cancel);
+        assert!(f.clarion_state().desktop_owns_macos_shortcuts());
     }
 
     // Even the pre-surface lock stage disables the desktop override, without
@@ -322,14 +322,14 @@ fn macos_desktop_shortcut_identity_tracks_style_surface_focus_and_modal_owners()
     let _lock = manager.lock(&c.qh, ());
     f.double_roundtrip(client);
     assert!(matches!(
-        f.realand().lock_state,
+        f.clarion().lock_state,
         crate::compositor::LockState::WaitingForSurfaces { .. }
     ));
     let server = f
-        .realand()
+        .clarion()
         .mapped_layer_surfaces
         .keys()
-        .find(|layer| layer.namespace() == "realand-desktop")
+        .find(|layer| layer.namespace() == "clarion-desktop")
         .unwrap()
         .wl_surface()
         .clone();
@@ -340,5 +340,5 @@ fn macos_desktop_shortcut_identity_tracks_style_surface_focus_and_modal_owners()
         },
         Some(server),
     );
-    assert!(!f.realand_state().desktop_owns_macos_shortcuts());
+    assert!(!f.clarion_state().desktop_owns_macos_shortcuts());
 }

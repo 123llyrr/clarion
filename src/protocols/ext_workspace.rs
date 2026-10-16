@@ -1,6 +1,6 @@
 //! ext-workspace protocol implementation.
 //!
-//! This is how we map the protocol concepts to the realand concepts:
+//! This is how we map the protocol concepts to the clarion concepts:
 //!
 //! - Workspace groups are outputs.
 //! - Workspace coordinates: X = 0, Y = workspace index. They need to be two-dimensional because 1D
@@ -88,15 +88,15 @@ pub struct ExtWorkspaceGlobalData {
 }
 
 pub fn refresh(state: &mut State) {
-    let _span = realand_tracy_span!("ext_workspace::refresh");
+    let _span = clarion_tracy_span!("ext_workspace::refresh");
 
-    let protocol_state = &mut state.realand.ext_workspace_state;
+    let protocol_state = &mut state.clarion.ext_workspace_state;
 
     let mut changed = false;
 
     // Remove workspaces that no longer exist (sending workspace_leave to workspace groups).
     let mut seen_workspaces = HashMap::new();
-    for (mon, _, ws) in state.realand.layout.workspaces() {
+    for (mon, _, ws) in state.clarion.layout.workspaces() {
         let output = mon.map(|mon| mon.output());
         seen_workspaces.insert(ws.id(), output);
     }
@@ -113,7 +113,7 @@ pub fn refresh(state: &mut State) {
 
     // Remove workspace groups for outputs that no longer exist.
     protocol_state.workspace_groups.retain(|output, data| {
-        if state.realand.sorted_outputs.contains(output) {
+        if state.clarion.sorted_outputs.contains(output) {
             return true;
         }
 
@@ -138,12 +138,12 @@ pub fn refresh(state: &mut State) {
     });
 
     // Update existing workspaces and create new ones.
-    for (mon, ws_idx, ws) in state.realand.layout.workspaces() {
+    for (mon, ws_idx, ws) in state.clarion.layout.workspaces() {
         changed |= refresh_workspace(protocol_state, mon, ws_idx, ws);
     }
 
     // Update workspace groups and create new ones, sending workspace_enter events as needed.
-    for output in &state.realand.sorted_outputs {
+    for output in &state.clarion.sorted_outputs {
         changed |= refresh_workspace_group(protocol_state, output);
     }
 
@@ -161,7 +161,7 @@ pub fn on_output_bound(state: &mut State, output: &Output, wl_output: &WlOutput)
 
     let mut sent = false;
 
-    let protocol_state = &mut state.realand.ext_workspace_state;
+    let protocol_state = &mut state.clarion.ext_workspace_state;
     if let Some(data) = protocol_state.workspace_groups.get_mut(output) {
         for group in &mut data.instances {
             if group.client().as_ref() != Some(&client) {

@@ -7,8 +7,8 @@ use std::sync::RwLock;
 use std::{io, thread};
 
 use atomic::Atomic;
+use clarion_config::Environment;
 use libc::{getrlimit, rlim_t, rlimit, setrlimit, RLIMIT_NOFILE};
-use realand_config::Environment;
 use smithay::wayland::xdg_activation::XdgActivationToken;
 
 use crate::utils::expand_home;
@@ -64,7 +64,7 @@ pub fn restore_nofile_rlimit() {
 
 /// Spawns the command to run independently of the compositor.
 pub fn spawn<T: AsRef<OsStr> + Send + 'static>(command: Vec<T>, token: Option<XdgActivationToken>) {
-    let _span = realand_tracy_span!();
+    let _span = clarion_tracy_span!();
 
     if command.is_empty() {
         return;
@@ -98,7 +98,7 @@ fn spawn_sync(
     args: impl IntoIterator<Item = impl AsRef<OsStr>>,
     token: Option<XdgActivationToken>,
 ) {
-    let _span = realand_tracy_span!();
+    let _span = clarion_tracy_span!();
 
     let mut command = command.as_ref();
 
@@ -232,8 +232,8 @@ mod systemd {
         }
 
         // When running as a systemd session, we want to put children into their own transient
-        // scopes in order to separate them from the realand process. This is helpful for
-        // example to prevent the OOM killer from taking down realand together with a
+        // scopes in order to separate them from the clarion process. This is helpful for
+        // example to prevent the OOM killer from taking down clarion together with a
         // misbehaving client.
         //
         // Putting a child into a scope is done by calling systemd's StartTransientUnit D-Bus method
@@ -242,7 +242,7 @@ mod systemd {
         // linger around forever.
         //
         // To prevent this, we'll use our double-fork (done for a separate reason) to help. In our
-        // intermediate child we will send back the grandchild PID, and in realand we will create a
+        // intermediate child we will send back the grandchild PID, and in clarion we will create a
         // transient scope with both our intermediate child and the grandchild PIDs set. Only then
         // we will signal our intermediate child to exit. This way, even if the grandchild
         // exits quickly, a non-empty scope will be created (with just our intermediate
@@ -419,12 +419,12 @@ mod systemd {
             return Ok(());
         }
 
-        let _span = realand_tracy_span!();
+        let _span = clarion_tracy_span!();
 
         // Extract the basename.
         let name = Path::new(name).file_name().unwrap_or(name);
 
-        let mut scope_name = String::from("app-realand-");
+        let mut scope_name = String::from("app-clarion-");
 
         // Escape for systemd similarly to libgnome-desktop, which says it had adapted this from
         // systemd source.

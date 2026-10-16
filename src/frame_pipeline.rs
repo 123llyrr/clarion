@@ -18,10 +18,10 @@ use smithay::wayland::presentation::Refresh;
 
 use crate::backend::tty::SurfaceDmabufFeedback;
 use crate::backend::{RenderResult, Tty};
-use crate::compositor::{OutputRenderElements, Realand};
+use crate::compositor::Clarion;
 use crate::frame_clock::FrameClock;
 use crate::render_helpers::debug::draw_damage;
-use crate::render_helpers::renderer::RealandRenderer;
+use crate::render_helpers::renderer::ClarionRenderer;
 use crate::render_helpers::{RenderCtx, RenderTarget};
 use crate::utils::{get_monotonic_time, next_presentation_seq};
 
@@ -36,25 +36,11 @@ pub(crate) struct FrameRequest {
     pub gpu_timing_tag: Option<crate::render_helpers::vulkan::timing::GpuTimingTag>,
 }
 
-/// A renderer-specific scene. Device code can read elements, never edit desktop state.
-pub(crate) struct SceneSnapshot<R: RealandRenderer> {
-    elements: Vec<OutputRenderElements<R>>,
-}
-
-impl<R: RealandRenderer> SceneSnapshot<R> {
-    pub fn elements(&self) -> &[OutputRenderElements<R>] {
-        &self.elements
-    }
-}
-
-/// Scene preparation is the sole renderer-dependent desktop operation.
-pub(crate) trait ScenePreparation {
-    fn prepare_scene<R: RealandRenderer>(&mut self, renderer: &mut R) -> SceneSnapshot<R>;
-}
+pub(crate) use crate::scene::{ScenePreparation, SceneSnapshot};
 
 /// Restricted platform operations needed around a device submission.
 ///
-/// No accessor returns Realand or its layout/input state. Protocol feedback must be
+/// No accessor returns Clarion or its layout/input state. Protocol feedback must be
 /// collected before KMS queues it with the frame; schedule mutations stay here.
 pub(crate) trait FrameServices {
     fn request(&self) -> &FrameRequest;
@@ -62,11 +48,6 @@ pub(crate) trait FrameServices {
         &mut self,
         renderer: &mut crate::render_helpers::vulkan::native::NativeRenderer,
     ) -> anyhow::Result<()>;
-    fn recover_vulkan_renderer(
-        &mut self,
-        node: smithay::backend::drm::DrmNode,
-        config: &crate::backend::DeviceSettings,
-    ) -> Option<crate::render_helpers::vulkan::native::NativeRenderer>;
     fn active_output_names(&self) -> Vec<String>;
     fn update_scanout(&mut self, states: &RenderElementStates);
     fn send_dmabuf_feedback(
@@ -97,22 +78,22 @@ impl<T: ScenePreparation + FrameServices> FramePort for T {}
 /// The adapter lives above the device backends. Its desktop reference is private and
 /// cannot be reached through the frame-port bounds used by device rendering code.
 pub(crate) struct FrameCoordinator<'a> {
-    realand: &'a mut Realand,
+    clarion: &'a mut Clarion,
     output: Output,
     request: FrameRequest,
 }
 
 impl<'a> FrameCoordinator<'a> {
-    pub fn new(realand: &'a mut Realand, output: &Output) -> Self {
-        let clock = realand.output_state[output].schedule.clock();
+    pub fn new(clarion: &'a mut Clarion, output: &Output) -> Self {
+        let clock = clarion.output_state[output].schedule.clock();
         let request = FrameRequest {
-            locked: realand.is_locked(),
+            locked: clarion.is_locked(),
             variable_refresh: clock.vrr(),
             refresh_interval: clock.refresh_interval().unwrap_or(HEADLESS_FRAME_INTERVAL),
-            gpu_timing_tag: realand.output_state[output].schedule.gpu_timing_tag(),
+            gpu_timing_tag: clarion.output_state[output].schedule.gpu_timing_tag(),
         };
         Self {
-            realand,
+            clarion,
             output: output.clone(),
             request,
         }
@@ -120,7 +101,7 @@ impl<'a> FrameCoordinator<'a> {
 }
 
 impl ScenePreparation for FrameCoordinator<'_> {
-    fn prepare_scene<R: RealandRenderer>(&mut self, renderer: &mut R) -> SceneSnapshot<R> {
+    fn prepare_scene<R: ClarionRenderer>(&mut self, renderer: &mut R) -> SceneSnapshot<R> {
         let _latency =
             crate::utils::latency::Span::new(crate::utils::latency::Operation::SceneBuild);
         let ctx = RenderCtx {
@@ -128,30 +109,33 @@ impl ScenePreparation for FrameCoordinator<'_> {
             target: RenderTarget::Output,
             xray: None,
         };
-        let mut elements = self.realand.render_to_vec(ctx, &self.output, true);
-        if self.realand.debug_draw_damage {
-            let output_state = self.realand.output_state.get_mut(&self.output).unwrap();
+        let mut elements = self
+            .clarion
+            .scene_for_output(&self.output)
+            .render_to_vec(ctx, true);
+        if self.clarion.debug_draw_damage {
+            let output_state = self.clarion.output_state.get_mut(&self.output).unwrap();
             draw_damage(&mut output_state.debug_damage_tracker, &mut elements);
         }
-        SceneSnapshot { elements }
+        SceneSnapshot::from_elements(elements)
     }
 }
 
 impl FrameServices for FrameCoordinator<'_> {
     fn cancel_timer(&mut self, token: RegistrationToken) {
-        self.realand.event_loop.remove(token);
+        self.clarion.event_loop.remove(token);
     }
     fn arm_nested_retry(&mut self, deadline: Instant) -> Option<RegistrationToken> {
         let timer_output = self.output.clone();
-        match self.realand.event_loop.insert_source(
+        match self.clarion.event_loop.insert_source(
             Timer::from_deadline(deadline),
             move |_, _, state| {
-                if !state.realand.output_state.contains_key(&timer_output) {
+                if !state.clarion.output_state.contains_key(&timer_output) {
                     return TimeoutAction::Drop;
                 }
                 if let crate::backend::Backend::Winit(winit) = &mut state.backend {
                     winit.retry_timer_fired();
-                    state.realand.queue_redraw(&timer_output);
+                    state.clarion.queue_redraw(&timer_output);
                 }
                 TimeoutAction::Drop
             },
@@ -172,35 +156,24 @@ impl FrameServices for FrameCoordinator<'_> {
     ) -> anyhow::Result<()> {
         crate::platform::device_bridge::install_native_shader_wakeup(
             renderer,
-            &self.realand.event_loop,
+            &self.clarion.event_loop,
         )?;
         renderer.install_completion_wakeup_with_callbacks(
-            &self.realand.event_loop,
-            |sample, state| state.realand.record_gpu_timing(sample),
+            &self.clarion.event_loop,
+            |sample, state| state.clarion.record_gpu_timing(sample),
             crate::compositor::State::on_native_gpu_completion,
         )?;
         Ok(())
     }
-    fn recover_vulkan_renderer(
-        &mut self,
-        node: smithay::backend::drm::DrmNode,
-        config: &crate::backend::DeviceSettings,
-    ) -> Option<crate::render_helpers::vulkan::native::NativeRenderer> {
-        crate::platform::device_bridge::native_renderer_with_wakeup(
-            node,
-            config,
-            &self.realand.event_loop,
-        )
-    }
     fn active_output_names(&self) -> Vec<String> {
-        self.realand
+        self.clarion
             .global_space
             .outputs()
             .map(Output::name)
             .collect()
     }
     fn update_scanout(&mut self, states: &RenderElementStates) {
-        self.realand
+        self.clarion
             .update_primary_scanout_output(&self.output, states);
     }
     fn send_dmabuf_feedback(
@@ -208,14 +181,14 @@ impl FrameServices for FrameCoordinator<'_> {
         feedback: &SurfaceDmabufFeedback,
         states: &RenderElementStates,
     ) {
-        self.realand
+        self.clarion
             .send_dmabuf_feedbacks(&self.output, feedback, states);
     }
     fn take_presentation_feedback(
         &mut self,
         states: &RenderElementStates,
     ) -> OutputPresentationFeedback {
-        self.realand
+        self.clarion
             .take_presentation_feedbacks(&self.output, states)
     }
     fn present_immediately(&mut self, states: &RenderElementStates) {
@@ -228,34 +201,34 @@ impl FrameServices for FrameCoordinator<'_> {
         );
     }
     fn set_default_dmabuf_feedback(&mut self, global: &DmabufGlobal, feedback: &DmabufFeedback) {
-        self.realand
+        self.clarion
             .dmabuf_state
             .set_default_feedback(global, feedback);
     }
     fn kms_submitted(&mut self) {
         if let Some(token) = self
-            .realand
+            .clarion
             .output_state
             .get_mut(&self.output)
             .unwrap()
             .schedule
             .kms_submitted()
         {
-            self.realand.event_loop.remove(token);
+            self.clarion.event_loop.remove(token);
         }
     }
     fn retry_after_vblank(&mut self, target: Duration) {
-        queue_retry_after_estimated_vblank(self.realand, self.output.clone(), target);
+        queue_retry_after_estimated_vblank(self.clarion, self.output.clone(), target);
     }
     fn kms_submission_failed(&mut self, target: Duration, error: &dyn Display) {
-        queue_kms_submission_retry(self.realand, self.output.clone(), target, error);
+        queue_kms_submission_retry(self.clarion, self.output.clone(), target, error);
     }
     fn estimated_vblank(&mut self, target: Duration) {
-        queue_estimated_vblank_timer(self.realand, self.output.clone(), target);
+        queue_estimated_vblank_timer(self.clarion, self.output.clone(), target);
     }
     fn finish_nested_redraw(&mut self) -> bool {
         let schedule = &mut self
-            .realand
+            .clarion
             .output_state
             .get_mut(&self.output)
             .unwrap()
@@ -264,20 +237,20 @@ impl FrameServices for FrameCoordinator<'_> {
         schedule.animations_remain()
     }
     fn output_resized(&mut self) {
-        self.realand.ipc_outputs_changed = true;
-        self.realand.output_resized(&self.output);
+        self.clarion.ipc_outputs_changed = true;
+        self.clarion.output_resized(&self.output);
     }
     fn finish_headless_redraw(&mut self) {
-        let output_state = self.realand.output_state.get_mut(&self.output).unwrap();
+        let output_state = self.clarion.output_state.get_mut(&self.output).unwrap();
         if let Some(token) = output_state.schedule.finish_headless_redraw() {
-            self.realand.event_loop.remove(token);
+            self.clarion.event_loop.remove(token);
         }
         if output_state.schedule.animations_remain() {
             let timer_output = self.output.clone();
-            match self.realand.event_loop.insert_source(
+            match self.clarion.event_loop.insert_source(
                 Timer::from_duration(HEADLESS_FRAME_INTERVAL),
                 move |_, _, state| {
-                    if let Some(output_state) = state.realand.output_state.get_mut(&timer_output) {
+                    if let Some(output_state) = state.clarion.output_state.get_mut(&timer_output) {
                         output_state.schedule.headless_timer_fired();
                     }
                     TimeoutAction::Drop
@@ -294,28 +267,28 @@ impl FrameServices for FrameCoordinator<'_> {
 /// Skipped redraw cleanup clears immediately queued damage, so the retry must be
 /// retained independently until the estimated refresh wakes the output.
 pub(crate) fn queue_retry_after_estimated_vblank(
-    realand: &mut Realand,
+    clarion: &mut Clarion,
     output: Output,
     target_presentation_time: Duration,
 ) {
-    realand
+    clarion
         .output_state
         .get_mut(&output)
         .unwrap()
         .schedule
         .retry_after_estimated_vblank();
-    queue_estimated_vblank_timer(realand, output, target_presentation_time);
+    queue_estimated_vblank_timer(clarion, output, target_presentation_time);
 }
 
 /// Used by both native Vulkan and GLES after a rejected KMS submission.
 pub(crate) fn queue_kms_submission_retry(
-    realand: &mut Realand,
+    clarion: &mut Clarion,
     output: Output,
     target: Duration,
     error: &(impl std::fmt::Display + ?Sized),
 ) {
     let now = get_monotonic_time();
-    let (deadline, should_warn) = realand
+    let (deadline, should_warn) = clarion
         .output_state
         .get_mut(&output)
         .unwrap()
@@ -328,22 +301,22 @@ pub(crate) fn queue_kms_submission_retry(
             "error queueing frame to KMS: {error}; retrying with bounded backoff"
         );
     }
-    queue_retry_after_estimated_vblank(realand, output, deadline);
+    queue_retry_after_estimated_vblank(clarion, output, deadline);
 }
 
 /// Activation should present promptly even if the previous DRM master rejected frames.
-pub(crate) fn reset_kms_submission_backoff(realand: &mut Realand) {
-    for state in realand.output_state.values_mut() {
+pub(crate) fn reset_kms_submission_backoff(clarion: &mut Clarion) {
+    for state in clarion.output_state.values_mut() {
         state.schedule.reset_kms_retry();
     }
 }
 
 fn queue_estimated_vblank_timer(
-    realand: &mut Realand,
+    clarion: &mut Clarion,
     output: Output,
     target_presentation_time: Duration,
 ) {
-    let output_state = realand.output_state.get_mut(&output).unwrap();
+    let output_state = clarion.output_state.get_mut(&output).unwrap();
     if output_state.schedule.reuse_estimated_timer() {
         return;
     }
@@ -357,11 +330,11 @@ fn queue_estimated_vblank_timer(
     trace!("queueing estimated vblank timer to fire in {duration:?}");
 
     let timer = Timer::from_duration(duration);
-    let token = realand
+    let token = clarion
         .event_loop
         .insert_source(timer, move |_, _, data| {
             Tty::on_estimated_vblank_timer(
-                &mut crate::platform::device_bridge::DeviceCoordinator::new(&mut data.realand),
+                &mut crate::platform::device_bridge::DeviceCoordinator::new(&mut data.clarion),
                 output.clone(),
             );
             TimeoutAction::Drop
@@ -398,18 +371,18 @@ pub(crate) fn estimated_vblank_delay(
 
 /// Complete nested frame callback pacing after the render result is known.
 pub(crate) fn finish_nested_frame(
-    realand: &mut Realand,
+    clarion: &mut Clarion,
     output: &Output,
     result: &RenderResult,
     render_started: Instant,
 ) {
-    let Some(output_state) = realand.output_state.get_mut(output) else {
+    let Some(output_state) = clarion.output_state.get_mut(output) else {
         return;
     };
     match result {
         RenderResult::Submitted => {
             if let Some(token) = output_state.schedule.nested_submitted() {
-                realand.event_loop.remove(token);
+                clarion.event_loop.remove(token);
             }
         }
         RenderResult::NoDamage => {
@@ -429,17 +402,17 @@ pub(crate) fn finish_nested_frame(
                 .unwrap_or(render_started);
             let timer_output = output.clone();
             let timer = Timer::from_deadline(deadline);
-            match realand.event_loop.insert_source(timer, move |_, _, state| {
-                let realand = &mut state.realand;
-                let Some(output_state) = realand.output_state.get_mut(&timer_output) else {
+            match clarion.event_loop.insert_source(timer, move |_, _, state| {
+                let clarion = &mut state.clarion;
+                let Some(output_state) = clarion.output_state.get_mut(&timer_output) else {
                     return TimeoutAction::Drop;
                 };
                 if !output_state.schedule.nested_frame_timer_fired() {
                     return TimeoutAction::Drop;
                 }
-                realand.send_frame_callbacks(&timer_output);
-                if realand.animations_need_redraw(&timer_output) {
-                    realand.queue_redraw(&timer_output);
+                clarion.send_frame_callbacks(&timer_output);
+                if clarion.animations_need_redraw(&timer_output) {
+                    clarion.queue_redraw(&timer_output);
                 }
                 TimeoutAction::Drop
             }) {
@@ -450,5 +423,5 @@ pub(crate) fn finish_nested_frame(
         }
         RenderResult::Skipped | RenderResult::GpuDeferred => return,
     }
-    realand.send_frame_callbacks(output);
+    clarion.send_frame_callbacks(output);
 }

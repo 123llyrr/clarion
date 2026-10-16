@@ -1,0 +1,7 @@
+type               = process
+command            = clarion --session
+restart            = false
+working-dir        = $HOME
+ready-notification = pipevar:NOTIFY_FD
+logfile            = $HOME/.local/share/clarion/clarion.log
+depends-on:        dbus

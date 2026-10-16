@@ -1,4 +1,4 @@
-//! Vulkan Graphics Pipelines & Shaders for Realand.
+//! Vulkan Graphics Pipelines & Shaders for Clarion.
 //!
 //! Manages SPIR-V shader modules, pipeline layouts, descriptor sets,
 //! texture samplers, and dynamic rendering graphics pipelines for quads

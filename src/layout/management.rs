@@ -1,25 +1,25 @@
 use super::*;
-use realand_core::management::{
+use clarion_core::management::{
     Arrangement, ArrangementSizing, ArrangementSpace, ArrangementWindow, Group as CoreGroup,
     ManagementAction,
 };
-use realand_core::policy_memory::{ColumnDisplay as CoreDisplay, Height, Width};
-use realand_core::{LayoutMode, SpaceId};
-use realand_ipc::management::*;
+use clarion_core::policy_memory::{ColumnDisplay as CoreDisplay, Height, Width};
+use clarion_core::{LayoutMode, SpaceId};
+use clarion_ipc::management::*;
 use std::collections::HashMap;
 
-fn core_display(display: realand_ipc::ColumnDisplay) -> CoreDisplay {
+fn core_display(display: clarion_ipc::ColumnDisplay) -> CoreDisplay {
     match display {
-        realand_ipc::ColumnDisplay::Normal => CoreDisplay::Normal,
-        realand_ipc::ColumnDisplay::Tabbed => CoreDisplay::Tabbed,
-        realand_ipc::ColumnDisplay::Dwindle => CoreDisplay::Dwindle,
+        clarion_ipc::ColumnDisplay::Normal => CoreDisplay::Normal,
+        clarion_ipc::ColumnDisplay::Tabbed => CoreDisplay::Tabbed,
+        clarion_ipc::ColumnDisplay::Dwindle => CoreDisplay::Dwindle,
     }
 }
-fn ipc_display(display: CoreDisplay) -> realand_ipc::ColumnDisplay {
+fn ipc_display(display: CoreDisplay) -> clarion_ipc::ColumnDisplay {
     match display {
-        CoreDisplay::Normal => realand_ipc::ColumnDisplay::Normal,
-        CoreDisplay::Tabbed => realand_ipc::ColumnDisplay::Tabbed,
-        CoreDisplay::Dwindle => realand_ipc::ColumnDisplay::Dwindle,
+        CoreDisplay::Normal => clarion_ipc::ColumnDisplay::Normal,
+        CoreDisplay::Tabbed => clarion_ipc::ColumnDisplay::Tabbed,
+        CoreDisplay::Dwindle => clarion_ipc::ColumnDisplay::Dwindle,
     }
 }
 fn core_sizing(sizing: SessionSizing) -> ArrangementSizing {
@@ -69,21 +69,21 @@ fn encode_arrangement(arrangement: &Arrangement<u64>) -> SessionLayout {
         .map(|(index, space)| (space.id, index))
         .collect();
     fn tree(
-        node: &realand_core::layout::BspNode<u64>,
+        node: &clarion_core::layout::BspNode<u64>,
         windows: &HashMap<u64, usize>,
     ) -> Option<SessionTree> {
         match node {
-            realand_core::layout::BspNode::Leaf(id) => {
+            clarion_core::layout::BspNode::Leaf(id) => {
                 windows.get(id).copied().map(SessionTree::Leaf)
             }
-            realand_core::layout::BspNode::Split {
+            clarion_core::layout::BspNode::Split {
                 axis,
                 ratio,
                 first,
                 second,
             } => match (tree(first, windows), tree(second, windows)) {
                 (Some(first), Some(second)) => Some(SessionTree::Split {
-                    vertical: *axis == realand_core::Axis::Vertical,
+                    vertical: *axis == clarion_core::Axis::Vertical,
                     ratio: *ratio,
                     first: Box::new(first),
                     second: Box::new(second),
@@ -103,8 +103,8 @@ fn encode_arrangement(arrangement: &Arrangement<u64>) -> SessionLayout {
                 index: space.index,
                 output: space.output.clone(),
                 mode: match space.mode {
-                    LayoutMode::Dwindle => realand_ipc::TilingMode::Dwindle,
-                    _ => realand_ipc::TilingMode::Scrolling,
+                    LayoutMode::Dwindle => clarion_ipc::TilingMode::Dwindle,
+                    _ => clarion_ipc::TilingMode::Scrolling,
                 },
                 tree: space.tree.as_ref().and_then(|node| tree(node, &windows)),
             })
@@ -157,7 +157,7 @@ impl<W: LayoutElement> Layout<W> {
                 let display = column
                     .and_then(|index| workspace.scrolling().columns().nth(index))
                     .map(|column| column.display_mode())
-                    .unwrap_or(realand_ipc::ColumnDisplay::Normal);
+                    .unwrap_or(clarion_ipc::ColumnDisplay::Normal);
                 let sizing = geometry.pos_in_scrolling_layout.and_then(|(column, row)| {
                     workspace
                         .scrolling()
@@ -185,8 +185,8 @@ impl<W: LayoutElement> Layout<W> {
                 index,
                 output: monitor.map(|monitor| monitor.output().name()),
                 mode: match workspace.tiling_mode() {
-                    realand_ipc::TilingMode::Dwindle => LayoutMode::Dwindle,
-                    realand_ipc::TilingMode::Scrolling => LayoutMode::Scrolling,
+                    clarion_ipc::TilingMode::Dwindle => LayoutMode::Dwindle,
+                    clarion_ipc::TilingMode::Scrolling => LayoutMode::Scrolling,
                 },
                 tree: workspace.dwindle.policy_snapshot().topology,
             });
@@ -355,7 +355,7 @@ impl<W: LayoutElement> Layout<W> {
             .map(|window| (window.app_id.as_str(), window.title.as_str()))
             .collect();
         let matched: Vec<_> =
-            realand_core::session_match::match_session_windows(&available, &saved)
+            clarion_core::session_match::match_session_windows(&available, &saved)
                 .into_iter()
                 .map(|id| id.and_then(|id| handles.get(&id).cloned()))
                 .collect();
@@ -426,7 +426,7 @@ impl<W: LayoutElement> Layout<W> {
                     suffix += 1;
                 }
                 self.ensure_named_workspace(&WorkspaceConfig {
-                    name: realand_config::WorkspaceName(name.clone()),
+                    name: clarion_config::WorkspaceName(name.clone()),
                     open_on_output: saved.output.clone(),
                     layout: None,
                 });
@@ -493,7 +493,7 @@ impl<W: LayoutElement> Layout<W> {
                     continue;
                 };
                 let id = tile.tile.window().id().clone();
-                if !window.floating && saved.mode == realand_ipc::TilingMode::Scrolling {
+                if !window.floating && saved.mode == clarion_ipc::TilingMode::Scrolling {
                     let saved_col = window.column.unwrap_or(i);
                     if let Some((_, col)) =
                         columns.iter().find(|(original, _)| *original == saved_col)
@@ -525,8 +525,8 @@ impl<W: LayoutElement> Layout<W> {
                         None,
                     );
                 }
-                ws.set_window_width(Some(&id), realand_ipc::SizeChange::SetFixed(window.size.0));
-                ws.set_window_height(Some(&id), realand_ipc::SizeChange::SetFixed(window.size.1));
+                ws.set_window_width(Some(&id), clarion_ipc::SizeChange::SetFixed(window.size.0));
+                ws.set_window_height(Some(&id), clarion_ipc::SizeChange::SetFixed(window.size.1));
                 if window.floating {
                     if let Some((x, y)) = window.position {
                         // IPC stores output-local positions; SetFixed is relative to the
@@ -534,8 +534,8 @@ impl<W: LayoutElement> Layout<W> {
                         let origin = ws.working_area().loc;
                         ws.move_floating_window(
                             Some(&id),
-                            realand_ipc::PositionChange::SetFixed(x - origin.x),
-                            realand_ipc::PositionChange::SetFixed(y - origin.y),
+                            clarion_ipc::PositionChange::SetFixed(x - origin.x),
+                            clarion_ipc::PositionChange::SetFixed(y - origin.y),
                             false,
                         );
                     }
@@ -590,7 +590,7 @@ impl<W: LayoutElement> Layout<W> {
                     // saved order before outputs return, just as on a live monitor.
                     let new_index = saved_index.min(workspaces.len() - 1);
                     let workspace = workspaces.remove(index);
-                    let id = realand_core::SpaceId(workspace.id().get());
+                    let id = clarion_core::SpaceId(workspace.id().get());
                     workspaces.insert(new_index, workspace);
                     self.core.borrow_mut().reorder_detached_space(id, new_index);
                 } else {

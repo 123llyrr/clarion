@@ -42,22 +42,22 @@ pub struct DBusServers {
 
 impl DBusServers {
     pub fn start(state: &mut State, is_session_instance: bool) {
-        let _span = realand_tracy_span!("DBusServers::start");
+        let _span = clarion_tracy_span!("DBusServers::start");
 
         let backend = &state.backend;
-        let realand = &mut state.realand;
-        let config = realand.config.borrow();
+        let clarion = &mut state.clarion;
+        let config = clarion.config.borrow();
 
         let mut dbus = Self::default();
 
         if is_session_instance {
-            let (to_realand, from_service_channel) = calloop::channel::channel();
-            let service_channel = ServiceChannel::new(to_realand);
-            realand
+            let (to_clarion, from_service_channel) = calloop::channel::channel();
+            let service_channel = ServiceChannel::new(to_clarion);
+            clarion
                 .event_loop
                 .insert_source(from_service_channel, move |event, _, state| match event {
                     calloop::channel::Event::Msg(new_client) => {
-                        state.realand.insert_client(new_client);
+                        state.clarion.insert_client(new_client);
                     }
                     calloop::channel::Event::Closed => (),
                 })
@@ -66,9 +66,9 @@ impl DBusServers {
         }
 
         if is_session_instance || config.debug.dbus_interfaces_in_non_session_instances {
-            let (to_realand, from_display_config) = calloop::channel::channel();
-            let display_config = DisplayConfig::new(to_realand, backend.ipc_outputs());
-            realand
+            let (to_clarion, from_display_config) = calloop::channel::channel();
+            let display_config = DisplayConfig::new(to_clarion, backend.ipc_outputs());
+            clarion
                 .event_loop
                 .insert_source(from_display_config, move |event, _, state| match event {
                     calloop::channel::Event::Msg(new_conf) => {
@@ -88,23 +88,23 @@ impl DBusServers {
                 .unwrap();
             dbus.conn_display_config = try_start(display_config);
 
-            let screen_saver = ScreenSaver::new(realand.is_fdo_idle_inhibited.clone());
+            let screen_saver = ScreenSaver::new(clarion.is_fdo_idle_inhibited.clone());
             dbus.conn_screen_saver = try_start(screen_saver);
 
-            let (to_realand, from_screenshot) = calloop::channel::channel();
-            realand
+            let (to_clarion, from_screenshot) = calloop::channel::channel();
+            clarion
                 .event_loop
                 .insert_source(from_screenshot, move |event, _, state| match event {
                     calloop::channel::Event::Msg(msg) => state.on_screen_shot_msg(msg),
                     calloop::channel::Event::Closed => (),
                 })
                 .unwrap();
-            let screenshot = gnome_shell_screenshot::Screenshot::new(to_realand);
+            let screenshot = gnome_shell_screenshot::Screenshot::new(to_clarion);
             dbus.conn_screen_shot = try_start(screenshot);
 
-            let (to_realand, from_introspect) = calloop::channel::channel();
-            let (to_introspect, from_realand) = async_channel::unbounded();
-            realand
+            let (to_clarion, from_introspect) = calloop::channel::channel();
+            let (to_introspect, from_clarion) = async_channel::unbounded();
+            clarion
                 .event_loop
                 .insert_source(from_introspect, move |event, _, state| match event {
                     calloop::channel::Event::Msg(msg) => {
@@ -113,13 +113,13 @@ impl DBusServers {
                     calloop::channel::Event::Closed => (),
                 })
                 .unwrap();
-            let introspect = Introspect::new(to_realand, from_realand);
+            let introspect = Introspect::new(to_clarion, from_clarion);
             dbus.conn_introspect = try_start(introspect);
 
             #[cfg(feature = "xdp-gnome-screencast")]
             {
-                let (to_realand, from_screen_cast) = calloop::channel::channel();
-                realand
+                let (to_clarion, from_screen_cast) = calloop::channel::channel();
+                clarion
                     .event_loop
                     .insert_source(from_screen_cast, {
                         move |event, _, state| match event {
@@ -128,24 +128,24 @@ impl DBusServers {
                         }
                     })
                     .unwrap();
-                let screen_cast = ScreenCast::new(backend.ipc_outputs(), to_realand);
+                let screen_cast = ScreenCast::new(backend.ipc_outputs(), to_clarion);
                 dbus.conn_screen_cast = try_start(screen_cast);
             }
 
-            let (to_realand, from_a11y) = calloop::channel::channel();
-            let (to_a11y, from_realand) = async_channel::unbounded();
-            realand
+            let (to_clarion, from_a11y) = calloop::channel::channel();
+            let (to_a11y, from_clarion) = async_channel::unbounded();
+            clarion
                 .event_loop
                 .insert_source(from_a11y, move |event, _, state| match event {
                     calloop::channel::Event::Msg(msg) => state.on_a11y_manager_msg(&to_a11y, msg),
                     calloop::channel::Event::Closed => (),
                 })
                 .unwrap();
-            let a11y_manager = freedesktop_a11y::Manager::new(to_realand, from_realand);
+            let a11y_manager = freedesktop_a11y::Manager::new(to_clarion, from_clarion);
             match a11y_manager.start() {
                 Ok(conn) => {
                     dbus.conn_a11y_manager = Some(conn);
-                    realand.a11y_manager = Some(a11y_manager);
+                    clarion.a11y_manager = Some(a11y_manager);
                 }
                 Err(err) => {
                     warn!("error starting a11y manager: {err:?}");
@@ -153,15 +153,15 @@ impl DBusServers {
             }
         }
 
-        let (to_realand, from_login1) = calloop::channel::channel();
-        realand
+        let (to_clarion, from_login1) = calloop::channel::channel();
+        clarion
             .event_loop
             .insert_source(from_login1, move |event, _, state| match event {
                 calloop::channel::Event::Msg(msg) => state.on_login1_msg(msg),
                 calloop::channel::Event::Closed => (),
             })
             .unwrap();
-        match freedesktop_login1::start(to_realand) {
+        match freedesktop_login1::start(to_clarion) {
             Ok(conn) => {
                 dbus.conn_login1 = Some(conn);
             }
@@ -170,15 +170,15 @@ impl DBusServers {
             }
         }
 
-        let (to_realand, from_locale1) = calloop::channel::channel();
-        realand
+        let (to_clarion, from_locale1) = calloop::channel::channel();
+        clarion
             .event_loop
             .insert_source(from_locale1, move |event, _, state| match event {
                 calloop::channel::Event::Msg(msg) => state.on_locale1_msg(msg),
                 calloop::channel::Event::Closed => (),
             })
             .unwrap();
-        match freedesktop_locale1::start(to_realand) {
+        match freedesktop_locale1::start(to_clarion) {
             Ok(conn) => {
                 dbus.conn_locale1 = Some(conn);
             }
@@ -187,7 +187,7 @@ impl DBusServers {
             }
         }
 
-        realand.dbus = Some(dbus);
+        clarion.dbus = Some(dbus);
     }
 }
 

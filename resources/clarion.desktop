@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Clarion
+Name[zh_CN]=澄境 / Clarion
+Comment=A modular Wayland compositor with a native Vulkan backend
+Comment[zh_CN]=采用原生 Vulkan 后端的模块化 Wayland 合成器
+Exec=clarion-session
+Type=Application
+DesktopNames=clarion

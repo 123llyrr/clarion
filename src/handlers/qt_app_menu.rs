@@ -4,7 +4,7 @@
 
 use std::sync::Mutex;
 
-use realand_ipc::AppMenu;
+use clarion_ipc::AppMenu;
 use smithay::reexports::wayland_server::backend::{ClientId, GlobalId, ObjectId};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{

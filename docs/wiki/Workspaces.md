@@ -1,6 +1,6 @@
 ### Overview
 
-Realand has dynamic workspaces that can move between monitors.
+Clarion has dynamic workspaces that can move between monitors.
 
 Each monitor contains an independent set of workspaces arranged vertically.
 You can switch between workspaces on a monitor with `focus-workspace-down` and `focus-workspace-up`.
@@ -27,26 +27,26 @@ But, they will also "remember" their original monitor, so when you reconnect it,
 
 > [!TIP]
 > From other tiling WMs, you may be used to thinking about workspaces like this: "These are all of my workspaces. I can show workspace X on my first monitor, and workspace Y on my second monitor."
-> In realand, instead, think like this: "My first monitor contains these workspaces, including X and Y, and my second monitor contains these other workspaces. I can switch my first monitor to workspace X or Y. I can move workspace Y to my second monitor to show it there."
+> In clarion, instead, think like this: "My first monitor contains these workspaces, including X and Y, and my second monitor contains these other workspaces. I can switch my first monitor to workspace X or Y. I can move workspace Y to my second monitor to show it there."
 
 ### Addressing workspaces by index
 
-Several actions in realand can address workspaces "by index": `focus-workspace 2`, `move-column-to-workspace 4`.
+Several actions in clarion can address workspaces "by index": `focus-workspace 2`, `move-column-to-workspace 4`.
 This index refers to whichever workspace *currently happens to be* at this position on the focused monitor.
 So, `focus-workspace 2` will always put you on the second workspace of the monitor, whichever workspace that currently is.
 
 This is an important distinction from WMs with static workspace systems.
-In realand, workspaces *do not have indices on their own*.
+In clarion, workspaces *do not have indices on their own*.
 If you take the first workspace and move it further down on the monitor, `focus-workspace 1` will now put you on a different workspace (the one that was below the first workspace before you moved it).
 
-When you want to have a more permanent workspace in realand, you can create a [named workspace](./Configuration:-Named-Workspaces.md) in the config or via the `set-workspace-name` action.
+When you want to have a more permanent workspace in clarion, you can create a [named workspace](./Configuration:-Named-Workspaces.md) in the config or via the `set-workspace-name` action.
 You can refer to named workspaces by name, e.g. `focus-workspace "browser"`, and they won't disappear when they become empty.
 
 > [!TIP]
 > You can try to emulate static workspaces by creating workspaces named "one", "two", "three", ..., and binding keys to `focus-workspace "one"`, `focus-workspace "two"`, ...
 > This can work to some extent, but it can become somewhat confusing, since you can still move these workspaces up and down and between monitors.
 >
-> If you're coming from a static workspace WM, I suggest *not* doing that, but instead trying the "realand way" with dynamic workspaces, focusing and moving up/down instead of by index.
+> If you're coming from a static workspace WM, I suggest *not* doing that, but instead trying the "clarion way" with dynamic workspaces, focusing and moving up/down instead of by index.
 > Thanks to scrollable tiling, you generally need fewer workspaces than on a traditional tiling WM.
 
 ### Example workflow

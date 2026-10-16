@@ -21,7 +21,7 @@ pub fn render_snapshot_from_surface_tree<R>(
     R: Renderer + ImportAll + ImportMem,
     R::TextureId: Clone + 'static,
 {
-    let _span = realand_tracy_span!("render_snapshot_from_surface_tree");
+    let _span = clarion_tracy_span!("render_snapshot_from_surface_tree");
 
     with_surface_tree_downward(
         surface,
@@ -119,7 +119,7 @@ pub fn push_elements_from_surface_tree<R>(
     R: Renderer + ImportAll,
     R::TextureId: Clone + 'static,
 {
-    let _span = realand_tracy_span!("push_elements_from_surface_tree");
+    let _span = clarion_tracy_span!("push_elements_from_surface_tree");
 
     let location = location.to_f64();
 

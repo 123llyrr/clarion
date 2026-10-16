@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use realand_config::{BlockOutFrom, Config, LayerRule, Workspace, WorkspaceName};
+use clarion_config::{BlockOutFrom, Config, LayerRule, Workspace, WorkspaceName};
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::element::Element;
 use smithay::output::Scale as OutputScale;
@@ -113,11 +113,11 @@ impl StageTestBar {
 }
 
 fn stage_rail_backgrounds(f: &mut Fixture, scale: f64) -> Vec<Rectangle<i32, Physical>> {
-    let output = f.realand_output(1);
-    let state = f.realand_state();
-    let realand = &mut state.realand;
-    realand.update_render_elements(None);
-    let monitor = realand.layout.monitor_for_output(&output).unwrap();
+    let output = f.clarion_output(1);
+    let state = f.clarion_state();
+    let clarion = &mut state.clarion;
+    clarion.update_render_elements(None);
+    let monitor = clarion.layout.monitor_for_output(&output).unwrap();
     let bottom = monitor.working_area().loc.y + monitor.working_area().size.h;
     macro_rules! geometry {
         ($renderer:expr) => {{
@@ -154,14 +154,14 @@ fn stage_rail_backgrounds(f: &mut Fixture, scale: f64) -> Vec<Rectangle<i32, Phy
 }
 
 pub(super) fn pixels(f: &mut Fixture, target: RenderTarget) -> Vec<u8> {
-    let output = f.realand_output(1);
-    let state = f.realand_state();
-    let realand = &mut state.realand;
-    realand.update_render_elements(None);
+    let output = f.clarion_output(1);
+    let state = f.clarion_state();
+    let clarion = &mut state.clarion;
+    clarion.update_render_elements(None);
     macro_rules! draw {
         ($renderer:expr) => {{
             let renderer = $renderer;
-            let elements = realand.render_to_vec(
+            let elements = clarion.render_to_vec(
                 RenderCtx {
                     renderer,
                     target,
@@ -195,9 +195,9 @@ fn test_stage_layers(native: bool) {
         let mut config = Config::default();
         config.hotkey_overlay.skip_at_startup = true;
         config.animations.overview_open_close.0.kind =
-            realand_config::animations::Kind::Easing(realand_config::animations::EasingParams {
+            clarion_config::animations::Kind::Easing(clarion_config::animations::EasingParams {
                 duration_ms: 1000,
-                curve: realand_config::animations::Curve::Linear,
+                curve: clarion_config::animations::Curve::Linear,
             });
         config.workspaces = ["first", "second", "third"]
             .into_iter()
@@ -208,8 +208,8 @@ fn test_stage_layers(native: bool) {
             })
             .collect();
         config.layer_rules.push(LayerRule {
-            matches: vec![realand_config::layer_rule::Match {
-                layer: Some(realand_ipc::Layer::Bottom),
+            matches: vec![clarion_config::layer_rule::Match {
+                layer: Some(clarion_ipc::Layer::Bottom),
                 ..Default::default()
             }],
             block_out_from: Some(BlockOutFrom::ScreenCapture),
@@ -218,19 +218,19 @@ fn test_stage_layers(native: bool) {
         let mut f = Fixture::with_config(config);
         if native {
             let mut headless = crate::backend::Headless::new(
-                f.realand().config.clone(),
+                f.clarion().config.clone(),
                 crate::backend::RendererBackendType::Vulkan,
             );
             headless.add_renderer().unwrap();
             headless.init(&mut crate::platform::device_bridge::DeviceCoordinator::new(
-                f.realand(),
+                f.clarion(),
             ));
-            f.realand_state().backend = crate::backend::Backend::Headless(headless);
+            f.clarion_state().backend = crate::backend::Backend::Headless(headless);
         } else {
             f.init_gles_renderer();
         }
         if native {
-            f.realand_state()
+            f.clarion_state()
                 .backend
                 .with_renderer(|renderer| match renderer {
                     crate::render_helpers::renderer::AnyRenderer::Native(renderer) => eprintln!(
@@ -244,9 +244,9 @@ fn test_stage_layers(native: bool) {
                 .unwrap();
         }
         f.add_output(1, (1280, 800));
-        let output = f.realand_output(1);
+        let output = f.clarion_output(1);
         output.change_current_state(None, None, Some(OutputScale::Fractional(scale)), None);
-        f.realand().output_resized(&output);
+        f.clarion().output_resized(&output);
         let client = f.add_client();
         for (layer, namespace, size, color) in [
             (
@@ -291,12 +291,12 @@ fn test_stage_layers(native: bool) {
             panel.ack_last_and_commit();
             f.double_roundtrip(client);
         }
-        f.realand_complete_animations();
+        f.clarion_complete_animations();
         let desktop = pixels(&mut f, RenderTarget::Output);
-        f.realand().layout.open_overview();
+        f.clarion().layout.open_overview();
         assert_eq!(pixels(&mut f, RenderTarget::Output), desktop, "Stage opening must retain the actual wallpaper and bottom layer at scale={scale}, native={native}");
-        f.realand_complete_animations();
-        let monitor = f.realand().layout.monitor_for_output(&output).unwrap();
+        f.clarion_complete_animations();
+        let monitor = f.clarion().layout.monitor_for_output(&output).unwrap();
         let (workspace, card) = monitor.workspaces_with_render_geo().next().unwrap();
         assert_eq!(workspace.id(), monitor.active_workspace_ref().id());
         let zoom = card.size.w / monitor.view_size().w;
@@ -335,9 +335,9 @@ fn test_stage_layers(native: bool) {
             "Layer privacy must use the ScreenCapture target for each card"
         );
         assert_eq!(at(&capture, wallpaper), wallpaper_color);
-        if let Some(directory) = std::env::var_os("REALAND_STAGE_PNG_DIR") {
+        if let Some(directory) = std::env::var_os("CLARION_STAGE_PNG_DIR") {
             let file = std::fs::File::create(std::path::Path::new(&directory).join(format!(
-                "realand-stage-layers-{scale}-{}.png",
+                "clarion-stage-layers-{scale}-{}.png",
                 if native { "vulkan" } else { "gles" }
             )))
             .unwrap();
@@ -349,26 +349,26 @@ fn test_stage_layers(native: bool) {
                 .write_image_data(&output_pixels)
                 .unwrap();
         }
-        f.realand().layout.close_overview();
+        f.clarion().layout.close_overview();
         assert_eq!(
             pixels(&mut f, RenderTarget::Output),
             output_pixels,
             "Stage closing must retain its composed first frame"
         );
-        let now = f.realand().clock.now_unadjusted();
-        f.realand()
+        let now = f.clarion().clock.now_unadjusted();
+        f.clarion()
             .clock
             .set_unadjusted(now + Duration::from_millis(250));
-        f.realand().advance_animations();
+        f.clarion().advance_animations();
         let closing = pixels(&mut f, RenderTarget::Output);
-        f.realand().layout.open_overview();
+        f.clarion().layout.open_overview();
         assert_eq!(
             pixels(&mut f, RenderTarget::Output),
             closing,
             "Stage reversal retains wallpaper and Bottom surfaces"
         );
-        f.realand().layout.close_overview();
-        f.realand_complete_animations();
+        f.clarion().layout.close_overview();
+        f.clarion_complete_animations();
         assert_eq!(
             pixels(&mut f, RenderTarget::Output),
             desktop,
@@ -403,15 +403,15 @@ fn test_stage_rail_with_native_bar(native: bool) {
         let mut f = Fixture::with_config(config);
         if native {
             let mut headless = crate::backend::Headless::new(
-                f.realand().config.clone(),
+                f.clarion().config.clone(),
                 crate::backend::RendererBackendType::Vulkan,
             );
             headless.add_renderer().unwrap();
             headless.init(&mut crate::platform::device_bridge::DeviceCoordinator::new(
-                f.realand(),
+                f.clarion(),
             ));
-            f.realand_state().backend = crate::backend::Backend::Headless(headless);
-            f.realand_state()
+            f.clarion_state().backend = crate::backend::Backend::Headless(headless);
+            f.clarion_state()
                 .backend
                 .with_renderer(|renderer| match renderer {
                     crate::render_helpers::renderer::AnyRenderer::Native(renderer) => eprintln!(
@@ -427,14 +427,14 @@ fn test_stage_rail_with_native_bar(native: bool) {
             f.init_gles_renderer();
         }
         f.add_output(1, (1280, 800));
-        let output = f.realand_output(1);
+        let output = f.clarion_output(1);
         output.change_current_state(None, None, Some(OutputScale::Fractional(scale)), None);
-        f.realand().output_resized(&output);
+        f.clarion().output_resized(&output);
         let mut bar = StageTestBar::new(&mut f);
-        f.realand().layout.open_overview();
-        f.realand_complete_animations();
+        f.clarion().layout.open_overview();
+        f.clarion_complete_animations();
         let logical_height = f
-            .realand()
+            .clarion()
             .layout
             .monitor_for_output(&output)
             .unwrap()
@@ -451,7 +451,7 @@ fn test_stage_rail_with_native_bar(native: bool) {
             (true, 40, Layer::Top),
         ] {
             bar.configure(&mut f, bottom, height, layer);
-            let monitor = f.realand().layout.monitor_for_output(&output).unwrap();
+            let monitor = f.clarion().layout.monitor_for_output(&output).unwrap();
             let area = monitor.working_area();
             assert_eq!(area.loc.y, if bottom { 0. } else { 40. });
             assert_eq!(area.size.h, logical_height.round() - 40.);
@@ -490,9 +490,9 @@ fn test_stage_rail_with_native_bar(native: bool) {
                 (20. * scale) as i32
             };
             assert_eq!(at((640, bar_y).into()), [255, 0, 0, 255]);
-            if let Some(directory) = std::env::var_os("REALAND_STAGE_PNG_DIR") {
+            if let Some(directory) = std::env::var_os("CLARION_STAGE_PNG_DIR") {
                 let file = std::fs::File::create(std::path::Path::new(&directory).join(format!(
-                    "realand-stage-bar-{scale}-{}-{}-{height}.png",
+                    "clarion-stage-bar-{scale}-{}-{}-{height}.png",
                     if native { "vulkan" } else { "gles" },
                     if bottom { "bottom" } else { "top" }
                 )))

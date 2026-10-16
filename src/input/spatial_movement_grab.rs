@@ -83,7 +83,7 @@ impl SpatialMovementGrab {
             .unwrap_or(self.new_location - self.last_location);
         self.last_location = self.new_location;
 
-        let layout = &mut data.realand.layout;
+        let layout = &mut data.clarion.layout;
         let res = match self.gesture {
             GestureState::Canvas => {
                 if let Some((_, ws)) = layout.find_workspace_by_id(self.workspace_id) {
@@ -137,7 +137,7 @@ impl SpatialMovementGrab {
 
         if let Some(output) = res {
             if let Some(output) = output {
-                data.realand.queue_redraw(&output);
+                data.clarion.queue_redraw(&output);
             }
             true
         } else {
@@ -146,7 +146,7 @@ impl SpatialMovementGrab {
     }
 
     fn on_ungrab(&mut self, state: &mut State) {
-        let layout = &mut state.realand.layout;
+        let layout = &mut state.clarion.layout;
         let res = match self.gesture {
             GestureState::Recognizing => None,
             GestureState::Canvas => {
@@ -163,11 +163,11 @@ impl SpatialMovementGrab {
         };
 
         if let Some(output) = res {
-            state.realand.queue_redraw(&output);
+            state.clarion.queue_redraw(&output);
         }
 
         state
-            .realand
+            .clarion
             .cursor_manager
             .set_cursor_image(CursorImageStatus::default_named());
     }

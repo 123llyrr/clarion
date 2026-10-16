@@ -85,10 +85,10 @@ unsafe fn compile_program(
     let vert_position = c"vert_position";
     let matrix = c"matrix";
     let tex_matrix = c"tex_matrix";
-    let size = c"realand_size";
-    let scale = c"realand_scale";
-    let alpha = c"realand_alpha";
-    let tint = c"realand_tint";
+    let size = c"clarion_size";
+    let scale = c"clarion_scale";
+    let alpha = c"clarion_alpha";
+    let tint = c"clarion_tint";
 
     Ok(ShaderProgram(Rc::new(ShaderProgramInner {
         normal: ShaderProgramInternal {
@@ -329,7 +329,7 @@ impl RenderElement<GlesRenderer> for ShaderRenderElement {
         _opaque_regions: &[Rectangle<i32, Physical>],
         _cache: Option<&UserDataMap>,
     ) -> Result<(), GlesError> {
-        let _span = realand_tracy_span!("ShaderRenderElement::draw");
+        let _span = clarion_tracy_span!("ShaderRenderElement::draw");
 
         let frame = frame.as_gles_frame();
 
@@ -600,9 +600,9 @@ impl
         };
         let mut uniforms = self.additional_uniforms.to_vec();
         uniforms.extend([
-            Uniform::new("realand_size", [dst.size.w as f32, dst.size.h as f32]),
-            Uniform::new("realand_scale", self.scale),
-            Uniform::new("realand_alpha", self.alpha),
+            Uniform::new("clarion_size", [dst.size.w as f32, dst.size.h as f32]),
+            Uniform::new("clarion_scale", self.scale),
+            Uniform::new("clarion_alpha", self.alpha),
         ]);
         frame.draw_animation_shader(program, textures, &uniforms, src, dst, damage)
     }

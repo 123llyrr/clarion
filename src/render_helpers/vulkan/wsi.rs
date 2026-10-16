@@ -786,7 +786,9 @@ impl Drop for VulkanWsi {
                 warn!(
                     "error waiting for Vulkan WSI queue during shutdown: {err}; retaining WSI resources"
                 );
+                super::lifecycle::record_quarantine();
                 std::mem::forget(self.ctx.clone());
+                super::lifecycle::record_quarantine();
                 std::mem::forget(std::mem::take(&mut self.slots));
                 return;
             }
@@ -812,7 +814,9 @@ impl Drop for VulkanWsi {
                     warn!(
                         "error waiting for Vulkan {kind} during shutdown: {err}; retaining WSI resources"
                     );
+                    super::lifecycle::record_quarantine();
                     std::mem::forget(self.ctx.clone());
+                    super::lifecycle::record_quarantine();
                     std::mem::forget(std::mem::take(&mut self.slots));
                     return;
                 }

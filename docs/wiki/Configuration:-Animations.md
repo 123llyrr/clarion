@@ -1,6 +1,6 @@
 ### Overview
 
-Realand has several animations which you can configure in the same way.
+Clarion has several animations which you can configure in the same way.
 Additionally, you can disable or slow down all animations at once.
 
 Here's a quick glance at the available animations with their default values.
@@ -27,10 +27,10 @@ animations {
     }
 
     window-open {
-        duration-ms 180
-        curve "ease-out-cubic"
+        duration-ms 200
+        curve "cubic-bezier" 0.16 1.4 0.30 1.0
         effect "fade"
-        popin 0.98
+        popin 0.94
         glide { off; }
     }
 
@@ -115,7 +115,7 @@ animations {
 }
 ```
 
-Realand supports the base curves plus several named cubic-Bezier presets.
+Clarion supports the base curves plus several named cubic-Bezier presets.
 You can get a feel for them on pages like [easings.net](https://easings.net/).
 
 - `ease-out-quad` <sup>Since: 0.1.5</sup>
@@ -168,7 +168,7 @@ animations {
 }
 ```
 
-Realand provides built-in spring presets:
+Clarion provides built-in spring presets:
 - `"macos-interactive"` (alias `"interactive"`): `damping-ratio=0.92 stiffness=300 epsilon=0.001`. Tuned for direct window manipulation, providing responsive motion with a subtle settle.
 - `"macos-default"` (aliases `"ca-default"`, `"default"`): `damping-ratio=0.5 stiffness=100 epsilon=0.001`. Matches native Apple Core Animation (`CASpringAnimation`) API defaults (mass 1, stiffness 100, damping 10).
 
@@ -188,7 +188,7 @@ The `damping-ratio` goes from 0.1 to 10.0 and has the following properties:
 - above 1.0: overdamped spring, won't oscillate.
 - 1.0: critically damped spring, comes to rest in minimum possible time without oscillations.
 
-Realand simultaneously bounds both displacement and velocity envelopes, ensuring that an underdamped spring settles smoothly without terminating prematurely upon the first target crossing.
+Clarion simultaneously bounds both displacement and velocity envelopes, ensuring that an underdamped spring settles smoothly without terminating prematurely upon the first target crossing.
 
 Lower `stiffness` will result in a slower animation more prone to oscillation.
 
@@ -217,7 +217,7 @@ animations {
 
 ##### `cube`
 
-Realand enables a vertical 3D cube transition by default. Keyboard switches, touchpad gestures,
+Clarion enables a vertical 3D cube transition by default. Keyboard switches, touchpad gestures,
 gesture cancellation, and multi-workspace jumps all drive the same continuous transition. Only
 the adjacent two workspaces are composed; panels, notifications, overlays, the lock screen, and
 the pointer remain flat.
@@ -228,18 +228,24 @@ the pointer remain flat.
 
 #### `window-open`
 
-Window opening defaults to a 180 ms fade and a small scale from 98% to 100%.
+Window opening defaults to a 200 ms transition from 94% size. The window becomes
+fully opaque early, briefly reaches about 100.32% size, and settles at 100% with
+zero end velocity. Opacity stays at full strength during the scale rebound.
 It starts with the first mapped buffer. The complete window snapshot is cached
 and redrawn only on damage; the fade uses the ordinary texture pipeline on both
-Vulkan and GLES. This is Realand's lightweight profile, not a measured macOS default.
+Vulkan and GLES. This is a Clarion motion profile. The supplied curve is a Clarion
+parameter choice; it is not a measured macOS window-opening curve. Timed `fade`
+curves retain their scale settling phase; physical springs and `reveal` keep their
+first-arrival completion behavior. Turning animations off or enabling reduced
+motion removes the complete transform immediately.
 
 ```kdl
 animations {
     window-open {
-        duration-ms 180
-        curve "ease-out-cubic"
+        duration-ms 200
+        curve "cubic-bezier" 0.16 1.4 0.30 1.0
         effect "fade"
-        popin 0.98
+        popin 0.94
         glide { off; }
     }
 }
@@ -267,8 +273,8 @@ You can write a custom shader for drawing the window during an open animation.
 
 See [this example shader](./examples/open_custom_shader.frag) for a full documentation with several animations to experiment with.
 
-If a custom shader fails to compile, realand will print a warning and fall back to the default, or previous successfully compiled shader.
-When running realand as a systemd service, you can see the warnings in the journal: `journalctl -ef /usr/bin/realand`
+If a custom shader fails to compile, clarion will print a warning and fall back to the default, or previous successfully compiled shader.
+When running clarion as a systemd service, you can see the warnings in the journal: `journalctl -ef /usr/bin/clarion`
 
 > [!WARNING]
 >
@@ -295,7 +301,7 @@ animations {
                     color = mix(from, to, coords_geo.y);
                 }
 
-                return color * realand_clamped_progress;
+                return color * clarion_clamped_progress;
             }
         "
     }
@@ -322,12 +328,12 @@ animations {
 
 The built-in effects use Denial's controller durations: `explosion` 400 ms, `implode` 280 ms,
 and `fade` 220 ms. If `duration-ms`, `curve`, or `spring` is present, that explicit timing wins.
-The same `glide` block is available here. Realand first evaluates the configured
+The same `glide` block is available here. Clarion first evaluates the configured
 `explosion`/`implode`/`fade` or custom pixel shader, then applies the Glide geometry transform.
 
 #### `window-wobble`
 
-Realand enables elastic window geometry during interactive move and resize operations. Input and
+Clarion enables elastic window geometry during interactive move and resize operations. Input and
 client geometry stay unchanged; only the cached complete-window texture is deformed. After release,
 the mesh settles using fixed simulation steps and stops requesting frames once stable.
 
@@ -346,8 +352,8 @@ You can write a custom shader for drawing the window during a close animation.
 
 See [this example shader](./examples/close_custom_shader.frag) for a full documentation with several animations to experiment with.
 
-If a custom shader fails to compile, realand will print a warning and fall back to the default, or previous successfully compiled shader.
-When running realand as a systemd service, you can see the warnings in the journal: `journalctl -ef /usr/bin/realand`
+If a custom shader fails to compile, clarion will print a warning and fall back to the default, or previous successfully compiled shader.
+When running clarion as a systemd service, you can see the warnings in the journal: `journalctl -ef /usr/bin/clarion`
 
 > [!WARNING]
 >
@@ -371,7 +377,7 @@ animations {
                     color = mix(from, to, coords_geo.y);
                 }
 
-                return color * (1.0 - realand_clamped_progress);
+                return color * (1.0 - clarion_clamped_progress);
             }
         "
     }
@@ -442,8 +448,8 @@ You can write a custom shader for drawing the window during a resize animation.
 
 See [this example shader](./examples/resize_custom_shader.frag) for a full documentation with several animations to experiment with.
 
-If a custom shader fails to compile, realand will print a warning and fall back to the default, or previous successfully compiled shader.
-When running realand as a systemd service, you can see the warnings in the journal: `journalctl -ef /usr/bin/realand`
+If a custom shader fails to compile, clarion will print a warning and fall back to the default, or previous successfully compiled shader.
+When running clarion as a systemd service, you can see the warnings in the journal: `journalctl -ef /usr/bin/clarion`
 
 > [!WARNING]
 >
@@ -457,8 +463,8 @@ animations {
     window-resize {
         custom-shader r"
             vec4 resize_color(vec3 coords_curr_geo, vec3 size_curr_geo) {
-                vec3 coords_tex_next = realand_geo_to_tex_next * coords_curr_geo;
-                vec4 color = texture2D(realand_tex_next, coords_tex_next.st);
+                vec3 coords_tex_next = clarion_geo_to_tex_next * coords_curr_geo;
+                vec4 color = texture2D(clarion_tex_next, coords_tex_next.st);
                 return color;
             }
         "
@@ -543,7 +549,7 @@ animations {
 
 <sup>Since: 0.1.5</sup>
 
-Sometimes, when two animations are meant to play together synchronized, realand will drive them both with the same configuration.
+Sometimes, when two animations are meant to play together synchronized, clarion will drive them both with the same configuration.
 
 For example, if a window resize causes the view to move, then that view movement animation will also use the `window-resize` configuration (rather than the `horizontal-view-movement` configuration).
 This is especially important for animated resizes to look good when using `center-focused-column "always"`.

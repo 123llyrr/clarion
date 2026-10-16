@@ -57,7 +57,7 @@ def install(stage, prefix):
         if not shutil.which(tool):
             raise ValueError(f"Required build helper is unavailable: {tool}")
 
-    root = prefix / "lib/realand-appmenu"
+    root = prefix / "lib/clarion-appmenu"
     root.mkdir(parents=True, exist_ok=True)
     tag = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     with (root / ".install.lock").open("a") as lock:
@@ -119,7 +119,7 @@ def install(stage, prefix):
                                     "schema_defaults": {"always-show-inner-menu": True}},
                 "policy": "No persistent dconf, environment, service or session changes",
             }
-            docs = temporary / "share/doc/realand-gtk-appmenu"
+            docs = temporary / "share/doc/clarion-gtk-appmenu"
             docs.mkdir(parents=True)
             (docs / "provenance.json").write_text(json.dumps(document, indent=2) + "\n")
             for path in temporary.rglob("*"):
@@ -142,7 +142,7 @@ def install(stage, prefix):
             "backup": str(backup),
             "GTK_MODULES_append": str(current / "lib/gtk-3.0/modules/libappmenu-gtk-module.so"),
             "GSETTINGS_SCHEMA_DIR": str(current / "share/glib-2.0/schemas"),
-            "provenance": str(current / "share/doc/realand-gtk-appmenu/provenance.json"),
+            "provenance": str(current / "share/doc/clarion-gtk-appmenu/provenance.json"),
             "session_changed": False,
         }
 

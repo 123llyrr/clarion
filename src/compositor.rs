@@ -13,9 +13,8 @@ use std::{env, mem, thread};
 use _server_decoration::server::org_kde_kwin_server_decoration_manager::Mode as KdeDecorationsMode;
 use anyhow::{bail, ensure, Context};
 use calloop::futures::Scheduler;
-use realand_config::debug::PreviewRender;
-use realand_config::output::MaxBpc;
-use realand_config::{
+use clarion_config::output::MaxBpc;
+use clarion_config::{
     Config, FloatOrInt, Key, Modifiers, OutputName, TrackLayout, WarpMouseToFocusMode,
     WorkspaceReference, Xkb,
 };
@@ -23,14 +22,11 @@ use smithay::backend::allocator::Fourcc;
 use smithay::backend::drm::DrmDeviceFd;
 use smithay::backend::input::Keycode;
 use smithay::backend::renderer::damage::OutputDamageTracker;
-use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
-use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::utils::{
-    select_dmabuf_feedback, CropRenderElement, Relocate, RelocateRenderElement,
-    RescaleRenderElement,
+    select_dmabuf_feedback, Relocate, RelocateRenderElement,
 };
 use smithay::backend::renderer::element::{
-    default_primary_scanout_output_compare, Element, Id, Kind, PrimaryScanoutOutput, RenderElement,
+    default_primary_scanout_output_compare, Element, Id, PrimaryScanoutOutput, RenderElement,
     RenderElementStates,
 };
 use smithay::backend::renderer::gles::GlesRenderer;
@@ -44,7 +40,7 @@ use smithay::desktop::utils::{
     OutputPresentationFeedback,
 };
 use smithay::desktop::{
-    find_popup_root_surface, layer_map_for_output, LayerMap, LayerSurface, PopupGrab, PopupManager,
+    find_popup_root_surface, layer_map_for_output, LayerSurface, PopupGrab, PopupManager,
     PopupUngrabStrategy, Space, Window, WindowSurfaceType,
 };
 use smithay::input::keyboard::{Layout as KeyboardLayout, XkbConfig};
@@ -123,15 +119,15 @@ use crate::a11y::A11y;
 use crate::animation::Clock;
 use crate::backend::tty::SurfaceDmabufFeedback;
 use crate::backend::{Backend, Headless, RenderResult, RendererBackendType, Tty, Winit};
-use crate::cursor::{CursorManager, CursorTextureCache, RenderCursor, XCursor};
+use crate::cursor::{CursorManager, CursorTextureCache, XCursor};
 #[cfg(feature = "dbus")]
-use crate::dbus::freedesktop_locale1::Locale1ToRealand;
+use crate::dbus::freedesktop_locale1::Locale1ToClarion;
 #[cfg(feature = "dbus")]
-use crate::dbus::freedesktop_login1::Login1ToRealand;
+use crate::dbus::freedesktop_login1::Login1ToClarion;
 #[cfg(feature = "dbus")]
-use crate::dbus::gnome_shell_introspect::{self, IntrospectToRealand, RealandToIntrospect};
+use crate::dbus::gnome_shell_introspect::{self, ClarionToIntrospect, IntrospectToClarion};
 #[cfg(feature = "dbus")]
-use crate::dbus::gnome_shell_screenshot::{RealandToScreenshot, ScreenshotToRealand};
+use crate::dbus::gnome_shell_screenshot::{ClarionToScreenshot, ScreenshotToClarion};
 use crate::gestures::scroll_swipe_gesture::ScrollSwipeGesture;
 use crate::gestures::scroll_tracker::ScrollTracker;
 use crate::handlers::{configure_lock_surface, XDG_ACTIVATION_TOKEN_TIMEOUT};
@@ -141,13 +137,9 @@ use crate::input::{
     mods_with_tablet_stylus_binds, mods_with_wheel_binds, TabletData,
 };
 use crate::ipc::server::IpcServer;
-use crate::layer::mapped::LayerSurfaceRenderElement;
 use crate::layer::MappedLayer;
-use crate::layout::tile::TileRenderElement;
 use crate::layout::workspace::{Workspace, WorkspaceId};
-use crate::layout::{
-    HitType, Layout, LayoutElement as _, LayoutElementRenderElement, MonitorRenderElement,
-};
+use crate::layout::{HitType, Layout, LayoutElement as _};
 use crate::output_schedule::OutputSchedule;
 pub use crate::output_schedule::RedrawState;
 use crate::protocols::ext_workspace::{self, ExtWorkspaceManagerState};
@@ -157,27 +149,24 @@ use crate::protocols::mutter_x11_interop::MutterX11InteropManagerState;
 use crate::protocols::output_management::OutputManagementManagerState;
 use crate::protocols::screencopy::{Screencopy, ScreencopyBuffer, ScreencopyManagerState};
 use crate::protocols::virtual_pointer::VirtualPointerManagerState;
-use crate::realand_render_elements;
 use crate::render_helpers::blur::BlurOptions;
-use crate::render_helpers::debug::push_opaque_regions;
-use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
-use crate::render_helpers::renderer::RealandRenderer;
-use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
-use crate::render_helpers::surface::push_elements_from_surface_tree;
+use crate::render_helpers::renderer::ClarionRenderer;
+use crate::render_helpers::solid_color::SolidColorBuffer;
 use crate::render_helpers::texture::TextureBuffer;
 use crate::render_helpers::xray::{Xray, XrayPos};
 use crate::render_helpers::{
     encompassing_geo, render_to_dmabuf, render_to_encompassing_texture, render_to_texture, shaders,
     RenderCtx, RenderTarget,
 };
+use crate::scene::{OutputRenderElements, PointerRenderElements, WindowScreenshotRenderElement};
 #[cfg(feature = "xdp-gnome-screencast")]
 use crate::screencasting::Screencasting;
 use crate::ui::config_error_notification::ConfigErrorNotification;
-use crate::ui::exit_confirm_dialog::{ExitConfirmDialog, ExitConfirmDialogRenderElement};
+use crate::ui::exit_confirm_dialog::ExitConfirmDialog;
 use crate::ui::hotkey_overlay::HotkeyOverlay;
-use crate::ui::mru::{MruCloseRequest, WindowMruUi, WindowMruUiRenderElement};
+use crate::ui::mru::{MruCloseRequest, WindowMruUi};
 use crate::ui::screen_transition::{self, ScreenTransition};
-use crate::ui::screenshot_ui::{OutputScreenshot, ScreenshotUi, ScreenshotUiRenderElement};
+use crate::ui::screenshot_ui::{OutputScreenshot, ScreenshotUi};
 use crate::utils::scale::{closest_representable_scale, guess_monitor_scale};
 use crate::utils::spawning::{CHILD_DISPLAY, CHILD_ENV};
 use crate::utils::vblank_throttle::VBlankThrottle;
@@ -198,7 +187,7 @@ const CLEAR_COLOR_LOCKED: [f32; 4] = [0.3, 0.1, 0.1, 1.];
 // should be ~1.995 seconds.
 const FRAME_CALLBACK_THROTTLE: Option<Duration> = Some(Duration::from_millis(995));
 
-pub struct Realand {
+pub struct Clarion {
     pub config: Rc<RefCell<Config>>,
 
     /// Output config from the config file.
@@ -206,7 +195,7 @@ pub struct Realand {
     /// This does not include transient output config changes done via IPC. It is only used when
     /// reloading the config from disk to determine if the output configuration should be reloaded
     /// (and transient changes dropped).
-    pub config_file_output_config: realand_config::Outputs,
+    pub config_file_output_config: clarion_config::Outputs,
     pub(crate) output_preview: Option<crate::output_preview::OutputPreview>,
     pub(crate) confirmed_output_preview: Option<crate::output_preview::ConfirmedOutputPreview>,
     pub(crate) last_cancelled_output_preview: Option<u64>,
@@ -215,6 +204,12 @@ pub struct Realand {
 
     pub event_loop: LoopHandle<'static, State>,
     pub scheduler: Scheduler<()>,
+    runtime_executor:
+        Option<crate::platform::event_sources::ScopedSource<calloop::futures::Executor<()>, State>>,
+    runtime_display:
+        Option<crate::platform::event_sources::ScopedSource<Generic<Display<State>>, State>>,
+    pub(crate) shutting_down: bool,
+    clients: crate::platform::wayland_shutdown::ClientRegistry,
     pub(crate) owned_tasks: crate::utils::owned_tasks::TaskPool,
     keymap_request: u64,
     #[cfg(test)]
@@ -223,12 +218,12 @@ pub struct Realand {
     pub stop_signal: LoopSignal,
     pub display_handle: DisplayHandle,
 
-    /// Whether realand was run with `--session`
+    /// Whether clarion was run with `--session`
     pub is_session_instance: bool,
 
     /// Name of the Wayland socket.
     ///
-    /// This is `None` when creating `Realand` without a Wayland socket.
+    /// This is `None` when creating `Clarion` without a Wayland socket.
     pub socket_name: Option<OsString>,
 
     pub start_time: Instant,
@@ -424,7 +419,7 @@ pub struct Realand {
     pub pending_mru_commit: Option<PendingMruCommit>,
 
     pub pick_window: Option<async_channel::Sender<Option<MappedId>>>,
-    pub pick_color: Option<async_channel::Sender<Option<realand_ipc::PickedColor>>>,
+    pub pick_color: Option<async_channel::Sender<Option<clarion_ipc::PickedColor>>>,
 
     pub debug_draw_opaque_regions: bool,
     pub debug_draw_damage: bool,
@@ -530,7 +525,7 @@ pub struct PopupGrabState {
     pub has_keyboard_grab: bool,
 }
 
-// The surfaces here are always toplevel surfaces focused as far as realand's logic is concerned, even
+// The surfaces here are always toplevel surfaces focused as far as clarion's logic is concerned, even
 // when popup grabs are active (which means the real keyboard focus is on a popup descending from
 // that toplevel surface).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -551,7 +546,7 @@ pub struct PointContents {
     pub output: Option<Output>,
     // Surface under point and its location in the global coordinate space.
     //
-    // Can be `None` even when `window` is set, for example when the pointer is over the realand
+    // Can be `None` even when `window` is set, for example when the pointer is over the clarion
     // border around the window.
     pub surface: Option<(WlSurface, Point<f64, Logical>)>,
     // If surface belongs to a window, this is that window.
@@ -633,24 +628,24 @@ impl CastTarget {
         matches!(self, CastTarget::Output { output, .. } if output == weak)
     }
 
-    pub fn matches(&self, ipc: &realand_ipc::CastTarget) -> bool {
+    pub fn matches(&self, ipc: &clarion_ipc::CastTarget) -> bool {
         use CastTarget::*;
         match (self, ipc) {
-            (Nothing, realand_ipc::CastTarget::Nothing {}) => true,
-            (Output { name, .. }, realand_ipc::CastTarget::Output { name: ipc_name }) => {
+            (Nothing, clarion_ipc::CastTarget::Nothing {}) => true,
+            (Output { name, .. }, clarion_ipc::CastTarget::Output { name: ipc_name }) => {
                 name == ipc_name
             }
-            (Window { id }, realand_ipc::CastTarget::Window { id: ipc_id }) => id == ipc_id,
+            (Window { id }, clarion_ipc::CastTarget::Window { id: ipc_id }) => id == ipc_id,
             _ => false,
         }
     }
 
-    pub fn make_ipc(&self) -> realand_ipc::CastTarget {
+    pub fn make_ipc(&self) -> clarion_ipc::CastTarget {
         use CastTarget::*;
         match self {
-            Nothing => realand_ipc::CastTarget::Nothing {},
-            Output { name, .. } => realand_ipc::CastTarget::Output { name: name.clone() },
-            Window { id } => realand_ipc::CastTarget::Window { id: *id },
+            Nothing => clarion_ipc::CastTarget::Nothing {},
+            Output { name, .. } => clarion_ipc::CastTarget::Output { name: name.clone() },
+            Window { id } => clarion_ipc::CastTarget::Window { id: *id },
         }
     }
 }
@@ -707,10 +702,44 @@ impl KeyboardFocus {
 
 pub struct State {
     pub backend: Backend,
-    pub realand: Realand,
+    pub clarion: Clarion,
+}
+
+impl Drop for State {
+    fn drop(&mut self) {
+        self.prepare_shutdown();
+    }
 }
 
 impl State {
+    /// Cancel event-loop futures and detach the Wayland display source before
+    /// dropping device owners. Call after dispatch returns; Drop also covers unwind and
+    /// fixture teardown. This only closes this instance, never the global GPU
+    /// lifecycle shared by other compositor fixtures.
+    pub fn prepare_shutdown(&mut self) {
+        if mem::replace(&mut self.clarion.shutting_down, true) {
+            return;
+        }
+        // Take before Drop so repeated calls, including State::drop, are inert.
+        // Cancel Async futures first; they can unregister nested loop sources.
+        drop(self.clarion.runtime_executor.take());
+        let clients = self.clarion.clients.snapshot();
+        if let Some(mut display) = self.clarion.runtime_display.take() {
+            // The owner is local, so destroyed callbacks can borrow all of
+            // State without re-entering a borrow of this registered source.
+            let result = display.with_source_mut(|source| {
+                crate::platform::wayland_shutdown::disconnect_clients(source, self, clients)
+            });
+            if let Err(error) = result {
+                warn!(
+                    ?error,
+                    "error dispatching Wayland client destruction during shutdown"
+                );
+            }
+            drop(display);
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Config,
@@ -722,7 +751,7 @@ impl State {
         is_session_instance: bool,
         requested_renderer: RendererBackendType,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let _span = realand_tracy_span!("State::new");
+        let _span = clarion_tracy_span!("State::new");
 
         let config = Rc::new(RefCell::new(config));
 
@@ -749,7 +778,7 @@ impl State {
             Backend::Tty(tty)
         };
 
-        let mut realand = Realand::new(
+        let mut clarion = Clarion::new(
             config.clone(),
             event_loop,
             stop_signal,
@@ -759,10 +788,10 @@ impl State {
             is_session_instance,
         );
         backend.init(&mut crate::platform::device_bridge::DeviceCoordinator::new(
-            &mut realand,
+            &mut clarion,
         ));
 
-        let mut state = Self { backend, realand };
+        let mut state = Self { backend, clarion };
 
         // Load the xkb_file config option if set by the user.
         state.load_xkb_file();
@@ -775,7 +804,7 @@ impl State {
     }
 
     pub fn refresh_and_flush_clients(&mut self) {
-        let _span = realand_tracy_span!("State::refresh_and_flush_clients");
+        let _span = clarion_tracy_span!("State::refresh_and_flush_clients");
 
         {
             let _latency =
@@ -792,96 +821,96 @@ impl State {
                 crate::utils::latency::Span::new(crate::utils::latency::Operation::Animations);
             // Apply this batch's latest motion before event-time effect simulation;
             // presentation forecasts must never become the canonical wobble pose.
-            self.realand.layout.flush_pending_move();
-            self.realand.advance_animations();
+            self.clarion.layout.flush_pending_move();
+            self.clarion.advance_animations();
         }
 
-        self.realand.flush_core_scene_invalidations();
-        self.realand.redraw_queued_outputs(&mut self.backend);
+        self.clarion.flush_core_scene_invalidations();
+        self.clarion.redraw_queued_outputs(&mut self.backend);
         // Motion may be coalesced inside redraw. Keep its final cleanup request
         // after submission, when queue_redraw can mark the pending vblank state.
-        self.realand.flush_core_scene_invalidations();
+        self.clarion.flush_core_scene_invalidations();
 
         {
-            let _span = realand_tracy_span!("flush_clients");
+            let _span = clarion_tracy_span!("flush_clients");
             let _latency =
                 crate::utils::latency::Span::new(crate::utils::latency::Operation::Flush);
-            self.realand.display_handle.flush_clients().unwrap();
+            self.clarion.display_handle.flush_clients().unwrap();
         }
 
         #[cfg(feature = "dbus")]
-        self.realand.update_locked_hint();
+        self.clarion.update_locked_hint();
 
         // Clear the time so it's fetched afresh next iteration.
-        self.realand.clock.clear();
-        self.realand.pointer_inactivity_timer_got_reset = false;
-        self.realand.notified_activity_this_iteration = false;
+        self.clarion.clock.clear();
+        self.clarion.pointer_inactivity_timer_got_reset = false;
+        self.clarion.notified_activity_this_iteration = false;
     }
 
     // We monitor both libinput and logind: libinput is always there (including without DBus), but
     // it misses some switch events (e.g. after unsuspend) on some systems.
     pub fn set_lid_closed(&mut self, is_closed: bool) {
-        if self.realand.is_lid_closed == is_closed {
+        if self.clarion.is_lid_closed == is_closed {
             return;
         }
 
         debug!("laptop lid {}", if is_closed { "closed" } else { "opened" });
-        self.realand.is_lid_closed = is_closed;
+        self.clarion.is_lid_closed = is_closed;
         self.backend.on_output_config_changed(
-            &mut crate::platform::device_bridge::DeviceCoordinator::new(&mut self.realand),
+            &mut crate::platform::device_bridge::DeviceCoordinator::new(&mut self.clarion),
         );
     }
 
     fn refresh(&mut self) {
-        let _span = realand_tracy_span!("State::refresh");
+        let _span = clarion_tracy_span!("State::refresh");
 
         // Handle commits for surfaces whose blockers cleared this cycle. This should happen before
         // layout.refresh() since this is where these surfaces handle commits.
         self.notify_blocker_cleared();
 
         // These should be called periodically, before flushing the clients.
-        self.realand.popups.cleanup();
+        self.clarion.popups.cleanup();
         self.refresh_popup_grab();
         self.update_keyboard_focus();
 
         // Should be called before refresh_layout() because that one will refresh other window
         // states and then send a pending configure.
-        self.realand.refresh_window_states();
+        self.clarion.refresh_window_states();
 
         // Needs to be called after updating the keyboard focus.
-        self.realand.refresh_layout();
+        self.clarion.refresh_layout();
 
-        self.realand
+        self.clarion
             .cursor_manager
             .check_cursor_image_surface_alive();
-        self.realand.refresh_pointer_outputs();
-        self.realand.global_space.refresh();
-        self.realand.refresh_idle_inhibit();
+        self.clarion.refresh_pointer_outputs();
+        self.clarion.global_space.refresh();
+        self.clarion.refresh_idle_inhibit();
         self.refresh_pointer_contents();
         foreign_toplevel::refresh(self);
         ext_workspace::refresh(self);
 
         #[cfg(feature = "xdp-gnome-screencast")]
-        self.realand.refresh_mapped_cast_outputs();
+        self.clarion.refresh_mapped_cast_outputs();
         // Should happen before refresh_window_rules(), but after anything that can start or stop
         // screencasts.
         #[cfg(feature = "xdp-gnome-screencast")]
-        self.realand.refresh_mapped_cast_window_rules();
+        self.clarion.refresh_mapped_cast_window_rules();
         self.ipc_refresh_casts();
 
-        self.realand.refresh_window_rules();
+        self.clarion.refresh_window_rules();
         self.refresh_ipc_outputs();
         self.ipc_refresh_layout();
         self.ipc_refresh_keyboard_layout_index();
 
         // Needs to be called after updating the keyboard focus.
         #[cfg(feature = "dbus")]
-        self.realand.refresh_a11y();
+        self.clarion.refresh_a11y();
     }
 
     fn notify_blocker_cleared(&mut self) {
-        let dh = self.realand.display_handle.clone();
-        while let Ok(client) = self.realand.blocker_cleared_rx.try_recv() {
+        let dh = self.clarion.display_handle.clone();
+        while let Ok(client) = self.clarion.blocker_cleared_rx.try_recv() {
             trace!("calling blocker_cleared");
             self.client_compositor_state(&client)
                 .blocker_cleared(self, &dh);
@@ -889,14 +918,14 @@ impl State {
     }
 
     pub fn move_cursor(&mut self, location: Point<f64, Logical>) {
-        let mut under = match self.realand.pointer_visibility {
+        let mut under = match self.clarion.pointer_visibility {
             PointerVisibility::Disabled => PointContents::default(),
-            _ => self.realand.contents_under(location),
+            _ => self.clarion.contents_under(location),
         };
 
         // Disable the hidden pointer if the contents underneath have changed.
-        if !self.realand.pointer_visibility.is_visible() && self.realand.pointer_contents != under {
-            self.realand.pointer_visibility = PointerVisibility::Disabled;
+        if !self.clarion.pointer_visibility.is_visible() && self.clarion.pointer_contents != under {
+            self.clarion.pointer_visibility = PointerVisibility::Disabled;
 
             // When setting PointerVisibility::Hidden together with pointer contents changing,
             // we can change straight to nothing to avoid one frame of hover. Notably, this can
@@ -904,9 +933,9 @@ impl State {
             under = PointContents::default();
         }
 
-        self.realand.pointer_contents.clone_from(&under);
+        self.clarion.pointer_contents.clone_from(&under);
 
-        let pointer = &self.realand.seat.get_pointer().unwrap();
+        let pointer = &self.clarion.seat.get_pointer().unwrap();
         pointer.motion(
             self,
             under.surface,
@@ -918,17 +947,17 @@ impl State {
         );
         pointer.frame(self);
 
-        self.realand.maybe_activate_pointer_constraint();
+        self.clarion.maybe_activate_pointer_constraint();
 
         // We do not show the pointer on programmatic or keyboard movement.
 
         // FIXME: granular
-        self.realand.queue_redraw_all();
+        self.clarion.queue_redraw_all();
     }
 
     /// Moves cursor within the specified rectangle, only adjusting coordinates if needed.
     fn move_cursor_to_rect(&mut self, rect: Rectangle<f64, Logical>, mode: CenterCoords) -> bool {
-        let pointer = &self.realand.seat.get_pointer().unwrap();
+        let pointer = &self.clarion.seat.get_pointer().unwrap();
         let cur_loc = pointer.current_location();
         let x_in_bound = cur_loc.x >= rect.loc.x && cur_loc.x <= rect.loc.x + rect.size.w;
         let y_in_bound = cur_loc.y >= rect.loc.y && cur_loc.y <= rect.loc.y + rect.size.h;
@@ -964,24 +993,24 @@ impl State {
     }
 
     pub fn move_cursor_to_focused_tile(&mut self, mode: CenterCoords) -> bool {
-        if !self.realand.keyboard_focus.is_layout() {
+        if !self.clarion.keyboard_focus.is_layout() {
             return false;
         }
 
-        if self.realand.tablet_cursor_location.is_some() {
+        if self.clarion.tablet_cursor_location.is_some() {
             return false;
         }
 
-        let Some(output) = self.realand.layout.active_output() else {
+        let Some(output) = self.clarion.layout.active_output() else {
             return false;
         };
-        let monitor = self.realand.layout.monitor_for_output(output).unwrap();
+        let monitor = self.clarion.layout.monitor_for_output(output).unwrap();
 
         let mut rv = false;
         let rect = monitor.active_window_visual_rectangle();
 
         if let Some(rect) = rect {
-            let output_geo = self.realand.global_space.output_geometry(output).unwrap();
+            let output_geo = self.clarion.global_space.output_geometry(output).unwrap();
             let mut rect = rect;
             rect.loc += output_geo.loc.to_f64();
             rv = self.move_cursor_to_rect(rect, mode);
@@ -992,35 +1021,35 @@ impl State {
 
     pub fn focus_default_monitor(&mut self) {
         // Our default target is the first output in sorted order.
-        let Some(mut target) = self.realand.sorted_outputs.first().cloned() else {
+        let Some(mut target) = self.clarion.sorted_outputs.first().cloned() else {
             // No outputs are connected.
             return;
         };
 
-        let config = self.realand.config.borrow();
+        let config = self.clarion.config.borrow();
         for config in &config.outputs.0 {
             if !config.focus_at_startup {
                 continue;
             }
-            if let Some(output) = self.realand.output_by_name_match(&config.name) {
+            if let Some(output) = self.clarion.output_by_name_match(&config.name) {
                 target = output.clone();
                 break;
             }
         }
         drop(config);
 
-        self.realand.layout.focus_output(&target);
+        self.clarion.layout.focus_output(&target);
         self.move_cursor_to_output(&target);
     }
 
     /// Focus a specific window, taking care of a potential active output change and cursor
     /// warp.
     pub fn focus_window(&mut self, window: &Window) {
-        let active_output = self.realand.layout.active_output().cloned();
+        let active_output = self.clarion.layout.active_output().cloned();
 
-        self.realand.layout.activate_window(window);
+        self.clarion.layout.activate_window(window);
 
-        let new_active = self.realand.layout.active_output().cloned();
+        let new_active = self.clarion.layout.active_output().cloned();
         if new_active != active_output {
             if !self.maybe_warp_cursor_to_focus_centered() {
                 if let Some(output) = new_active {
@@ -1032,11 +1061,11 @@ impl State {
         }
 
         // FIXME: granular
-        self.realand.queue_redraw_all();
+        self.clarion.queue_redraw_all();
     }
 
     pub fn confirm_mru(&mut self) {
-        if let Some(window) = self.realand.close_mru(MruCloseRequest::Confirm) {
+        if let Some(window) = self.clarion.close_mru(MruCloseRequest::Confirm) {
             // focus_window() will warp the cursor to the window only when the keyboard focus is on
             // the layout. However, right now the keyboard focus is still on the MRU (that we had
             // just closed) since it's only updated at the end of the event loop cycle. Force-update
@@ -1048,7 +1077,7 @@ impl State {
     }
 
     pub fn maybe_warp_cursor_to_focus(&mut self) -> bool {
-        let focused = match self.realand.config.borrow().input.warp_mouse_to_focus {
+        let focused = match self.clarion.config.borrow().input.warp_mouse_to_focus {
             None => return false,
             Some(inner) => match inner.mode {
                 None => CenterCoords::Separately,
@@ -1060,7 +1089,7 @@ impl State {
     }
 
     pub fn maybe_warp_cursor_to_focus_centered(&mut self) -> bool {
-        let focused = match self.realand.config.borrow().input.warp_mouse_to_focus {
+        let focused = match self.clarion.config.borrow().input.warp_mouse_to_focus {
             None => return false,
             Some(inner) => match inner.mode {
                 None => CenterCoords::Both,
@@ -1074,23 +1103,23 @@ impl State {
     pub fn refresh_pointer_contents(&mut self) {
         // Don't move the mouse pointer while the user is interacting with the tablet, as it causes
         // unwanted jumps for the client.
-        if self.realand.tablet_cursor_location.is_some() {
+        if self.clarion.tablet_cursor_location.is_some() {
             return;
         }
 
-        let _span = realand_tracy_span!("Realand::refresh_pointer_contents");
+        let _span = clarion_tracy_span!("Clarion::refresh_pointer_contents");
 
-        let pointer = &self.realand.seat.get_pointer().unwrap();
+        let pointer = &self.clarion.seat.get_pointer().unwrap();
         let location = pointer.current_location();
 
-        if !self.realand.exit_confirm_dialog.is_open()
-            && !self.realand.is_locked()
-            && !self.realand.screenshot_ui.is_open()
+        if !self.clarion.exit_confirm_dialog.is_open()
+            && !self.clarion.is_locked()
+            && !self.clarion.screenshot_ui.is_open()
         {
             // Don't refresh cursor focus during transitions.
-            if let Some((output, _)) = self.realand.output_under(location) {
+            if let Some((output, _)) = self.clarion.output_under(location) {
                 if self
-                    .realand
+                    .clarion
                     .layout
                     .monitor_for_output(output)
                     .is_some_and(|monitor| monitor.are_transitions_ongoing())
@@ -1110,39 +1139,39 @@ impl State {
         // means we may need to redraw.
 
         // FIXME: granular
-        self.realand.queue_redraw_all();
+        self.clarion.queue_redraw_all();
     }
 
     pub fn update_pointer_contents(&mut self) -> bool {
-        let _span = realand_tracy_span!("Realand::update_pointer_contents");
+        let _span = clarion_tracy_span!("Clarion::update_pointer_contents");
 
-        let pointer = &self.realand.seat.get_pointer().unwrap();
+        let pointer = &self.clarion.seat.get_pointer().unwrap();
         let location = pointer.current_location();
-        let mut under = match self.realand.pointer_visibility {
+        let mut under = match self.clarion.pointer_visibility {
             PointerVisibility::Disabled => PointContents::default(),
-            _ => self.realand.contents_under(location),
+            _ => self.clarion.contents_under(location),
         };
 
         // We're not changing the global cursor location here, so if the contents did not change,
         // then nothing changed.
-        if self.realand.pointer_contents == under {
+        if self.clarion.pointer_contents == under {
             return false;
         }
 
         // Disable the hidden pointer if the contents underneath have changed.
-        if !self.realand.pointer_visibility.is_visible() {
-            self.realand.pointer_visibility = PointerVisibility::Disabled;
+        if !self.clarion.pointer_visibility.is_visible() {
+            self.clarion.pointer_visibility = PointerVisibility::Disabled;
 
             // When setting PointerVisibility::Hidden together with pointer contents changing,
             // we can change straight to nothing to avoid one frame of hover. Notably, this can
             // be triggered through warp-mouse-to-focus combined with hide-when-typing.
             under = PointContents::default();
-            if self.realand.pointer_contents == under {
+            if self.clarion.pointer_contents == under {
                 return false;
             }
         }
 
-        self.realand.pointer_contents.clone_from(&under);
+        self.clarion.pointer_contents.clone_from(&under);
 
         pointer.motion(
             self,
@@ -1154,20 +1183,20 @@ impl State {
             },
         );
 
-        self.realand.maybe_activate_pointer_constraint();
+        self.clarion.maybe_activate_pointer_constraint();
 
         true
     }
 
     pub fn move_cursor_to_output(&mut self, output: &Output) {
-        let geo = self.realand.global_space.output_geometry(output).unwrap();
+        let geo = self.clarion.global_space.output_geometry(output).unwrap();
         self.move_cursor(center(geo).to_f64());
     }
 
     pub fn refresh_popup_grab(&mut self) {
-        if let Some(grab) = &mut self.realand.popup_grab {
+        if let Some(grab) = &mut self.clarion.popup_grab {
             if grab.grab.has_ended() {
-                self.realand.popup_grab = None;
+                self.clarion.popup_grab = None;
             }
         }
     }
@@ -1176,9 +1205,9 @@ impl State {
         // This entry point is used both by refresh and immediate input boundaries.
         // Consume the core's latest focus request before dispatching the next key
         // or button; lock surfaces, layer grabs and shell UI still arbitrate here.
-        let mut operations = mem::take(&mut self.realand.core_protocol_ops);
-        self.realand.layout.drain_core_protocol_ops(&mut operations);
-        let current = self.realand.layout.core_focus_id();
+        let mut operations = mem::take(&mut self.clarion.core_protocol_ops);
+        self.clarion.layout.drain_core_protocol_ops(&mut operations);
+        let current = self.clarion.layout.core_focus_id();
         let requested = operations
             .last()
             .map_or(current, |operation| match operation {
@@ -1198,19 +1227,19 @@ impl State {
             current
         };
         operations.clear();
-        self.realand.core_protocol_ops = operations;
+        self.clarion.core_protocol_ops = operations;
         self.update_keyboard_focus_for_core(focused_id);
     }
 
     fn update_keyboard_focus_for_core(&mut self, focused_id: Option<u64>) {
         // Clean up on-demand layer surface focus if necessary.
-        if let Some(surface) = &self.realand.layer_shell_on_demand_focus {
+        if let Some(surface) = &self.clarion.layer_shell_on_demand_focus {
             // Still alive and has on-demand interactivity.
             let mut good = surface.alive()
                 && surface.cached_state().keyboard_interactivity
                     == wlr_layer::KeyboardInteractivity::OnDemand;
 
-            if let Some(mapped) = self.realand.mapped_layer_surfaces.get(surface) {
+            if let Some(mapped) = self.clarion.mapped_layer_surfaces.get(surface) {
                 // Check if it moved to the overview backdrop.
                 if mapped.place_within_backdrop() {
                     good = false;
@@ -1221,28 +1250,28 @@ impl State {
             }
 
             if !good {
-                self.realand.layer_shell_on_demand_focus = None;
+                self.clarion.layer_shell_on_demand_focus = None;
             }
         }
 
         // Compute the current focus.
-        let focus = if self.realand.exit_confirm_dialog.is_open() {
+        let focus = if self.clarion.exit_confirm_dialog.is_open() {
             KeyboardFocus::ExitConfirmDialog
-        } else if self.realand.is_locked() {
+        } else if self.clarion.is_locked() {
             KeyboardFocus::LockScreen {
-                surface: self.realand.lock_surface_focus(),
+                surface: self.clarion.lock_surface_focus(),
             }
-        } else if self.realand.screenshot_ui.is_open() {
+        } else if self.clarion.screenshot_ui.is_open() {
             KeyboardFocus::ScreenshotUi
-        } else if self.realand.window_mru_ui.is_open() {
+        } else if self.clarion.window_mru_ui.is_open() {
             KeyboardFocus::Mru
-        } else if let Some(output) = self.realand.layout.active_output() {
-            let mon = self.realand.layout.monitor_for_output(output).unwrap();
+        } else if let Some(output) = self.clarion.layout.active_output() {
+            let mon = self.clarion.layout.monitor_for_output(output).unwrap();
             let layers = layer_map_for_output(output);
 
             // Explicitly check for layer-shell popup grabs here, our keyboard focus will stay on
             // the root layer surface while it has grabs.
-            let layer_grab = self.realand.popup_grab.as_ref().and_then(|g| {
+            let layer_grab = self.clarion.popup_grab.as_ref().and_then(|g| {
                 layers
                     .layer_for_surface(&g.root, WindowSurfaceType::TOPLEVEL)
                     .and_then(|l| l.can_receive_keyboard_focus().then(|| (&g.root, l.layer())))
@@ -1255,7 +1284,7 @@ impl State {
 
             let layout_focus = || {
                 focused_id
-                    .and_then(|id| self.realand.layout.core_focus_window(id))
+                    .and_then(|id| self.clarion.layout.core_focus_window(id))
                     .map(|win| win.toplevel().wl_surface().clone())
                     .map(|surface| KeyboardFocus::Layout {
                         surface: Some(surface),
@@ -1270,7 +1299,7 @@ impl State {
                         return None;
                     }
 
-                    let mapped = self.realand.mapped_layer_surfaces.get(surface)?;
+                    let mapped = self.clarion.mapped_layer_surfaces.get(surface)?;
                     if mapped.place_within_backdrop() {
                         return None;
                     }
@@ -1283,7 +1312,7 @@ impl State {
             let on_d_focus_on_layer = |layer| {
                 layers.layers_on(layer).find_map(|surface| {
                     let is_on_demand_surface =
-                        Some(surface) == self.realand.layer_shell_on_demand_focus.as_ref();
+                        Some(surface) == self.clarion.layer_shell_on_demand_focus.as_ref();
                     is_on_demand_surface
                         .then(|| surface.wl_surface().clone())
                         .map(|surface| KeyboardFocus::LayerShell { surface })
@@ -1294,7 +1323,7 @@ impl State {
             let focus_on_layer =
                 |layer| excl_focus_on_layer(layer).or_else(|| on_d_focus_on_layer(layer));
 
-            let is_overview_open = self.realand.layout.is_overview_open();
+            let is_overview_open = self.clarion.layout.is_overview_open();
 
             let mut surface = grab_on_layer(Layer::Overlay);
             // FIXME: we shouldn't prioritize the top layer grabs over regular overlay input or a
@@ -1336,20 +1365,20 @@ impl State {
             KeyboardFocus::Layout { surface: None }
         };
 
-        let keyboard = self.realand.seat.get_keyboard().unwrap();
-        if self.realand.keyboard_focus != focus {
+        let keyboard = self.clarion.seat.get_keyboard().unwrap();
+        if self.clarion.keyboard_focus != focus {
             trace!(
                 "keyboard focus changed from {:?} to {:?}",
-                self.realand.keyboard_focus,
+                self.clarion.keyboard_focus,
                 focus
             );
 
             // Tell the windows their new focus state for window rule purposes.
             if let KeyboardFocus::Layout {
                 surface: Some(surface),
-            } = &self.realand.keyboard_focus
+            } = &self.clarion.keyboard_focus
             {
-                if let Some((mapped, _)) = self.realand.layout.find_window_and_output_mut(surface) {
+                if let Some((mapped, _)) = self.clarion.layout.find_window_and_output_mut(surface) {
                     mapped.set_is_focused(false);
                 }
             }
@@ -1357,7 +1386,7 @@ impl State {
                 surface: Some(surface),
             } = &focus
             {
-                if let Some((mapped, _)) = self.realand.layout.find_window_and_output_mut(surface) {
+                if let Some((mapped, _)) = self.clarion.layout.find_window_and_output_mut(surface) {
                     mapped.set_is_focused(true);
 
                     // If `mapped` does not have a focus timestamp, then the window is newly
@@ -1367,7 +1396,7 @@ impl State {
                     // period has gone by without the focus having elsewhere.
                     let stamp = get_monotonic_time();
 
-                    let debounce = self.realand.config.borrow().recent_windows.debounce_ms;
+                    let debounce = self.clarion.config.borrow().recent_windows.debounce_ms;
                     let debounce = Duration::from_millis(u64::from(debounce));
 
                     if mapped.get_focus_timestamp().is_none() || debounce.is_zero() {
@@ -1376,27 +1405,27 @@ impl State {
                         let timer = Timer::from_duration(debounce);
 
                         let focus_token = self
-                            .realand
+                            .clarion
                             .event_loop
                             .insert_source(timer, move |_, _, state| {
-                                state.realand.mru_apply_keyboard_commit();
+                                state.clarion.mru_apply_keyboard_commit();
                                 TimeoutAction::Drop
                             })
                             .unwrap();
                         if let Some(PendingMruCommit { token, .. }) =
-                            self.realand.pending_mru_commit.replace(PendingMruCommit {
+                            self.clarion.pending_mru_commit.replace(PendingMruCommit {
                                 id: mapped.id(),
                                 token: focus_token,
                                 stamp,
                             })
                         {
-                            self.realand.event_loop.remove(token);
+                            self.clarion.event_loop.remove(token);
                         }
                     }
                 }
             }
 
-            if let Some(grab) = self.realand.popup_grab.as_mut() {
+            if let Some(grab) = self.clarion.popup_grab.as_mut() {
                 if grab.has_keyboard_grab && Some(&grab.root) != focus.surface() {
                     trace!(
                         "grab root {:?} is not the new focus {:?}, ungrabbing",
@@ -1406,16 +1435,16 @@ impl State {
 
                     grab.grab.ungrab(PopupUngrabStrategy::All);
                     keyboard.unset_grab(self);
-                    self.realand.seat.get_pointer().unwrap().unset_grab(
+                    self.clarion.seat.get_pointer().unwrap().unset_grab(
                         self,
                         SERIAL_COUNTER.next_serial(),
                         get_monotonic_time().as_millis() as u32,
                     );
-                    self.realand.popup_grab = None;
+                    self.clarion.popup_grab = None;
                 }
             }
 
-            if self.realand.config.borrow().input.keyboard.track_layout == TrackLayout::Window {
+            if self.clarion.config.borrow().input.keyboard.track_layout == TrackLayout::Window {
                 let current_layout = keyboard.with_xkb_state(self, |context| {
                     let xkb = context.xkb().lock().unwrap();
                     xkb.active_layout()
@@ -1423,7 +1452,7 @@ impl State {
 
                 let mut new_layout = current_layout;
                 // Store the currently active layout for the surface.
-                if let Some(current_focus) = self.realand.keyboard_focus.surface() {
+                if let Some(current_focus) = self.clarion.keyboard_focus.surface() {
                     with_states(current_focus, |data| {
                         let cell = data
                             .data_map
@@ -1450,11 +1479,11 @@ impl State {
                 }
             }
 
-            self.realand.keyboard_focus.clone_from(&focus);
+            self.clarion.keyboard_focus.clone_from(&focus);
             keyboard.set_focus(self, focus.into_surface(), SERIAL_COUNTER.next_serial());
 
             // FIXME: can be more granular.
-            self.realand.queue_redraw_all();
+            self.clarion.queue_redraw_all();
         }
     }
 
@@ -1474,7 +1503,7 @@ impl State {
             })
             .unwrap_or(false);
         if retry {
-            self.realand.queue_redraw_all();
+            self.clarion.queue_redraw_all();
         }
     }
 
@@ -1499,8 +1528,8 @@ impl State {
             })
             .unwrap_or(false);
         if installed {
-            self.realand.update_shaders();
-            self.realand.queue_redraw_all();
+            self.clarion.update_shaders();
+            self.clarion.queue_redraw_all();
         }
     }
 
@@ -1522,16 +1551,16 @@ impl State {
             })
             .unwrap_or((false, false));
         if published {
-            self.realand.update_shaders();
+            self.clarion.update_shaders();
         }
         if published || retry {
-            self.realand.queue_redraw_all();
+            self.clarion.queue_redraw_all();
         }
     }
 
     /// Compile only on the owner thread: libxkbcommon context ownership stays local.
     fn apply_xkb_text(&mut self, keymap: String) -> anyhow::Result<()> {
-        let keyboard = self.realand.seat.get_keyboard().unwrap();
+        let keyboard = self.clarion.seat.get_keyboard().unwrap();
         let num_lock = keyboard.modifier_state().num_lock;
         keyboard
             .set_keymap_from_string(self, keymap)
@@ -1546,9 +1575,9 @@ impl State {
 
     /// Reading and UTF-8 validation use owned bytes; stale completions cannot replace a newer map.
     fn queue_xkb_file(&mut self, path: String, fallback: Option<Xkb>) {
-        self.realand.keymap_request = self.realand.keymap_request.wrapping_add(1);
-        let request = self.realand.keymap_request;
-        let task = self.realand.owned_tasks.submit(move || {
+        self.clarion.keymap_request = self.clarion.keymap_request.wrapping_add(1);
+        let request = self.clarion.keymap_request;
+        let task = self.clarion.owned_tasks.submit(move || {
             let path = PathBuf::from(path);
             let path = expand_home(&path)
                 .map_err(|e| e.to_string())?
@@ -1556,7 +1585,7 @@ impl State {
             crate::utils::owned_tasks::read_regular_text(&path, 4 * 1024 * 1024)
                 .map_err(|e| format!("failed to read xkb_file: {e}"))
         });
-        let event_loop = self.realand.event_loop.clone();
+        let event_loop = self.clarion.event_loop.clone();
         let future = async move {
             let result = match task {
                 Ok(task) => task.finish().await,
@@ -1565,9 +1594,9 @@ impl State {
             event_loop.insert_idle(move |state| {
                 #[cfg(test)]
                 {
-                    state.realand.keymap_completions += 1;
+                    state.clarion.keymap_completions += 1;
                 }
-                if state.realand.keymap_request != request {
+                if state.clarion.keymap_request != request {
                     return;
                 }
                 let result = result
@@ -1582,35 +1611,35 @@ impl State {
                 state.ipc_keyboard_layouts_changed();
             });
         };
-        if let Err(err) = self.realand.scheduler.schedule(future) {
+        if let Err(err) = self.clarion.scheduler.schedule(future) {
             warn!("error scheduling xkb_file: {err:?}");
         }
     }
 
     pub(crate) fn begin_session_layout_restore(&mut self) -> Result<SessionRestoreToken, String> {
-        if self.realand.is_locked() {
+        if self.clarion.is_locked() {
             return Err("会话锁定时不能恢复布局".into());
         }
-        self.realand.session_restore_request = self.realand.session_restore_request.wrapping_add(1);
+        self.clarion.session_restore_request = self.clarion.session_restore_request.wrapping_add(1);
         Ok(SessionRestoreToken {
-            request: self.realand.session_restore_request,
-            lock_epoch: self.realand.capture_scene_epoch.stamp(),
+            request: self.clarion.session_restore_request,
+            lock_epoch: self.clarion.capture_scene_epoch.stamp(),
         })
     }
 
     pub(crate) fn apply_session_layout_restore(
         &mut self,
         token: SessionRestoreToken,
-        session: realand_ipc::management::SessionLayout,
+        session: clarion_ipc::management::SessionLayout,
     ) -> Result<(), String> {
-        if self.realand.is_locked() || !token.lock_epoch.is_current() {
+        if self.clarion.is_locked() || !token.lock_epoch.is_current() {
             return Err("会话锁定已取消布局恢复".into());
         }
-        if token.request != self.realand.session_restore_request {
+        if token.request != self.clarion.session_restore_request {
             return Err("新的布局恢复请求已取消此请求".into());
         }
-        self.realand.layout.restore_session_layout(session)?;
-        self.realand.queue_redraw_all();
+        self.clarion.layout.restore_session_layout(session)?;
+        self.clarion.queue_redraw_all();
         Ok(())
     }
 
@@ -1623,10 +1652,10 @@ impl State {
             }
         };
         let task = self
-            .realand
+            .clarion
             .owned_tasks
             .submit(move || crate::ipc::server::parse_session_layout(&json));
-        let event_loop = self.realand.event_loop.clone();
+        let event_loop = self.clarion.event_loop.clone();
         let future = async move {
             let session = match task {
                 Ok(task) => task.finish().await,
@@ -1640,7 +1669,7 @@ impl State {
                 }
             });
         };
-        if let Err(err) = self.realand.scheduler.schedule(future) {
+        if let Err(err) = self.clarion.scheduler.schedule(future) {
             warn!("error scheduling session layout restoration: {err:?}");
         }
     }
@@ -1648,21 +1677,21 @@ impl State {
     fn apply_xkb_fallback(&mut self, mut xkb: Xkb) {
         xkb.file = None;
         if xkb == Xkb::default() {
-            xkb = self.realand.xkb_from_locale1.clone().unwrap_or_default();
+            xkb = self.clarion.xkb_from_locale1.clone().unwrap_or_default();
         }
         self.set_xkb_config(xkb.to_xkb_config());
     }
 
     fn load_xkb_file(&mut self) {
-        let path = self.realand.config.borrow().input.keyboard.xkb.file.clone();
+        let path = self.clarion.config.borrow().input.keyboard.xkb.file.clone();
         if let Some(path) = path {
             self.queue_xkb_file(path, None);
         }
     }
 
     pub fn set_xkb_config(&mut self, xkb: XkbConfig) {
-        self.realand.keymap_request = self.realand.keymap_request.wrapping_add(1);
-        let keyboard = self.realand.seat.get_keyboard().unwrap();
+        self.clarion.keymap_request = self.clarion.keymap_request.wrapping_add(1);
+        let keyboard = self.clarion.seat.get_keyboard().unwrap();
         let num_lock = keyboard.modifier_state().num_lock;
         if let Err(err) = keyboard.set_xkb_config(self, xkb) {
             warn!("error updating xkb config: {err:?}");
@@ -1679,49 +1708,49 @@ impl State {
 
     pub fn reload_config(&mut self, config: Result<Config, ()>) {
         self.cancel_output_preview();
-        let _span = realand_tracy_span!("State::reload_config");
+        let _span = clarion_tracy_span!("State::reload_config");
         let _latency =
             crate::utils::latency::Span::new(crate::utils::latency::Operation::ConfigReload);
 
         let mut config = match config {
             Ok(config) => config,
             Err(()) => {
-                self.realand.config_error_notification.show();
-                self.realand.queue_redraw_all();
+                self.clarion.config_error_notification.show();
+                self.clarion.queue_redraw_all();
 
                 #[cfg(feature = "dbus")]
-                self.realand.a11y_announce_config_error();
+                self.clarion.a11y_announce_config_error();
 
                 return;
             }
         };
 
-        self.realand.config_error_notification.hide();
+        self.clarion.config_error_notification.hide();
 
         // Find & orphan removed named workspaces.
         let mut removed_workspaces: Vec<String> = vec![];
-        for ws in &self.realand.config.borrow().workspaces {
+        for ws in &self.clarion.config.borrow().workspaces {
             if !config.workspaces.iter().any(|w| w.name == ws.name) {
                 removed_workspaces.push(ws.name.0.clone());
             }
         }
         for name in removed_workspaces {
-            self.realand.layout.unname_workspace(&name);
+            self.clarion.layout.unname_workspace(&name);
         }
 
-        self.realand.layout.update_config(&config);
-        for mapped in self.realand.mapped_layer_surfaces.values_mut() {
+        self.clarion.layout.update_config(&config);
+        for mapped in self.clarion.mapped_layer_surfaces.values_mut() {
             mapped.update_config(&config);
         }
 
         // Create new named workspaces.
         for ws_config in &config.workspaces {
-            self.realand.layout.ensure_named_workspace(ws_config);
+            self.clarion.layout.ensure_named_workspace(ws_config);
         }
 
         let rate = 1.0 / config.animations.slowdown.max(0.001);
-        self.realand.clock.set_rate(rate);
-        self.realand
+        self.clarion.clock.set_rate(rate);
+        self.clarion
             .clock
             .set_complete_instantly(config.animations.off);
 
@@ -1737,14 +1766,14 @@ impl State {
         let mut cursor_inactivity_timeout_changed = false;
         let mut recent_windows_changed = false;
         let mut xwls_changed = false;
-        let mut old_config = self.realand.config.borrow_mut();
+        let mut old_config = self.clarion.config.borrow_mut();
 
         // Reload the cursor.
         if config.cursor != old_config.cursor {
-            self.realand
+            self.clarion
                 .cursor_manager
                 .reload(&config.cursor.xcursor_theme, config.cursor.xcursor_size);
-            self.realand.cursor_texture_cache.clear();
+            self.clarion.cursor_texture_cache.clear();
         }
 
         // We need &mut self to reload the xkb config, so just store it here.
@@ -1756,7 +1785,7 @@ impl State {
         if config.input.keyboard.repeat_rate != old_config.input.keyboard.repeat_rate
             || config.input.keyboard.repeat_delay != old_config.input.keyboard.repeat_delay
         {
-            let keyboard = self.realand.seat.get_keyboard().unwrap();
+            let keyboard = self.clarion.seat.get_keyboard().unwrap();
             keyboard.change_repeat_info(
                 config.input.keyboard.repeat_rate.into(),
                 config.input.keyboard.repeat_delay.into(),
@@ -1776,9 +1805,9 @@ impl State {
         let ignored_nodes_changed =
             config.debug.ignored_drm_devices != old_config.debug.ignored_drm_devices;
 
-        if config.outputs != self.realand.config_file_output_config {
+        if config.outputs != self.clarion.config_file_output_config {
             output_config_changed = true;
-            self.realand
+            self.clarion
                 .config_file_output_config
                 .clone_from(&config.outputs);
         } else {
@@ -1798,14 +1827,14 @@ impl State {
         let binds_changed = config.binds != old_config.binds;
         let new_mod_key = self.backend.mod_key(&config);
         if new_mod_key != self.backend.mod_key(&old_config) || binds_changed {
-            self.realand
+            self.clarion
                 .hotkey_overlay
                 .on_hotkey_config_updated(new_mod_key);
-            self.realand.mods_with_mouse_binds = mods_with_mouse_binds(new_mod_key, &config.binds);
-            self.realand.mods_with_wheel_binds = mods_with_wheel_binds(new_mod_key, &config.binds);
-            self.realand.mods_with_tablet_stylus_binds =
+            self.clarion.mods_with_mouse_binds = mods_with_mouse_binds(new_mod_key, &config.binds);
+            self.clarion.mods_with_wheel_binds = mods_with_wheel_binds(new_mod_key, &config.binds);
+            self.clarion.mods_with_tablet_stylus_binds =
                 mods_with_tablet_stylus_binds(new_mod_key, &config.binds);
-            self.realand.mods_with_finger_scroll_binds =
+            self.clarion.mods_with_finger_scroll_binds =
                 mods_with_finger_scroll_binds(new_mod_key, &config.binds);
         }
 
@@ -1894,7 +1923,7 @@ impl State {
         // Release the borrow.
         drop(old_config);
         self.backend
-            .update_config_snapshot(&self.realand.config.borrow());
+            .update_config_snapshot(&self.clarion.config.borrow());
 
         // Parsing a user keymap must not block input/redraw dispatch.
         if let Some(mut xkb) = reload_xkb {
@@ -1907,15 +1936,15 @@ impl State {
         }
 
         if libinput_config_changed {
-            let config = self.realand.config.borrow();
-            for mut device in self.realand.devices.iter().cloned() {
+            let config = self.clarion.config.borrow();
+            for mut device in self.clarion.devices.iter().cloned() {
                 apply_libinput_settings(&config.input, &mut device);
             }
         }
 
         if ignored_nodes_changed {
             self.backend.update_ignored_nodes_config(
-                &mut crate::platform::device_bridge::DeviceCoordinator::new(&mut self.realand),
+                &mut crate::platform::device_bridge::DeviceCoordinator::new(&mut self.clarion),
             );
         }
 
@@ -1924,42 +1953,42 @@ impl State {
         }
 
         if window_rules_changed {
-            self.realand.recompute_window_rules();
+            self.clarion.recompute_window_rules();
         }
 
         if layer_rules_changed {
-            self.realand.recompute_layer_rules();
+            self.clarion.recompute_layer_rules();
         }
 
         if shaders_changed {
-            self.realand.update_shaders();
+            self.clarion.update_shaders();
         }
 
         if cursor_inactivity_timeout_changed {
             // Force reset due to timeout change.
-            self.realand.pointer_inactivity_timer_got_reset = false;
-            self.realand.reset_pointer_inactivity_timer();
+            self.clarion.pointer_inactivity_timer_got_reset = false;
+            self.clarion.reset_pointer_inactivity_timer();
         }
 
         if binds_changed {
-            self.realand.window_mru_ui.update_binds();
+            self.clarion.window_mru_ui.update_binds();
         }
 
         if recent_windows_changed {
-            self.realand.window_mru_ui.update_config();
+            self.clarion.window_mru_ui.update_config();
         }
 
         if xwls_changed {
             // If xwl-s was previously working and is now off, we don't try to kill it or stop
             // watching the sockets, for simplicity's sake.
-            let was_working = self.realand.satellite.is_some();
+            let was_working = self.clarion.satellite.is_some();
 
             // Try to start, or restart in case the user corrected the path or something.
             xwayland::satellite::setup(self);
 
-            let config = self.realand.config.borrow();
+            let config = self.clarion.config.borrow();
             let display_name = (!config.xwayland_satellite.off)
-                .then_some(self.realand.satellite.as_ref())
+                .then_some(self.clarion.satellite.as_ref())
                 .flatten()
                 .map(|satellite| satellite.display_name().to_owned());
 
@@ -1978,18 +2007,18 @@ impl State {
         // global suddenly appearing? Either way, right now it's live-reloaded in a sense that new
         // clients will use the new xdg-decoration setting.
 
-        self.realand.queue_redraw_all();
+        self.clarion.queue_redraw_all();
     }
 
     pub fn reload_output_config(&mut self) {
         self.backend
-            .update_config_snapshot(&self.realand.config.borrow());
+            .update_config_snapshot(&self.clarion.config.borrow());
         let mut resized_outputs = vec![];
         let mut recolored_outputs = vec![];
 
-        for output in self.realand.global_space.outputs() {
+        for output in self.clarion.global_space.outputs() {
             let name = output.user_data().get::<OutputName>().unwrap();
-            let full_config = self.realand.config.borrow_mut();
+            let full_config = self.clarion.config.borrow_mut();
             let config = full_config.outputs.find(name);
 
             let scale = config
@@ -2017,7 +2046,7 @@ impl State {
                     Some(output::Scale::Fractional(scale)),
                     None,
                 );
-                self.realand.ipc_outputs_changed = true;
+                self.clarion.ipc_outputs_changed = true;
                 resized_outputs.push(output.clone());
             }
 
@@ -2028,14 +2057,14 @@ impl State {
             backdrop_color[3] = 1.;
             let backdrop_color = Color32F::from(backdrop_color);
 
-            if let Some(state) = self.realand.output_state.get_mut(output) {
+            if let Some(state) = self.clarion.output_state.get_mut(output) {
                 if state.backdrop_buffer.color() != backdrop_color {
                     state.backdrop_buffer.set_color(backdrop_color);
                     recolored_outputs.push(output.clone());
                 }
             }
 
-            for mon in self.realand.layout.monitors_mut() {
+            for mon in self.clarion.layout.monitors_mut() {
                 if mon.output() != output {
                     continue;
                 }
@@ -2057,20 +2086,20 @@ impl State {
         }
 
         for output in resized_outputs {
-            self.realand.output_resized(&output);
+            self.clarion.output_resized(&output);
         }
 
         for output in recolored_outputs {
-            self.realand.queue_redraw(&output);
+            self.clarion.queue_redraw(&output);
         }
 
         self.backend.on_output_config_changed(
-            &mut crate::platform::device_bridge::DeviceCoordinator::new(&mut self.realand),
+            &mut crate::platform::device_bridge::DeviceCoordinator::new(&mut self.clarion),
         );
 
-        self.realand.reposition_outputs(None);
+        self.clarion.reposition_outputs(None);
 
-        if let Some(touch) = self.realand.seat.get_touch() {
+        if let Some(touch) = self.clarion.seat.get_touch() {
             // A down event installs a touch grab. With no active sequence there
             // is nothing to cancel, and Smithay warns about a spurious cancel.
             if touch.is_grabbed() {
@@ -2078,22 +2107,22 @@ impl State {
             }
         }
 
-        let config = self.realand.config.borrow().outputs.clone();
-        self.realand
+        let config = self.clarion.config.borrow().outputs.clone();
+        self.clarion
             .output_management_state
             .on_config_changed(config);
     }
 
     pub fn modify_output_config<F>(&mut self, name: &str, fun: F)
     where
-        F: FnOnce(&mut realand_config::Output),
+        F: FnOnce(&mut clarion_config::Output),
     {
         self.cancel_output_preview();
         // Try hard to find the output config section corresponding to the output set by the
         // user. Since if we add a new section and some existing section also matches the
         // output, then our new section won't do anything.
         let temp;
-        let match_name = if let Some(output) = self.realand.output_by_name_match(name) {
+        let match_name = if let Some(output) = self.clarion.output_by_name_match(name) {
             output.user_data().get::<OutputName>().unwrap()
         } else if let Some(output_name) = self
             .backend
@@ -2113,11 +2142,11 @@ impl State {
             &temp
         };
 
-        let mut config = self.realand.config.borrow_mut();
+        let mut config = self.clarion.config.borrow_mut();
         let config = if let Some(config) = config.outputs.find_mut(match_name) {
             config
         } else {
-            config.outputs.0.push(realand_config::Output {
+            config.outputs.0.push(clarion_config::Output {
                 // Save name as set by the user.
                 name: String::from(name),
                 ..Default::default()
@@ -2128,25 +2157,25 @@ impl State {
         fun(config);
     }
 
-    pub fn apply_transient_output_config(&mut self, name: &str, action: realand_ipc::OutputAction) {
+    pub fn apply_transient_output_config(&mut self, name: &str, action: clarion_ipc::OutputAction) {
         self.modify_output_config(name, move |config| match action {
-            realand_ipc::OutputAction::Off => config.off = true,
-            realand_ipc::OutputAction::On => config.off = false,
-            realand_ipc::OutputAction::Mode { mode } => {
+            clarion_ipc::OutputAction::Off => config.off = true,
+            clarion_ipc::OutputAction::On => config.off = false,
+            clarion_ipc::OutputAction::Mode { mode } => {
                 config.mode = match mode {
-                    realand_ipc::ModeToSet::Automatic => None,
-                    realand_ipc::ModeToSet::Specific(mode) => Some(realand_config::output::Mode {
+                    clarion_ipc::ModeToSet::Automatic => None,
+                    clarion_ipc::ModeToSet::Specific(mode) => Some(clarion_config::output::Mode {
                         custom: false,
                         mode,
                     }),
                 };
                 config.modeline = None;
             }
-            realand_ipc::OutputAction::CustomMode { mode } => {
-                config.mode = Some(realand_config::output::Mode { custom: true, mode });
+            clarion_ipc::OutputAction::CustomMode { mode } => {
+                config.mode = Some(clarion_config::output::Mode { custom: true, mode });
                 config.modeline = None;
             }
-            realand_ipc::OutputAction::Modeline {
+            clarion_ipc::OutputAction::Modeline {
                 clock,
                 hdisplay,
                 hsync_start,
@@ -2160,7 +2189,7 @@ impl State {
                 vsync_polarity,
             } => {
                 // Do not reset config.mode to None since it's used as a fallback.
-                config.modeline = Some(realand_config::output::Modeline {
+                config.modeline = Some(clarion_config::output::Modeline {
                     clock,
                     hdisplay,
                     hsync_start,
@@ -2174,51 +2203,51 @@ impl State {
                     vsync_polarity,
                 })
             }
-            realand_ipc::OutputAction::Scale { scale } => {
+            clarion_ipc::OutputAction::Scale { scale } => {
                 config.scale = match scale {
-                    realand_ipc::ScaleToSet::Automatic => None,
-                    realand_ipc::ScaleToSet::Specific(scale) => Some(FloatOrInt(scale)),
+                    clarion_ipc::ScaleToSet::Automatic => None,
+                    clarion_ipc::ScaleToSet::Specific(scale) => Some(FloatOrInt(scale)),
                 }
             }
-            realand_ipc::OutputAction::Transform { transform } => config.transform = transform,
-            realand_ipc::OutputAction::Position { position } => {
+            clarion_ipc::OutputAction::Transform { transform } => config.transform = transform,
+            clarion_ipc::OutputAction::Position { position } => {
                 config.position = match position {
-                    realand_ipc::PositionToSet::Automatic => None,
-                    realand_ipc::PositionToSet::Specific(position) => {
-                        Some(realand_config::Position {
+                    clarion_ipc::PositionToSet::Automatic => None,
+                    clarion_ipc::PositionToSet::Specific(position) => {
+                        Some(clarion_config::Position {
                             x: position.x,
                             y: position.y,
                         })
                     }
                 }
             }
-            realand_ipc::OutputAction::Vrr { vrr } => {
+            clarion_ipc::OutputAction::Vrr { vrr } => {
                 config.variable_refresh_rate = if vrr.vrr {
-                    Some(realand_config::Vrr {
+                    Some(clarion_config::Vrr {
                         on_demand: vrr.on_demand,
                     })
                 } else {
                     None
                 }
             }
-            realand_ipc::OutputAction::MaxBpc { max_bpc } => config.max_bpc = Some(MaxBpc(max_bpc)),
-            realand_ipc::OutputAction::Hdr { hdr } => config.hdr = hdr.hdr,
+            clarion_ipc::OutputAction::MaxBpc { max_bpc } => config.max_bpc = Some(MaxBpc(max_bpc)),
+            clarion_ipc::OutputAction::Hdr { hdr } => config.hdr = hdr.hdr,
         });
 
         self.reload_output_config();
     }
 
     pub fn refresh_ipc_outputs(&mut self) {
-        if !self.realand.ipc_outputs_changed {
+        if !self.clarion.ipc_outputs_changed {
             return;
         }
-        self.realand.ipc_outputs_changed = false;
+        self.clarion.ipc_outputs_changed = false;
 
-        let _span = realand_tracy_span!("State::refresh_ipc_outputs");
+        let _span = clarion_tracy_span!("State::refresh_ipc_outputs");
 
         for ipc_output in self.backend.ipc_outputs().lock().unwrap().values_mut() {
             let logical = self
-                .realand
+                .clarion
                 .global_space
                 .outputs()
                 .find(|output| output.name() == ipc_output.name)
@@ -2227,33 +2256,33 @@ impl State {
         }
 
         #[cfg(feature = "dbus")]
-        self.realand.on_ipc_outputs_changed();
+        self.clarion.on_ipc_outputs_changed();
 
         let new_config = self.backend.ipc_outputs().lock().unwrap().clone();
-        self.realand
+        self.clarion
             .output_management_state
             .notify_changes(new_config);
     }
 
     pub fn open_screenshot_ui(&mut self, show_pointer: bool, path: Option<String>) {
-        if self.realand.is_locked() || self.realand.screenshot_ui.is_open() {
+        if self.clarion.is_locked() || self.clarion.screenshot_ui.is_open() {
             return;
         }
 
         let default_output = self
-            .realand
+            .clarion
             .output_under_cursor()
-            .or_else(|| self.realand.layout.active_output().cloned());
+            .or_else(|| self.clarion.layout.active_output().cloned());
         let Some(default_output) = default_output else {
             return;
         };
 
-        self.realand.update_render_elements(None);
+        self.clarion.update_render_elements(None);
 
         // Capture each output with the renderer that can actually consume its KMS swapchain.
         // A TTY may have a native Vulkan output next to a surface that was migrated to GLES;
         // feeding both through the global renderer silently drops the foreign texture type.
-        let outputs: Vec<_> = self.realand.global_space.outputs().cloned().collect();
+        let outputs: Vec<_> = self.clarion.global_space.outputs().cloned().collect();
         let mut screenshots = HashMap::new();
         let mut mixed_panels = HashMap::new();
         let mut saw_gles = false;
@@ -2270,7 +2299,7 @@ impl State {
                                 renderer_output.clone(),
                                 ScreenshotUi::panels_gles(gles, scale),
                             );
-                            self.realand
+                            self.clarion
                                 .capture_screenshot_for_output(gles, &renderer_output)
                         }
                         crate::render_helpers::renderer::AnyRenderer::Native(native) => {
@@ -2279,7 +2308,7 @@ impl State {
                                 renderer_output.clone(),
                                 ScreenshotUi::panels_native(native, scale),
                             );
-                            self.realand
+                            self.clarion
                                 .capture_screenshot_for_output_native(native, &renderer_output)
                         }
                     });
@@ -2295,18 +2324,18 @@ impl State {
 
         // Now that we captured the screenshots, clear grabs like drag-and-drop, etc.
         let time = get_monotonic_time().as_millis() as u32;
-        self.realand.seat.get_pointer().unwrap().unset_grab(
+        self.clarion.seat.get_pointer().unwrap().unset_grab(
             self,
             SERIAL_COUNTER.next_serial(),
             time,
         );
-        if let Some(touch) = self.realand.seat.get_touch() {
+        if let Some(touch) = self.clarion.seat.get_touch() {
             touch.unset_grab(self);
         }
 
         // Can't unset_grab() from with_tools(), will deadlock on tablet seat mutex...
         let mut tools = Vec::new();
-        self.realand.seat.tablet_seat().with_tools(|map| {
+        self.clarion.seat.tablet_seat().with_tools(|map| {
             tools = Vec::from_iter(map.values().cloned());
         });
         for tool in tools {
@@ -2316,7 +2345,7 @@ impl State {
         let opened = if saw_gles && saw_native {
             // Keep each output's help panel in the same renderer domain as its screenshot
             // texture; the UI element wrapper will select the matching variant at draw time.
-            Some(self.realand.screenshot_ui.open_mixed(
+            Some(self.clarion.screenshot_ui.open_mixed(
                 screenshots,
                 mixed_panels,
                 default_output,
@@ -2335,11 +2364,11 @@ impl State {
             self.backend
                 .with_renderer_for_output(Some(&renderer_output), |renderer| match renderer {
                     crate::render_helpers::renderer::AnyRenderer::Gles(gles) => self
-                        .realand
+                        .clarion
                         .screenshot_ui
                         .open(gles, screenshots, default_output, show_pointer, path),
                     crate::render_helpers::renderer::AnyRenderer::Native(native) => self
-                        .realand
+                        .clarion
                         .screenshot_ui
                         .open_native(native, screenshots, default_output, show_pointer, path),
                 })
@@ -2350,17 +2379,17 @@ impl State {
             return;
         }
 
-        self.realand
+        self.clarion
             .cursor_manager
             .set_cursor_image(CursorImageStatus::Named(CursorIcon::Crosshair));
-        self.realand.queue_redraw_all();
+        self.clarion.queue_redraw_all();
     }
 
     pub fn handle_pick_color(
         &mut self,
-        tx: async_channel::Sender<Option<realand_ipc::PickedColor>>,
+        tx: async_channel::Sender<Option<clarion_ipc::PickedColor>>,
     ) {
-        let pointer = self.realand.seat.get_pointer().unwrap();
+        let pointer = self.clarion.seat.get_pointer().unwrap();
         let start_data = PointerGrabStartData {
             focus: None,
             button: 0,
@@ -2368,31 +2397,31 @@ impl State {
         };
         let grab = PickColorGrab::new(start_data);
         pointer.set_grab(self, grab, SERIAL_COUNTER.next_serial(), Focus::Clear);
-        self.realand.pick_color = Some(tx);
-        self.realand
+        self.clarion.pick_color = Some(tx);
+        self.clarion
             .cursor_manager
             .set_cursor_image(CursorImageStatus::Named(CursorIcon::Crosshair));
-        self.realand.queue_redraw_all();
+        self.clarion.queue_redraw_all();
     }
 
     pub fn confirm_screenshot(&mut self, write_to_disk: bool) {
-        let ScreenshotUi::Open { path, .. } = &self.realand.screenshot_ui else {
+        let ScreenshotUi::Open { path, .. } = &self.clarion.screenshot_ui else {
             return;
         };
         // Reserve capacity before rendering or submitting GPU work. Keep the
         // selection and explicit path available when preparation cannot start.
         let options = self
-            .realand
+            .clarion
             .screenshot_save_options(write_to_disk, path.clone());
-        let permit = match self.realand.screenshot_tasks.acquire() {
+        let permit = match self.clarion.screenshot_tasks.acquire() {
             Ok(permit) => permit,
             Err(error) => {
                 warn!("cannot start screenshot: {error:#}");
                 return;
             }
         };
-        let selected_output = self.realand.screenshot_ui.selection_output().cloned();
-        let selected_is_native = self.realand.screenshot_ui.selection_uses_native();
+        let selected_output = self.clarion.screenshot_ui.selection_output().cloned();
+        let selected_is_native = self.clarion.screenshot_ui.selection_uses_native();
         let result = selected_output
             .as_ref()
             .and_then(|output| {
@@ -2404,11 +2433,11 @@ impl State {
                                 Some(false),
                             ) => {
                                 let (size, texture, region) =
-                                    self.realand.screenshot_ui.prepare_capture(gles)?;
+                                    self.clarion.screenshot_ui.prepare_capture(gles)?;
                                 use crate::platform::pixel_readback::DeferredCaptureRenderer;
                                 let job =
                                     gles.enqueue_pixels(&texture, region, Fourcc::Abgr8888)?;
-                                self.realand.enqueue_screenshot(
+                                self.clarion.enqueue_screenshot(
                                     output.clone(),
                                     job,
                                     size,
@@ -2421,10 +2450,10 @@ impl State {
                                 Some(true),
                             ) => {
                                 let (size, texture, region) =
-                                    self.realand.screenshot_ui.prepare_capture_native(native)?;
+                                    self.clarion.screenshot_ui.prepare_capture_native(native)?;
                                 let job =
                                     native.enqueue_readback(&texture, region, Fourcc::Abgr8888)?;
-                                self.realand.enqueue_screenshot(
+                                self.clarion.enqueue_screenshot(
                                     output.clone(),
                                     crate::platform::pixel_readback::PendingPixels::Native(job),
                                     size,
@@ -2441,20 +2470,23 @@ impl State {
             .unwrap_or_else(|| Err(anyhow::anyhow!("screenshot selection output disappeared")));
         if let Err(error) = result {
             warn!("error preparing screenshot: {error:#}");
-            self.realand.queue_redraw_all();
+            self.clarion.queue_redraw_all();
             return;
         }
-        self.realand.screenshot_ui.close();
-        self.realand
+        self.clarion.screenshot_ui.close();
+        self.clarion
             .cursor_manager
             .set_cursor_image(CursorImageStatus::default_named());
-        self.realand.queue_redraw_all();
+        self.clarion.queue_redraw_all();
     }
 
     pub fn store_unmap_snapshot(&mut self, window: &Window, output: Option<&Output>) {
+        if self.clarion.shutting_down {
+            return;
+        }
         // The unmapping tile may have an xray background, in which case we will render xray
         // elements, so they need to be updated.
-        self.realand.update_xray_render_elements(output);
+        self.clarion.update_xray_render_elements(output);
 
         self.backend
             .with_renderer_for_output(output, |renderer| match renderer {
@@ -2466,33 +2498,33 @@ impl State {
                             xray: None,
                         };
 
-                        self.realand.fill_xray_elements(ctx.r(), output);
+                        self.clarion.fill_xray_elements(ctx.r(), output);
 
                         // If any background layer has block_out_from, also fill the Screencast xray
                         // buffer so the unmap snapshot can render a buffer with blocked-out background.
                         //
                         // This will be used in Tile::render_snapshot().
                         let has_blocked_out =
-                            self.realand.has_blocked_out_background_layers(output);
+                            self.clarion.has_blocked_out_background_layers(output);
                         if has_blocked_out {
                             let screencast_ctx = RenderCtx {
                                 target: RenderTarget::Screencast,
                                 ..ctx.r()
                             };
-                            self.realand.fill_xray_elements(screencast_ctx, output);
+                            self.clarion.fill_xray_elements(screencast_ctx, output);
                         }
 
-                        let state = self.realand.output_state.get_mut(output).unwrap();
-                        self.realand.layout.store_unmap_snapshot(
+                        let state = self.clarion.output_state.get_mut(output).unwrap();
+                        self.clarion.layout.store_unmap_snapshot(
                             renderer,
                             Some(&mut state.xray),
                             has_blocked_out,
                             window,
                         );
 
-                        self.realand.clear_xray_elements(output);
+                        self.clarion.clear_xray_elements(output);
                     } else {
-                        self.realand
+                        self.clarion
                             .layout
                             .store_unmap_snapshot(renderer, None, false, window);
                     }
@@ -2504,7 +2536,7 @@ impl State {
                             RenderTarget::Screencast,
                             RenderTarget::ScreenCapture,
                         ] {
-                            self.realand.fill_xray_elements_native(
+                            self.clarion.fill_xray_elements_native(
                                 RenderCtx {
                                     renderer,
                                     target,
@@ -2513,16 +2545,16 @@ impl State {
                                 output,
                             );
                         }
-                        let state = self.realand.output_state.get_mut(output).unwrap();
-                        self.realand.layout.store_unmap_snapshot_native(
+                        let state = self.clarion.output_state.get_mut(output).unwrap();
+                        self.clarion.layout.store_unmap_snapshot_native(
                             renderer,
                             Some(&mut state.xray),
                             true,
                             window,
                         );
-                        self.realand.clear_xray_elements(output);
+                        self.clarion.clear_xray_elements(output);
                     } else {
-                        self.realand
+                        self.clarion
                             .layout
                             .store_unmap_snapshot_native(renderer, None, false, window);
                     }
@@ -2534,15 +2566,15 @@ impl State {
     pub fn set_dynamic_cast_target(&mut self, _target: CastTarget) {}
 
     #[cfg(feature = "dbus")]
-    pub fn on_screen_shot_msg(&mut self, msg: ScreenshotToRealand) {
+    pub fn on_screen_shot_msg(&mut self, msg: ScreenshotToClarion) {
         match msg {
-            ScreenshotToRealand::TakeScreenshot {
+            ScreenshotToClarion::TakeScreenshot {
                 include_cursor,
                 reply,
             } => {
                 self.handle_take_screenshot(&reply, include_cursor);
             }
-            ScreenshotToRealand::PickColor(tx) => {
+            ScreenshotToClarion::PickColor(tx) => {
                 self.handle_pick_color(tx);
             }
         }
@@ -2551,20 +2583,20 @@ impl State {
     #[cfg(feature = "dbus")]
     fn handle_take_screenshot(
         &mut self,
-        to_screenshot: &async_channel::Sender<RealandToScreenshot>,
+        to_screenshot: &async_channel::Sender<ClarionToScreenshot>,
         include_cursor: bool,
     ) {
         let reply = {
             let sender = to_screenshot.clone();
             crate::platform::capture::ScreenshotCompletion::new(move |path| {
-                if let Err(error) = sender.try_send(RealandToScreenshot::ScreenshotResult(path)) {
+                if let Err(error) = sender.try_send(ClarionToScreenshot::ScreenshotResult(path)) {
                     warn!("error sending screenshot portal result: {error}");
                 }
             })
         };
         // The existing portal supports a single output. Preserve its explicit
         // limitation while sharing the deferred readback and bounded encoder.
-        let mut outputs = self.realand.global_space.outputs();
+        let mut outputs = self.clarion.global_space.outputs();
         let output = outputs.next().cloned();
         let single = output.is_some() && outputs.next().is_none();
         drop(outputs);
@@ -2573,7 +2605,7 @@ impl State {
             return;
         }
         let output = output.unwrap();
-        let path = make_screenshot_path(&self.realand.config.borrow())
+        let path = make_screenshot_path(&self.clarion.config.borrow())
             .ok()
             .flatten()
             .unwrap_or_else(|| env::temp_dir().join("screenshot.png"));
@@ -2585,28 +2617,28 @@ impl State {
         let result = self
             .backend
             .with_renderer_for_output(Some(&output), |renderer| {
-                let permit = self.realand.screenshot_tasks.acquire()?;
+                let permit = self.clarion.screenshot_tasks.acquire()?;
                 match renderer {
                     crate::render_helpers::renderer::AnyRenderer::Gles(gles) => {
                         let (size, texture) =
-                            self.realand
+                            self.clarion
                                 .prepare_screenshot(gles, &output, include_cursor)?;
                         let region = Rectangle::from_size(texture.size());
                         use crate::platform::pixel_readback::DeferredCaptureRenderer;
                         let job = gles.enqueue_pixels(&texture, region, Fourcc::Abgr8888)?;
-                        self.realand
+                        self.clarion
                             .enqueue_screenshot(output.clone(), job, size, options, permit)
                     }
                     crate::render_helpers::renderer::AnyRenderer::Native(native) => {
                         let (size, texture) =
-                            self.realand
+                            self.clarion
                                 .prepare_screenshot(native, &output, include_cursor)?;
                         let job = native.enqueue_readback(
                             &texture,
                             Rectangle::from_size(texture.size()),
                             Fourcc::Abgr8888,
                         )?;
-                        self.realand.enqueue_screenshot(
+                        self.clarion.enqueue_screenshot(
                             output.clone(),
                             crate::platform::pixel_readback::PendingPixels::Native(job),
                             size,
@@ -2624,26 +2656,26 @@ impl State {
     #[cfg(feature = "dbus")]
     pub fn on_introspect_msg(
         &mut self,
-        to_introspect: &async_channel::Sender<RealandToIntrospect>,
-        msg: IntrospectToRealand,
+        to_introspect: &async_channel::Sender<ClarionToIntrospect>,
+        msg: IntrospectToClarion,
     ) {
         use crate::utils::with_toplevel_role;
 
-        let IntrospectToRealand::GetWindows = msg;
-        let _span = realand_tracy_span!("GetWindows");
+        let IntrospectToClarion::GetWindows = msg;
+        let _span = clarion_tracy_span!("GetWindows");
 
         let mut windows = HashMap::new();
 
         #[cfg(feature = "xdp-gnome-screencast")]
         windows.insert(
-            self.realand.casting.dynamic_cast_id_for_portal.get(),
+            self.clarion.casting.dynamic_cast_id_for_portal.get(),
             gnome_shell_introspect::WindowProperties {
-                title: String::from("realand Dynamic Cast Target"),
-                app_id: String::from("rs.bxt.realand.desktop"),
+                title: String::from("clarion Dynamic Cast Target"),
+                app_id: String::from("rs.bxt.clarion.desktop"),
             },
         );
 
-        self.realand.layout.with_windows(|mapped, _, _, _| {
+        self.clarion.layout.with_windows(|mapped, _, _, _| {
             let id = mapped.id().get();
             let props = with_toplevel_role(mapped.toplevel(), |role| {
                 gnome_shell_introspect::WindowProperties {
@@ -2662,31 +2694,31 @@ impl State {
             windows.insert(id, props);
         });
 
-        let msg = RealandToIntrospect::Windows(windows);
+        let msg = ClarionToIntrospect::Windows(windows);
         if let Err(err) = to_introspect.send_blocking(msg) {
             warn!("error sending windows to introspect: {err:?}");
         }
     }
 
     #[cfg(feature = "dbus")]
-    pub fn on_login1_msg(&mut self, msg: Login1ToRealand) {
-        let Login1ToRealand::LidClosedChanged(is_closed) = msg;
+    pub fn on_login1_msg(&mut self, msg: Login1ToClarion) {
+        let Login1ToClarion::LidClosedChanged(is_closed) = msg;
 
         trace!("login1 lid {}", if is_closed { "closed" } else { "opened" });
         self.set_lid_closed(is_closed);
     }
 
     #[cfg(feature = "dbus")]
-    pub fn on_locale1_msg(&mut self, msg: Locale1ToRealand) {
-        let Locale1ToRealand::XkbChanged(xkb) = msg;
+    pub fn on_locale1_msg(&mut self, msg: Locale1ToClarion) {
+        let Locale1ToClarion::XkbChanged(xkb) = msg;
 
         trace!("locale1 xkb settings changed: {xkb:?}");
-        let xkb = self.realand.xkb_from_locale1.insert(xkb);
+        let xkb = self.clarion.xkb_from_locale1.insert(xkb);
 
         {
-            let config = self.realand.config.borrow();
+            let config = self.clarion.config.borrow();
             if config.input.keyboard.xkb != Xkb::default() {
-                trace!("ignoring locale1 xkb change because realand config has xkb settings");
+                trace!("ignoring locale1 xkb change because clarion config has xkb settings");
                 return;
             }
         }
@@ -2697,7 +2729,7 @@ impl State {
     }
 }
 
-impl Realand {
+impl Clarion {
     /// Expose explicit synchronization only when the primary DRM device can
     /// wake surface commit blockers from timeline points.
     pub fn enable_drm_syncobj(&mut self, device: DrmDeviceFd) {
@@ -2739,10 +2771,15 @@ impl Realand {
         create_wayland_socket: bool,
         is_session_instance: bool,
     ) -> Self {
-        let _span = realand_tracy_span!("Realand::new");
+        let _span = clarion_tracy_span!("Clarion::new");
 
         let (executor, scheduler) = calloop::futures::executor().unwrap();
-        event_loop.insert_source(executor, |_, _, _| ()).unwrap();
+        let runtime_executor = crate::platform::event_sources::ScopedSource::insert(
+            &event_loop,
+            executor,
+            |_, _, _| (),
+        )
+        .unwrap();
 
         let display_handle = display.handle();
         let config_ = config.borrow();
@@ -2872,7 +2909,7 @@ impl Realand {
                 Timer::from_duration(XDG_ACTIVATION_TOKEN_TIMEOUT),
                 |_, _, state| {
                     state
-                        .realand
+                        .clarion
                         .activation_state
                         .retain_tokens(|_, token_data| {
                             token_data.timestamp.elapsed() < XDG_ACTIVATION_TOKEN_TIMEOUT
@@ -2925,10 +2962,10 @@ impl Realand {
                 .insert_source(source, |event, _, state| {
                     if let calloop::channel::Event::Msg(completion) = event {
                         let visible_changed =
-                            state.realand.cursor_manager.apply_completion(completion);
-                        state.realand.cursor_texture_cache.clear();
-                        if visible_changed && state.realand.pointer_visibility.is_visible() {
-                            state.realand.queue_redraw_all();
+                            state.clarion.cursor_manager.apply_completion(completion);
+                        state.clarion.cursor_texture_cache.clear();
+                        if visible_changed && state.clarion.pointer_visibility.is_visible() {
+                            state.clarion.queue_redraw_all();
                         }
                     }
                 })
@@ -2960,7 +2997,7 @@ impl Realand {
             .insert_source(
                 Timer::from_duration(Duration::from_secs(1)),
                 |_, _, state| {
-                    state.realand.send_frame_callbacks_on_fallback_timer();
+                    state.clarion.send_frame_callbacks_on_fallback_timer();
                     TimeoutAction::ToDuration(Duration::from_secs(1))
                 },
             )
@@ -2971,7 +3008,7 @@ impl Realand {
             let socket_name = socket_source.socket_name().to_os_string();
             event_loop
                 .insert_source(socket_source, move |client, _, state| {
-                    state.realand.insert_client(NewClient {
+                    state.clarion.insert_client(NewClient {
                         client,
                         restricted: false,
                         credentials_unknown: false,
@@ -2993,8 +3030,10 @@ impl Realand {
         let screencasting = Screencasting::new(&event_loop);
 
         let display_source = Generic::new(display, Interest::READ, Mode::Level);
-        event_loop
-            .insert_source(display_source, |_, display, state| {
+        let runtime_display = crate::platform::event_sources::ScopedSource::insert(
+            &event_loop,
+            display_source,
+            |_, display, state| {
                 let _latency = crate::utils::latency::Span::new(
                     crate::utils::latency::Operation::ClientDispatch,
                 );
@@ -3003,24 +3042,25 @@ impl Realand {
                     display.get_mut().dispatch_clients(state).unwrap();
                 }
                 Ok(PostAction::Continue)
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
 
         event_loop
             .insert_source(
                 Timer::from_duration(Duration::from_secs(60)),
                 |_, _, state| {
-                    let _span = realand_tracy_span!("startup timeout");
-                    state.realand.is_at_startup = false;
-                    state.realand.recompute_window_rules();
-                    state.realand.recompute_layer_rules();
+                    let _span = clarion_tracy_span!("startup timeout");
+                    state.clarion.is_at_startup = false;
+                    state.clarion.recompute_window_rules();
+                    state.clarion.recompute_layer_rules();
                     TimeoutAction::Drop
                 },
             )
             .unwrap();
 
         drop(config_);
-        let mut realand = Self {
+        let mut clarion = Self {
             config,
             config_file_output_config,
             output_preview: None,
@@ -3030,6 +3070,10 @@ impl Realand {
 
             event_loop,
             scheduler,
+            runtime_executor: Some(runtime_executor),
+            runtime_display: Some(runtime_display),
+            shutting_down: false,
+            clients: Default::default(),
             owned_tasks: crate::utils::owned_tasks::TaskPool::new(),
             keymap_request: 0,
             #[cfg(test)]
@@ -3190,12 +3234,15 @@ impl Realand {
             casting: screencasting,
         };
 
-        realand.reset_pointer_inactivity_timer();
+        clarion.reset_pointer_inactivity_timer();
 
-        realand
+        clarion
     }
 
     pub fn insert_client(&mut self, client: NewClient) {
+        if self.shutting_down {
+            return;
+        }
         let NewClient {
             client,
             restricted,
@@ -3209,10 +3256,12 @@ impl Realand {
             primary_selection_disabled: config.clipboard.disable_primary,
             restricted,
             credentials_unknown,
+            registration: self.clients.registration(),
         });
 
-        if let Err(err) = self.display_handle.insert_client(client, data) {
-            warn!("error inserting client: {err}");
+        match self.display_handle.insert_client(client, data.clone()) {
+            Ok(client) => data.registration.connected(client.id()),
+            Err(err) => warn!("error inserting client: {err}"),
         }
     }
 
@@ -3227,7 +3276,7 @@ impl Realand {
             "/org/freedesktop/login1",
             Some("org.freedesktop.login1.Manager"),
             "Inhibit",
-            &("handle-power-key", "realand", "Power key handling", "block"),
+            &("handle-power-key", "clarion", "Power key handling", "block"),
         )?;
 
         let fd: zbus::zvariant::OwnedFd = message.body().deserialize()?;
@@ -3244,14 +3293,14 @@ impl Realand {
 
     /// Repositions all outputs, optionally adding a new output.
     pub fn reposition_outputs(&mut self, new_output: Option<&Output>) {
-        let _span = realand_tracy_span!("Realand::reposition_outputs");
+        let _span = clarion_tracy_span!("Clarion::reposition_outputs");
 
         #[derive(Debug)]
         struct Data {
             output: Output,
             name: OutputName,
             position: Option<Point<i32, Logical>>,
-            config: Option<realand_config::Position>,
+            config: Option<clarion_config::Position>,
         }
 
         let config = self.config.borrow();
@@ -3453,8 +3502,8 @@ impl Realand {
     /// Converts a `WlOutput` to a corresponding `Output` if it exists.
     ///
     /// Compared to raw `Output::from_resource`, this method also verifies that the output still
-    /// exists in realand. Right after the output global is disabled, but before it is removed for
-    /// good, `Output::from_resource` will succeed, but since realand already forgot the output,
+    /// exists in clarion. Right after the output global is disabled, but before it is removed for
+    /// good, `Output::from_resource` will succeed, but since clarion already forgot the output,
     /// accessing it can cause logic bugs.
     pub fn output_from_resource(&self, wl_output: &WlOutput) -> Option<Output> {
         Output::from_resource(wl_output).filter(|output| self.output_exists(output))
@@ -3496,7 +3545,7 @@ impl Realand {
                 Timer::from_duration(Duration::from_secs(10)),
                 move |_, _, state| {
                     state
-                        .realand
+                        .clarion
                         .display_handle
                         .remove_global::<State>(global.clone());
                     TimeoutAction::Drop
@@ -3670,12 +3719,12 @@ impl Realand {
             Rectangle::new(corner, Size::new(8., 8.)).contains(pos)
         };
 
-        // Realand: Top-right hot corner activates the Wayfire-style 2D Expo grid wall!
+        // Clarion: Top-right hot corner activates the Wayfire-style 2D Expo grid wall!
         if hot_corners.top_right && contains(Point::new(size.w - 8., 0.)) {
             return Some(HotCornerKind::TopRight);
         }
 
-        // Realand: Bottom-left hot corner activates Realand GUI Settings!
+        // Clarion: Bottom-left hot corner activates Clarion GUI Settings!
         if hot_corners.bottom_left && contains(Point::new(0., size.h - 8.)) {
             return Some(HotCornerKind::BottomLeft);
         }
@@ -4355,7 +4404,7 @@ impl Realand {
     }
 
     pub fn redraw_queued_outputs(&mut self, backend: &mut Backend) {
-        let _span = realand_tracy_span!("Realand::redraw_queued_outputs");
+        let _span = clarion_tracy_span!("Clarion::redraw_queued_outputs");
 
         loop {
             let now = get_monotonic_time();
@@ -4406,7 +4455,7 @@ impl Realand {
         let timer_output = output.clone();
         let timer = Timer::from_duration(delay);
         let token = match self.event_loop.insert_source(timer, move |_, _, state| {
-            let Some(output_state) = state.realand.output_state.get_mut(&timer_output) else {
+            let Some(output_state) = state.clarion.output_state.get_mut(&timer_output) else {
                 return TimeoutAction::Drop;
             };
             output_state
@@ -4438,7 +4487,7 @@ impl Realand {
     }
 
     /// Snapshot on demand; querying statistics never schedules a redraw.
-    pub(crate) fn frame_timings(&self) -> Vec<realand_ipc::diagnostics::OutputFrameTimings> {
+    pub(crate) fn frame_timings(&self) -> Vec<clarion_ipc::diagnostics::OutputFrameTimings> {
         let mut timings = self
             .output_state
             .iter()
@@ -4470,85 +4519,13 @@ impl Realand {
             .map(|(output, _)| output.clone())
     }
 
-    pub fn render_pointer<R: RealandRenderer>(
+    pub fn render_pointer<R: ClarionRenderer>(
         &self,
         renderer: &mut R,
         output: &Output,
         push: &mut dyn FnMut(PointerRenderElements<R>),
     ) {
-        let _span = realand_tracy_span!("Realand::render_pointer");
-        let output_scale = output.current_scale();
-        let output_pos = self.global_space.output_geometry(output).unwrap().loc;
-
-        // Check whether we need to draw the tablet cursor or the regular cursor.
-        let pointer_pos = self
-            .tablet_cursor_location
-            .unwrap_or_else(|| self.seat.get_pointer().unwrap().current_location());
-        let pointer_pos = pointer_pos - output_pos.to_f64();
-
-        // Get the render cursor to draw.
-        let cursor_scale = output_scale.integer_scale();
-        let render_cursor = self.cursor_manager.get_render_cursor(cursor_scale);
-
-        let output_scale = Scale::from(output.current_scale().fractional_scale());
-
-        match render_cursor {
-            RenderCursor::Hidden => (),
-            RenderCursor::Surface { surface, hotspot } => {
-                let pointer_pos =
-                    (pointer_pos - hotspot.to_f64()).to_physical_precise_round(output_scale);
-
-                push_elements_from_surface_tree(
-                    renderer,
-                    &surface,
-                    pointer_pos,
-                    output_scale,
-                    1.,
-                    Kind::Cursor,
-                    &mut |elem| push(elem.into()),
-                );
-            }
-            RenderCursor::Named {
-                icon,
-                scale,
-                cursor,
-            } => {
-                let (idx, frame) = cursor.frame(self.start_time.elapsed().as_millis() as u32);
-                let hotspot = XCursor::hotspot(frame).to_logical(scale);
-                let pointer_pos =
-                    (pointer_pos - hotspot.to_f64()).to_physical_precise_round(output_scale);
-
-                let texture = self.cursor_texture_cache.get(icon, scale, &cursor, idx);
-                match MemoryRenderBufferRenderElement::from_buffer(
-                    renderer,
-                    pointer_pos,
-                    &texture,
-                    None,
-                    None,
-                    None,
-                    Kind::Cursor,
-                ) {
-                    Ok(element) => push(element.into()),
-                    Err(err) => {
-                        warn!("error importing a cursor texture: {err:?}");
-                    }
-                }
-            }
-        }
-
-        if let Some(dnd_icon) = self.dnd_icon.as_ref() {
-            let pointer_pos =
-                (pointer_pos + dnd_icon.offset.to_f64()).to_physical_precise_round(output_scale);
-            push_elements_from_surface_tree(
-                renderer,
-                &dnd_icon.surface,
-                pointer_pos,
-                output_scale,
-                1.,
-                Kind::ScanoutCandidate,
-                &mut |elem| push(elem.into()),
-            );
-        }
+        self.pointer_scene(output).render(renderer, output, push);
     }
 
     /// Checks if the pointer should be included on a window cast or screenshot.
@@ -4616,7 +4593,7 @@ impl Realand {
             return;
         }
 
-        let _span = realand_tracy_span!("Realand::refresh_pointer_outputs");
+        let _span = clarion_tracy_span!("Clarion::refresh_pointer_outputs");
 
         // Check whether we need to draw the tablet cursor or the regular cursor.
         let pointer_pos = self
@@ -4778,7 +4755,7 @@ impl Realand {
     }
 
     pub fn refresh_idle_inhibit(&mut self) {
-        let _span = realand_tracy_span!("Realand::refresh_idle_inhibit");
+        let _span = clarion_tracy_span!("Clarion::refresh_idle_inhibit");
 
         self.idle_inhibiting_surfaces.retain(|s| s.is_alive());
 
@@ -4792,7 +4769,7 @@ impl Realand {
     }
 
     pub fn refresh_window_states(&mut self) {
-        let _span = realand_tracy_span!("Realand::refresh_window_states");
+        let _span = clarion_tracy_span!("Clarion::refresh_window_states");
 
         let config = self.config.borrow();
         self.layout.with_windows_mut(|mapped, _output| {
@@ -4802,7 +4779,7 @@ impl Realand {
     }
 
     pub fn refresh_window_rules(&mut self) {
-        let _span = realand_tracy_span!("Realand::refresh_window_rules");
+        let _span = clarion_tracy_span!("Clarion::refresh_window_rules");
 
         let config = self.config.borrow();
         let window_rules = &config.window_rules;
@@ -4844,7 +4821,7 @@ impl Realand {
     }
 
     pub fn advance_animations(&mut self) {
-        let _span = realand_tracy_span!("Realand::advance_animations");
+        let _span = clarion_tracy_span!("Clarion::advance_animations");
 
         self.layout.advance_animations();
         self.config_error_notification.advance_animations();
@@ -4858,86 +4835,62 @@ impl Realand {
             config.animations.off || config.animations.overview_open_close.0.off
         };
         for state in self.output_state.values_mut() {
-            if let Some(transition) = &mut state.screen_transition {
-                if locking
-                    || (overview_disabled && transition.is_overview())
-                    || transition.is_done()
-                {
-                    state.screen_transition = None;
-                }
-            }
+            crate::scene::lifecycle::advance_screen_transition(
+                &mut state.screen_transition,
+                locking,
+                overview_disabled,
+            );
         }
     }
 
     pub fn update_render_elements(&mut self, output: Option<&Output>) {
         self.update_xray_render_elements(output);
         self.layout.update_render_elements(output);
-
-        for (out, state) in self.output_state.iter_mut() {
+        for (out, state) in &mut self.output_state {
             if output.is_none_or(|output| out == output) {
-                let scale = Scale::from(out.current_scale().fractional_scale());
-                let transform = out.current_transform();
-
-                if let Some(transition) = &mut state.screen_transition {
-                    transition.update_render_elements(scale, transform);
-                }
-
-                let layer_map = layer_map_for_output(out);
-                for surface in layer_map.layers() {
-                    let Some(mapped) = self.mapped_layer_surfaces.get_mut(surface) else {
-                        continue;
-                    };
-                    let Some(geo) = layer_map.layer_geometry(surface) else {
-                        continue;
-                    };
-
-                    mapped.update_render_elements(geo.size.to_f64());
-                }
+                crate::scene::lifecycle::update_transition(out, state.screen_transition.as_mut());
+                crate::scene::lifecycle::update_layers(out, &mut self.mapped_layer_surfaces, false);
             }
         }
     }
 
-    // Updates only those render elements that go in the xray buffer.
+    // Capture/unmap preparation needs only the sources referenced by xray effects.
     pub fn update_xray_render_elements(&mut self, output: Option<&Output>) {
-        for (out, state) in self.output_state.iter_mut() {
+        let blur = BlurOptions::from(self.config.borrow().blur);
+        for (out, state) in &mut self.output_state {
             if output.is_none_or(|output| out == output) {
-                let scale = Scale::from(out.current_scale().fractional_scale());
-                let mode = out.current_mode().unwrap();
-                let transform = out.current_transform();
-                let size = transform.transform_size(mode.size);
-
-                state.xray.workspaces.clear();
-                let mon = self.layout.monitor_for_output(out).unwrap();
-                for (ws, geo) in mon.workspaces_with_render_geo() {
-                    let bg_color = ws.render_background().color();
-                    state.xray.workspaces.push((geo, bg_color));
-                }
-                state.xray.backdrop_color = state.backdrop_buffer.color();
-                let blur_options = BlurOptions::from(self.config.borrow().blur);
-                for buf in &state.xray.background {
-                    let mut buffer = buf.borrow_mut();
-                    buffer.update_size(size, scale);
-                    buffer.update_blur_options(blur_options);
-                }
-                for buf in &state.xray.backdrop {
-                    let mut buffer = buf.borrow_mut();
-                    buffer.update_size(size, scale);
-                    buffer.update_blur_options(blur_options);
-                }
-
-                let layer_map = layer_map_for_output(out);
-                for surface in layer_map.layers_on(Layer::Background) {
-                    let Some(mapped) = self.mapped_layer_surfaces.get_mut(surface) else {
-                        continue;
-                    };
-                    let Some(geo) = layer_map.layer_geometry(surface) else {
-                        continue;
-                    };
-
-                    mapped.update_render_elements(geo.size.to_f64());
-                }
+                crate::scene::lifecycle::update_xray(
+                    out,
+                    self.layout.scene_backgrounds(out),
+                    &mut state.xray,
+                    state.backdrop_buffer.color(),
+                    blur,
+                );
+                crate::scene::lifecycle::update_layers(out, &mut self.mapped_layer_surfaces, true);
             }
         }
+    }
+
+    /// A native renderer replacement starts a new pixel-resource epoch. Immutable
+    /// snapshots from the previous context must never be sampled on the new one.
+    /// Submitted work owns its own buffers until completion; only scene caches
+    /// and effects whose old pixels cannot be recreated are retired here.
+    pub(crate) fn on_native_renderer_replaced(&mut self) {
+        self.layout.on_native_renderer_replaced();
+        self.clear_screen_transition_snapshots();
+        self.window_mru_ui.on_native_renderer_replaced();
+        self.hotkey_overlay.on_native_renderer_replaced();
+        self.config_error_notification.on_native_renderer_replaced();
+        self.exit_confirm_dialog.on_native_renderer_replaced();
+        if self.screenshot_ui.close() {
+            self.cursor_manager
+                .set_cursor_image(CursorImageStatus::default_named());
+        }
+        for state in self.output_state.values() {
+            state.xray.invalidate_native_resources();
+        }
+        self.update_shaders();
+        self.queue_redraw_all();
     }
 
     pub fn update_shaders(&mut self) {
@@ -4948,570 +4901,116 @@ impl Realand {
         }
     }
 
-    pub fn render_to_vec<R: RealandRenderer>(
+    /// Project only the state needed to compose this output. Scene code cannot
+    /// reach protocol mutation, input dispatch, event-loop or device scheduling.
+    pub(crate) fn scene_for_output<'a>(
+        &'a self,
+        output: &'a Output,
+    ) -> crate::scene::OutputScene<'a> {
+        let state = &self.output_state[output];
+        crate::scene::OutputScene {
+            output,
+            sources: if self.is_locked() || self.screenshot_ui.is_open() {
+                crate::layout::scene_source::OutputSceneSource::empty()
+            } else {
+                self.layout.scene_source(output)
+            },
+            windows: &self.layout,
+            layers: crate::scene::SceneLayers {
+                mapped: &self.mapped_layer_surfaces,
+            },
+            effects: crate::scene::OutputEffects {
+                backdrop_buffer: &state.backdrop_buffer,
+                overview_shade_buffer: &state.overview_shade_buffer,
+                lock_color_buffer: &state.lock_color_buffer,
+                lock_surface: state.lock_surface.as_ref().map(LockSurface::wl_surface),
+                screen_transition: state.screen_transition.as_ref(),
+                xray: &state.xray,
+            },
+            ui: crate::scene::SceneUi {
+                exit_dialog: &self.exit_confirm_dialog,
+                config_notification: &self.config_error_notification,
+                screenshot: &self.screenshot_ui,
+                hotkeys: &self.hotkey_overlay,
+                window_switcher: &self.window_mru_ui,
+            },
+            pointer: self.pointer_scene(output),
+            locked: self.is_locked(),
+            transitions_allowed: matches!(self.lock_state, LockState::Unlocked),
+            debug_draw_opaque_regions: self.debug_draw_opaque_regions,
+            preview_render: self.config.borrow().debug.preview_render,
+        }
+    }
+
+    fn pointer_scene(&self, output: &Output) -> crate::scene::ScenePointer<'_> {
+        let pointer = self
+            .tablet_cursor_location
+            .unwrap_or_else(|| self.seat.get_pointer().unwrap().current_location());
+        let output_pos = self.global_space.output_geometry(output).unwrap().loc;
+        crate::scene::ScenePointer {
+            visible: self.pointer_visibility.is_visible(),
+            position: pointer - output_pos.to_f64(),
+            manager: &self.cursor_manager,
+            textures: &self.cursor_texture_cache,
+            elapsed: self.start_time.elapsed(),
+            dnd_icon: self
+                .dnd_icon
+                .as_ref()
+                .map(|icon| crate::scene::SceneDndIcon {
+                    surface: &icon.surface,
+                    offset: icon.offset,
+                }),
+        }
+    }
+
+    pub fn render_to_vec<R: ClarionRenderer>(
         &self,
         ctx: RenderCtx<R>,
         output: &Output,
         include_pointer: bool,
     ) -> Vec<OutputRenderElements<R>> {
-        // Internal scene preparation and capture completion retain VkFence
-        // resources directly. Device adapters explicitly require sync-file
-        // export for their final display submission.
-        if let Some(native) = ctx.renderer.as_native_renderer() {
-            native.set_completion_export_required(false);
-        }
-
-        let mut elements = Vec::new();
-        self.render(ctx, output, include_pointer, &mut |elem| {
-            elements.push(elem)
-        });
-        elements
+        self.scene_for_output(output)
+            .render_to_vec(ctx, include_pointer)
     }
 
-    pub fn render<R: RealandRenderer>(
+    pub fn render<R: ClarionRenderer>(
         &self,
-        mut ctx: RenderCtx<R>,
+        ctx: RenderCtx<R>,
         output: &Output,
         include_pointer: bool,
         push: &mut dyn FnMut(OutputRenderElements<R>),
     ) {
-        let _span = realand_tracy_span!("Realand::render");
-
-        if ctx.target == RenderTarget::Output {
-            if let Some(preview) = self.config.borrow().debug.preview_render {
-                ctx.target = match preview {
-                    PreviewRender::Screencast => RenderTarget::Screencast,
-                    PreviewRender::ScreenCapture => RenderTarget::ScreenCapture,
-                };
-            }
-        }
-
-        if let Some(gles_ctx) = ctx.as_gles() {
-            self.fill_xray_elements(gles_ctx, output);
-        } else if let Some(native_ctx) = ctx.as_native() {
-            self.fill_xray_elements_native(native_ctx, output);
-        }
-
-        // Reborrow to shorten lifetime to be able to put in xray.
-        let mut ctx = ctx.r();
-        let state = self.output_state.get(output).unwrap();
-        ctx.xray = Some(&state.xray);
-
-        self.render_inner(ctx, output, include_pointer, push);
-
-        self.clear_xray_elements(output);
+        self.scene_for_output(output)
+            .render(ctx, include_pointer, push);
     }
 
-    fn render_inner<R: RealandRenderer>(
-        &self,
-        mut ctx: RenderCtx<R>,
-        output: &Output,
-        include_pointer: bool,
-        push: &mut dyn FnMut(OutputRenderElements<R>),
-    ) {
-        let state = self.output_state.get(output).unwrap();
-        let output_scale = Scale::from(output.current_scale().fractional_scale());
-
-        let push = if self.debug_draw_opaque_regions {
-            &mut move |elem| {
-                push_opaque_regions(&elem, output_scale, push);
-                push(elem);
-            }
-        } else {
-            push
-        };
-
-        use realand_core::scene::{SceneInputs, ScenePass, ScenePlan};
-        let layer_map = layer_map_for_output(output);
-        let mon = self.layout.monitor_for_output(output);
-        let overview_progress = mon
-            .map(|mon| mon.overview_backdrop_progress())
-            .unwrap_or(0.);
-        let plan = ScenePlan::new(SceneInputs {
-            pointer: include_pointer && self.pointer_visibility.is_visible(),
-            screen_transition: matches!(self.lock_state, LockState::Unlocked)
-                && state.screen_transition.is_some(),
-            locked: self.is_locked(),
-            screenshot_ui: self.screenshot_ui.is_open(),
-            desktop_above_top: mon.is_some_and(|mon| mon.render_above_top_layer()),
-            stage: mon.is_some_and(|mon| mon.is_stage_visible()),
-            overview_backdrop: overview_progress > 0.,
-            explicit_backdrop_wallpaper: self
-                .layers_in_render_order(&layer_map, Layer::Background, true)
-                .next()
-                .is_some(),
-        });
-        let mut backdrop: Option<OutputRenderElements<R>> = Some(
-            SolidColorRenderElement::from_buffer(
-                &state.backdrop_buffer,
-                (0., 0.),
-                1.,
-                Kind::Unspecified,
-            )
-            .into(),
-        );
-        let focus_ring = !self.layout.interactive_move_is_moving_above_output(output);
-        macro_rules! push_popups_from_layer {
-            ($layer:expr, $ns:expr, $xray_pos:expr, $backdrop:expr, $push:expr) => {{
-                self.render_layer_popups(
-                    ctx.r(),
-                    $ns,
-                    &layer_map,
-                    $layer,
-                    $xray_pos,
-                    $backdrop,
-                    $push,
-                );
-            }};
-            ($layer:expr, true) => {{
-                push_popups_from_layer!($layer, None, XrayPos::default(), true, &mut |elem| push(
-                    elem.into()
-                ));
-            }};
-            ($layer:expr, $ns:expr, $xray_pos:expr, $push:expr) => {{
-                push_popups_from_layer!($layer, $ns, $xray_pos, false, $push);
-            }};
-            ($layer:expr) => {{
-                push_popups_from_layer!($layer, None, XrayPos::default(), false, &mut |elem| push(
-                    elem.into()
-                ));
-            }};
+    pub fn fill_xray_elements(&self, ctx: RenderCtx<GlesRenderer>, output: &Output) {
+        crate::scene::SceneLayers {
+            mapped: &self.mapped_layer_surfaces,
         }
-        macro_rules! push_normal_from_layer {
-            ($layer:expr, $ns:expr, $xray_pos:expr, $backdrop:expr, $push:expr) => {{
-                self.render_layer_normal(
-                    ctx.r(),
-                    $ns,
-                    &layer_map,
-                    $layer,
-                    $xray_pos,
-                    $backdrop,
-                    $push,
-                );
-            }};
-            ($layer:expr, true) => {{
-                push_normal_from_layer!($layer, None, XrayPos::default(), true, &mut |elem| {
-                    push(elem.into())
-                });
-            }};
-            ($layer:expr, $ns:expr, $xray_pos:expr, $push:expr) => {{
-                push_normal_from_layer!($layer, $ns, $xray_pos, false, $push);
-            }};
-            ($layer:expr) => {{
-                push_normal_from_layer!($layer, None, XrayPos::default(), false, &mut |elem| {
-                    push(elem.into())
-                });
-            }};
-        }
-
-        macro_rules! process {
-            ($geo:expr, $zoom:expr) => {{
-                &mut |elem| {
-                    if let Some(elem) = scale_relocate_crop(elem, output_scale, $zoom, $geo) {
-                        push(elem.into());
-                    }
-                }
-            }};
-        }
-        for pass in plan.passes() {
-            match pass {
-                ScenePass::Pointer => {
-                    self.render_pointer(ctx.renderer, output, &mut |elem| push(elem.into()));
-                }
-                ScenePass::ScreenTransition => {
-                    if let Some(transition) = &state.screen_transition {
-                        push(transition.render(ctx.target).into());
-                    }
-                }
-                ScenePass::ExitDialog => {
-                    self.exit_confirm_dialog
-                        .render(ctx.renderer, output, &mut |elem| push(elem.into()));
-                }
-                ScenePass::ConfigNotification => {
-                    if let Some(element) =
-                        self.config_error_notification.render(ctx.renderer, output)
-                    {
-                        push(element.into());
-                    }
-                }
-                ScenePass::LockSurface => {
-                    if let Some(surface) = state.lock_surface.as_ref() {
-                        push_elements_from_surface_tree(
-                            ctx.renderer,
-                            surface.wl_surface(),
-                            Point::new(0, 0),
-                            output_scale,
-                            1.,
-                            Kind::ScanoutCandidate,
-                            &mut |elem| push(elem.into()),
-                        );
-                    }
-                }
-                ScenePass::LockBackdrop => {
-                    push(
-                        SolidColorRenderElement::from_buffer(
-                            &state.lock_color_buffer,
-                            (0., 0.),
-                            1.,
-                            Kind::Unspecified,
-                        )
-                        .into(),
-                    );
-                }
-                ScenePass::ScreenshotUi => {
-                    self.screenshot_ui
-                        .render_output(output, ctx.target, &mut |elem| push(elem.into()));
-                }
-                ScenePass::HotkeyOverlay => {
-                    if let Some(element) = self.hotkey_overlay.render(ctx.renderer, output) {
-                        push(element.into());
-                    }
-                }
-                ScenePass::WindowSwitcher => {
-                    self.window_mru_ui
-                        .render_output(self, output, ctx.r(), &mut |elem| push(elem.into()));
-                }
-                ScenePass::OverlayLayer => {
-                    push_popups_from_layer!(Layer::Overlay);
-                    push_normal_from_layer!(Layer::Overlay);
-                }
-                ScenePass::TopLayer => {
-                    push_popups_from_layer!(Layer::Top);
-                    push_normal_from_layer!(Layer::Top);
-                }
-                ScenePass::MovingWindow => {
-                    self.layout
-                        .render_interactive_move_for_output(ctx.r(), output, &mut |elem| {
-                            push(elem.into())
-                        });
-                }
-                ScenePass::InsertHint => {
-                    let mon = mon.unwrap();
-                    mon.render_insert_hint_between_workspaces(ctx.renderer, &mut |elem| {
-                        push(elem.into())
-                    });
-                }
-                ScenePass::Workspaces => {
-                    let mon = mon.unwrap();
-                    mon.render_workspaces(ctx.r(), focus_ring, &mut |elem| push(elem.into()));
-                }
-                ScenePass::LowerLayerPopups => {
-                    push_popups_from_layer!(Layer::Bottom);
-                    push_popups_from_layer!(Layer::Background);
-                }
-                ScenePass::LowerLayers => {
-                    push_normal_from_layer!(Layer::Bottom);
-                    push_normal_from_layer!(Layer::Background);
-                }
-                ScenePass::WorkspaceBackground => {
-                    let mon = mon.unwrap();
-                    if let Some((ws, _geo)) = mon.workspaces_with_render_geo().next() {
-                        push(ws.render_background().into());
-                    }
-                }
-                ScenePass::WorkspaceLayerPopups => {
-                    let mon = mon.unwrap();
-                    for (ws, geo) in mon.workspaces_with_render_geo() {
-                        let ns = Some(ws.id().get() as usize);
-                        let zoom = mon.workspace_render_zoom(geo);
-                        let xray_pos = XrayPos::new(geo.loc, zoom);
-                        push_popups_from_layer!(Layer::Bottom, ns, xray_pos, process!(geo, zoom));
-                        push_popups_from_layer!(
-                            Layer::Background,
-                            ns,
-                            xray_pos,
-                            process!(geo, zoom)
-                        );
-                    }
-                }
-                ScenePass::StageWithLayers => {
-                    let mon = mon.unwrap();
-                    mon.render_stage_with_layers(
-                        ctx.r(),
-                        focus_ring,
-                        &mut |mut ctx, id, geo, popups, card_push| {
-                            let ns = Some(id.get() as usize);
-                            let zoom = geo.size.w / mon.view_size().w.max(f64::EPSILON);
-                            let xray_pos = XrayPos::new(geo.loc, zoom);
-                            for layer in [Layer::Bottom, Layer::Background] {
-                                if popups {
-                                    self.render_layer_popups(
-                                        ctx.r(),
-                                        ns,
-                                        &layer_map,
-                                        layer,
-                                        xray_pos,
-                                        false,
-                                        card_push,
-                                    );
-                                } else {
-                                    self.render_layer_normal(
-                                        ctx.r(),
-                                        ns,
-                                        &layer_map,
-                                        layer,
-                                        xray_pos,
-                                        false,
-                                        card_push,
-                                    );
-                                }
-                            }
-                        },
-                        &mut |elem| push(elem.into()),
-                    );
-                }
-                ScenePass::WorkspaceLowerLayers => {
-                    let mon = mon.unwrap();
-                    for (ws, geo) in mon.workspaces_with_render_geo() {
-                        // The render element namespace. This will be set to the workspace index for
-                        // elements duplicated across workspaces (i.e. background and bottom layers) in
-                        // order to have their non-xray framebuffer effects separated from each other.
-                        //
-                        // This doesn't have to correspond exactly to workspace id or idx, the only
-                        // requirement is that there's only one framebuffer effect element with a given id +
-                        // namespace on the frame at once. Id + namespace is used as the cache key in the
-                        // damage tracker.
-                        let ns = Some(ws.id().get() as usize);
-                        let zoom = mon.workspace_render_zoom(geo);
-                        let xray_pos = XrayPos::new(geo.loc, zoom);
-                        push_normal_from_layer!(Layer::Bottom, ns, xray_pos, process!(geo, zoom));
-                        push_normal_from_layer!(
-                            Layer::Background,
-                            ns,
-                            xray_pos,
-                            process!(geo, zoom)
-                        );
-
-                        process!(geo, zoom)(ws.render_background());
-                    }
-                }
-                ScenePass::WorkspaceShadows => {
-                    let mon = mon.unwrap();
-                    mon.render_workspace_shadows(ctx.renderer, &mut |elem| push(elem.into()));
-                }
-                ScenePass::OverviewShade => {
-                    push(
-                        SolidColorRenderElement::from_buffer(
-                            &state.overview_shade_buffer,
-                            (0., 0.),
-                            (0.25 * overview_progress) as f32,
-                            Kind::Unspecified,
-                        )
-                        .into(),
-                    );
-                }
-                ScenePass::BackdropLayers => {
-                    push_popups_from_layer!(Layer::Background, true);
-                    push_normal_from_layer!(Layer::Background, true);
-                }
-                ScenePass::WallpaperFallback => {
-                    push_normal_from_layer!(Layer::Background);
-                }
-                ScenePass::Backdrop => {
-                    push(backdrop.take().expect("scene backdrop pass appears once"));
-                }
-            }
-        }
-    }
-
-    pub fn fill_xray_elements(&self, mut ctx: RenderCtx<GlesRenderer>, output: &Output) {
-        let _span = realand_tracy_span!("Realand::fill_xray_elements");
-
-        // Make sure the xrayed elements themselves cannot use xray by mistake.
-        ctx.xray = None;
-
-        let state = self.output_state.get(output).unwrap();
-        let xray = &state.xray;
-        let layer_map = layer_map_for_output(output);
-
-        // FIXME: it would be cool to call this code on-demand. It's even relatively simple to do:
-        // move this function to after the render_inner() call, check if
-        // Rc::strong_count(&xray.background) > 1, and only then construct the elements. This way,
-        // only if something referenced the xray buffer will the elements get constructed.
-        //
-        // Unfortunately, currently this runs into an important limitation: offscreens are rendered
-        // immediately deep inside render_inner(), and when they are, they already need the xray
-        // elements filled.
-        //
-        // Perhaps in the future when offscreen rendering becomes on-demand, this optimization will
-        // be possible.
-
-        // These element buffers are cleared and rebuilt on every render; retain their capacity.
-        let mut buffer = xray.background[ctx.target as usize].borrow_mut();
-        {
-            let elements = buffer.elements();
-            elements.clear();
-            self.render_layer_normal(
-                ctx.r(),
-                None,
-                &layer_map,
-                Layer::Background,
-                XrayPos::default(),
-                false,
-                &mut |elem| elements.push(elem.into()),
-            );
-        }
-
-        let mut buffer = xray.backdrop[ctx.target as usize].borrow_mut();
-        {
-            let elements = buffer.elements();
-            elements.clear();
-            self.render_layer_normal(
-                ctx.r(),
-                None,
-                &layer_map,
-                Layer::Background,
-                XrayPos::default(),
-                true,
-                &mut |elem| elements.push(elem.into()),
-            );
-        }
+        .fill_xray_elements(output, &self.output_state[output].xray, ctx);
     }
 
     pub fn fill_xray_elements_native(
         &self,
-        mut ctx: RenderCtx<crate::render_helpers::vulkan::native::NativeRenderer>,
+        ctx: RenderCtx<crate::render_helpers::vulkan::native::NativeRenderer>,
         output: &Output,
     ) {
-        let _span = realand_tracy_span!("Realand::fill_xray_elements");
-
-        // Make sure the xrayed elements themselves cannot use xray by mistake.
-        ctx.xray = None;
-
-        let state = self.output_state.get(output).unwrap();
-        let xray = &state.xray;
-        let layer_map = layer_map_for_output(output);
-
-        // FIXME: it would be cool to call this code on-demand. It's even relatively simple to do:
-        // move this function to after the render_inner() call, check if
-        // Rc::strong_count(&xray.background) > 1, and only then construct the elements. This way,
-        // only if something referenced the xray buffer will the elements get constructed.
-        //
-        // Unfortunately, currently this runs into an important limitation: offscreens are rendered
-        // immediately deep inside render_inner(), and when they are, they already need the xray
-        // elements filled.
-        //
-        // Perhaps in the future when offscreen rendering becomes on-demand, this optimization will
-        // be possible.
-
-        // These element buffers are cleared and rebuilt on every render; retain their capacity.
-        let mut buffer = xray.background[ctx.target as usize].borrow_mut();
-        {
-            let elements = buffer.elements_native();
-            elements.clear();
-            self.render_layer_normal(
-                ctx.r(),
-                None,
-                &layer_map,
-                Layer::Background,
-                XrayPos::default(),
-                false,
-                &mut |elem| elements.push(elem.into()),
-            );
+        crate::scene::SceneLayers {
+            mapped: &self.mapped_layer_surfaces,
         }
-
-        let mut buffer = xray.backdrop[ctx.target as usize].borrow_mut();
-        {
-            let elements = buffer.elements_native();
-            elements.clear();
-            self.render_layer_normal(
-                ctx.r(),
-                None,
-                &layer_map,
-                Layer::Background,
-                XrayPos::default(),
-                true,
-                &mut |elem| elements.push(elem.into()),
-            );
-        }
+        .fill_xray_elements(output, &self.output_state[output].xray, ctx);
     }
 
     pub fn clear_xray_elements(&self, output: &Output) {
-        let state = self.output_state.get(output).unwrap();
-        let xray = &state.xray;
-
-        // Clear the xray elements for all render targets after all rendering that could use them
-        // did so.
-        for buf in &xray.background {
-            let mut buf = buf.borrow_mut();
-            buf.elements().clear();
-            buf.elements_native().clear();
-        }
-        for buf in &xray.backdrop {
-            let mut buf = buf.borrow_mut();
-            buf.elements().clear();
-            buf.elements_native().clear();
-        }
+        crate::scene::clear_xray_elements(&self.output_state[output].xray);
     }
 
-    /// Checks if any background layer surface has `block_out_from` set.
     pub fn has_blocked_out_background_layers(&self, output: &Output) -> bool {
-        let layer_map = layer_map_for_output(output);
-        for for_backdrop in [false, true] {
-            for (mapped, _geo) in
-                self.layers_in_render_order(&layer_map, Layer::Background, for_backdrop)
-            {
-                if mapped.rules().block_out_from.is_some() {
-                    return true;
-                }
-            }
+        crate::scene::SceneLayers {
+            mapped: &self.mapped_layer_surfaces,
         }
-        false
-    }
-
-    fn layers_in_render_order<'a>(
-        &'a self,
-        layer_map: &'a LayerMap,
-        layer: Layer,
-        for_backdrop: bool,
-    ) -> impl Iterator<Item = (&'a MappedLayer, Rectangle<i32, Logical>)> {
-        // LayerMap returns layers in reverse stacking order.
-        layer_map.layers_on(layer).rev().filter_map(move |surface| {
-            let mapped = self.mapped_layer_surfaces.get(surface)?;
-
-            if for_backdrop != mapped.place_within_backdrop() {
-                return None;
-            }
-
-            let geo = layer_map.layer_geometry(surface)?;
-            Some((mapped, geo))
-        })
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn render_layer_normal<R: RealandRenderer>(
-        &self,
-        mut ctx: RenderCtx<R>,
-        ns: Option<usize>,
-        layer_map: &LayerMap,
-        layer: Layer,
-        xray_pos: XrayPos,
-        for_backdrop: bool,
-        push: &mut dyn FnMut(LayerSurfaceRenderElement<R>),
-    ) {
-        for (mapped, geo) in self.layers_in_render_order(layer_map, layer, for_backdrop) {
-            let loc = geo.loc.to_f64();
-            let xray_pos = xray_pos.offset(loc);
-            mapped.render_normal(ctx.r(), ns, loc, xray_pos, push);
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn render_layer_popups<R: RealandRenderer>(
-        &self,
-        mut ctx: RenderCtx<R>,
-        ns: Option<usize>,
-        layer_map: &LayerMap,
-        layer: Layer,
-        xray_pos: XrayPos,
-        for_backdrop: bool,
-        push: &mut dyn FnMut(LayerSurfaceRenderElement<R>),
-    ) {
-        for (mapped, geo) in self.layers_in_render_order(layer_map, layer, for_backdrop) {
-            let loc = geo.loc.to_f64();
-            let xray_pos = xray_pos.offset(loc);
-            mapped.render_popups(ctx.r(), ns, loc, xray_pos, push);
-        }
+        .has_blocked_background(output)
     }
 
     /// Idle throttling only suppresses continuous effects; finite UI and layout transitions
@@ -5571,7 +5070,7 @@ impl Realand {
     }
 
     fn redraw(&mut self, backend: &mut Backend, output: &Output) {
-        let _span = realand_tracy_span!("Realand::redraw");
+        let _span = clarion_tracy_span!("Clarion::redraw");
         let now = get_monotonic_time();
         let started = std::time::Instant::now();
 
@@ -5732,7 +5231,7 @@ impl Realand {
     }
 
     pub fn refresh_on_demand_vrr(&mut self, backend: &mut Backend, output: &Output) {
-        let _span = realand_tracy_span!("Realand::refresh_on_demand_vrr");
+        let _span = clarion_tracy_span!("Clarion::refresh_on_demand_vrr");
 
         let name = output.user_data().get::<OutputName>().unwrap();
         let on_demand = self
@@ -5958,7 +5457,7 @@ impl Realand {
         feedback: &SurfaceDmabufFeedback,
         render_element_states: &RenderElementStates,
     ) {
-        let _span = realand_tracy_span!("Realand::send_dmabuf_feedbacks");
+        let _span = clarion_tracy_span!("Clarion::send_dmabuf_feedbacks");
 
         // We can unconditionally send the current output's feedback to regular and layer-shell
         // surfaces, as they can only be displayed on a single output at a time. Even if a surface
@@ -6043,7 +5542,7 @@ impl Realand {
     }
 
     pub fn send_frame_callbacks(&mut self, output: &Output) {
-        let _span = realand_tracy_span!("Realand::send_frame_callbacks");
+        let _span = clarion_tracy_span!("Clarion::send_frame_callbacks");
 
         let state = self.output_state.get(output).unwrap();
         let sequence = state.schedule.callback_sequence();
@@ -6215,16 +5714,16 @@ impl Realand {
         let output = output.clone();
         let timer = Timer::from_deadline(deadline);
         match self.event_loop.insert_source(timer, move |_, _, state| {
-            if let Some(output_state) = state.realand.output_state.get_mut(&output) {
+            if let Some(output_state) = state.clarion.output_state.get_mut(&output) {
                 output_state.schedule.take_fifo_timer();
-                if state.realand.fifo.estimated_vblank_due(
+                if state.clarion.fifo.estimated_vblank_due(
                     &output,
                     Instant::now(),
-                    &state.realand.blocker_cleared_tx,
+                    &state.clarion.blocker_cleared_tx,
                 ) {
-                    state.realand.stop_signal.wakeup();
+                    state.clarion.stop_signal.wakeup();
                 }
-                state.realand.schedule_nested_fifo_timer(&output);
+                state.clarion.schedule_nested_fifo_timer(&output);
             }
             TimeoutAction::Drop
         }) {
@@ -6298,15 +5797,15 @@ impl Realand {
         let timer = Timer::from_deadline(instant);
         let token = match self.event_loop.insert_source(timer, move |_, _, state| {
             let is_current = state
-                .realand
+                .clarion
                 .commit_timing
                 .scheduled
                 .get(&timer_surface)
                 .is_some_and(|scheduled| scheduled.deadline == deadline);
             if is_current {
-                state.realand.commit_timing.scheduled.remove(&timer_surface);
+                state.clarion.commit_timing.scheduled.remove(&timer_surface);
                 state
-                    .realand
+                    .clarion
                     .release_commit_timing(&timer_surface, release_until);
             }
             TimeoutAction::Drop
@@ -6427,7 +5926,7 @@ impl Realand {
     pub fn send_frame_callbacks_on_fallback_timer(&mut self) {
         self.release_due_commit_timing(get_monotonic_time());
         self.expire_fifo_barriers(get_monotonic_time());
-        let _span = realand_tracy_span!("Realand::send_frame_callbacks_on_fallback_timer");
+        let _span = clarion_tracy_span!("Clarion::send_frame_callbacks_on_fallback_timer");
 
         // Make up a bogus output; we don't care about it here anyway, just the throttling timer.
         let output = Output::new(
@@ -6586,7 +6085,7 @@ impl Realand {
         OutputRenderElements<R>: RenderElement<R>,
         for<'a> R::Framebuffer<'a>: Texture,
     {
-        let _span = realand_tracy_span!("Realand::render_for_screencopy_with_damage");
+        let _span = clarion_tracy_span!("Clarion::render_for_screencopy_with_damage");
 
         let mut screencopy_state = mem::take(&mut self.screencopy_state);
 
@@ -6678,7 +6177,7 @@ impl Realand {
         OutputRenderElements<R>: RenderElement<R>,
         for<'a> R::Framebuffer<'a>: Texture,
     {
-        let _span = realand_tracy_span!("Realand::render_for_screencopy");
+        let _span = clarion_tracy_span!("Clarion::render_for_screencopy");
 
         let output = screencopy.output();
         ensure!(
@@ -6827,11 +6326,11 @@ impl Realand {
                     });
                     match result {
                         Ok(()) => {
-                            screencopy.submit_after_sync(false, None, &state.realand.event_loop)
+                            screencopy.submit_after_sync(false, None, &state.clarion.event_loop)
                         }
                         Err(error) => {
-                            state.realand.screencopy_state.invalidate_damage(&manager);
-                            state.realand.queue_redraw(&output);
+                            state.clarion.screencopy_state.invalidate_damage(&manager);
+                            state.clarion.queue_redraw(&output);
                             warn!("error completing SHM screencopy: {error}");
                         }
                     }
@@ -7054,7 +6553,7 @@ impl Realand {
         include_pointer: bool,
     ) -> anyhow::Result<(Size<i32, Physical>, <R as RendererSuper>::TextureId)>
     where
-        R: RealandRenderer
+        R: ClarionRenderer
             + ExportMem
             + Offscreen<<R as RendererSuper>::TextureId>
             + Bind<<R as RendererSuper>::TextureId>,
@@ -7062,7 +6561,7 @@ impl Realand {
         OutputRenderElements<R>: RenderElement<R>,
         for<'a> R::Framebuffer<'a>: Texture,
     {
-        let _span = realand_tracy_span!("Realand::screenshot");
+        let _span = clarion_tracy_span!("Clarion::screenshot");
 
         self.update_render_elements(Some(output));
 
@@ -7124,7 +6623,7 @@ impl Realand {
         show_pointer: bool,
     ) -> anyhow::Result<(Size<i32, Physical>, <R as RendererSuper>::TextureId)>
     where
-        R: RealandRenderer
+        R: ClarionRenderer
             + ExportMem
             + Offscreen<<R as RendererSuper>::TextureId>
             + Bind<<R as RendererSuper>::TextureId>,
@@ -7135,7 +6634,7 @@ impl Realand {
         if let Some(native) = renderer.as_native_renderer() {
             native.set_completion_export_required(false);
         }
-        let _span = realand_tracy_span!("Realand::screenshot_window");
+        let _span = clarion_tracy_span!("Clarion::screenshot_window");
 
         let scale = Scale::from(output.current_scale().fractional_scale());
         let alpha =
@@ -7230,13 +6729,13 @@ impl Realand {
         permit: crate::platform::capture::CapturePermit,
     ) -> anyhow::Result<()> {
         self.enqueue_pixel_readback(Some(output), job, move |state, result| {
-            if state.realand.is_locked() {
+            if state.clarion.is_locked() {
                 return;
             }
             match result {
                 Ok(pixels) => {
                     if let Err(error) = state
-                        .realand
+                        .clarion
                         .save_screenshot_prepared(size, pixels, options, permit)
                     {
                         warn!("error saving screenshot: {error:#}");
@@ -7257,111 +6756,13 @@ impl Realand {
         job: crate::platform::pixel_readback::PendingPixels,
         on_done: impl FnOnce(&mut State, Result<Vec<u8>, String>) + 'static,
     ) -> anyhow::Result<()> {
-        use crate::platform::gles_readback::GlesReadbackPoll;
-        use crate::platform::pixel_readback::PendingPixels;
-        let scene_epoch = self.capture_scene_epoch.stamp();
-        match job {
-            PendingPixels::Native(job) => {
-                let (tx, rx) = calloop::channel::sync_channel(1);
-                let mut on_done = Some(on_done);
-                self.event_loop
-                    .insert_source(rx, move |event, _, state| {
-                        let result = match event {
-                            calloop::channel::Event::Msg(result) => result,
-                            calloop::channel::Event::Closed => {
-                                Err("Vulkan capture worker closed without completion".into())
-                            }
-                        };
-                        if let Some(on_done) = on_done.take() {
-                            let result = if !scene_epoch.is_current()
-                                || output.as_ref().is_some_and(|output| {
-                                    !state.realand.output_state.contains_key(output)
-                                }) {
-                                Err("Vulkan capture scene or output was invalidated".into())
-                            } else {
-                                result
-                            };
-                            on_done(state, result);
-                        }
-                    })
-                    .map_err(|error| {
-                        anyhow::anyhow!(
-                            "error registering Vulkan readback completion: {}",
-                            error.error
-                        )
-                    })?;
-                thread::Builder::new()
-                    .name("capture-readback".into())
-                    .spawn(move || {
-                        let result = job.finish().map_err(|error| error.to_string());
-                        let _ = tx.send(result);
-                    })
-                    .context("error starting Vulkan readback")?;
-            }
-            PendingPixels::Gles(mut job) => {
-                let output = output.context("GLES readback needs its original output")?;
-                let mut on_done = Some(on_done);
-                self.event_loop
-                    .insert_source(Timer::from_duration(Duration::ZERO), move |_, _, state| {
-                        if !scene_epoch.is_current()
-                            || !state.realand.output_state.contains_key(&output)
-                        {
-                            if let Some(on_done) = on_done.take() {
-                                on_done(
-                                    state,
-                                    Err("GLES capture scene or output was invalidated".into()),
-                                );
-                            }
-                            return TimeoutAction::Drop;
-                        }
-                        let result = state
-                            .backend
-                            .with_renderer_for_output(Some(&output), |renderer| match renderer {
-                                crate::render_helpers::renderer::AnyRenderer::Gles(gles) => {
-                                    job.poll(gles)
-                                }
-                                _ => Err(anyhow::anyhow!("GLES capture renderer was replaced")),
-                            })
-                            .unwrap_or_else(|| {
-                                Err(anyhow::anyhow!("GLES capture output disappeared"))
-                            });
-                        match result {
-                            Ok(GlesReadbackPoll::Pending) => {
-                                TimeoutAction::ToDuration(Duration::from_millis(2))
-                            }
-                            result => {
-                                if let Some(on_done) = on_done.take() {
-                                    let result = match result {
-                                        Ok(GlesReadbackPoll::Ready(pixels)) => Ok(pixels),
-                                        Err(error) => Err(error.to_string()),
-                                        Ok(GlesReadbackPoll::Pending) => unreachable!(),
-                                    };
-                                    on_done(state, result);
-                                }
-                                TimeoutAction::Drop
-                            }
-                        }
-                    })
-                    .map_err(|error| {
-                        anyhow::anyhow!("error registering GLES readback: {}", error.error)
-                    })?;
-            }
-            PendingPixels::Ready(pixels) => {
-                self.event_loop.insert_idle(move |state| {
-                    let result = if !scene_epoch.is_current()
-                        || output
-                            .as_ref()
-                            .is_some_and(|output| !state.realand.output_state.contains_key(output))
-                    {
-                        Err("capture scene or output was invalidated".into())
-                    } else {
-                        Ok(pixels)
-                    };
-                    on_done(state, result);
-                });
-            }
-        }
-        Ok(())
+        crate::platform::pixel_readback::enqueue(
+            &self.event_loop,
+            self.capture_scene_epoch.stamp(),
+            output,
+            job,
+            on_done,
+        )
     }
 
     fn screenshot_save_options(
@@ -7408,10 +6809,10 @@ impl Realand {
             self.event_loop
                 .insert_source(rx, move |event, _, state| {
                     if let calloop::channel::Event::Msg(buf) = event {
-                        if scene_epoch.is_current() && !state.realand.is_locked() {
+                        if scene_epoch.is_current() && !state.clarion.is_locked() {
                             set_data_device_selection(
-                                &state.realand.display_handle,
-                                &state.realand.seat,
+                                &state.clarion.display_handle,
+                                &state.clarion.seat,
                                 vec![String::from("image/png")],
                                 buf,
                             );
@@ -7431,7 +6832,7 @@ impl Realand {
             self.event_loop
                 .insert_source(rx, move |event, _, state| {
                     if let calloop::channel::Event::Msg(path) = event {
-                        if scene_epoch.is_current() && !state.realand.is_locked() {
+                        if scene_epoch.is_current() && !state.clarion.is_locked() {
                             state.ipc_screenshot_taken(path);
                         }
                     }
@@ -7572,7 +6973,7 @@ impl Realand {
                 .event_loop
                 .insert_source(timer, |_, _, state| {
                     trace!("lock deadline expired, continuing");
-                    state.realand.continue_to_locking();
+                    state.clarion.continue_to_locking();
                     TimeoutAction::Drop
                 })
                 .unwrap();
@@ -7720,7 +7121,7 @@ impl Realand {
         let res = thread::Builder::new()
             .name("Logind LockedHint Updater".to_owned())
             .spawn(move || {
-                let _span = realand_tracy_span!("LockedHint");
+                let _span = clarion_tracy_span!("LockedHint");
 
                 if let Err(err) = call(session_id, locked) {
                     warn!("failed to set logind LockedHint: {err:?}");
@@ -7812,7 +7213,7 @@ impl Realand {
             // Keep only its own already-focused desktop as the return target;
             // exclusive focus still wins until the interaction surface closes.
             // Names alone cannot let another Wayland client retain that focus.
-            if surface.namespace() == "realand-desktop-interaction"
+            if surface.namespace() == "clarion-desktop-interaction"
                 && surface.cached_state().keyboard_interactivity
                     == wlr_layer::KeyboardInteractivity::Exclusive
                 && self
@@ -7820,7 +7221,7 @@ impl Realand {
                     .as_ref()
                     .is_some_and(|base| {
                         base.alive()
-                            && base.namespace() == "realand-desktop"
+                            && base.namespace() == "clarion-desktop"
                             && base.cached_state().keyboard_interactivity
                                 == wlr_layer::KeyboardInteractivity::OnDemand
                             && base.wl_surface().client().is_some_and(|client| {
@@ -7859,7 +7260,7 @@ impl Realand {
 
     #[cfg(feature = "dbus")]
     pub fn on_ipc_outputs_changed(&self) {
-        let _span = realand_tracy_span!("Realand::on_ipc_outputs_changed");
+        let _span = clarion_tracy_span!("Clarion::on_ipc_outputs_changed");
 
         let Some(dbus) = &self.dbus else { return };
         let Some(conn_display_config) = dbus.conn_display_config.clone() else {
@@ -7870,7 +7271,7 @@ impl Realand {
             .name("DisplayConfig MonitorsChanged Emitter".to_owned())
             .spawn(move || {
                 use crate::dbus::mutter_display_config::DisplayConfig;
-                let _span = realand_tracy_span!("MonitorsChanged");
+                let _span = clarion_tracy_span!("MonitorsChanged");
                 let iface = match conn_display_config
                     .object_server()
                     .interface::<_, DisplayConfig>("/org/gnome/Mutter/DisplayConfig")
@@ -7960,13 +7361,13 @@ impl Realand {
 
     pub fn do_screen_transition<R>(&mut self, renderer: &mut R, delay_ms: Option<u16>)
     where
-        R: RealandRenderer
+        R: ClarionRenderer
             + Offscreen<<R as RendererSuper>::TextureId>
             + Bind<<R as RendererSuper>::TextureId>,
         OutputRenderElements<R>: RenderElement<R>,
         screen_transition::TransitionTexture: From<TextureBuffer<R::TextureId>>,
     {
-        let _span = realand_tracy_span!("Realand::do_screen_transition");
+        let _span = clarion_tracy_span!("Clarion::do_screen_transition");
 
         let textures = self.capture_transition_textures(renderer, None);
 
@@ -8021,7 +7422,7 @@ impl Realand {
 
     pub(crate) fn do_overview_mode_transition<R>(&mut self, renderer: &mut R, output: &Output)
     where
-        R: RealandRenderer
+        R: ClarionRenderer
             + Offscreen<<R as RendererSuper>::TextureId>
             + Bind<<R as RendererSuper>::TextureId>,
         OutputRenderElements<R>: RenderElement<R>,
@@ -8048,7 +7449,7 @@ impl Realand {
         output_filter: Option<&Output>,
     ) -> Vec<(Output, [screen_transition::TransitionTexture; 3])>
     where
-        R: RealandRenderer
+        R: ClarionRenderer
             + Offscreen<<R as RendererSuper>::TextureId>
             + Bind<<R as RendererSuper>::TextureId>,
         OutputRenderElements<R>: RenderElement<R>,
@@ -8107,7 +7508,7 @@ impl Realand {
     }
 
     pub fn recompute_window_rules(&mut self) {
-        let _span = realand_tracy_span!("Realand::recompute_window_rules");
+        let _span = clarion_tracy_span!("Clarion::recompute_window_rules");
 
         let mut privacy_changed = false;
         let changed = {
@@ -8150,7 +7551,7 @@ impl Realand {
     }
 
     pub fn recompute_layer_rules(&mut self) {
-        let _span = realand_tracy_span!("Realand::recompute_layer_rules");
+        let _span = clarion_tracy_span!("Clarion::recompute_layer_rules");
 
         let mut changed = false;
         let mut privacy_changed = false;
@@ -8183,7 +7584,7 @@ impl Realand {
             return;
         }
 
-        let _span = realand_tracy_span!("Realand::reset_pointer_inactivity_timer");
+        let _span = clarion_tracy_span!("Clarion::reset_pointer_inactivity_timer");
 
         if let Some(token) = self.pointer_inactivity_timer.take() {
             self.event_loop.remove(token);
@@ -8198,13 +7599,13 @@ impl Realand {
         let token = self
             .event_loop
             .insert_source(timer, move |_, _, state| {
-                state.realand.pointer_inactivity_timer = None;
+                state.clarion.pointer_inactivity_timer = None;
 
                 // If the pointer is already invisible, don't reset it back to Hidden causing one
                 // frame of hover.
-                if state.realand.pointer_visibility.is_visible() {
-                    state.realand.pointer_visibility = PointerVisibility::Hidden;
-                    state.realand.queue_redraw_all();
+                if state.clarion.pointer_visibility.is_visible() {
+                    state.clarion.pointer_visibility = PointerVisibility::Hidden;
+                    state.clarion.queue_redraw_all();
                 }
 
                 TimeoutAction::Drop
@@ -8220,7 +7621,7 @@ impl Realand {
             return;
         }
 
-        let _span = realand_tracy_span!("Realand::notify_activity");
+        let _span = clarion_tracy_span!("Clarion::notify_activity");
 
         self.last_user_activity = Instant::now();
         self.idle_notifier_state.notify_activity(&self.seat);
@@ -8276,6 +7677,7 @@ pub struct NewClient {
 }
 
 pub struct ClientState {
+    registration: crate::platform::wayland_shutdown::ClientRegistration,
     pub compositor_state: CompositorClientState,
     pub can_view_decoration_globals: bool,
     pub primary_selection_disabled: bool,
@@ -8287,55 +7689,8 @@ pub struct ClientState {
 
 impl ClientData for ClientState {
     fn initialized(&self, _client_id: ClientId) {}
-    fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {}
-}
-
-fn scale_relocate_crop<E: Element>(
-    elem: E,
-    output_scale: Scale<f64>,
-    zoom: f64,
-    ws_geo: Rectangle<f64, Logical>,
-) -> Option<CropRenderElement<RelocateRenderElement<RescaleRenderElement<E>>>> {
-    let ws_geo = ws_geo.to_physical_precise_round(output_scale);
-    let elem = RescaleRenderElement::from_element(elem, Point::from((0, 0)), zoom);
-    let elem = RelocateRenderElement::from_element(elem, ws_geo.loc, Relocate::Relative);
-    CropRenderElement::from_element(elem, output_scale, ws_geo)
-}
-
-realand_render_elements! {
-    PointerRenderElements<R> => {
-        Wayland = WaylandSurfaceRenderElement<R>,
-        NamedPointer = MemoryRenderBufferRenderElement<R>,
-    }
-}
-
-realand_render_elements! {
-    WindowScreenshotRenderElement<R> => {
-        Layout = LayoutElementRenderElement<R>,
-        Pointer = RelocateRenderElement<PointerRenderElements<R>>,
-    }
-}
-
-realand_render_elements! {
-    OutputRenderElements<R> => {
-        Monitor = MonitorRenderElement<R>,
-        RescaledTile = RescaleRenderElement<TileRenderElement<R>>,
-        LayerSurface = LayerSurfaceRenderElement<R>,
-        RelocatedLayerSurface = CropRenderElement<RelocateRenderElement<RescaleRenderElement<
-            LayerSurfaceRenderElement<R>
-        >>>,
-        RelocatedColor = CropRenderElement<RelocateRenderElement<RescaleRenderElement<
-            SolidColorRenderElement
-        >>>,
-        Pointer = PointerRenderElements<R>,
-        Wayland = WaylandSurfaceRenderElement<R>,
-        SolidColor = SolidColorRenderElement,
-        ScreenshotUi = ScreenshotUiRenderElement,
-        WindowMruUi = WindowMruUiRenderElement<R>,
-        ExitConfirmDialog = ExitConfirmDialogRenderElement,
-        Texture = PrimaryGpuTextureRenderElement,
-        // Used for the CPU-rendered panels.
-        RelocatedMemoryBuffer = RelocateRenderElement<MemoryRenderBufferRenderElement<R>>,
+    fn disconnected(&self, client_id: ClientId, _reason: DisconnectReason) {
+        self.registration.disconnected(client_id);
     }
 }
 

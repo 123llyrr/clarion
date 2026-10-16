@@ -133,7 +133,7 @@ impl Drop for Span {
             samples.borrow_mut()[self.operation as usize].record(elapsed, now, threshold)
         });
         if let Some((count, maximum)) = report {
-            tracing::warn!(target:"realand::latency",operation=self.operation.label(),
+            tracing::warn!(target:"clarion::latency",operation=self.operation.label(),
                 elapsed_ms=elapsed.as_secs_f64()*1000.0,
                 threshold_ms=threshold.as_secs_f64()*1000.0,
                 thread=std::thread::current().name().unwrap_or("unnamed"),

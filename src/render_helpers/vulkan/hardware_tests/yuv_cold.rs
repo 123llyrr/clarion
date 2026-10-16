@@ -24,7 +24,7 @@ impl drm::Device for Card {}
 impl drm::control::Device for Card {}
 
 fn primary_node() -> Option<std::path::PathBuf> {
-    let selected = DrmNode::from_path(std::env::var_os("REALAND_VULKAN_TEST_NODE")?).ok()?;
+    let selected = DrmNode::from_path(std::env::var_os("CLARION_VULKAN_TEST_NODE")?).ok()?;
     let primary = selected.node_with_type(NodeType::Primary)?.ok()?;
     let device = |node: &DrmNode| {
         std::fs::canonicalize(format!(
@@ -83,7 +83,7 @@ fn unavailable(reason: impl std::fmt::Display) {
         "YUV_COLD_RESULT {}",
         serde_json::json!({
             "status": "UNAVAILABLE", "reason": reason.to_string(),
-            "node": std::env::var("REALAND_VULKAN_TEST_NODE").ok()
+            "node": std::env::var("CLARION_VULKAN_TEST_NODE").ok()
         })
     );
 }
@@ -432,7 +432,7 @@ fn check_native_nv12(storage_height: u32, expect_undersized: bool, gate_preparat
         eprintln!(
             "YUV_GATED_PREPARATION_RESULT {}",
             serde_json::json!({
-                "status": "PASS", "node": std::env::var("REALAND_VULKAN_TEST_NODE").ok(),
+                "status": "PASS", "node": std::env::var("CLARION_VULKAN_TEST_NODE").ok(),
                 "cold_admission_wall_ms": admission_wall.as_secs_f64() * 1000.,
                 "owner_fence_waits_during_cold_admission": 0,
                 "previous_target_pixels_preserved": true,
@@ -496,7 +496,7 @@ fn check_native_nv12(storage_height: u32, expect_undersized: bool, gate_preparat
         "YUV_COLD_RESULT {}",
         serde_json::json!({
             "status": "PASS", "pixel_checks": 9, "cold_iterations": 1, "warm_iterations": 8,
-            "node": std::env::var("REALAND_VULKAN_TEST_NODE").ok(),
+            "node": std::env::var("CLARION_VULKAN_TEST_NODE").ok(),
             "producer": primary, "renderer_import_cache_cold": true, "driver_cache_cleared": false,
         "dumb_storage_size": [16, storage_height], "pitch": pitch,
         "uv_offset": 16 * pitch, "backing_bytes": backing_bytes,

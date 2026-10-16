@@ -17,7 +17,7 @@ def sha256(path):
 
 def atomic_text(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(prefix=".realand-settings-", dir=path.parent)
+    descriptor, temporary = tempfile.mkstemp(prefix=".clarion-settings-", dir=path.parent)
     try:
         with os.fdopen(descriptor, "w") as stream:
             stream.write(text)
@@ -39,12 +39,13 @@ def main():
     if not binary.is_file() or not os.access(binary, os.X_OK):
         parser.error("--binary must be an executable file")
     prefix = arguments.prefix.resolve()
-    root = prefix / "lib/realand-settings"
+    root = prefix / "lib/clarion-settings"
     root.mkdir(parents=True, exist_ok=True)
     tag = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     paths = {
-        "launcher": prefix / "bin/realand-settings",
-        "desktop": prefix / "share/applications/realand-settings.desktop",
+        "launcher": prefix / "bin/clarion-settings",
+        "legacy_launcher": prefix / "bin/realand-settings",
+        "desktop": prefix / "share/applications/clarion-settings.desktop",
     }
     with (root / ".install.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -63,7 +64,7 @@ def main():
                 previous[name] = {"path": str(path), "absent": True}
         release = root / "releases" / tag
         release.mkdir(parents=True)
-        installed = release / "realand-settings"
+        installed = release / "clarion-settings"
         shutil.copy2(binary, installed)
         installed.chmod(0o755)
         digest = sha256(binary)
@@ -71,22 +72,26 @@ def main():
             raise RuntimeError("Copied executable differs from the build")
         launcher = paths["launcher"]
         launcher.parent.mkdir(parents=True, exist_ok=True)
-        temporary = launcher.with_name(f".realand-settings-{tag}")
+        temporary = launcher.with_name(f".clarion-settings-{tag}")
         temporary.symlink_to(installed)
         os.replace(temporary, launcher)
+        legacy = paths["legacy_launcher"]
+        temporary = legacy.with_name(f".realand-settings-{tag}")
+        temporary.symlink_to(launcher)
+        os.replace(temporary, legacy)
         escaped = str(launcher).replace("\\", "\\\\").replace('"', '\\"').replace("`", "\\`").replace("$", "\\$").replace("%", "%%")
         atomic_text(paths["desktop"], f'''[Desktop Entry]
 Type=Application
-Name=Realand System Preferences
+Name=Clarion System Preferences
 Name[zh_CN]=系统偏好设置
-Comment=Configure the Realand desktop
-Comment[zh_CN]=配置 Realand 桌面
+Comment=Configure the Clarion desktop
+Comment[zh_CN]=配置澄境桌面
 Exec="{escaped}"
 Icon=preferences-system
 Terminal=false
 Categories=Settings;DesktopSettings;
 StartupNotify=true
-StartupWMClass=realand-settings
+StartupWMClass=clarion-settings
 ''')
         receipt = {
             "release": str(release), "binary": str(installed), "sha256": digest,

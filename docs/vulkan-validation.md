@@ -1,6 +1,6 @@
 # Vulkan backend validation
 
-On a physical TTY, Realand's primary GPU can use the native Vulkan `Renderer`/`Frame` implementation to draw the desktop into Smithay's DRM compositor. It does not render the scene through GLES first. Secondary GPU outputs try the same primary-GPU Vulkan renderer with linear DMA-BUFs allocated on the primary GPU; connection-time KMS scanout and Vulkan target-import probes select GLES per output if cross-device sharing is unsupported. Direct scanout can bypass Vulkan composition. Headless mode has a native Vulkan offscreen renderer. Nested winit mode creates a Vulkan WSI surface and swapchain directly; it composites to a Vulkan texture and queues a GPU copy for presentation without a GLES scene pass. Its two frame slots avoid a per-frame queue-idle wait.
+On a physical TTY, Clarion's primary GPU can use the native Vulkan `Renderer`/`Frame` implementation to draw the desktop into Smithay's DRM compositor. It does not render the scene through GLES first. Secondary GPU outputs try the same primary-GPU Vulkan renderer with linear DMA-BUFs allocated on the primary GPU; connection-time KMS scanout and Vulkan target-import probes select GLES per output if cross-device sharing is unsupported. Direct scanout can bypass Vulkan composition. Headless mode has a native Vulkan offscreen renderer. Nested winit mode creates a Vulkan WSI surface and swapchain directly; it composites to a Vulkan texture and queues a GPU copy for presentation without a GLES scene pass. Its two frame slots avoid a per-frame queue-idle wait.
 
 Select `renderer "vulkan"` in the configuration, or start with `--renderer vulkan`. On TTY, check the startup log for `Native Vulkan desktop renderer ready for direct KMS submission`; nested mode logs `nested native Vulkan WSI renderer initialized` and its first presentation. The requested option alone does not prove that Vulkan initialized. TTY initialization or KMS swapchain format negotiation failures select the GLES fallback; an explicitly requested nested Vulkan backend reports an initialization error if the host cannot support Vulkan WSI.
 
@@ -59,10 +59,10 @@ On a multi-GPU system, run once per device with its matching ICD, for example:
 
 ```sh
 VK_DRIVER_FILES=/usr/share/vulkan/icd.d/intel_icd.json \
-    REALAND_VULKAN_LOG_DIR=target/vulkan-check-intel \
+    CLARION_VULKAN_LOG_DIR=target/vulkan-check-intel \
     ./scripts/check-vulkan.sh /dev/dri/renderD128
 VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.json \
-    REALAND_VULKAN_LOG_DIR=target/vulkan-check-nvidia \
+    CLARION_VULKAN_LOG_DIR=target/vulkan-check-nvidia \
     ./scripts/check-vulkan.sh /dev/dri/renderD129
 ```
 
@@ -101,7 +101,7 @@ The opt-in `wayland_client_acquire_and_release_follow_gpu_use` integration test 
 cargo test --lib --no-default-features wayland_client_acquire_and_release_follow_gpu_use -- --ignored --test-threads=1
 ```
 
-Nested Vulkan WSI can be checked inside an existing Wayland session with a separate, non-session `realand --renderer vulkan` instance. Look for `nested Vulkan WSI presented first frame`, then resize and close that nested window. This does not exercise physical KMS scanout.
+Nested Vulkan WSI can be checked inside an existing Wayland session with a separate, non-session `clarion --renderer vulkan` instance. Look for `nested Vulkan WSI presented first frame`, then resize and close that nested window. This does not exercise physical KMS scanout.
 
 ## Nourish reference
 
@@ -141,7 +141,7 @@ GPU readback byte-for-byte against the original full-pass path. It covers all
 eight output transforms, fractional scaling, zoom, crop, rounded clipping,
 noise/saturation, disjoint/empty regions and repeated movement/growth using the
 same blur cache. It also exercises zero offset and the 31-pass limit. Run with
-`REALAND_VULKAN_TEST_NODE` set as described above and enable the validation layer.
+`CLARION_VULKAN_TEST_NODE` set as described above and enable the validation layer.
 
 For a 1920×1080 capture, a 24-pixel-high required output area, three passes and
 offset 2, the sum of blur pass render areas falls from 3,402,000 to 131,040 pixels

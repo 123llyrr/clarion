@@ -39,7 +39,7 @@ pub enum ProgramType {
 
 impl Shaders {
     fn compile(renderer: &mut GlesRenderer) -> Self {
-        let _span = realand_tracy_span!("Shaders::compile");
+        let _span = clarion_tracy_span!("Shaders::compile");
 
         let border = ShaderProgram::compile(
             renderer,
@@ -97,10 +97,10 @@ impl Shaders {
                     include_str!("clipped_surface.frag"),
                     include_str!("rounding_alpha.frag"),
                     "\nvec4 postprocess(vec4 color) { return color; }",
-                    "\nvec4 realand_sample_background(vec2 uv) { return texture2D(tex, uv); }",
+                    "\nvec4 clarion_sample_background(vec2 uv) { return texture2D(tex, uv); }",
                 ),
                 &[
-                    UniformName::new("realand_scale", UniformType::_1f),
+                    UniformName::new("clarion_scale", UniformType::_1f),
                     UniformName::new("geo_size", UniformType::_2f),
                     UniformName::new("corner_radius", UniformType::_4f),
                     UniformName::new("input_to_geo", UniformType::Matrix3x3),
@@ -122,7 +122,7 @@ impl Shaders {
                     include_str!("liquid_glass.frag"),
                 ),
                 &[
-                    UniformName::new("realand_scale", UniformType::_1f),
+                    UniformName::new("clarion_scale", UniformType::_1f),
                     UniformName::new("geo_size", UniformType::_2f),
                     UniformName::new("corner_radius", UniformType::_4f),
                     UniformName::new("input_to_geo", UniformType::Matrix3x3),
@@ -272,23 +272,23 @@ fn compile_resize_program(
         renderer,
         &program,
         &[
-            UniformName::new("realand_input_to_curr_geo", UniformType::Matrix3x3),
-            UniformName::new("realand_curr_geo_to_prev_geo", UniformType::Matrix3x3),
-            UniformName::new("realand_curr_geo_to_next_geo", UniformType::Matrix3x3),
-            UniformName::new("realand_curr_geo_size", UniformType::_2f),
-            UniformName::new("realand_geo_to_tex_prev", UniformType::Matrix3x3),
-            UniformName::new("realand_geo_to_tex_next", UniformType::Matrix3x3),
-            UniformName::new("realand_progress", UniformType::_1f),
-            UniformName::new("realand_clamped_progress", UniformType::_1f),
-            UniformName::new("realand_corner_radius", UniformType::_4f),
-            UniformName::new("realand_clip_to_geometry", UniformType::_1f),
+            UniformName::new("clarion_input_to_curr_geo", UniformType::Matrix3x3),
+            UniformName::new("clarion_curr_geo_to_prev_geo", UniformType::Matrix3x3),
+            UniformName::new("clarion_curr_geo_to_next_geo", UniformType::Matrix3x3),
+            UniformName::new("clarion_curr_geo_size", UniformType::_2f),
+            UniformName::new("clarion_geo_to_tex_prev", UniformType::Matrix3x3),
+            UniformName::new("clarion_geo_to_tex_next", UniformType::Matrix3x3),
+            UniformName::new("clarion_progress", UniformType::_1f),
+            UniformName::new("clarion_clamped_progress", UniformType::_1f),
+            UniformName::new("clarion_corner_radius", UniformType::_4f),
+            UniformName::new("clarion_clip_to_geometry", UniformType::_1f),
         ],
-        &["realand_tex_prev", "realand_tex_next"],
+        &["clarion_tex_prev", "clarion_tex_next"],
     )
 }
 
 pub fn set_custom_resize_program(
-    renderer: &mut impl super::renderer::RealandRenderer,
+    renderer: &mut impl super::renderer::ClarionRenderer,
     src: Option<&str>,
 ) {
     if let Some(native) = renderer.as_native_renderer() {
@@ -334,34 +334,34 @@ fn compile_close_program(
         renderer,
         &program,
         &[
-            UniformName::new("realand_input_to_geo", UniformType::Matrix3x3),
-            UniformName::new("realand_geo_size", UniformType::_2f),
-            UniformName::new("realand_geo_to_tex", UniformType::Matrix3x3),
-            UniformName::new("realand_progress", UniformType::_1f),
-            UniformName::new("realand_clamped_progress", UniformType::_1f),
-            UniformName::new("realand_random_seed", UniformType::_1f),
-            UniformName::new("realand_glide_enabled", UniformType::_1f),
-            UniformName::new("realand_glide_tilt", UniformType::_1f),
-            UniformName::new("realand_glide_depth", UniformType::_1f),
+            UniformName::new("clarion_input_to_geo", UniformType::Matrix3x3),
+            UniformName::new("clarion_geo_size", UniformType::_2f),
+            UniformName::new("clarion_geo_to_tex", UniformType::Matrix3x3),
+            UniformName::new("clarion_progress", UniformType::_1f),
+            UniformName::new("clarion_clamped_progress", UniformType::_1f),
+            UniformName::new("clarion_random_seed", UniformType::_1f),
+            UniformName::new("clarion_glide_enabled", UniformType::_1f),
+            UniformName::new("clarion_glide_tilt", UniformType::_1f),
+            UniformName::new("clarion_glide_depth", UniformType::_1f),
         ],
-        &["realand_tex"],
+        &["clarion_tex"],
     )
 }
 
 pub const DENIAL_EXPLOSION_SHADER: &str = include_str!("denial_explosion.frag");
 pub const DENIAL_IMPLODE_SHADER: &str = include_str!("denial_implode.frag");
 
-pub fn close_shader_for_effect(effect: realand_config::WindowCloseEffect) -> Option<&'static str> {
+pub fn close_shader_for_effect(effect: clarion_config::WindowCloseEffect) -> Option<&'static str> {
     match effect {
-        realand_config::WindowCloseEffect::Explosion => Some(DENIAL_EXPLOSION_SHADER),
-        realand_config::WindowCloseEffect::Implode => Some(DENIAL_IMPLODE_SHADER),
-        realand_config::WindowCloseEffect::Fade => None,
+        clarion_config::WindowCloseEffect::Explosion => Some(DENIAL_EXPLOSION_SHADER),
+        clarion_config::WindowCloseEffect::Implode => Some(DENIAL_IMPLODE_SHADER),
+        clarion_config::WindowCloseEffect::Fade => None,
     }
 }
 
 pub fn resolve_close_shader(
     custom_shader: Option<&str>,
-    effect: realand_config::WindowCloseEffect,
+    effect: clarion_config::WindowCloseEffect,
 ) -> Option<&str> {
     if let Some(custom) = custom_shader {
         Some(custom)
@@ -371,7 +371,7 @@ pub fn resolve_close_shader(
 }
 
 pub fn set_custom_close_program(
-    renderer: &mut impl super::renderer::RealandRenderer,
+    renderer: &mut impl super::renderer::ClarionRenderer,
     src: Option<&str>,
 ) {
     if let Some(native) = renderer.as_native_renderer() {
@@ -420,23 +420,23 @@ fn compile_open_program(
         renderer,
         &program,
         &[
-            UniformName::new("realand_input_to_geo", UniformType::Matrix3x3),
-            UniformName::new("realand_geo_size", UniformType::_2f),
-            UniformName::new("realand_geo_to_tex", UniformType::Matrix3x3),
-            UniformName::new("realand_progress", UniformType::_1f),
-            UniformName::new("realand_clamped_progress", UniformType::_1f),
-            UniformName::new("realand_random_seed", UniformType::_1f),
-            UniformName::new("realand_glide_enabled", UniformType::_1f),
-            UniformName::new("realand_glide_tilt", UniformType::_1f),
-            UniformName::new("realand_glide_depth", UniformType::_1f),
-            UniformName::new("realand_popin_ratio", UniformType::_1f),
+            UniformName::new("clarion_input_to_geo", UniformType::Matrix3x3),
+            UniformName::new("clarion_geo_size", UniformType::_2f),
+            UniformName::new("clarion_geo_to_tex", UniformType::Matrix3x3),
+            UniformName::new("clarion_progress", UniformType::_1f),
+            UniformName::new("clarion_clamped_progress", UniformType::_1f),
+            UniformName::new("clarion_random_seed", UniformType::_1f),
+            UniformName::new("clarion_glide_enabled", UniformType::_1f),
+            UniformName::new("clarion_glide_tilt", UniformType::_1f),
+            UniformName::new("clarion_glide_depth", UniformType::_1f),
+            UniformName::new("clarion_popin_ratio", UniformType::_1f),
         ],
-        &["realand_tex"],
+        &["clarion_tex"],
     )
 }
 
 pub fn set_custom_open_program(
-    renderer: &mut impl super::renderer::RealandRenderer,
+    renderer: &mut impl super::renderer::ClarionRenderer,
     src: Option<&str>,
 ) {
     if let Some(native) = renderer.as_native_renderer() {
@@ -508,7 +508,7 @@ pub fn animation_source(program: ProgramType, custom: Option<&str>) -> String {
 
 pub fn init_native(
     renderer: &mut crate::render_helpers::vulkan::native::NativeRenderer,
-    animations: &realand_config::Animations,
+    animations: &clarion_config::Animations,
 ) {
     // Establish valid defaults before trying user-provided programs.
     set_custom_resize_program(renderer, None);

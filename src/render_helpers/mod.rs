@@ -1,7 +1,7 @@
 use std::ptr;
 
 use anyhow::{ensure, Context as _};
-use realand_config::BlockOutFrom;
+use clarion_config::BlockOutFrom;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::{Buffer, Fourcc};
 use smithay::backend::renderer::damage::OutputDamageTracker;
@@ -270,7 +270,7 @@ where
         + Bind<<R as RendererSuper>::TextureId>,
     R::Error: Send + Sync + 'static,
 {
-    let _span = realand_tracy_span!();
+    let _span = clarion_tracy_span!();
 
     let mut texture = create_texture(renderer, size, fourcc).context("error creating texture")?;
 
@@ -301,7 +301,7 @@ where
     R::Error: Send + Sync + 'static,
     for<'a> R::Framebuffer<'a>: Texture,
 {
-    let _span = realand_tracy_span!();
+    let _span = clarion_tracy_span!();
 
     let mut texture = create_texture(renderer, size, fourcc).context("error creating texture")?;
     let mut target = renderer
@@ -330,7 +330,7 @@ where
     R::Error: Send + Sync + 'static,
     for<'a> R::Framebuffer<'a>: Texture,
 {
-    let _span = realand_tracy_span!();
+    let _span = clarion_tracy_span!();
 
     let mapping = render_and_download(renderer, size, scale, transform, fourcc, elements)
         .context("error rendering")?;
@@ -362,7 +362,7 @@ where
     R: Renderer + Bind<Dmabuf>,
     R::Error: Send + Sync + 'static,
 {
-    let _span = realand_tracy_span!();
+    let _span = clarion_tracy_span!();
     let (size, _scale, _transform) = damage_tracker.mode().try_into().unwrap();
     ensure!(
         dmabuf.width() == size.w as u32 && dmabuf.height() == size.h as u32,
@@ -445,7 +445,7 @@ where
         + Bind<<R as RendererSuper>::TextureId>,
     R::Error: Send + Sync + 'static,
 {
-    let _span = realand_tracy_span!();
+    let _span = clarion_tracy_span!();
     let (size, _, _): (Size<i32, Physical>, Scale<f64>, Transform) = damage_tracker
         .mode()
         .try_into()

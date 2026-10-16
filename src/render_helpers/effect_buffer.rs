@@ -11,8 +11,8 @@ use smithay::backend::renderer::{
 };
 use smithay::utils::{Buffer, Logical, Physical, Scale, Size, Transform};
 
-use crate::compositor::OutputRenderElements;
 use crate::render_helpers::blur::{Blur, BlurOptions};
+use crate::scene::OutputRenderElements;
 
 #[derive(Debug)]
 pub struct EffectBuffer {
@@ -152,6 +152,22 @@ impl EffectBuffer {
         }
     }
 
+    /// Retire a native-device epoch even for inactive capture targets. Waiting
+    /// until prepare_native() would leave hidden effect and blur-pool images
+    /// holding the old device indefinitely. Submitted GPU work retains its own
+    /// image and client-buffer owners independently of these scene caches.
+    pub(crate) fn invalidate_native_resources(&mut self) {
+        self.native_elements.clear();
+        self.native_texture = None;
+        self.native_blurred = None;
+        self.native_states = None;
+        self.native_damage = None;
+        self.native_context = None;
+        self.native_blur = Default::default();
+        self.native_dirty = true;
+        self.commit_counter.increment();
+    }
+
     pub fn id(&self) -> &Id {
         &self.id
     }
@@ -229,7 +245,7 @@ impl EffectBuffer {
         }
     }
 
-    pub fn prepare_any<R: super::renderer::RealandRenderer>(
+    pub fn prepare_any<R: super::renderer::ClarionRenderer>(
         &mut self,
         renderer: &mut R,
         blur: bool,
@@ -371,7 +387,7 @@ impl EffectBuffer {
     }
 
     fn prepare_offscreen(&mut self, renderer: &mut GlesRenderer) -> anyhow::Result<()> {
-        let _span = realand_tracy_span!("EffectBuffer::prepare_offscreen");
+        let _span = clarion_tracy_span!("EffectBuffer::prepare_offscreen");
 
         let cached = self
             .offscreen
@@ -419,7 +435,7 @@ impl EffectBuffer {
             offscreen
         } else {
             trace!("creating new offscreen texture: {reason}");
-            let span = realand_tracy_span!("creating effect offscreen texture");
+            let span = clarion_tracy_span!("creating effect offscreen texture");
             span.emit_text(&reason);
 
             let texture: GlesTexture = renderer
@@ -620,5 +636,136 @@ mod tests {
             Some(1)
         );
         assert!(matches!(elements, Elements::Unchanged(_)));
+    }
+
+    #[test]
+    #[ignore = "requires real DRM render node and native Vulkan contexts"]
+    fn native_epoch_invalidation_releases_inactive_capture_context_and_rebuilds() {
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        use smithay::backend::allocator::Fourcc;
+        use smithay::backend::renderer::{Bind, ExportMem, Texture};
+
+        use crate::render_helpers::blur::BlurOptions;
+        use crate::render_helpers::solid_color::SolidColorBuffer;
+        use crate::render_helpers::vulkan::{hardware_tests::setup, native::NativeRenderer};
+        use crate::render_helpers::xray::Xray;
+
+        let (vk, reference, allocator) = setup();
+        drop(reference);
+        drop(allocator);
+        let old_context = Arc::downgrade(vk.ctx.as_ref().unwrap());
+        let mut previous = NativeRenderer::new(vk).unwrap();
+        previous
+            .prepare_output_format_for_test(Fourcc::Abgr8888)
+            .unwrap();
+        let xray = Xray::new();
+        let mut identities = Vec::new();
+        for buffer in xray.background.iter().chain(&xray.backdrop) {
+            let mut buffer = buffer.borrow_mut();
+            buffer.update_size((48, 32).into(), 1.0.into());
+            buffer.update_blur_options(BlurOptions {
+                passes: 2,
+                offset: 1.0,
+            });
+            let mut source = SolidColorBuffer::new((48., 32.), [1., 0., 0., 1.]);
+            buffer.elements_native().push(
+                SolidColorRenderElement::from_buffer(&source, (0., 0.), 1., Kind::Unspecified)
+                    .into(),
+            );
+            assert!(buffer.prepare_any(&mut previous, true));
+            // Force rotation into NativeBlur's retained output pool. Clearing
+            // only EffectBuffer.native_texture/native_blurred must not pass.
+            let retained = buffer.native_texture(true).unwrap().clone();
+            source.set_color([0., 0., 1., 1.]);
+            buffer.elements_native().clear();
+            buffer.elements_native().push(
+                SolidColorRenderElement::from_buffer(&source, (0., 0.), 1., Kind::Unspecified)
+                    .into(),
+            );
+            assert!(buffer.prepare_any(&mut previous, true));
+            assert!(!buffer.native_blur.retained_output_allocations().is_empty());
+            drop(retained);
+            identities.push((buffer.id().clone(), buffer.commit()));
+        }
+        // This explicit wait is confined to the GPU test. It distinguishes
+        // scene-cache ownership from legitimately unfinished GPU submissions.
+        unsafe {
+            previous
+                .vulkan()
+                .ctx
+                .as_ref()
+                .unwrap()
+                .device
+                .device_wait_idle()
+                .unwrap();
+        }
+        previous.retire_completed().unwrap();
+        drop(previous);
+        assert!(
+            old_context.upgrade().is_some(),
+            "inactive effect caches must pin the fixture before invalidation"
+        );
+
+        xray.invalidate_native_resources();
+        for (buffer, (identity, commit)) in
+            xray.background.iter().chain(&xray.backdrop).zip(identities)
+        {
+            let buffer = buffer.borrow();
+            assert_eq!(buffer.id(), &identity);
+            assert_ne!(
+                buffer.commit(),
+                commit,
+                "replacement must damage the old effect contents"
+            );
+            assert!(buffer.native_texture(false).is_none());
+            assert!(buffer.native_texture(true).is_none());
+            assert!(buffer.native_states.is_none());
+            assert!(buffer.native_damage.is_none());
+            assert!(buffer.native_context.is_none());
+            assert!(buffer.native_elements.is_empty());
+            assert!(buffer.native_blur.retained_output_allocations().is_empty());
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while old_context.upgrade().is_some() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            old_context.upgrade().is_none(),
+            "display and unused capture caches must release the retired Vulkan context"
+        );
+
+        let (vk, reference, allocator) = setup();
+        drop(reference);
+        drop(allocator);
+        let mut replacement = NativeRenderer::new(vk).unwrap();
+        replacement
+            .prepare_output_format_for_test(Fourcc::Abgr8888)
+            .unwrap();
+        for buffer in xray.background.iter().chain(&xray.backdrop) {
+            let mut buffer = buffer.borrow_mut();
+            let source = SolidColorBuffer::new((48., 32.), [0., 1., 0., 1.]);
+            buffer.elements_native().push(
+                SolidColorRenderElement::from_buffer(&source, (0., 0.), 1., Kind::Unspecified)
+                    .into(),
+            );
+            assert!(buffer.prepare_any(&mut replacement, true));
+            let mut texture = buffer.native_texture(true).unwrap().clone();
+            let size = texture.size();
+            let framebuffer = replacement.bind(&mut texture).unwrap();
+            let mapping = replacement
+                .copy_framebuffer(&framebuffer, Rectangle::from_size(size), Fourcc::Abgr8888)
+                .unwrap();
+            let pixels = replacement.map_texture(&mapping).unwrap();
+            assert!(
+                pixels
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|pixel| { pixel[0] < 10 && pixel[1] > 240 && pixel[2] < 10 }),
+                "all display and capture buffers must rebuild fresh green pixels"
+            );
+        }
     }
 }

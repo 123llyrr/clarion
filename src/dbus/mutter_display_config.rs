@@ -15,7 +15,7 @@ use crate::utils::is_laptop_panel;
 use crate::utils::scale::supported_scales;
 
 pub struct DisplayConfig {
-    to_realand: calloop::channel::Sender<HashMap<String, Option<realand_config::Output>>>,
+    to_clarion: calloop::channel::Sender<HashMap<String, Option<clarion_config::Output>>>,
     ipc_outputs: Arc<Mutex<IpcOutputMap>>,
 }
 
@@ -93,7 +93,7 @@ impl DisplayConfig {
                 .modes
                 .iter()
                 .map(|m| {
-                    let realand_ipc::Mode {
+                    let clarion_ipc::Mode {
                         width,
                         height,
                         refresh_rate,
@@ -135,14 +135,14 @@ impl DisplayConfig {
 
             if let Some(logical) = output.logical.as_ref() {
                 let transform = match logical.transform {
-                    realand_ipc::Transform::Normal => 0,
-                    realand_ipc::Transform::_90 => 1,
-                    realand_ipc::Transform::_180 => 2,
-                    realand_ipc::Transform::_270 => 3,
-                    realand_ipc::Transform::Flipped => 4,
-                    realand_ipc::Transform::Flipped90 => 5,
-                    realand_ipc::Transform::Flipped180 => 6,
-                    realand_ipc::Transform::Flipped270 => 7,
+                    clarion_ipc::Transform::Normal => 0,
+                    clarion_ipc::Transform::_90 => 1,
+                    clarion_ipc::Transform::_180 => 2,
+                    clarion_ipc::Transform::_270 => 3,
+                    clarion_ipc::Transform::Flipped => 4,
+                    clarion_ipc::Transform::Flipped90 => 5,
+                    clarion_ipc::Transform::Flipped180 => 6,
+                    clarion_ipc::Transform::Flipped270 => 7,
                 };
 
                 logical_monitors.push(LogicalMonitor {
@@ -210,32 +210,32 @@ impl DisplayConfig {
                 }
                 new_conf.insert(
                     connector.clone(),
-                    Some(realand_config::Output {
+                    Some(clarion_config::Output {
                         off: false,
                         name: connector,
-                        scale: Some(realand_config::FloatOrInt(requested_config.scale)),
+                        scale: Some(clarion_config::FloatOrInt(requested_config.scale)),
                         transform: match requested_config.transform {
-                            0 => realand_ipc::Transform::Normal,
-                            1 => realand_ipc::Transform::_90,
-                            2 => realand_ipc::Transform::_180,
-                            3 => realand_ipc::Transform::_270,
-                            4 => realand_ipc::Transform::Flipped,
-                            5 => realand_ipc::Transform::Flipped90,
-                            6 => realand_ipc::Transform::Flipped180,
-                            7 => realand_ipc::Transform::Flipped270,
+                            0 => clarion_ipc::Transform::Normal,
+                            1 => clarion_ipc::Transform::_90,
+                            2 => clarion_ipc::Transform::_180,
+                            3 => clarion_ipc::Transform::_270,
+                            4 => clarion_ipc::Transform::Flipped,
+                            5 => clarion_ipc::Transform::Flipped90,
+                            6 => clarion_ipc::Transform::Flipped180,
+                            7 => clarion_ipc::Transform::Flipped270,
                             x => {
                                 return Err(zbus::fdo::Error::Failed(format!(
                                     "Unknown transform {x}",
                                 )))
                             }
                         },
-                        position: Some(realand_config::Position {
+                        position: Some(clarion_config::Position {
                             x: requested_config.x,
                             y: requested_config.y,
                         }),
-                        mode: Some(realand_config::output::Mode {
+                        mode: Some(clarion_config::output::Mode {
                             custom: false,
-                            mode: realand_ipc::ConfiguredMode::from_str(&mode).map_err(|e| {
+                            mode: clarion_ipc::ConfiguredMode::from_str(&mode).map_err(|e| {
                                 zbus::fdo::Error::Failed(format!(
                                     "Could not parse mode '{mode}': {e}"
                                 ))
@@ -261,8 +261,8 @@ impl DisplayConfig {
             // 0 means "verify", so don't actually apply here
             return Ok(());
         }
-        if let Err(err) = self.to_realand.send(new_conf) {
-            warn!("error sending message to realand: {err:?}");
+        if let Err(err) = self.to_clarion.send(new_conf) {
+            warn!("error sending message to clarion: {err:?}");
             return Err(fdo::Error::Failed("internal error".to_owned()));
         }
         Ok(())
@@ -308,11 +308,11 @@ fn validate_monitor_scale(scale: f64) -> fdo::Result<()> {
 
 impl DisplayConfig {
     pub fn new(
-        to_realand: calloop::channel::Sender<HashMap<String, Option<realand_config::Output>>>,
+        to_clarion: calloop::channel::Sender<HashMap<String, Option<clarion_config::Output>>>,
         ipc_outputs: Arc<Mutex<IpcOutputMap>>,
     ) -> Self {
         Self {
-            to_realand,
+            to_clarion,
             ipc_outputs,
         }
     }
@@ -334,7 +334,7 @@ impl Start for DisplayConfig {
 }
 
 // Adapted from Mutter.
-fn make_display_name(output: &realand_ipc::Output, is_laptop_panel: bool) -> String {
+fn make_display_name(output: &clarion_ipc::Output, is_laptop_panel: bool) -> String {
     if is_laptop_panel {
         return String::from("Built-in display");
     }

@@ -93,9 +93,9 @@ pub fn region_to_non_overlapping_rects(
     region: &RegionAttributes,
     output: &mut Vec<Rectangle<i32, Logical>>,
 ) {
-    let _span = realand_tracy_span!("region_to_non_overlapping_rects");
+    let _span = clarion_tracy_span!("region_to_non_overlapping_rects");
     struct Coordinates;
-    impl realand_core::region::PixelRectangle for Coordinates {
+    impl clarion_core::region::PixelRectangle for Coordinates {
         type Rect = Rectangle<i32, Logical>;
         fn xywh(r: Self::Rect) -> [i32; 4] {
             [r.loc.x, r.loc.y, r.size.w, r.size.h]
@@ -104,11 +104,11 @@ pub fn region_to_non_overlapping_rects(
             Rectangle::new((x, y).into(), (w, h).into())
         }
     }
-    realand_core::region::canonical_region::<Coordinates, _>(
+    clarion_core::region::canonical_region::<Coordinates, _>(
         region.rects.iter().map(|(kind, rect)| {
             let kind = match kind {
-                RectangleKind::Add => realand_core::region::RegionOp::Add,
-                RectangleKind::Subtract => realand_core::region::RegionOp::Subtract,
+                RectangleKind::Add => clarion_core::region::RegionOp::Add,
+                RectangleKind::Subtract => clarion_core::region::RegionOp::Subtract,
             };
             (kind, *rect)
         }),

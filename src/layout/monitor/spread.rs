@@ -85,7 +85,7 @@ pub(super) struct SpreadClosing {
 
 impl<W: LayoutElement> Monitor<W> {
     pub(in crate::layout) fn reconcile_spread_candidates(&self, force_metadata: bool) {
-        use realand_core::spread::{SpreadAction, SpreadCandidate};
+        use clarion_core::spread::{SpreadAction, SpreadCandidate};
         let core = self.core.borrow();
         let output = core.spread().output(&self.output_name);
         let metadata = force_metadata || output.is_some_and(|output| !output.query().is_empty());
@@ -617,7 +617,7 @@ impl<W: LayoutElement> Monitor<W> {
         let preferred = self.active_window().map(LayoutElement::core_id);
         self.core
             .borrow_mut()
-            .spread_action(realand_core::spread::SpreadAction::Reset {
+            .spread_action(clarion_core::spread::SpreadAction::Reset {
                 connector: self.output_name.clone(),
                 preferred,
             });
@@ -670,7 +670,7 @@ impl<W: LayoutElement> Monitor<W> {
 
     #[allow(non_upper_case_globals)]
     pub(crate) fn spread_key(&mut self, key: smithay::input::keyboard::Keysym) {
-        use realand_core::spread::{SpreadAction, SpreadKey};
+        use clarion_core::spread::{SpreadAction, SpreadKey};
         use smithay::input::keyboard::keysyms::*;
         // Titles/app IDs are read once at search input. Ordinary unfiltered
         // overview frames and mutation edges do not allocate metadata strings.
@@ -706,7 +706,7 @@ impl<W: LayoutElement> Monitor<W> {
         }
     }
 
-    pub(super) fn render_spread<R: RealandRenderer>(
+    pub(super) fn render_spread<R: ClarionRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         push: &mut dyn FnMut(MonitorRenderElement<R>),

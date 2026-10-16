@@ -17,15 +17,15 @@ use crate::tests::client::{ClientId, LayerConfigureProps, LayerMargin};
 fn integrated_shell_glass_default_keeps_explicit_overrides_and_namespace_scope() {
     for override_value in [None, Some(false), Some(true)] {
         let config = override_value.map_or_else(String::new, |value| format!(
-            "layer-rule {{ match namespace=\"^realand-shell(-dock)?$\"; background-effect {{ liquid-glass {value}; }}; }}"
+            "layer-rule {{ match namespace=\"^clarion-shell(-dock)?$\"; background-effect {{ liquid-glass {value}; }}; }}"
         ));
-        let mut f = Fixture::with_config(realand_config::Config::parse_mem(&config).unwrap());
+        let mut f = Fixture::with_config(clarion_config::Config::parse_mem(&config).unwrap());
         f.add_output(1, (1280, 800));
         let client = f.add_client();
         for namespace in [
-            "realand-shell",
-            "realand-shell-dock",
-            "realand-shell-other",
+            "clarion-shell",
+            "clarion-shell-dock",
+            "clarion-shell-other",
             "waybar",
         ] {
             map_focus_layer(
@@ -35,14 +35,14 @@ fn integrated_shell_glass_default_keeps_explicit_overrides_and_namespace_scope()
                 namespace,
                 KeyboardInteractivity::None,
             );
-            let realand = f.realand();
-            let layer = realand
+            let clarion = f.clarion();
+            let layer = clarion
                 .mapped_layer_surfaces
                 .iter()
                 .find(|(surface, _)| surface.namespace() == namespace)
                 .unwrap()
                 .1;
-            let expected = if matches!(namespace, "realand-shell" | "realand-shell-dock") {
+            let expected = if matches!(namespace, "clarion-shell" | "clarion-shell-dock") {
                 Some(override_value.unwrap_or(true))
             } else {
                 None
@@ -53,7 +53,7 @@ fn integrated_shell_glass_default_keeps_explicit_overrides_and_namespace_scope()
 }
 
 fn layer_focus_fixture() -> (Fixture, ClientId, KeyboardFocus, u64) {
-    let mut config = realand_config::Config::default();
+    let mut config = clarion_config::Config::default();
     config.input.focus_follows_mouse = None;
     config.animations.off = true;
     let mut f = Fixture::with_config(config);
@@ -68,18 +68,18 @@ fn layer_focus_fixture() -> (Fixture, ClientId, KeyboardFocus, u64) {
     window.set_size(100, 100);
     window.ack_last_and_commit();
     f.double_roundtrip(client);
-    f.realand().layout.toggle_window_floating(None);
-    f.realand().layout.move_floating_window(
+    f.clarion().layout.toggle_window_floating(None);
+    f.clarion().layout.move_floating_window(
         None,
-        realand_ipc::PositionChange::SetFixed(200.),
-        realand_ipc::PositionChange::SetFixed(200.),
+        clarion_ipc::PositionChange::SetFixed(200.),
+        clarion_ipc::PositionChange::SetFixed(200.),
         false,
     );
-    f.realand_complete_animations();
+    f.clarion_complete_animations();
     f.double_roundtrip(client);
-    let focus = f.realand().keyboard_focus.clone();
+    let focus = f.clarion().keyboard_focus.clone();
     assert!(matches!(focus, KeyboardFocus::Layout { surface: Some(_) }));
-    let id = f.realand().layout.active_window().unwrap().id().get();
+    let id = f.clarion().layout.active_window().unwrap().id().get();
     (f, client, focus, id)
 }
 
@@ -111,20 +111,20 @@ fn map_focus_layer(
 
 fn assert_layer_keyboard_focus(f: &mut Fixture, namespace: &str) {
     let layer = f
-        .realand()
+        .clarion()
         .mapped_layer_surfaces
         .keys()
         .find(|layer| layer.namespace() == namespace)
         .unwrap()
         .clone();
     assert_eq!(
-        f.realand().keyboard_focus,
+        f.clarion().keyboard_focus,
         KeyboardFocus::LayerShell {
             surface: layer.wl_surface().clone(),
         }
     );
     assert_eq!(
-        f.realand().seat.get_keyboard().unwrap().current_focus(),
+        f.clarion().seat.get_keyboard().unwrap().current_focus(),
         Some(layer.wl_surface().clone())
     );
 }
@@ -137,17 +137,17 @@ fn focus_test_click(pointer: &ZwlrVirtualPointerV1, time: u32, x: u32, y: u32) {
 }
 
 #[test]
-fn realand_desktop_waits_for_click_focus_and_preserves_explicit_app_activation() {
+fn clarion_desktop_waits_for_click_focus_and_preserves_explicit_app_activation() {
     let (mut f, client, app_focus, app_id) = layer_focus_fixture();
     let desktop = map_focus_layer(
         &mut f,
         client,
         Layer::Bottom,
-        "realand-desktop",
+        "clarion-desktop",
         KeyboardInteractivity::OnDemand,
     );
-    assert_eq!(f.realand().keyboard_focus, app_focus);
-    assert!(f.realand().layer_shell_on_demand_focus.is_none());
+    assert_eq!(f.clarion().keyboard_focus, app_focus);
+    assert!(f.clarion().layer_shell_on_demand_focus.is_none());
 
     // Go through the real Wayland virtual-pointer protocol and the compositor's
     // input handler, rather than dispatching directly through Smithay's seat.
@@ -162,35 +162,35 @@ fn realand_desktop_waits_for_click_focus_and_preserves_explicit_app_activation()
     let registry = c.display.get_registry(&c.qh, ());
     let manager: ZwlrVirtualPointerManagerV1 = registry.bind(global.name, 1, &c.qh, ());
     let pointer = manager.create_virtual_pointer(None, &c.qh, ());
-    let under = f.realand().contents_under((100., 100.).into());
-    assert_eq!(under.layer.unwrap().namespace(), "realand-desktop");
+    let under = f.clarion().contents_under((100., 100.).into());
+    assert_eq!(under.layer.unwrap().namespace(), "clarion-desktop");
     pointer.motion_absolute(1, 100, 100, 1280, 800);
     pointer.frame();
     f.double_roundtrip(client);
-    assert_eq!(f.realand().keyboard_focus, app_focus);
+    assert_eq!(f.clarion().keyboard_focus, app_focus);
     focus_test_click(&pointer, 10, 100, 100);
     f.double_roundtrip(client);
-    assert_layer_keyboard_focus(&mut f, "realand-desktop");
-    assert!(f.realand().layer_shell_on_demand_focus.is_some());
+    assert_layer_keyboard_focus(&mut f, "clarion-desktop");
+    assert!(f.clarion().layer_shell_on_demand_focus.is_some());
 
-    f.realand_state()
-        .do_action(realand_config::Action::FocusWindow(u64::MAX), false);
+    f.clarion_state()
+        .do_action(clarion_config::Action::FocusWindow(u64::MAX), false);
     f.double_roundtrip(client);
-    assert_layer_keyboard_focus(&mut f, "realand-desktop");
-    assert!(f.realand().layer_shell_on_demand_focus.is_some());
-    f.realand_state()
-        .do_action(realand_config::Action::FocusWindow(app_id), false);
+    assert_layer_keyboard_focus(&mut f, "clarion-desktop");
+    assert!(f.clarion().layer_shell_on_demand_focus.is_some());
+    f.clarion_state()
+        .do_action(clarion_config::Action::FocusWindow(app_id), false);
     f.double_roundtrip(client);
-    assert_eq!(f.realand().keyboard_focus, app_focus);
-    assert!(f.realand().layer_shell_on_demand_focus.is_none());
+    assert_eq!(f.clarion().keyboard_focus, app_focus);
+    assert!(f.clarion().layer_shell_on_demand_focus.is_none());
 
     focus_test_click(&pointer, 20, 100, 100);
     f.double_roundtrip(client);
-    assert_layer_keyboard_focus(&mut f, "realand-desktop");
+    assert_layer_keyboard_focus(&mut f, "clarion-desktop");
     focus_test_click(&pointer, 30, 220, 220);
     f.double_roundtrip(client);
-    assert_eq!(f.realand().keyboard_focus, app_focus);
-    assert!(f.realand().layer_shell_on_demand_focus.is_none());
+    assert_eq!(f.clarion().keyboard_focus, app_focus);
+    assert!(f.clarion().layer_shell_on_demand_focus.is_none());
 
     // A desktop dialog still requests the normal exclusive overlay focus.
     let panel = f.client(client).layer(&desktop);
@@ -201,7 +201,7 @@ fn realand_desktop_waits_for_click_focus_and_preserves_explicit_app_activation()
     });
     panel.commit();
     f.double_roundtrip(client);
-    assert_layer_keyboard_focus(&mut f, "realand-desktop");
+    assert_layer_keyboard_focus(&mut f, "clarion-desktop");
     let panel = f.client(client).layer(&desktop);
     panel.set_configure_props(LayerConfigureProps {
         layer: Some(Layer::Bottom),
@@ -210,7 +210,7 @@ fn realand_desktop_waits_for_click_focus_and_preserves_explicit_app_activation()
     });
     panel.commit();
     f.double_roundtrip(client);
-    assert_eq!(f.realand().keyboard_focus, app_focus);
+    assert_eq!(f.clarion().keyboard_focus, app_focus);
 
     // Restarting/remapping the persistent desktop must not steal focus either.
     let panel = f.client(client).layer(&desktop);
@@ -235,10 +235,10 @@ fn realand_desktop_waits_for_click_focus_and_preserves_explicit_app_activation()
     panel.set_size(1280, 800);
     panel.ack_last_and_commit();
     f.double_roundtrip(client);
-    assert_eq!(f.realand().keyboard_focus, app_focus);
-    assert!(f.realand().layer_shell_on_demand_focus.is_none());
+    assert_eq!(f.clarion().keyboard_focus, app_focus);
+    assert!(f.clarion().layer_shell_on_demand_focus.is_none());
     assert_eq!(
-        f.realand().seat.get_keyboard().unwrap().current_focus(),
+        f.clarion().seat.get_keyboard().unwrap().current_focus(),
         app_focus.surface().cloned()
     );
 }
@@ -255,7 +255,7 @@ fn other_on_demand_layer_clients_keep_automatic_mapping_focus() {
             KeyboardInteractivity::OnDemand,
         );
         assert_layer_keyboard_focus(&mut f, "lxqt-runner");
-        assert!(f.realand().layer_shell_on_demand_focus.is_some());
+        assert!(f.clarion().layer_shell_on_demand_focus.is_some());
     }
 }
 
@@ -263,23 +263,23 @@ fn other_on_demand_layer_clients_keep_automatic_mapping_focus() {
 fn desktop_interaction_restores_only_its_existing_same_client_desktop_focus() {
     for (base_namespace, popup_namespace, same_client, focus_base, mode, retain) in [
         (
-            "realand-desktop",
-            "realand-desktop-interaction",
+            "clarion-desktop",
+            "clarion-desktop-interaction",
             true,
             true,
             KeyboardInteractivity::Exclusive,
             true,
         ),
         (
-            "realand-desktop",
-            "realand-desktop-interaction",
+            "clarion-desktop",
+            "clarion-desktop-interaction",
             false,
             true,
             KeyboardInteractivity::Exclusive,
             false,
         ),
         (
-            "realand-desktop",
+            "clarion-desktop",
             "other-overlay",
             true,
             true,
@@ -288,23 +288,23 @@ fn desktop_interaction_restores_only_its_existing_same_client_desktop_focus() {
         ),
         (
             "other-desktop",
-            "realand-desktop-interaction",
+            "clarion-desktop-interaction",
             true,
             true,
             KeyboardInteractivity::Exclusive,
             false,
         ),
         (
-            "realand-desktop",
-            "realand-desktop-interaction",
+            "clarion-desktop",
+            "clarion-desktop-interaction",
             true,
             false,
             KeyboardInteractivity::Exclusive,
             false,
         ),
         (
-            "realand-desktop",
-            "realand-desktop-interaction",
+            "clarion-desktop",
+            "clarion-desktop-interaction",
             true,
             true,
             KeyboardInteractivity::None,
@@ -335,7 +335,7 @@ fn desktop_interaction_restores_only_its_existing_same_client_desktop_focus() {
             f.double_roundtrip(client);
             assert_layer_keyboard_focus(&mut f, base_namespace);
         } else {
-            assert!(f.realand().layer_shell_on_demand_focus.is_none());
+            assert!(f.clarion().layer_shell_on_demand_focus.is_none());
         }
         let popup_client = if same_client { client } else { f.add_client() };
         let popup = map_focus_layer(&mut f, popup_client, Layer::Overlay, popup_namespace, mode);
@@ -345,7 +345,7 @@ fn desktop_interaction_restores_only_its_existing_same_client_desktop_focus() {
         }
         focus_test_click(&pointer, 20, 100, 100);
         f.double_roundtrip(client);
-        assert_eq!(f.realand().layer_shell_on_demand_focus.is_some(), retain,
+        assert_eq!(f.clarion().layer_shell_on_demand_focus.is_some(), retain,
             "base={base_namespace} popup={popup_namespace} same_client={same_client} focus_base={focus_base} mode={mode:?}");
         if mode == KeyboardInteractivity::Exclusive {
             assert_layer_keyboard_focus(&mut f, popup_namespace);
@@ -372,17 +372,17 @@ fn desktop_interaction_restores_only_its_existing_same_client_desktop_focus() {
         if retain {
             assert_layer_keyboard_focus(&mut f, base_namespace);
         } else {
-            assert_eq!(f.realand().keyboard_focus, app_focus);
+            assert_eq!(f.clarion().keyboard_focus, app_focus);
             assert_eq!(
-                f.realand().seat.get_keyboard().unwrap().current_focus(),
+                f.clarion().seat.get_keyboard().unwrap().current_focus(),
                 app_focus.surface().cloned()
             );
         }
         // A subsequent application click still ends the remembered desktop.
         focus_test_click(&pointer, 30, 220, 220);
         f.double_roundtrip(client);
-        assert!(f.realand().layer_shell_on_demand_focus.is_none());
-        assert_eq!(f.realand().keyboard_focus, app_focus);
+        assert!(f.clarion().layer_shell_on_demand_focus.is_none());
+        assert_eq!(f.clarion().keyboard_focus, app_focus);
     }
 }
 
@@ -404,10 +404,10 @@ fn desktop_focus_restore_capability_query_does_not_change_keyboard_focus() {
     )
     .unwrap();
     let socket = server.socket_path.clone().unwrap();
-    f.realand().ipc_server = Some(server);
+    f.clarion().ipc_server = Some(server);
     // The normal State constructor seeds this snapshot when it creates the
     // original socket-less test server. Seed the replacement in the same way.
-    f.realand_state().ipc_keyboard_layouts_changed();
+    f.clarion_state().ipc_keyboard_layouts_changed();
     let mut client = UnixStream::connect(socket).unwrap();
     client.write_all(b"\"Capabilities\"\n").unwrap();
     client.set_nonblocking(true).unwrap();
@@ -426,19 +426,19 @@ fn desktop_focus_restore_capability_query_does_not_change_keyboard_focus() {
             Err(error) => panic!("could not read capabilities reply: {error}"),
         }
     }
-    let response: realand_ipc::Reply = serde_json::from_slice(&reply).unwrap();
-    let realand_ipc::Response::Capabilities(names) = response.unwrap() else {
+    let response: clarion_ipc::Reply = serde_json::from_slice(&reply).unwrap();
+    let clarion_ipc::Response::Capabilities(names) = response.unwrap() else {
         panic!("unexpected capabilities response");
     };
     assert!(names
         .iter()
         .any(|name| name == "desktop-menu-focus-restore"));
-    assert_eq!(f.realand().keyboard_focus, app_focus);
+    assert_eq!(f.clarion().keyboard_focus, app_focus);
     assert_eq!(
-        f.realand().seat.get_keyboard().unwrap().current_focus(),
+        f.clarion().seat.get_keyboard().unwrap().current_focus(),
         app_focus.surface().cloned()
     );
-    assert!(f.realand().layer_shell_on_demand_focus.is_none());
+    assert!(f.clarion().layer_shell_on_demand_focus.is_none());
 }
 
 #[test]
@@ -447,14 +447,14 @@ fn layer_subsurfaces_created_before_role_inherit_scale() {
     for scale in [1., 1.25, 1.5, 2.] {
         let mut f = Fixture::new();
         f.add_output(1, (1280, 800));
-        let output = f.realand_output(1);
+        let output = f.clarion_output(1);
         output.change_current_state(
             None,
             None,
             Some(smithay::output::Scale::Fractional(scale)),
             None,
         );
-        f.realand().output_resized(&output);
+        f.clarion().output_resized(&output);
         let id = f.add_client();
         let client = f.client(id);
         let qh = client.qh.clone();
@@ -515,14 +515,14 @@ fn shell_repaints_and_exclusive_zone_changes_keep_workspace_geometry_current() {
     for scale in [1., 1.25, 1.5, 2.] {
         let mut f = Fixture::new();
         f.add_output(1, (1280, 800));
-        let output = f.realand_output(1);
+        let output = f.clarion_output(1);
         output.change_current_state(
             None,
             None,
             Some(smithay::output::Scale::Fractional(scale)),
             None,
         );
-        f.realand().output_resized(&output);
+        f.clarion().output_resized(&output);
         let client = f.add_client();
         let panel = f
             .client(client)
@@ -556,7 +556,7 @@ fn shell_repaints_and_exclusive_zone_changes_keep_workspace_geometry_current() {
                 .to_f64();
             assert_eq!(expected.loc.y, f64::from(zone));
             assert!(f
-                .realand()
+                .clarion()
                 .layout
                 .workspaces()
                 .all(|(_, _, workspace)| workspace.working_area() == expected));
@@ -564,7 +564,7 @@ fn shell_repaints_and_exclusive_zone_changes_keep_workspace_geometry_current() {
         f.client(client).layer(&surface).layer_surface.destroy();
         f.double_roundtrip(client);
         assert_eq!(
-            f.realand()
+            f.clarion()
                 .layout
                 .active_workspace()
                 .unwrap()
@@ -611,9 +611,9 @@ fn shell_repaint_commit_cost_for_128_windows() {
         panel.set_size(1280, 800);
         panel.ack_last_and_commit();
         f.double_roundtrip(client);
-        f.realand_complete_animations();
+        f.clarion_complete_animations();
         let surface = f
-            .realand()
+            .clarion()
             .mapped_layer_surfaces
             .keys()
             .find(|layer| layer.namespace() == "video-wallpaper")
@@ -621,12 +621,12 @@ fn shell_repaint_commit_cost_for_128_windows() {
             .wl_surface()
             .clone();
         for _ in 0..100 {
-            assert!(f.realand_state().layer_shell_handle_commit(&surface));
+            assert!(f.clarion_state().layer_shell_handle_commit(&surface));
         }
         let mut samples = Vec::with_capacity(1000);
         for _ in 0..1000 {
             let start = Instant::now();
-            assert!(f.realand_state().layer_shell_handle_commit(&surface));
+            assert!(f.clarion_state().layer_shell_handle_commit(&surface));
             samples.push(start.elapsed().as_secs_f64() * 1_000_000.);
         }
         samples.sort_by(f64::total_cmp);
@@ -889,13 +889,13 @@ fn multiple_commits_before_mapping() {
 
 #[test]
 fn layer_float_respects_reduced_motion_and_idle_throttling() {
-    let mut config = realand_config::Config::default();
-    config.layer_rules.push(realand_config::LayerRule {
+    let mut config = clarion_config::Config::default();
+    config.layer_rules.push(clarion_config::LayerRule {
         baba_is_float: Some(true),
         ..Default::default()
     });
     let mut f = Fixture::with_config(config);
-    let mut config = realand_config::Config::default();
+    let mut config = clarion_config::Config::default();
     f.add_output(1, (1920, 1080));
     let id = f.add_client();
     let layer = f.client(id).create_layer(None, Layer::Top, "motion-test");
@@ -911,17 +911,17 @@ fn layer_float_respects_reduced_motion_and_idle_throttling() {
     layer.set_size(100, 50);
     layer.ack_last_and_commit();
     f.double_roundtrip(id);
-    f.realand_complete_animations();
-    let output = f.realand_output(1);
-    let realand = f.realand();
-    assert_eq!(realand.mapped_layer_surfaces.len(), 1);
-    assert!(realand.animations_need_redraw(&output));
-    realand.last_user_activity = std::time::Instant::now() - std::time::Duration::from_secs(31);
-    assert!(!realand.animations_need_redraw(&output));
-    realand.last_user_activity = std::time::Instant::now();
-    assert!(realand.animations_need_redraw(&output));
+    f.clarion_complete_animations();
+    let output = f.clarion_output(1);
+    let clarion = f.clarion();
+    assert_eq!(clarion.mapped_layer_surfaces.len(), 1);
+    assert!(clarion.animations_need_redraw(&output));
+    clarion.last_user_activity = std::time::Instant::now() - std::time::Duration::from_secs(31);
+    assert!(!clarion.animations_need_redraw(&output));
+    clarion.last_user_activity = std::time::Instant::now();
+    assert!(clarion.animations_need_redraw(&output));
 
-    let mapped = realand.mapped_layer_surfaces.values_mut().next().unwrap();
+    let mapped = clarion.mapped_layer_surfaces.values_mut().next().unwrap();
     assert!(mapped.are_animations_ongoing());
     config.animations.off = true;
     mapped.update_config(&config);
@@ -930,15 +930,15 @@ fn layer_float_respects_reduced_motion_and_idle_throttling() {
     config.animations.off = false;
     mapped.update_config(&config);
     assert!(mapped.are_animations_ongoing());
-    realand.clock.set_complete_instantly(true);
+    clarion.clock.set_complete_instantly(true);
     assert!(!mapped.are_animations_ongoing());
     assert_eq!(mapped.bob_offset(), (0., 0.).into());
-    realand.clock.set_complete_instantly(false);
+    clarion.clock.set_complete_instantly(false);
     assert!(mapped.are_animations_ongoing());
 }
 
 fn core_focus_app(f: &mut Fixture, app_id: u64) -> smithay::desktop::Window {
-    f.realand()
+    f.clarion()
         .layout
         .windows()
         .find(|(_, window)| window.id().get() == app_id)
@@ -952,32 +952,32 @@ fn core_focus_app(f: &mut Fixture, app_id: u64) -> smithay::desktop::Window {
 fn core_focus_requests_are_consumed_at_the_immediate_protocol_boundary() {
     let (mut f, _, app_focus, app_id) = layer_focus_fixture();
     let window = core_focus_app(&mut f, app_id);
-    assert!(f.realand().layout.minimize_window(&window));
+    assert!(f.clarion().layout.minimize_window(&window));
     // No event-loop roundtrip between the core command and this discrete edge.
-    f.realand_state().update_keyboard_focus();
+    f.clarion_state().update_keyboard_focus();
     assert_eq!(
-        f.realand().keyboard_focus,
+        f.clarion().keyboard_focus,
         KeyboardFocus::Layout { surface: None }
     );
     assert!(f
-        .realand()
+        .clarion()
         .seat
         .get_keyboard()
         .unwrap()
         .current_focus()
         .is_none());
     let mut remaining = Vec::new();
-    f.realand().layout.drain_core_protocol_ops(&mut remaining);
+    f.clarion().layout.drain_core_protocol_ops(&mut remaining);
     assert!(
         remaining.is_empty(),
         "seat reconciliation must consume core requests"
     );
 
-    assert!(f.realand().layout.restore_window(&window));
-    f.realand().layout.activate_window(&window);
-    f.realand_state().update_keyboard_focus();
-    assert_eq!(f.realand().keyboard_focus, app_focus);
-    f.realand().layout.drain_core_protocol_ops(&mut remaining);
+    assert!(f.clarion().layout.restore_window(&window));
+    f.clarion().layout.activate_window(&window);
+    f.clarion_state().update_keyboard_focus();
+    assert_eq!(f.clarion().keyboard_focus, app_focus);
+    f.clarion().layout.drain_core_protocol_ops(&mut remaining);
     assert!(remaining.is_empty());
 }
 
@@ -993,15 +993,15 @@ fn core_focus_requests_never_override_an_exclusive_shell_surface() {
         KeyboardInteractivity::Exclusive,
     );
     assert_layer_keyboard_focus(&mut f, "core-focus-exclusive");
-    assert!(f.realand().layout.minimize_window(&window));
-    f.realand_state().update_keyboard_focus();
+    assert!(f.clarion().layout.minimize_window(&window));
+    f.clarion_state().update_keyboard_focus();
     assert_layer_keyboard_focus(&mut f, "core-focus-exclusive");
-    assert!(f.realand().layout.restore_window(&window));
-    f.realand().layout.activate_window(&window);
-    f.realand_state().update_keyboard_focus();
+    assert!(f.clarion().layout.restore_window(&window));
+    f.clarion().layout.activate_window(&window);
+    f.clarion_state().update_keyboard_focus();
     assert_layer_keyboard_focus(&mut f, "core-focus-exclusive");
     let mut remaining = Vec::new();
-    f.realand().layout.drain_core_protocol_ops(&mut remaining);
+    f.clarion().layout.drain_core_protocol_ops(&mut remaining);
     assert!(remaining.is_empty());
 }
 
@@ -1009,15 +1009,15 @@ fn core_focus_requests_never_override_an_exclusive_shell_surface() {
 fn remembered_core_focus_has_no_seat_target_without_an_output() {
     let (mut f, _, app_focus, app_id) = layer_focus_fixture();
     let window = core_focus_app(&mut f, app_id);
-    let output = f.realand_output(1);
-    f.realand().remove_output(&output);
-    f.realand_state().update_keyboard_focus();
+    let output = f.clarion_output(1);
+    f.clarion().remove_output(&output);
+    f.clarion_state().update_keyboard_focus();
     assert_eq!(
-        f.realand().keyboard_focus,
+        f.clarion().keyboard_focus,
         KeyboardFocus::Layout { surface: None }
     );
     assert!(f
-        .realand()
+        .clarion()
         .seat
         .get_keyboard()
         .unwrap()
@@ -1025,7 +1025,7 @@ fn remembered_core_focus_has_no_seat_target_without_an_output() {
         .is_none());
     // Restoring a connector cannot revive a stale cached wl_surface target.
     f.add_output(2, (1024, 768));
-    f.realand().layout.activate_window(&window);
-    f.realand_state().update_keyboard_focus();
-    assert_eq!(f.realand().keyboard_focus, app_focus);
+    f.clarion().layout.activate_window(&window);
+    f.clarion_state().update_keyboard_focus();
+    assert_eq!(f.clarion().keyboard_focus, app_focus);
 }

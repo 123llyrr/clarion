@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only sampling of Realand scheduling, memory/IO pressure and slow render phases."""
+"""Read-only sampling of Clarion scheduling, memory/IO pressure and slow render phases."""
 import argparse
 import json
 import os
@@ -177,16 +177,16 @@ def latency_events(journal_text):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--pid', type=int, help='Compositor PID; default: realand.service MainPID')
+    parser.add_argument('--pid', type=int, help='Compositor PID; default: clarion.service MainPID')
     parser.add_argument('--seconds', type=int, default=15, choices=range(1, 61), metavar='1..60')
     parser.add_argument('--output', type=Path, required=True, help='Write a new JSON report; existing files are not overwritten')
     args = parser.parse_args()
     pid = args.pid
     if pid is None:
-        pid = int(subprocess.check_output(['systemctl', '--user', 'show', 'realand.service',
+        pid = int(subprocess.check_output(['systemctl', '--user', 'show', 'clarion.service',
                                          '-p', 'MainPID', '--value'], text=True, timeout=3).strip())
     if pid <= 0:
-        parser.error('Realand is not running; specify --pid')
+        parser.error('Clarion is not running; specify --pid')
     if args.output.exists():
         parser.error('Output already exists; choose a new report path')
     started = time.time()

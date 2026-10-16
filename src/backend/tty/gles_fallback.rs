@@ -128,8 +128,8 @@ mod tests {
     use super::*;
 
     fn render_device() -> (DrmNode, GbmDevice<DrmDeviceFd>) {
-        let path = std::env::var("REALAND_VULKAN_TEST_NODE")
-            .expect("set REALAND_VULKAN_TEST_NODE to a DRM render node");
+        let path = std::env::var("CLARION_VULKAN_TEST_NODE")
+            .expect("set CLARION_VULKAN_TEST_NODE to a DRM render node");
         let file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -146,7 +146,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires REALAND_VULKAN_TEST_NODE and an unavailable EGL vendor list in an isolated process"]
+    #[ignore = "requires CLARION_VULKAN_TEST_NODE and an unavailable EGL vendor list in an isolated process"]
     fn gbm_registration_does_not_require_egl_and_failed_activation_remains_retryable() {
         let vendor_list = std::env::var("__EGL_VENDOR_LIBRARY_FILENAMES")
             .expect("run this test in isolation with an unavailable EGL vendor list");
@@ -175,7 +175,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires REALAND_VULKAN_TEST_NODE and hardware EGL support"]
+    #[ignore = "requires CLARION_VULKAN_TEST_NODE and hardware EGL support"]
     fn deferred_gles_activates_once_and_reopens_after_device_removal() {
         let (node, gbm) = render_device();
         let mut fallback = GlesFallback::new().unwrap();

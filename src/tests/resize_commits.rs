@@ -1,4 +1,4 @@
-use realand_ipc::SizeChange;
+use clarion_ipc::SizeChange;
 use smithay::reexports::wayland_server::{
     protocol::wl_surface::WlSurface as ServerSurface, Resource as _,
 };
@@ -31,9 +31,9 @@ fn setup(explicit_geometry: bool) -> (Fixture, ClientId, WlSurface, ServerSurfac
     // Settle any activation configure sent by mapping the window.
     f.client(id).window(&surface).ack_last_and_commit();
     f.double_roundtrip(id);
-    f.realand_complete_animations();
+    f.clarion_complete_animations();
     let server = f
-        .realand()
+        .clarion()
         .layout
         .windows()
         .find(|(_, mapped)| {
@@ -44,7 +44,7 @@ fn setup(explicit_geometry: bool) -> (Fixture, ClientId, WlSurface, ServerSurfac
         .toplevel()
         .wl_surface()
         .clone();
-    f.realand()
+    f.clarion()
         .layout
         .find_window_and_output_mut(&server)
         .unwrap()
@@ -55,7 +55,7 @@ fn setup(explicit_geometry: bool) -> (Fixture, ClientId, WlSurface, ServerSurfac
 }
 
 fn sources(f: &mut Fixture, server: &ServerSurface) -> Vec<SnapshotSource> {
-    f.realand()
+    f.clarion()
         .layout
         .find_window_and_output(server)
         .unwrap()
@@ -65,7 +65,7 @@ fn sources(f: &mut Fixture, server: &ServerSurface) -> Vec<SnapshotSource> {
 }
 
 fn geometry(f: &mut Fixture, server: &ServerSurface) -> Rectangle<i32, Logical> {
-    f.realand()
+    f.clarion()
         .layout
         .find_window_and_output(server)
         .unwrap()
@@ -75,7 +75,7 @@ fn geometry(f: &mut Fixture, server: &ServerSurface) -> Rectangle<i32, Logical> 
 }
 
 fn request_resize(f: &mut Fixture, id: ClientId, surface: &WlSurface, width: i32) -> Serial {
-    f.realand()
+    f.clarion()
         .layout
         .set_column_width(SizeChange::SetFixed(width));
     f.double_roundtrip(id);
@@ -90,8 +90,8 @@ fn request_resize(f: &mut Fixture, id: ClientId, surface: &WlSurface, width: i32
 
 fn notify_blocker_cleared(f: &mut Fixture, server: &ServerSurface) {
     let client = server.client().unwrap();
-    let state = f.realand_state();
-    let dh = state.realand.display_handle.clone();
+    let state = f.clarion_state();
+    let dh = state.clarion.display_handle.clone();
     state
         .client_compositor_state(&client)
         .blocker_cleared(state, &dh);

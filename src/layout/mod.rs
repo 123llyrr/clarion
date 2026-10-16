@@ -1,6 +1,6 @@
 //! Window layout logic.
 //!
-//! Realand implements scrollable tiling with dynamic workspaces. The scrollable tiling is mostly
+//! Clarion implements scrollable tiling with dynamic workspaces. The scrollable tiling is mostly
 //! orthogonal to any particular workspace system, though outputs living in separate coordinate
 //! spaces suggest per-output workspaces.
 //!
@@ -12,7 +12,7 @@
 //! workspaces from disconnected outputs will move. Currently, the primary output has no other
 //! distinction from other outputs.
 //!
-//! Where possible, realand tries to follow these principles with regards to outputs:
+//! Where possible, clarion tries to follow these principles with regards to outputs:
 //!
 //! 1. Disconnecting and reconnecting the same output must not change the layout.
 //!    * This includes both secondary outputs and the primary output.
@@ -35,20 +35,19 @@ use std::mem;
 use std::rc::Rc;
 use std::time::Duration;
 
-use monitor::{InsertHint, InsertPosition, InsertWorkspace, MonitorAddWindowTarget};
-use realand_config::utils::MergeWith as _;
-use realand_config::{
+use clarion_config::utils::MergeWith as _;
+use clarion_config::{
     Config, CornerRadius, LayoutPart, PresetSize, Workspace as WorkspaceConfig, WorkspaceReference,
 };
-use realand_ipc::{ColumnDisplay, PositionChange, SizeChange, WindowLayout};
+use clarion_ipc::{ColumnDisplay, PositionChange, SizeChange, WindowLayout};
+use monitor::{InsertHint, InsertPosition, InsertWorkspace, MonitorAddWindowTarget};
 use scrolling::{Column, ColumnWidth};
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
-use smithay::backend::renderer::element::utils::RescaleRenderElement;
 use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
 use smithay::output::{self, Output};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size, Transform};
-use tile::{Tile, TileRenderElement};
+use tile::Tile;
 use workspace::{WorkspaceAddWindowTarget, WorkspaceId};
 
 pub use self::monitor::MonitorRenderElement;
@@ -56,11 +55,11 @@ use self::monitor::{Monitor, WorkspaceSwitch};
 use self::wobble::WobbleAnchor;
 use self::workspace::Workspace;
 use crate::animation::{Animation, Clock};
+use crate::clarion_render_elements;
 use crate::layout::scrolling::ScrollDirection;
-use crate::realand_render_elements;
 use crate::render_helpers::background_effect::BackgroundEffectElement;
 use crate::render_helpers::offscreen::OffscreenData;
-use crate::render_helpers::renderer::RealandRenderer;
+use crate::render_helpers::renderer::ClarionRenderer;
 use crate::render_helpers::snapshot::RenderSnapshot;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::texture::TextureBuffer;
@@ -85,6 +84,7 @@ mod management;
 pub mod minimized;
 pub mod monitor;
 pub mod opening_window;
+pub mod scene_source;
 pub mod scrolling;
 pub mod shadow;
 mod stage_drag;
@@ -105,7 +105,7 @@ const INTERACTIVE_MOVE_ALPHA: f64 = 0.75;
 /// Size-relative units.
 pub struct SizeFrac;
 
-realand_render_elements! {
+clarion_render_elements! {
     LayoutElementRenderElement<R> => {
         Wayland = WaylandSurfaceRenderElement<R>,
         SolidColor = SolidColorRenderElement,
@@ -140,7 +140,7 @@ pub trait LayoutElement {
     }
 
     /// Updates the config for the element.
-    fn update_config(&mut self, blur_config: realand_config::Blur) {
+    fn update_config(&mut self, blur_config: clarion_config::Blur) {
         let _ = blur_config;
     }
 
@@ -167,7 +167,7 @@ pub trait LayoutElement {
     ///
     /// The element should be rendered in such a way that its visual geometry ends up at the given
     /// location.
-    fn render<R: RealandRenderer>(
+    fn render<R: ClarionRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         location: Point<f64, Logical>,
@@ -181,7 +181,7 @@ pub trait LayoutElement {
     }
 
     /// Renders the non-popup parts of the element.
-    fn render_normal<R: RealandRenderer>(
+    fn render_normal<R: ClarionRenderer>(
         &self,
         ctx: RenderCtx<R>,
         location: Point<f64, Logical>,
@@ -193,7 +193,7 @@ pub trait LayoutElement {
     }
 
     /// Renders the popups of the element.
-    fn render_popups<R: RealandRenderer>(
+    fn render_popups<R: ClarionRenderer>(
         &self,
         ctx: RenderCtx<R>,
         location: Point<f64, Logical>,
@@ -207,7 +207,7 @@ pub trait LayoutElement {
 
     /// Renders the background effect behind the main surface of the element.
     #[allow(clippy::too_many_arguments)]
-    fn render_background_effect<R: RealandRenderer>(
+    fn render_background_effect<R: ClarionRenderer>(
         &self,
         _ctx: RenderCtx<R>,
         _geometry: Rectangle<f64, Logical>,
@@ -406,12 +406,12 @@ enum MonitorSet<W: LayoutElement> {
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Options {
-    pub layout: realand_config::Layout,
-    pub animations: realand_config::Animations,
-    pub gestures: realand_config::Gestures,
-    pub overview: realand_config::Overview,
-    pub blur: realand_config::Blur,
-    pub renderer: realand_config::RendererBackendConfig,
+    pub layout: clarion_config::Layout,
+    pub animations: clarion_config::Animations,
+    pub gestures: clarion_config::Gestures,
+    pub overview: clarion_config::Overview,
+    pub blur: clarion_config::Blur,
+    pub renderer: clarion_config::RendererBackendConfig,
     // Debug flags.
     pub disable_resize_throttling: bool,
     pub disable_transactions: bool,
@@ -433,7 +433,7 @@ enum InteractiveMoveState<W: LayoutElement> {
 #[derive(Debug)]
 struct PendingMove<I> {
     window: I,
-    motion: realand_core::input::MotionAccumulator<(Output, Point<f64, Logical>)>,
+    motion: clarion_core::input::MotionAccumulator<(Output, Point<f64, Logical>)>,
 }
 
 #[derive(Debug)]
@@ -449,13 +449,13 @@ struct InteractiveMoveData<W: LayoutElement> {
     /// Config overrides for the output where the window is currently located.
     ///
     /// Cached here to be accessible while an output is removed.
-    pub(self) output_config: Option<realand_config::LayoutPart>,
+    pub(self) output_config: Option<clarion_config::LayoutPart>,
     /// Config overrides for the workspace where the window is currently located.
     ///
     /// To avoid sudden window changes when starting an interactive move, it will remember the
     /// config overrides for the workspace where the move originated from. As soon as the window
     /// moves over some different workspace though, this override will reset.
-    pub(self) workspace_config: Option<(WorkspaceId, realand_config::LayoutPart)>,
+    pub(self) workspace_config: Option<(WorkspaceId, clarion_config::LayoutPart)>,
 }
 
 #[derive(Debug)]
@@ -539,8 +539,8 @@ pub enum HitType {
     },
 }
 
-pub use realand_core::overview::OverviewMode;
-use realand_core::overview::{OverviewAction, OverviewSettlement};
+pub use clarion_core::overview::OverviewMode;
+use clarion_core::overview::{OverviewAction, OverviewSettlement};
 
 #[derive(Debug)]
 enum OverviewProgress {
@@ -591,14 +591,14 @@ impl<W: LayoutElement> InteractiveMoveState<W> {
 }
 
 impl<W: LayoutElement> InteractiveMoveData<W> {
-    fn controls(&self) -> realand_core::move_controls::MoveControls {
+    fn controls(&self) -> clarion_core::move_controls::MoveControls {
         let core = self.core.borrow();
         let interaction = core.interaction().expect("physical move has a core owner");
         assert_eq!(interaction.id, self.tile.window().core_id());
         interaction.controls
     }
 
-    fn placement(&self) -> realand_core::move_controls::MovePlacement {
+    fn placement(&self) -> clarion_core::move_controls::MovePlacement {
         self.controls().placement()
     }
 
@@ -674,7 +674,7 @@ impl Options {
         }
     }
 
-    fn with_merged_layout(mut self, part: Option<&realand_config::LayoutPart>) -> Self {
+    fn with_merged_layout(mut self, part: Option<&clarion_config::LayoutPart>) -> Self {
         if let Some(part) = part {
             self.layout.merge_with(part);
         }
@@ -775,10 +775,10 @@ impl<W: LayoutElement> Layout<W> {
         let size = moving.tile.tile_expected_or_current_size().upscale(zoom);
         self.core
             .borrow_mut()
-            .apply(realand_core::CoreEvent::MovePose {
+            .apply(clarion_core::CoreEvent::MovePose {
                 id: moving.tile.window().core_id(),
                 output: Some(moving.output.name()),
-                geometry: realand_core::Rect::new(location.x, location.y, size.w, size.h),
+                geometry: clarion_core::Rect::new(location.x, location.y, size.w, size.h),
                 pointer: [
                     moving.pointer_pos_within_output.x,
                     moving.pointer_pos_within_output.y,
@@ -796,7 +796,7 @@ impl<W: LayoutElement> Layout<W> {
             if let Some(id) = id {
                 self.core
                     .borrow_mut()
-                    .apply(realand_core::CoreEvent::MovePlaced { id });
+                    .apply(clarion_core::CoreEvent::MovePlaced { id });
                 // Placement can deliberately leave the destination policy without a selected
                 // window. Acknowledge that final pure policy intent after transfer completion,
                 // before activating its keyboard scope; explicit None must remain meaningful.
@@ -817,13 +817,13 @@ impl<W: LayoutElement> Layout<W> {
         if let Some(workspace) = self.active_workspace() {
             self.core
                 .borrow_mut()
-                .apply(realand_core::CoreEvent::ActivateSpace {
-                    id: realand_core::SpaceId(workspace.id().get()),
+                .apply(clarion_core::CoreEvent::ActivateSpace {
+                    id: clarion_core::SpaceId(workspace.id().get()),
                 });
         } else {
             self.core
                 .borrow_mut()
-                .apply(realand_core::CoreEvent::DeactivateSpace);
+                .apply(clarion_core::CoreEvent::DeactivateSpace);
         }
     }
 
@@ -918,7 +918,7 @@ impl<W: LayoutElement> Layout<W> {
                     let mut workspaces = vec![];
                     for i in (0..primary.workspaces.len()).rev() {
                         if returning
-                            .contains(&realand_core::SpaceId(primary.workspaces[i].id().get()))
+                            .contains(&clarion_core::SpaceId(primary.workspaces[i].id().get()))
                         {
                             let prior_active = primary.active_workspace_idx();
                             let prefer_first_nonempty =
@@ -928,7 +928,7 @@ impl<W: LayoutElement> Layout<W> {
                             let mut ws = primary.workspaces.remove(i);
                             ws.set_output(None);
                             if prefer_first_nonempty && primary.workspaces.len() > 1 {
-                                let id = realand_core::SpaceId(primary.workspaces[1].id().get());
+                                let id = clarion_core::SpaceId(primary.workspaces[1].id().get());
                                 this.core.borrow_mut().select_output_space(
                                     primary.output_name(),
                                     id,
@@ -1020,7 +1020,7 @@ impl<W: LayoutElement> Layout<W> {
             this.flush_pending_move();
             this.core
                 .borrow_mut()
-                .apply(realand_core::CoreEvent::OutputDisconnected {
+                .apply(clarion_core::CoreEvent::OutputDisconnected {
                     connector: output.name(),
                 });
             this.core
@@ -1186,10 +1186,10 @@ impl<W: LayoutElement> Layout<W> {
                 }
 
                 if mon.is_selected_output() {
-                    let id = realand_core::SpaceId(mon.active_workspace_ref().id().get());
+                    let id = clarion_core::SpaceId(mon.active_workspace_ref().id().get());
                     self.core
                         .borrow_mut()
-                        .apply(realand_core::CoreEvent::ActivateSpace { id });
+                        .apply(clarion_core::CoreEvent::ActivateSpace { id });
                 }
                 Some(&mon.output)
             }
@@ -1276,7 +1276,7 @@ impl<W: LayoutElement> Layout<W> {
 
                 self.core
                     .borrow_mut()
-                    .apply(realand_core::CoreEvent::DeactivateSpace);
+                    .apply(clarion_core::CoreEvent::DeactivateSpace);
                 None
             }
         }
@@ -1449,7 +1449,7 @@ impl<W: LayoutElement> Layout<W> {
     pub fn set_minimize_target(
         &mut self,
         window: &W::Id,
-        target: Option<realand_ipc::DockTarget>,
+        target: Option<clarion_ipc::DockTarget>,
         reduce_motion: bool,
     ) -> Option<Output> {
         for ws in self.workspaces_mut() {
@@ -1734,7 +1734,7 @@ impl<W: LayoutElement> Layout<W> {
         self.with_desktop_transition(|this| {
             this.flush_pending_move();
             core_adapter::connect_output(&this.core, output);
-            let _span = realand_tracy_span!("Layout::update_output_size");
+            let _span = clarion_tracy_span!("Layout::update_output_size");
 
             let Some(mon) = this.monitor_for_output_mut(output) else {
                 error!("monitor missing in update_output_size()");
@@ -1907,7 +1907,7 @@ impl<W: LayoutElement> Layout<W> {
         let id = *core.active_window()?;
         let window = core.window(&id)?;
         let moving = core.interaction().is_some_and(|interaction| {
-            interaction.id == id && interaction.phase == realand_core::desktop::MovePhase::Moving
+            interaction.id == id && interaction.phase == clarion_core::desktop::MovePhase::Moving
         });
         (!window.minimized && (window.attached || moving)).then_some(id)
     }
@@ -1918,7 +1918,7 @@ impl<W: LayoutElement> Layout<W> {
             core.window(&id).is_some_and(|window| {
                 let moving = core.interaction().filter(|interaction| {
                     interaction.id == id
-                        && interaction.phase == realand_core::desktop::MovePhase::Moving
+                        && interaction.phase == clarion_core::desktop::MovePhase::Moving
                 });
                 let connector = moving
                     .and_then(|interaction| interaction.output.as_deref())
@@ -2732,7 +2732,7 @@ impl<W: LayoutElement> Layout<W> {
         let connector = core
             .interaction()
             .filter(|interaction| {
-                interaction.phase == realand_core::desktop::MovePhase::Moving
+                interaction.phase == clarion_core::desktop::MovePhase::Moving
                     && interaction.id == id
             })
             .and_then(|interaction| interaction.output.as_deref())
@@ -2889,7 +2889,7 @@ impl<W: LayoutElement> Layout<W> {
             let expected: Vec<_> = monitor
                 .workspaces
                 .iter()
-                .map(|workspace| realand_core::SpaceId(workspace.id().get()))
+                .map(|workspace| clarion_core::SpaceId(workspace.id().get()))
                 .collect();
             assert_eq!(
                 core.navigation()
@@ -2903,7 +2903,7 @@ impl<W: LayoutElement> Layout<W> {
         if let MonitorSet::NoOutputs { workspaces } = &self.monitor_set {
             let expected: Vec<_> = workspaces
                 .iter()
-                .map(|workspace| realand_core::SpaceId(workspace.id().get()))
+                .map(|workspace| clarion_core::SpaceId(workspace.id().get()))
                 .collect();
             assert_eq!(
                 core.navigation().detached_spaces(),
@@ -2918,7 +2918,7 @@ impl<W: LayoutElement> Layout<W> {
         }
         let physical_spaces: HashSet<_> = self
             .workspaces()
-            .map(|(_, _, workspace)| realand_core::SpaceId(workspace.id().get()))
+            .map(|(_, _, workspace)| clarion_core::SpaceId(workspace.id().get()))
             .collect();
         let core_spaces: HashSet<_> = core.spaces().map(|space| space.id).collect();
         assert_eq!(
@@ -2969,7 +2969,7 @@ impl<W: LayoutElement> Layout<W> {
         );
         for (_, _, workspace) in self.workspaces() {
             assert_eq!(
-                core.space(realand_core::SpaceId(workspace.id().get()))
+                core.space(clarion_core::SpaceId(workspace.id().get()))
                     .and_then(|space| space.focused),
                 workspace.active_window().map(LayoutElement::core_id),
                 "local focus memory must describe its physical policy payloads"
@@ -3176,7 +3176,7 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn advance_animations(&mut self) {
-        let _span = realand_tracy_span!("Layout::advance_animations");
+        let _span = clarion_tracy_span!("Layout::advance_animations");
 
         let mut dnd_scroll = None;
         let mut is_dnd = false;
@@ -3230,10 +3230,10 @@ impl<W: LayoutElement> Layout<W> {
                 }
                 let target = mon
                     .window_under(pos_within_output)
-                    .map(|(win, _)| realand_core::dnd_hold::DndTarget::Window(win.core_id()))
+                    .map(|(win, _)| clarion_core::dnd_hold::DndTarget::Window(win.core_id()))
                     .or_else(|| {
                         mon.workspace_under_narrow(pos_within_output).map(|ws| {
-                            realand_core::dnd_hold::DndTarget::Workspace(realand_core::SpaceId(
+                            clarion_core::dnd_hold::DndTarget::Workspace(clarion_core::SpaceId(
                                 ws.id().get(),
                             ))
                         })
@@ -3243,7 +3243,7 @@ impl<W: LayoutElement> Layout<W> {
             if is_dnd {
                 if let Some((scrolled, target)) = observed {
                     let intent = self.core.borrow_mut().dnd_hold_action(
-                        realand_core::dnd_hold::DndHoldAction::Observe {
+                        clarion_core::dnd_hold::DndHoldAction::Observe {
                             connector: output.name(),
                             target,
                             timestamp: self.clock.now_unadjusted(),
@@ -3393,7 +3393,7 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn update_render_elements(&mut self, output: Option<&Output>) {
-        let _span = realand_tracy_span!("Layout::update_render_elements");
+        let _span = clarion_tracy_span!("Layout::update_render_elements");
 
         self.update_render_elements_time = self.clock.now();
 
@@ -3437,6 +3437,20 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
+    /// Invalidate native pixel snapshots after device replacement or GLES fallback.
+    /// This is an epoch boundary, including captures that span several outputs.
+    pub(crate) fn on_native_renderer_replaced(&mut self) {
+        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
+            move_.tile.on_native_renderer_replaced();
+        }
+        for monitor in self.monitors() {
+            monitor.clear_native_caches();
+        }
+        for workspace in self.workspaces_mut() {
+            workspace.on_native_renderer_replaced();
+        }
+    }
+
     pub fn update_shaders(&mut self) {
         if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
             move_.tile.update_shaders();
@@ -3457,7 +3471,7 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     fn update_insert_hint(&mut self, output: Option<&Output>) {
-        let _span = realand_tracy_span!("Layout::update_insert_hint");
+        let _span = clarion_tracy_span!("Layout::update_insert_hint");
 
         for mon in self.monitors_mut() {
             mon.insert_hint = None;
@@ -3474,7 +3488,7 @@ impl<W: LayoutElement> Layout<W> {
             return;
         }
 
-        let _span = realand_tracy_span!("Layout::update_insert_hint::update");
+        let _span = clarion_tracy_span!("Layout::update_insert_hint::update");
 
         if let Some(mon) = self.monitor_for_output_mut(&move_.output) {
             let (insert_ws, geo) = mon.insert_position(move_.pointer_pos_within_output);
@@ -3554,7 +3568,7 @@ impl<W: LayoutElement> Layout<W> {
                 let ws =
                     Workspace::new_with_config_no_outputs(Some(ws_config.clone()), clock, options)
                         .with_core(self.core.clone());
-                let id = realand_core::SpaceId(ws.id().get());
+                let id = clarion_core::SpaceId(ws.id().get());
                 workspaces.insert(0, ws);
                 self.core.borrow_mut().reorder_detached_space(id, 0);
             }
@@ -3852,7 +3866,7 @@ impl<W: LayoutElement> Layout<W> {
         workspace.toggle_window_floating(window);
     }
 
-    pub fn switch_tiling_mode(&mut self, mode: Option<realand_ipc::TilingMode>) {
+    pub fn switch_tiling_mode(&mut self, mode: Option<clarion_ipc::TilingMode>) {
         if let Some(workspace) = self.active_workspace_mut() {
             if let Some(target_mode) = mode {
                 workspace.set_tiling_mode(target_mode);
@@ -4552,9 +4566,9 @@ impl<W: LayoutElement> Layout<W> {
                         (ColumnWidth::Proportion(1.), false)
                     }
                 });
-            let start = realand_core::move_controls::MoveStart {
+            let start = clarion_core::move_controls::MoveStart {
                 pointer: [start_pos_within_output.x, start_pos_within_output.y],
-                visual_window: realand_core::Rect::new(
+                visual_window: clarion_core::Rect::new(
                     window_pos.x,
                     window_pos.y,
                     window_size.w,
@@ -4569,7 +4583,7 @@ impl<W: LayoutElement> Layout<W> {
             };
             this.core
                 .borrow_mut()
-                .apply(realand_core::CoreEvent::BeginMove { id, start });
+                .apply(clarion_core::CoreEvent::BeginMove { id, start });
             if this.core.borrow().interaction().is_none() {
                 this.discard_stage_drag_origin(&window_id);
                 return false;
@@ -4760,7 +4774,7 @@ impl<W: LayoutElement> Layout<W> {
                         .unwrap_or_default();
                     self.core
                         .borrow_mut()
-                        .apply(realand_core::CoreEvent::MovePose {
+                        .apply(clarion_core::CoreEvent::MovePose {
                             id,
                             output: Some(output.name()),
                             geometry,
@@ -5270,7 +5284,7 @@ impl<W: LayoutElement> Layout<W> {
         let begin_gesture = self.dnd.is_none();
         self.core
             .borrow_mut()
-            .dnd_hold_action(realand_core::dnd_hold::DndHoldAction::Motion {
+            .dnd_hold_action(clarion_core::dnd_hold::DndHoldAction::Motion {
                 connector: output.name(),
             });
         self.dnd = Some(DndData {
@@ -5298,7 +5312,7 @@ impl<W: LayoutElement> Layout<W> {
             this.dnd = None;
             this.core
                 .borrow_mut()
-                .dnd_hold_action(realand_core::dnd_hold::DndHoldAction::End);
+                .dnd_hold_action(clarion_core::dnd_hold::DndHoldAction::End);
 
             for mon in this.monitors_mut() {
                 mon.dnd_scroll_gesture_end();
@@ -5534,8 +5548,8 @@ impl<W: LayoutElement> Layout<W> {
 
     pub fn default_overview_mode(&self) -> OverviewMode {
         match self.options.overview.style {
-            realand_config::OverviewStyle::Stage => OverviewMode::Stage,
-            realand_config::OverviewStyle::Strip => OverviewMode::Strip,
+            clarion_config::OverviewStyle::Stage => OverviewMode::Stage,
+            clarion_config::OverviewStyle::Strip => OverviewMode::Strip,
         }
     }
 
@@ -5608,7 +5622,7 @@ impl<W: LayoutElement> Layout<W> {
                 let initial = this.active_window().map(LayoutElement::core_id);
                 this.core
                     .borrow_mut()
-                    .spread_action(realand_core::spread::SpreadAction::Begin { initial });
+                    .spread_action(clarion_core::spread::SpreadAction::Begin { initial });
             }
             this.set_overview_mode(OverviewMode::Windows);
             if let MonitorSet::Normal { monitors, .. } = &mut this.monitor_set {
@@ -5706,7 +5720,7 @@ impl<W: LayoutElement> Layout<W> {
         self.core
             .borrow_mut()
             .overview_action(OverviewAction::RememberExpo(
-                id.map(|id| realand_core::SpaceId(id.get())),
+                id.map(|id| clarion_core::SpaceId(id.get())),
             ));
     }
 
@@ -5804,7 +5818,7 @@ impl<W: LayoutElement> Layout<W> {
                 return (idx, ws_id);
             }
             let config = WorkspaceConfig {
-                name: realand_config::WorkspaceName("scratchpad".to_string()),
+                name: clarion_config::WorkspaceName("scratchpad".to_string()),
                 open_on_output: None,
                 layout: None,
             };
@@ -5825,7 +5839,7 @@ impl<W: LayoutElement> Layout<W> {
                     ws.set_output(Some(mon.output.clone()));
                     ws.update_config(mon.options.clone());
 
-                    let id = realand_core::SpaceId(ws.id().get());
+                    let id = clarion_core::SpaceId(ws.id().get());
                     let inserted_index;
                     if mon.workspaces.is_empty() {
                         inserted_index = 0;
@@ -5881,10 +5895,10 @@ impl<W: LayoutElement> Layout<W> {
         } else {
             let space = self
                 .active_workspace()
-                .map(|workspace| realand_core::SpaceId(workspace.id().get()));
+                .map(|workspace| clarion_core::SpaceId(workspace.id().get()));
             self.core
                 .borrow_mut()
-                .apply(realand_core::CoreEvent::RememberScratchpadReturn { space });
+                .apply(clarion_core::CoreEvent::RememberScratchpadReturn { space });
             let (scratch_idx, _) = self.ensure_scratchpad_workspace();
             self.switch_workspace(scratch_idx);
         }
@@ -5919,10 +5933,10 @@ impl<W: LayoutElement> Layout<W> {
         } else {
             let space = self
                 .active_workspace()
-                .map(|workspace| realand_core::SpaceId(workspace.id().get()));
+                .map(|workspace| clarion_core::SpaceId(workspace.id().get()));
             self.core
                 .borrow_mut()
-                .apply(realand_core::CoreEvent::RememberScratchpadReturn { space });
+                .apply(clarion_core::CoreEvent::RememberScratchpadReturn { space });
             let (scratch_idx, _) = self.ensure_scratchpad_workspace();
             self.move_to_workspace(None, scratch_idx, ActivateWindow::No);
         }
@@ -6028,7 +6042,7 @@ impl<W: LayoutElement> Layout<W> {
         if fresh || self.core.borrow().overview().initial_stage().is_none() {
             let origin = self
                 .active_workspace()
-                .map(|ws| realand_core::SpaceId(ws.id().get()));
+                .map(|ws| clarion_core::SpaceId(ws.id().get()));
             self.core
                 .borrow_mut()
                 .overview_action(OverviewAction::RememberStage(origin));
@@ -6238,7 +6252,7 @@ impl<W: LayoutElement> Layout<W> {
         xray_has_blocked_out_layers: bool,
         window: &W::Id,
     ) {
-        let _span = realand_tracy_span!("Layout::store_unmap_snapshot");
+        let _span = clarion_tracy_span!("Layout::store_unmap_snapshot");
 
         if self.is_window_spread_visible() {
             for mon in self.monitors_mut() {
@@ -6328,7 +6342,7 @@ impl<W: LayoutElement> Layout<W> {
         xray_has_blocked_out_layers: bool,
         window: &W::Id,
     ) {
-        let _span = realand_tracy_span!("Layout::store_unmap_snapshot");
+        let _span = clarion_tracy_span!("Layout::store_unmap_snapshot");
 
         if self.is_window_spread_visible() {
             for mon in self.monitors_mut() {
@@ -6447,7 +6461,7 @@ impl<W: LayoutElement> Layout<W> {
         window: &W::Id,
         blocker: TransactionBlocker,
     ) {
-        let _span = realand_tracy_span!("Layout::start_close_animation_for_window");
+        let _span = clarion_tracy_span!("Layout::start_close_animation_for_window");
 
         if self.is_window_spread_visible() {
             if let Some(mon) = self.monitors_mut().find(|mon| mon.has_window(window)) {
@@ -6514,7 +6528,7 @@ impl<W: LayoutElement> Layout<W> {
         window: &W::Id,
         blocker: TransactionBlocker,
     ) {
-        let _span = realand_tracy_span!("Layout::start_close_animation_for_window_native");
+        let _span = clarion_tracy_span!("Layout::start_close_animation_for_window_native");
 
         if self.is_window_spread_visible() {
             if let Some(mon) = self.monitors_mut().find(|mon| mon.has_window(window)) {
@@ -6573,42 +6587,8 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
-    pub fn render_interactive_move_for_output<R: RealandRenderer>(
-        &self,
-        ctx: RenderCtx<R>,
-        output: &Output,
-        push: &mut dyn FnMut(RescaleRenderElement<TileRenderElement<R>>),
-    ) {
-        if self.update_render_elements_time != self.clock.now() {
-            error!("clock moved between updating render elements and rendering");
-        }
-
-        let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move else {
-            return;
-        };
-
-        if &move_.output != output {
-            return;
-        }
-
-        let scale = Scale::from(move_.output.current_scale().fractional_scale());
-        let zoom = self.interactive_move_zoom();
-        let pos_in_backdrop = move_.tile_render_location(zoom);
-        let xray_pos = XrayPos::new(pos_in_backdrop, zoom);
-
-        move_
-            .tile
-            .render(ctx, pos_in_backdrop, xray_pos, true, &mut |elem| {
-                push(RescaleRenderElement::from_element(
-                    elem,
-                    pos_in_backdrop.to_physical_precise_round(scale),
-                    zoom,
-                ));
-            });
-    }
-
     pub fn refresh(&mut self, is_active: bool) {
-        let _span = realand_tracy_span!("Layout::refresh");
+        let _span = clarion_tracy_span!("Layout::refresh");
 
         self.is_active = is_active;
         let overview_is_open = self.is_overview_open();

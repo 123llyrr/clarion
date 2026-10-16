@@ -3,13 +3,13 @@ use std::cmp::max;
 use std::rc::Rc;
 use std::time::Duration;
 
-use realand_config::utils::MergeWith as _;
-use realand_config::{CenterFocusedColumn, CornerRadius, PresetSize, Workspace as WorkspaceConfig};
-use realand_core::workspace_state::{
+use clarion_config::utils::MergeWith as _;
+use clarion_config::{CenterFocusedColumn, CornerRadius, PresetSize, Workspace as WorkspaceConfig};
+use clarion_core::workspace_state::{
     CanvasPolicyMemory, MinimizeRestore, RestoreColumn, RestoreDestination, SpaceLayerFocus,
 };
-use realand_core::{CoreEvent, Layer, LayoutMode, SpaceId};
-use realand_ipc::{ColumnDisplay, PositionChange, SizeChange, WindowLayout};
+use clarion_core::{CoreEvent, Layer, LayoutMode, SpaceId};
+use clarion_ipc::{ColumnDisplay, PositionChange, SizeChange, WindowLayout};
 
 use super::core_adapter::{self, DesktopContext};
 use smithay::backend::renderer::element::Kind;
@@ -34,9 +34,9 @@ use super::{
     ActivateWindow, HitType, InsertPosition, LayoutElement, Options, RemovedTile, SizeFrac,
 };
 use crate::animation::Clock;
+use crate::clarion_render_elements;
 use crate::layout::RenderLayer;
-use crate::realand_render_elements;
-use crate::render_helpers::renderer::RealandRenderer;
+use crate::render_helpers::renderer::ClarionRenderer;
 use crate::render_helpers::shadow::ShadowRenderElement;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::xray::{Xray, XrayPos};
@@ -111,7 +111,7 @@ pub struct Workspace<W: LayoutElement> {
     pub(super) options: Rc<Options>,
 
     /// Layout config overrides for this workspace.
-    layout_config: Option<realand_config::LayoutPart>,
+    layout_config: Option<clarion_config::LayoutPart>,
 
     /// Unique ID of this workspace.
     id: WorkspaceId,
@@ -156,7 +156,7 @@ impl WorkspaceId {
     }
 }
 
-realand_render_elements! {
+clarion_render_elements! {
     WorkspaceRenderElement<R> => {
         Scrolling = ScrollingSpaceRenderElement<R>,
         Floating = FloatingSpaceRenderElement<R>,
@@ -487,9 +487,9 @@ impl<W: LayoutElement> Workspace<W> {
             let minimum = tile.window().min_size();
             let maximum = tile.window().max_size();
             let minimum =
-                realand_core::Size::new(f64::from(minimum.w), f64::from(minimum.h)).sanitized();
+                clarion_core::Size::new(f64::from(minimum.w), f64::from(minimum.h)).sanitized();
             let maximum =
-                realand_core::Size::new(f64::from(maximum.w), f64::from(maximum.h)).sanitized();
+                clarion_core::Size::new(f64::from(maximum.w), f64::from(maximum.h)).sanitized();
             if core
                 .window(&id)
                 .is_some_and(|record| record.min_size != minimum || record.max_size != maximum)
@@ -556,7 +556,7 @@ impl<W: LayoutElement> Workspace<W> {
             .set_space_focus(SpaceId(self.id.get()), id, activate);
     }
 
-    pub fn tiling_mode(&self) -> realand_ipc::TilingMode {
+    pub fn tiling_mode(&self) -> clarion_ipc::TilingMode {
         match self
             .core
             .borrow()
@@ -564,30 +564,30 @@ impl<W: LayoutElement> Workspace<W> {
             .map(|space| space.mode)
             .unwrap_or(LayoutMode::Scrolling)
         {
-            LayoutMode::Dwindle => realand_ipc::TilingMode::Dwindle,
-            LayoutMode::Floating | LayoutMode::Scrolling => realand_ipc::TilingMode::Scrolling,
+            LayoutMode::Dwindle => clarion_ipc::TilingMode::Dwindle,
+            LayoutMode::Floating | LayoutMode::Scrolling => clarion_ipc::TilingMode::Scrolling,
         }
     }
 
     fn tiling_is_empty(&self) -> bool {
         match self.tiling_mode() {
-            realand_ipc::TilingMode::Dwindle => self.dwindle.is_empty(),
-            realand_ipc::TilingMode::Scrolling => self.scrolling.is_empty(),
+            clarion_ipc::TilingMode::Dwindle => self.dwindle.is_empty(),
+            clarion_ipc::TilingMode::Scrolling => self.scrolling.is_empty(),
         }
     }
 
     pub fn toggle_tiling_mode(&mut self) {
         match self.tiling_mode() {
-            realand_ipc::TilingMode::Scrolling => {
-                self.set_tiling_mode(realand_ipc::TilingMode::Dwindle)
+            clarion_ipc::TilingMode::Scrolling => {
+                self.set_tiling_mode(clarion_ipc::TilingMode::Dwindle)
             }
-            realand_ipc::TilingMode::Dwindle => {
-                self.set_tiling_mode(realand_ipc::TilingMode::Scrolling)
+            clarion_ipc::TilingMode::Dwindle => {
+                self.set_tiling_mode(clarion_ipc::TilingMode::Scrolling)
             }
         }
     }
 
-    pub fn set_tiling_mode(&mut self, mode: realand_ipc::TilingMode) {
+    pub fn set_tiling_mode(&mut self, mode: clarion_ipc::TilingMode) {
         self.with_layout_transition(|this| {
             if this.canvas_enabled() {
                 this.toggle_canvas();
@@ -597,11 +597,11 @@ impl<W: LayoutElement> Workspace<W> {
             }
             let space = SpaceId(this.id.get());
             match this.tiling_mode() {
-                realand_ipc::TilingMode::Scrolling => this
+                clarion_ipc::TilingMode::Scrolling => this
                     .core
                     .borrow_mut()
                     .capture_scrolling(space, this.scrolling.policy_snapshot()),
-                realand_ipc::TilingMode::Dwindle => this
+                clarion_ipc::TilingMode::Dwindle => this
                     .core
                     .borrow_mut()
                     .capture_dwindle(space, this.dwindle.policy_snapshot()),
@@ -609,8 +609,8 @@ impl<W: LayoutElement> Workspace<W> {
             this.core.borrow_mut().set_layout_mode(
                 SpaceId(this.id.get()),
                 match mode {
-                    realand_ipc::TilingMode::Scrolling => LayoutMode::Scrolling,
-                    realand_ipc::TilingMode::Dwindle => LayoutMode::Dwindle,
+                    clarion_ipc::TilingMode::Scrolling => LayoutMode::Scrolling,
+                    clarion_ipc::TilingMode::Dwindle => LayoutMode::Dwindle,
                 },
             );
 
@@ -618,7 +618,7 @@ impl<W: LayoutElement> Workspace<W> {
             // the space of the active tiling mode, and can be focused, rendered and closed no
             // matter which mode it was originally opened in.
             match mode {
-                realand_ipc::TilingMode::Dwindle => {
+                clarion_ipc::TilingMode::Dwindle => {
                     let active_id = this.scrolling.active_window().map(|win| win.id().clone());
 
                     let closing = this.scrolling.take_closing_windows();
@@ -639,7 +639,7 @@ impl<W: LayoutElement> Workspace<W> {
                         this.dwindle.set_active_window(id);
                     }
                 }
-                realand_ipc::TilingMode::Scrolling => {
+                clarion_ipc::TilingMode::Scrolling => {
                     let active_id = this.dwindle.active_window_id().cloned();
 
                     let closing = this.dwindle.take_closing_windows();
@@ -676,7 +676,7 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     pub fn toggle_dwindle_split(&mut self) {
-        if self.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+        if self.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
             self.dwindle.toggle_split_direction();
         }
     }
@@ -849,13 +849,30 @@ impl<W: LayoutElement> Workspace<W> {
         })
     }
 
-    pub fn update_layout_config(&mut self, layout_config: Option<realand_config::LayoutPart>) {
+    pub fn update_layout_config(&mut self, layout_config: Option<clarion_config::LayoutPart>) {
         if self.layout_config == layout_config {
             return;
         }
 
         self.layout_config = layout_config;
         self.update_config(self.base_options.clone());
+    }
+
+    pub(crate) fn on_native_renderer_replaced(&mut self) {
+        for tile in self.tiles_mut() {
+            tile.on_native_renderer_replaced();
+        }
+        // Closed clients cannot provide fresh pixels. End only their stale
+        // native snapshot effects, keeping unrelated GLES transitions intact.
+        self.scrolling
+            .closing_windows
+            .retain(|closing| !closing.uses_native_renderer());
+        self.dwindle
+            .closing_windows
+            .retain(|closing| !closing.uses_native_renderer());
+        self.floating
+            .closing_windows
+            .retain(|closing| !closing.uses_native_renderer());
     }
 
     pub fn update_shaders(&mut self) {
@@ -927,7 +944,7 @@ impl<W: LayoutElement> Workspace<W> {
     pub fn active_window(&self) -> Option<&W> {
         if self.active_layer().is_floating() {
             self.floating.active_window()
-        } else if self.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+        } else if self.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
             self.dwindle.active_window()
         } else {
             self.scrolling.active_window()
@@ -937,7 +954,7 @@ impl<W: LayoutElement> Workspace<W> {
     pub fn active_window_mut(&mut self) -> Option<&mut W> {
         if self.active_layer().is_floating() {
             self.floating.active_window_mut()
-        } else if self.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+        } else if self.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
             self.dwindle.active_window_mut()
         } else {
             self.scrolling.active_window_mut()
@@ -947,7 +964,7 @@ impl<W: LayoutElement> Workspace<W> {
     pub fn is_active_pending_fullscreen(&self) -> bool {
         if self.active_layer().is_floating() {
             false
-        } else if self.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+        } else if self.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
             self.dwindle.is_active_pending_fullscreen()
         } else {
             self.scrolling.is_active_pending_fullscreen()
@@ -1119,7 +1136,7 @@ impl<W: LayoutElement> Workspace<W> {
         width: ColumnWidth,
         is_full_width: bool,
         is_floating: bool,
-        anim: Option<realand_config::Animation>,
+        anim: Option<clarion_config::Animation>,
     ) {
         self.with_layout_transition(|this| {
             if let WorkspaceAddWindowTarget::NextTo(id) = target {
@@ -1158,7 +1175,7 @@ impl<W: LayoutElement> Workspace<W> {
                         if activate || this.tiling_is_empty() {
                             this.set_active_layer(SpaceLayerFocus::Floating);
                         }
-                    } else if this.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+                    } else if this.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
                         let act = if activate {
                             ActivateWindow::Yes
                         } else {
@@ -1248,7 +1265,7 @@ impl<W: LayoutElement> Workspace<W> {
                         if activate || this.tiling_is_empty() {
                             this.set_active_layer(SpaceLayerFocus::Floating);
                         }
-                    } else if this.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+                    } else if this.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
                         let act = if activate {
                             ActivateWindow::Yes
                         } else {
@@ -1308,7 +1325,7 @@ impl<W: LayoutElement> Workspace<W> {
         &mut self,
         column: Column<W>,
         activate: bool,
-        anim: Option<realand_config::Animation>,
+        anim: Option<clarion_config::Animation>,
     ) {
         self.with_layout_transition(|this| {
             for (tile, _) in column.tiles() {
@@ -1531,7 +1548,7 @@ impl<W: LayoutElement> Workspace<W> {
         self.with_layout_transition(|this| {
             if this.active_layer().is_floating() {
                 this.floating.focus_left()
-            } else if this.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+            } else if this.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
                 this.dwindle.focus_left()
             } else {
                 this.scrolling.focus_left()
@@ -1543,7 +1560,7 @@ impl<W: LayoutElement> Workspace<W> {
         self.with_layout_transition(|this| {
             if this.active_layer().is_floating() {
                 this.floating.focus_right()
-            } else if this.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+            } else if this.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
                 this.dwindle.focus_right()
             } else {
                 this.scrolling.focus_right()
@@ -1555,7 +1572,7 @@ impl<W: LayoutElement> Workspace<W> {
         self.with_layout_transition(|this| {
             if this.active_layer().is_floating() {
                 this.floating.focus_leftmost();
-            } else if this.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+            } else if this.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
                 this.dwindle.focus_leftmost();
             } else {
                 this.scrolling.focus_column_first();
@@ -1567,7 +1584,7 @@ impl<W: LayoutElement> Workspace<W> {
         self.with_layout_transition(|this| {
             if this.active_layer().is_floating() {
                 this.floating.focus_rightmost();
-            } else if this.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+            } else if this.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
                 this.dwindle.focus_rightmost();
             } else {
                 this.scrolling.focus_column_last();
@@ -1613,7 +1630,7 @@ impl<W: LayoutElement> Workspace<W> {
         self.with_layout_transition(|this| {
             if this.active_layer().is_floating() {
                 this.floating.focus_down()
-            } else if this.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+            } else if this.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
                 this.dwindle.focus_down()
             } else {
                 this.scrolling.focus_down()
@@ -1625,7 +1642,7 @@ impl<W: LayoutElement> Workspace<W> {
         self.with_layout_transition(|this| {
             if this.active_layer().is_floating() {
                 this.floating.focus_up()
-            } else if this.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+            } else if this.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
                 this.dwindle.focus_up()
             } else {
                 this.scrolling.focus_up()
@@ -1637,7 +1654,7 @@ impl<W: LayoutElement> Workspace<W> {
         self.with_layout_transition(|this| {
             if this.active_layer().is_floating() {
                 this.floating.focus_down();
-            } else if this.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+            } else if this.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
                 if !this.dwindle.focus_down() {
                     this.dwindle.focus_left();
                 }
@@ -1651,7 +1668,7 @@ impl<W: LayoutElement> Workspace<W> {
         self.with_layout_transition(|this| {
             if this.active_layer().is_floating() {
                 this.floating.focus_down();
-            } else if this.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+            } else if this.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
                 if !this.dwindle.focus_down() {
                     this.dwindle.focus_right();
                 }
@@ -1665,7 +1682,7 @@ impl<W: LayoutElement> Workspace<W> {
         self.with_layout_transition(|this| {
             if this.active_layer().is_floating() {
                 this.floating.focus_up();
-            } else if this.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+            } else if this.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
                 if !this.dwindle.focus_up() {
                     this.dwindle.focus_left();
                 }
@@ -1679,7 +1696,7 @@ impl<W: LayoutElement> Workspace<W> {
         self.with_layout_transition(|this| {
             if this.active_layer().is_floating() {
                 this.floating.focus_up();
-            } else if this.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+            } else if this.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
                 if !this.dwindle.focus_up() {
                     this.dwindle.focus_right();
                 }
@@ -1693,7 +1710,7 @@ impl<W: LayoutElement> Workspace<W> {
         self.with_layout_transition(|this| {
             if this.active_layer().is_floating() {
                 this.floating.focus_topmost();
-            } else if this.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+            } else if this.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
                 this.dwindle.focus_top();
             } else {
                 this.scrolling.focus_top();
@@ -1705,7 +1722,7 @@ impl<W: LayoutElement> Workspace<W> {
         self.with_layout_transition(|this| {
             if this.active_layer().is_floating() {
                 this.floating.focus_bottommost();
-            } else if this.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+            } else if this.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
                 this.dwindle.focus_bottom();
             } else {
                 this.scrolling.focus_bottom();
@@ -1734,7 +1751,7 @@ impl<W: LayoutElement> Workspace<W> {
             if this.active_layer().is_floating() {
                 this.floating.move_left();
                 true
-            } else if this.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+            } else if this.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
                 this.dwindle.move_left()
             } else {
                 this.scrolling.move_left()
@@ -1747,7 +1764,7 @@ impl<W: LayoutElement> Workspace<W> {
             if this.active_layer().is_floating() {
                 this.floating.move_right();
                 true
-            } else if this.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+            } else if this.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
                 this.dwindle.move_right()
             } else {
                 this.scrolling.move_right()
@@ -1787,7 +1804,7 @@ impl<W: LayoutElement> Workspace<W> {
             if this.active_layer().is_floating() {
                 this.floating.move_down();
                 true
-            } else if this.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+            } else if this.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
                 this.dwindle.move_down()
             } else {
                 this.scrolling.move_down()
@@ -1800,7 +1817,7 @@ impl<W: LayoutElement> Workspace<W> {
             if this.active_layer().is_floating() {
                 this.floating.move_up();
                 true
-            } else if this.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+            } else if this.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
                 this.dwindle.move_up()
             } else {
                 this.scrolling.move_up()
@@ -1853,7 +1870,7 @@ impl<W: LayoutElement> Workspace<W> {
             if this.active_layer().is_floating() {
                 return;
             }
-            if this.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+            if this.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
                 match direction {
                     ScrollDirection::Left => {
                         this.dwindle.move_left();
@@ -1912,7 +1929,7 @@ impl<W: LayoutElement> Workspace<W> {
             }) {
                 this.floating.center_window(id);
             } else if id.map_or(
-                this.tiling_mode() == realand_ipc::TilingMode::Scrolling,
+                this.tiling_mode() == clarion_ipc::TilingMode::Scrolling,
                 |id| !this.dwindle.has_window(id),
             ) {
                 this.scrolling.center_window(id);
@@ -1933,7 +1950,7 @@ impl<W: LayoutElement> Workspace<W> {
         self.with_layout_transition(|this| {
             if this.active_layer().is_floating() {
                 this.floating.toggle_window_width(None, forwards);
-            } else if this.tiling_mode() == realand_ipc::TilingMode::Scrolling {
+            } else if this.tiling_mode() == clarion_ipc::TilingMode::Scrolling {
                 this.scrolling.toggle_width(forwards);
             }
         })
@@ -1942,7 +1959,7 @@ impl<W: LayoutElement> Workspace<W> {
     pub fn toggle_full_width(&mut self) {
         self.with_layout_transition(|this| {
             if this.active_layer().is_floating()
-                || this.tiling_mode() != realand_ipc::TilingMode::Scrolling
+                || this.tiling_mode() != clarion_ipc::TilingMode::Scrolling
             {
                 // Leave this unimplemented for now. For good UX, this probably needs moving the tile
                 // to be against the left edge of the working area while it is full-width.
@@ -1956,7 +1973,7 @@ impl<W: LayoutElement> Workspace<W> {
         self.with_layout_transition(|this| {
             if this.active_layer().is_floating() {
                 this.floating.set_window_width(None, change, true);
-            } else if this.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+            } else if this.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
                 this.dwindle.set_window_width(None, change);
             } else {
                 this.scrolling.set_window_width(None, change);
@@ -1971,7 +1988,7 @@ impl<W: LayoutElement> Workspace<W> {
             }) {
                 this.floating.set_window_width(window, change, true);
             } else if window.map_or(
-                this.tiling_mode() == realand_ipc::TilingMode::Dwindle,
+                this.tiling_mode() == clarion_ipc::TilingMode::Dwindle,
                 |id| this.dwindle.has_window(id),
             ) {
                 this.dwindle.set_window_width(window, change);
@@ -1988,7 +2005,7 @@ impl<W: LayoutElement> Workspace<W> {
             }) {
                 this.floating.set_window_height(window, change, true);
             } else if window.map_or(
-                this.tiling_mode() == realand_ipc::TilingMode::Dwindle,
+                this.tiling_mode() == clarion_ipc::TilingMode::Dwindle,
                 |id| this.dwindle.has_window(id),
             ) {
                 this.dwindle.set_window_height(window, change);
@@ -2005,7 +2022,7 @@ impl<W: LayoutElement> Workspace<W> {
             });
             if !is_floating
                 && window.map_or(
-                    this.tiling_mode() == realand_ipc::TilingMode::Scrolling,
+                    this.tiling_mode() == clarion_ipc::TilingMode::Scrolling,
                     |id| !this.dwindle.has_window(id),
                 )
             {
@@ -2021,7 +2038,7 @@ impl<W: LayoutElement> Workspace<W> {
             }) {
                 this.floating.toggle_window_width(window, forwards);
             } else if window.map_or(
-                this.tiling_mode() == realand_ipc::TilingMode::Scrolling,
+                this.tiling_mode() == clarion_ipc::TilingMode::Scrolling,
                 |id| !this.dwindle.has_window(id),
             ) {
                 this.scrolling.toggle_window_width(window, forwards);
@@ -2036,7 +2053,7 @@ impl<W: LayoutElement> Workspace<W> {
             }) {
                 this.floating.toggle_window_height(window, forwards);
             } else if window.map_or(
-                this.tiling_mode() == realand_ipc::TilingMode::Scrolling,
+                this.tiling_mode() == clarion_ipc::TilingMode::Scrolling,
                 |id| !this.dwindle.has_window(id),
             ) {
                 this.scrolling.toggle_window_height(window, forwards);
@@ -2047,7 +2064,7 @@ impl<W: LayoutElement> Workspace<W> {
     pub fn expand_column_to_available_width(&mut self) {
         self.with_layout_transition(|this| {
             if this.active_layer().is_floating()
-                || this.tiling_mode() != realand_ipc::TilingMode::Scrolling
+                || this.tiling_mode() != clarion_ipc::TilingMode::Scrolling
             {
                 return;
             }
@@ -2299,7 +2316,7 @@ impl<W: LayoutElement> Workspace<W> {
                     match (policy, this.tiling_mode()) {
                         (
                             CanvasPolicyMemory::Scrolling(saved),
-                            realand_ipc::TilingMode::Scrolling,
+                            clarion_ipc::TilingMode::Scrolling,
                         ) => {
                             let current =
                                 CanvasPolicyMemory::Scrolling(this.scrolling.policy_snapshot());
@@ -2311,7 +2328,7 @@ impl<W: LayoutElement> Workspace<W> {
                             let tiles = this.scrolling.drain_tiles();
                             this.scrolling.restore_policy(&saved, tiles, active);
                         }
-                        (CanvasPolicyMemory::Dwindle(saved), realand_ipc::TilingMode::Dwindle) => {
+                        (CanvasPolicyMemory::Dwindle(saved), clarion_ipc::TilingMode::Dwindle) => {
                             this.dwindle.restore_stage_topology(&saved);
                             if let Some(id) = active.and_then(|id| {
                                 this.dwindle
@@ -2338,10 +2355,10 @@ impl<W: LayoutElement> Workspace<W> {
                 }
                 tiled.extend(this.dwindle.tiled_positions());
                 let policy = match this.tiling_mode() {
-                    realand_ipc::TilingMode::Scrolling => {
+                    clarion_ipc::TilingMode::Scrolling => {
                         CanvasPolicyMemory::Scrolling(this.scrolling.policy_snapshot())
                     }
-                    realand_ipc::TilingMode::Dwindle => {
+                    clarion_ipc::TilingMode::Dwindle => {
                         CanvasPolicyMemory::Dwindle(this.dwindle.policy_snapshot())
                     }
                 };
@@ -2405,7 +2422,7 @@ impl<W: LayoutElement> Workspace<W> {
                     // Update the authoritative destination before selecting
                     // its lane; validation must not see the old floating row.
                     this.register_core_tile(&removed.tile, false);
-                    if this.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+                    if this.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
                         this.dwindle.add_tile(
                             removed.tile,
                             if target_is_active {
@@ -2541,7 +2558,7 @@ impl<W: LayoutElement> Workspace<W> {
                     } else {
                         return;
                     }
-                } else if this.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+                } else if this.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
                     let Some(tile) = this.dwindle.active_tile_mut() else {
                         return;
                     };
@@ -2664,7 +2681,7 @@ impl<W: LayoutElement> Workspace<W> {
             this.interactive_resize_end(Some(window));
             let mut removed = if record.layer == Layer::Above {
                 this.floating.remove_tile(window)
-            } else if this.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+            } else if this.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
                 this.dwindle.remove_window(window).unwrap()
             } else {
                 this.scrolling.remove_tile(window, Transaction::new())
@@ -2781,9 +2798,9 @@ impl<W: LayoutElement> Workspace<W> {
             }
             if let Some(display) = restore.display {
                 let display = match display {
-                    realand_core::policy_memory::ColumnDisplay::Normal => ColumnDisplay::Normal,
-                    realand_core::policy_memory::ColumnDisplay::Tabbed => ColumnDisplay::Tabbed,
-                    realand_core::policy_memory::ColumnDisplay::Dwindle => ColumnDisplay::Dwindle,
+                    clarion_core::policy_memory::ColumnDisplay::Normal => ColumnDisplay::Normal,
+                    clarion_core::policy_memory::ColumnDisplay::Tabbed => ColumnDisplay::Tabbed,
+                    clarion_core::policy_memory::ColumnDisplay::Dwindle => ColumnDisplay::Dwindle,
                 };
                 this.scrolling.set_window_column_display(core_id, display);
             }
@@ -2866,7 +2883,7 @@ impl<W: LayoutElement> Workspace<W> {
     pub fn active_window_visual_rectangle(&self) -> Option<Rectangle<f64, Logical>> {
         if self.active_layer().is_floating() {
             self.floating.active_window_visual_rectangle()
-        } else if self.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+        } else if self.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
             self.dwindle.active_window_visual_rectangle()
         } else {
             self.scrolling.active_window_visual_rectangle()
@@ -2893,7 +2910,7 @@ impl<W: LayoutElement> Workspace<W> {
         }
     }
 
-    pub fn render_scrolling<R: RealandRenderer>(
+    pub fn render_scrolling<R: ClarionRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         xray_pos: XrayPos,
@@ -2911,7 +2928,7 @@ impl<W: LayoutElement> Workspace<W> {
             }
         }
         let tiling_focus_ring = focus_ring && !self.floating_is_active();
-        if self.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+        if self.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
             let view_rect = Rectangle::from_size(self.view_size);
             self.dwindle.render(
                 ctx,
@@ -2929,7 +2946,7 @@ impl<W: LayoutElement> Workspace<W> {
         }
     }
 
-    pub fn render_floating<R: RealandRenderer>(
+    pub fn render_floating<R: ClarionRenderer>(
         &self,
         ctx: RenderCtx<R>,
         xray_pos: XrayPos,
@@ -2953,7 +2970,7 @@ impl<W: LayoutElement> Workspace<W> {
         );
     }
 
-    pub fn render_shadow<R: RealandRenderer>(
+    pub fn render_shadow<R: ClarionRenderer>(
         &self,
         renderer: &mut R,
         push: &mut dyn FnMut(ShadowRenderElement),
@@ -2971,7 +2988,7 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     pub fn render_above_top_layer(&self) -> bool {
-        if self.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+        if self.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
             self.dwindle.is_active_pending_fullscreen()
         } else {
             self.scrolling.render_above_top_layer()
@@ -3135,7 +3152,7 @@ impl<W: LayoutElement> Workspace<W> {
             }
         }
 
-        if self.tiling_mode() == realand_ipc::TilingMode::Dwindle {
+        if self.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
             self.dwindle.window_under(pos)
         } else {
             self.scrolling.window_under(pos)
@@ -3430,7 +3447,7 @@ impl<W: LayoutElement> Workspace<W> {
         self.working_area
     }
 
-    pub fn layout_config(&self) -> Option<&realand_config::LayoutPart> {
+    pub fn layout_config(&self) -> Option<&clarion_config::LayoutPart> {
         self.layout_config.as_ref()
     }
 
@@ -3593,14 +3610,14 @@ pub(super) fn compute_working_area(output: &Output) -> Rectangle<f64, Logical> {
 }
 
 fn compute_workspace_shadow_config(
-    config: realand_config::WorkspaceShadow,
+    config: clarion_config::WorkspaceShadow,
     view_size: Size<f64, Logical>,
-) -> realand_config::Shadow {
+) -> clarion_config::Shadow {
     // Gaps between workspaces are a multiple of the view height, so shadow settings should also be
     // normalized to the view height to prevent them from overlapping on lower resolutions.
     let norm = view_size.h / 1080.;
 
-    let mut config = realand_config::Shadow::from(config);
+    let mut config = clarion_config::Shadow::from(config);
     config.softness *= norm;
     config.spread *= norm;
     config.offset.x.0 *= norm;

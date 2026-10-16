@@ -1,4 +1,4 @@
-Since realand is not a complete desktop environment, you will very likely want to run the following software to make sure that other apps work fine.
+Since clarion is not a complete desktop environment, you will very likely want to run the following software to make sure that other apps work fine.
 
 ### Notification Daemon
 
@@ -8,13 +8,13 @@ Many apps need one. For example, [mako](https://github.com/emersion/mako) works 
 
 These provide a cross-desktop API for apps to use for various things like file pickers or UI settings. Flatpak apps in particular require working portals.
 
-Portals **require** [running realand as a session](./Getting-Started.md), which means through the `realand-session` script or from a display manager. You will want the following portals installed:
+Portals **require** [running clarion as a session](./Getting-Started.md), which means through the `clarion-session` script or from a display manager. You will want the following portals installed:
 
 * `xdg-desktop-portal-gtk`: implements most of the basic functionality, this is the "default fallback portal".
 * `xdg-desktop-portal-gnome`: required for screencasting support.
 * `gnome-keyring`: implements the Secret portal, required for certain apps to work.
 
-Then systemd should start them on-demand automatically. These particular portals are configured in `realand-portals.conf` which [must be installed](./Getting-Started.md#manual-installation) in the correct location.
+Then systemd should start them on-demand automatically. These particular portals are configured in `clarion-portals.conf` which [must be installed](./Getting-Started.md#manual-installation) in the correct location.
 
 Since we're using `xdg-desktop-portal-gnome`, Flatpak apps will read the GNOME UI settings. For example, to enable the dark style, run:
 
@@ -22,9 +22,9 @@ Since we're using `xdg-desktop-portal-gnome`, Flatpak apps will read the GNOME U
 dconf write /org/gnome/desktop/interface/color-scheme '"prefer-dark"'
 ```
 
-Note that if you're using the provided `resources/realand-portals.conf`, you also need to install the `nautilus` file manager in order for file chooser dialogues to work properly. This is necessary because xdg-desktop-portal-gnome uses nautilus as the file chooser by default starting from version 47.0.
+Note that if you're using the provided `resources/clarion-portals.conf`, you also need to install the `nautilus` file manager in order for file chooser dialogues to work properly. This is necessary because xdg-desktop-portal-gnome uses nautilus as the file chooser by default starting from version 47.0.
 
-If you do not want to install `nautilus` (say you use `nemo` instead), you can set `org.freedesktop.impl.portal.FileChooser=gtk;` in `realand-portals.conf` to use the GTK portal for file chooser dialogues.
+If you do not want to install `nautilus` (say you use `nemo` instead), you can set `org.freedesktop.impl.portal.FileChooser=gtk;` in `clarion-portals.conf` to use the GTK portal for file chooser dialogues.
 
 > [!WARNING]
 > Do not set the `GDK_BACKEND` environment variable globally as this will break the screencast portal.

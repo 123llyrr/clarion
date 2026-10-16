@@ -279,7 +279,7 @@ mod tests {
             io::ErrorKind::Interrupted
         );
         let path =
-            std::env::temp_dir().join(format!("realand-gamma-reader-{}", std::process::id()));
+            std::env::temp_dir().join(format!("clarion-gamma-reader-{}", std::process::id()));
         std::fs::write(&path, [9, 9, 1, 0, 2, 0, 3, 0]).unwrap();
         let mut file = File::open(&path).unwrap();
         file.seek(io::SeekFrom::Start(2)).unwrap();

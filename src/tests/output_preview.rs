@@ -1,8 +1,8 @@
 use super::Fixture;
-use realand_config::Config;
+use clarion_config::Config;
 use std::time::Duration;
 
-fn candidate() -> realand_config::Outputs {
+fn candidate() -> clarion_config::Outputs {
     Config::parse_mem("output \"headless-1\" { scale 2; transform \"90\"; position x=20 y=40; }")
         .unwrap()
         .outputs
@@ -12,96 +12,96 @@ fn candidate() -> realand_config::Outputs {
 fn preview_cancel_restores_exact_transient_config_and_scale() {
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));
-    f.realand_state().apply_transient_output_config(
+    f.clarion_state().apply_transient_output_config(
         "headless-1",
-        realand_ipc::OutputAction::Scale {
-            scale: realand_ipc::ScaleToSet::Specific(1.5),
+        clarion_ipc::OutputAction::Scale {
+            scale: clarion_ipc::ScaleToSet::Specific(1.5),
         },
     );
-    let original = f.realand().config.borrow().outputs.clone();
-    let file = f.realand().config_file_output_config.clone();
+    let original = f.clarion().config.borrow().outputs.clone();
+    let file = f.clarion().config_file_output_config.clone();
     let id = f
-        .realand_state()
+        .clarion_state()
         .begin_output_preview(candidate(), Duration::from_secs(15))
         .unwrap();
-    assert_eq!(f.realand_output(1).current_scale().fractional_scale(), 2.0);
-    f.realand_state().finish_output_preview(id, false).unwrap();
-    assert_eq!(f.realand().config.borrow().outputs, original);
-    assert_eq!(f.realand().config_file_output_config, file);
-    assert_eq!(f.realand_output(1).current_scale().fractional_scale(), 1.5);
+    assert_eq!(f.clarion_output(1).current_scale().fractional_scale(), 2.0);
+    f.clarion_state().finish_output_preview(id, false).unwrap();
+    assert_eq!(f.clarion().config.borrow().outputs, original);
+    assert_eq!(f.clarion().config_file_output_config, file);
+    assert_eq!(f.clarion_output(1).current_scale().fractional_scale(), 1.5);
 }
 
 #[test]
 fn compositor_timer_restores_without_client() {
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));
-    let original = f.realand().config.borrow().outputs.clone();
+    let original = f.clarion().config.borrow().outputs.clone();
     let id = f
-        .realand_state()
+        .clarion_state()
         .begin_output_preview(candidate(), Duration::ZERO)
         .unwrap();
     f.state.server.dispatch();
-    assert!(f.realand().output_preview.is_none());
-    assert_eq!(f.realand().config.borrow().outputs, original);
-    assert_eq!(f.realand_output(1).current_scale().fractional_scale(), 1.0);
+    assert!(f.clarion().output_preview.is_none());
+    assert_eq!(f.clarion().config.borrow().outputs, original);
+    assert_eq!(f.clarion_output(1).current_scale().fractional_scale(), 1.0);
     // The client's cancellation can arrive just after the compositor timer.
-    f.realand_state().finish_output_preview(id, false).unwrap();
-    assert!(f.realand_state().finish_output_preview(id, true).is_err());
+    f.clarion_state().finish_output_preview(id, false).unwrap();
+    assert!(f.clarion_state().finish_output_preview(id, true).is_err());
 }
 
 #[test]
 fn late_confirmation_restores_even_before_timer_dispatch() {
     let mut f = Fixture::new();
-    let original = f.realand().config.borrow().outputs.clone();
+    let original = f.clarion().config.borrow().outputs.clone();
     let id = f
-        .realand_state()
+        .clarion_state()
         .begin_output_preview(candidate(), Duration::ZERO)
         .unwrap();
-    assert!(f.realand_state().finish_output_preview(id, true).is_err());
-    assert_eq!(f.realand().config.borrow().outputs, original);
+    assert!(f.clarion_state().finish_output_preview(id, true).is_err());
+    assert_eq!(f.clarion().config.borrow().outputs, original);
 }
 
 #[test]
 fn confirmation_keeps_preview_after_timer_deadline() {
     let mut f = Fixture::new();
     let id = f
-        .realand_state()
+        .clarion_state()
         .begin_output_preview(candidate(), Duration::from_millis(20))
         .unwrap();
-    f.realand_state().finish_output_preview(id, true).unwrap();
+    f.clarion_state().finish_output_preview(id, true).unwrap();
     std::thread::sleep(Duration::from_millis(25));
     f.state.server.dispatch();
-    assert_eq!(f.realand().config.borrow().outputs, candidate());
-    assert!(f.realand().output_preview.is_none());
+    assert_eq!(f.clarion().config.borrow().outputs, candidate());
+    assert!(f.clarion().output_preview.is_none());
 }
 
 #[test]
 fn confirmed_preview_can_be_compensated_if_client_cannot_save() {
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));
-    f.realand_state().apply_transient_output_config(
+    f.clarion_state().apply_transient_output_config(
         "headless-1",
-        realand_ipc::OutputAction::Scale {
-            scale: realand_ipc::ScaleToSet::Specific(1.5),
+        clarion_ipc::OutputAction::Scale {
+            scale: clarion_ipc::ScaleToSet::Specific(1.5),
         },
     );
-    let original = f.realand().config.borrow().outputs.clone();
+    let original = f.clarion().config.borrow().outputs.clone();
     let id = f
-        .realand_state()
+        .clarion_state()
         .begin_output_preview(candidate(), Duration::from_secs(15))
         .unwrap();
-    f.realand_state().finish_output_preview(id, true).unwrap();
+    f.clarion_state().finish_output_preview(id, true).unwrap();
     assert!(f
-        .realand_state()
+        .clarion_state()
         .finish_output_preview(id.wrapping_add(1), false)
         .is_err());
-    assert_eq!(f.realand().config.borrow().outputs, candidate());
-    f.realand_state().finish_output_preview(id, false).unwrap();
-    assert_eq!(f.realand().config.borrow().outputs, original);
-    assert_eq!(f.realand_output(1).current_scale().fractional_scale(), 1.5);
+    assert_eq!(f.clarion().config.borrow().outputs, candidate());
+    f.clarion_state().finish_output_preview(id, false).unwrap();
+    assert_eq!(f.clarion().config.borrow().outputs, original);
+    assert_eq!(f.clarion_output(1).current_scale().fractional_scale(), 1.5);
     // Retrying after a lost rollback reply is safe.
-    f.realand_state().finish_output_preview(id, false).unwrap();
-    assert!(f.realand().confirmed_output_preview.is_none());
+    f.clarion_state().finish_output_preview(id, false).unwrap();
+    assert!(f.clarion().confirmed_output_preview.is_none());
 }
 
 #[test]
@@ -109,20 +109,20 @@ fn external_changes_invalidate_confirmed_compensation() {
     for reload in [false, true] {
         let mut f = Fixture::new();
         let id = f
-            .realand_state()
+            .clarion_state()
             .begin_output_preview(candidate(), Duration::from_secs(15))
             .unwrap();
-        f.realand_state().finish_output_preview(id, true).unwrap();
+        f.clarion_state().finish_output_preview(id, true).unwrap();
         if reload {
-            f.realand_state().reload_config(Ok(Config::default()));
+            f.clarion_state().reload_config(Ok(Config::default()));
         } else {
-            f.realand_state()
-                .apply_transient_output_config("headless-1", realand_ipc::OutputAction::Off);
+            f.clarion_state()
+                .apply_transient_output_config("headless-1", clarion_ipc::OutputAction::Off);
         }
-        let current = f.realand().config.borrow().outputs.clone();
-        assert!(f.realand_state().finish_output_preview(id, false).is_err());
-        assert_eq!(f.realand().config.borrow().outputs, current);
-        assert!(f.realand().confirmed_output_preview.is_none());
+        let current = f.clarion().config.borrow().outputs.clone();
+        assert!(f.clarion_state().finish_output_preview(id, false).is_err());
+        assert_eq!(f.clarion().config.borrow().outputs, current);
+        assert!(f.clarion().confirmed_output_preview.is_none());
     }
 }
 
@@ -130,59 +130,59 @@ fn external_changes_invalidate_confirmed_compensation() {
 fn newer_preview_cannot_be_cancelled_by_previous_confirmed_token() {
     let mut f = Fixture::new();
     let first = f
-        .realand_state()
+        .clarion_state()
         .begin_output_preview(candidate(), Duration::from_secs(15))
         .unwrap();
-    f.realand_state()
+    f.clarion_state()
         .finish_output_preview(first, true)
         .unwrap();
     let second = f
-        .realand_state()
+        .clarion_state()
         .begin_output_preview(Default::default(), Duration::from_secs(15))
         .unwrap();
     assert!(f
-        .realand_state()
+        .clarion_state()
         .finish_output_preview(first, false)
         .is_err());
-    assert!(f.realand().config.borrow().outputs.0.is_empty());
-    f.realand_state()
+    assert!(f.clarion().config.borrow().outputs.0.is_empty());
+    f.clarion_state()
         .finish_output_preview(second, false)
         .unwrap();
-    assert_eq!(f.realand().config.borrow().outputs, candidate());
+    assert_eq!(f.clarion().config.borrow().outputs, candidate());
 }
 
 #[test]
 fn concurrent_preview_and_wrong_token_cannot_replace_original() {
     let mut f = Fixture::new();
     let id = f
-        .realand_state()
+        .clarion_state()
         .begin_output_preview(candidate(), Duration::from_secs(15))
         .unwrap();
     assert!(f
-        .realand_state()
+        .clarion_state()
         .begin_output_preview(Default::default(), Duration::ZERO)
         .is_err());
     assert!(f
-        .realand_state()
+        .clarion_state()
         .finish_output_preview(id.wrapping_add(1), true)
         .is_err());
-    assert_eq!(f.realand().config.borrow().outputs, candidate());
-    f.realand_state().finish_output_preview(id, false).unwrap();
-    assert!(f.realand().config.borrow().outputs.0.is_empty());
+    assert_eq!(f.clarion().config.borrow().outputs, candidate());
+    f.clarion_state().finish_output_preview(id, false).unwrap();
+    assert!(f.clarion().config.borrow().outputs.0.is_empty());
 }
 
 #[test]
 fn output_removal_during_preview_does_not_break_recovery() {
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));
-    f.realand_state()
+    f.clarion_state()
         .begin_output_preview(candidate(), Duration::ZERO)
         .unwrap();
-    let output = f.realand_output(1);
-    f.realand().remove_output(&output);
+    let output = f.clarion_output(1);
+    f.clarion().remove_output(&output);
     f.state.server.dispatch();
-    assert!(f.realand().output_preview.is_none());
-    assert!(f.realand().config.borrow().outputs.0.is_empty());
+    assert!(f.clarion().output_preview.is_none());
+    assert!(f.clarion().config.borrow().outputs.0.is_empty());
 }
 
 #[test]
@@ -190,10 +190,10 @@ fn output_reload_still_cancels_an_active_touch_sequence() {
     use smithay::input::touch::DownEvent;
     use smithay::utils::SERIAL_COUNTER;
     let mut f = Fixture::new();
-    let touch = f.realand().seat.add_touch();
+    let touch = f.clarion().seat.add_touch();
     assert!(!touch.is_grabbed());
     touch.down(
-        f.realand_state(),
+        f.clarion_state(),
         None,
         &DownEvent {
             slot: Some(0).into(),
@@ -203,10 +203,10 @@ fn output_reload_still_cancels_an_active_touch_sequence() {
         },
     );
     assert!(touch.is_grabbed());
-    f.realand_state().reload_output_config();
+    f.clarion_state().reload_output_config();
     assert!(!touch.is_grabbed());
     touch.down(
-        f.realand_state(),
+        f.clarion_state(),
         None,
         &DownEvent {
             slot: Some(0).into(),
@@ -215,8 +215,8 @@ fn output_reload_still_cancels_an_active_touch_sequence() {
             time: 1,
         },
     );
-    f.realand_state()
-        .do_action(realand_config::Action::CloseOverview, false);
+    f.clarion_state()
+        .do_action(clarion_config::Action::CloseOverview, false);
     assert!(!touch.is_grabbed());
 }
 
@@ -224,26 +224,26 @@ fn output_reload_still_cancels_an_active_touch_sequence() {
 fn external_reload_invalidates_preview_token() {
     let mut f = Fixture::new();
     let id = f
-        .realand_state()
+        .clarion_state()
         .begin_output_preview(candidate(), Duration::from_secs(15))
         .unwrap();
-    f.realand_state().reload_config(Ok(Config::default()));
-    assert!(f.realand_state().finish_output_preview(id, true).is_err());
-    assert!(f.realand().config.borrow().outputs.0.is_empty());
+    f.clarion_state().reload_config(Ok(Config::default()));
+    assert!(f.clarion_state().finish_output_preview(id, true).is_err());
+    assert!(f.clarion().config.borrow().outputs.0.is_empty());
 }
 
 #[test]
 fn external_output_action_survives_old_preview_deadline() {
     let mut f = Fixture::new();
     let id = f
-        .realand_state()
+        .clarion_state()
         .begin_output_preview(candidate(), Duration::ZERO)
         .unwrap();
-    f.realand_state()
-        .apply_transient_output_config("headless-1", realand_ipc::OutputAction::Off);
+    f.clarion_state()
+        .apply_transient_output_config("headless-1", clarion_ipc::OutputAction::Off);
     f.state.server.dispatch();
-    f.realand_state().finish_output_preview(id, false).unwrap();
-    let config = f.realand().config.borrow();
+    f.clarion_state().finish_output_preview(id, false).unwrap();
+    let config = f.clarion().config.borrow();
     assert!(config.outputs.0[0].off);
     assert!(config.outputs.0[0].scale.is_none());
 }

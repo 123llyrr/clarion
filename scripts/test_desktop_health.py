@@ -29,20 +29,20 @@ class DesktopHealthTests(unittest.TestCase):
             root = Path(directory)
             installed = self.executable(root / "installed", "new")
             local = self.executable(root / "local", "old")
-            self.assertEqual(health.check_launcher("realand", local, installed).status, "warn")
+            self.assertEqual(health.check_launcher("clarion", local, installed).status, "warn")
             local.unlink()
             local.symlink_to(installed)
-            self.assertEqual(health.check_launcher("realand", local, installed).status, "ok")
+            self.assertEqual(health.check_launcher("clarion", local, installed).status, "ok")
 
     def test_equal_copy_and_missing_launcher(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             installed = self.executable(root / "installed", "same")
             local = self.executable(root / "local", "same")
-            self.assertEqual(health.check_launcher("realand", local, installed).status, "ok")
-            self.assertEqual(health.check_launcher("realand", None, installed).status, "error")
+            self.assertEqual(health.check_launcher("clarion", local, installed).status, "ok")
+            self.assertEqual(health.check_launcher("clarion", None, installed).status, "error")
             local.chmod(0o600)
-            self.assertEqual(health.check_launcher("realand", local, installed).status, "error")
+            self.assertEqual(health.check_launcher("clarion", local, installed).status, "error")
 
     def test_fifo_cannot_block_binary_hash_check(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -88,13 +88,13 @@ class DesktopHealthTests(unittest.TestCase):
         self.assertNotIn("private", output)
         self.assertTrue(any(check.name == "配置" and check.status == "error" for check in checks))
         self.assertTrue(any(check.name == "桌面 IPC" and check.status == "ok" for check in checks))
-        self.assertIn(["/fixture/realand", "validate", "--config", "/tmp/config with spaces; literal.kdl"], commands)
+        self.assertIn(["/fixture/clarion", "validate", "--config", "/tmp/config with spaces; literal.kdl"], commands)
         for command in commands:
             self.assertFalse(set(command) & {"start", "stop", "restart", "reload", "daemon-reload", "action"})
 
     def test_invalid_ipc_reply_is_unknown_not_success(self):
         with patch.object(health, "check_launcher", return_value=health.Check("mock", "ok", "fixture")):
-            checks = health.collect_checks(runner=lambda args: (0, "not JSON"), which=lambda name: "/fixture/realand" if name == "realand" else None)
+            checks = health.collect_checks(runner=lambda args: (0, "not JSON"), which=lambda name: "/fixture/clarion" if name == "clarion" else None)
         self.assertEqual(next(check for check in checks if check.name == "桌面 IPC").status, "warn")
 
     def test_cli_warnings_errors_and_json_failure_status(self):
@@ -121,7 +121,7 @@ class DesktopHealthTests(unittest.TestCase):
 
         with patch.object(health, "check_launcher", return_value=health.Check("mock", "warn", "old copy")), patch.object(health.Path, "is_file", return_value=True), patch.object(health, "check_running_binary", return_value=health.Check("运行版本", "warn", "old session")) as compare:
             health.collect_checks(runner=runner, which=lambda name: "/fixture/" + name)
-        compare.assert_called_once_with(123, Path("/usr/local/bin/realand"))
+        compare.assert_called_once_with(123, Path("/usr/local/bin/clarion"))
 
 
 if __name__ == "__main__":

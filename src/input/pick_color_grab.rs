@@ -1,4 +1,4 @@
-use realand_ipc::PickedColor;
+use clarion_ipc::PickedColor;
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::input::ButtonState;
 use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement};
@@ -27,14 +27,14 @@ impl PickColorGrab {
     }
 
     fn on_ungrab(&mut self, state: &mut State) {
-        if let Some(tx) = state.realand.pick_color.take() {
+        if let Some(tx) = state.clarion.pick_color.take() {
             let _ = tx.try_send(None);
         }
         state
-            .realand
+            .clarion
             .cursor_manager
             .set_cursor_image(CursorImageStatus::default_named());
-        state.realand.queue_redraw_all();
+        state.clarion.queue_redraw_all();
     }
 
     pub(crate) fn pick_color_at_point(
@@ -43,26 +43,26 @@ impl PickColorGrab {
         reply: async_channel::Sender<Option<PickedColor>>,
     ) -> anyhow::Result<()> {
         let (output, pos_within_output) = data
-            .realand
+            .clarion
             .output_under(location)
             .ok_or_else(|| anyhow::anyhow!("color picker output disappeared"))?;
         let output = output.clone();
-        let permit = data.realand.capture_permit()?;
+        let permit = data.clarion.capture_permit()?;
         let job = data
             .backend
             .with_renderer_for_output(Some(&output), |renderer| match renderer {
                 crate::render_helpers::renderer::AnyRenderer::Gles(gles) => {
-                    Self::sample_pixel(gles, &mut data.realand, &output, pos_within_output)
+                    Self::sample_pixel(gles, &mut data.clarion, &output, pos_within_output)
                 }
                 crate::render_helpers::renderer::AnyRenderer::Native(native) => {
-                    Self::sample_pixel(native, &mut data.realand, &output, pos_within_output)
+                    Self::sample_pixel(native, &mut data.clarion, &output, pos_within_output)
                 }
             })
             .ok_or_else(|| anyhow::anyhow!("color picker renderer disappeared"))??;
-        data.realand
+        data.clarion
             .enqueue_pixel_readback(Some(output), job, move |state, result| {
                 let _permit = permit;
-                let color = if state.realand.is_locked() {
+                let color = if state.clarion.is_locked() {
                     None
                 } else {
                     result
@@ -82,7 +82,7 @@ impl PickColorGrab {
 
     fn sample_pixel<R>(
         renderer: &mut R,
-        realand: &mut crate::compositor::Realand,
+        clarion: &mut crate::compositor::Clarion,
         output: &Output,
         pos_within_output: Point<f64, Logical>,
     ) -> anyhow::Result<PendingPixels>
@@ -91,11 +91,11 @@ impl PickColorGrab {
             + Offscreen<<R as RendererSuper>::TextureId>
             + Bind<<R as RendererSuper>::TextureId>,
         R::Error: Send + Sync + 'static,
-        crate::compositor::OutputRenderElements<R>:
+        crate::scene::OutputRenderElements<R>:
             smithay::backend::renderer::element::RenderElement<R>,
         for<'a> R::Framebuffer<'a>: Texture,
     {
-        realand.update_render_elements(Some(output));
+        clarion.update_render_elements(Some(output));
 
         let scale = Scale::from(output.current_scale().fractional_scale());
         // FIXME: perhaps replace floor with round once we figure out the pointer behavior
@@ -109,7 +109,7 @@ impl PickColorGrab {
             target: RenderTarget::Output,
             xray: None,
         };
-        let elements = realand.render_to_vec(ctx, output, false);
+        let elements = clarion.render_to_vec(ctx, output, false);
 
         let (texture, _) = render_to_texture(
             renderer,
@@ -161,9 +161,9 @@ impl PointerGrab<State> for PickColorGrab {
         }
 
         // We're handling this press, don't send the release to the window.
-        data.realand.suppressed_buttons.insert(event.button);
+        data.clarion.suppressed_buttons.insert(event.button);
 
-        if let Some(tx) = data.realand.pick_color.take() {
+        if let Some(tx) = data.clarion.pick_color.take() {
             if let Err(error) =
                 Self::pick_color_at_point(handle.current_location(), data, tx.clone())
             {

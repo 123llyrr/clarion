@@ -56,7 +56,7 @@ const fn triangle_verts() -> [ffi::types::GLfloat; 12 * MAX_RECTS_PER_DRAW] {
 
 impl Resources {
     fn create(renderer: &mut GlesRenderer) -> Result<Self, GlesError> {
-        let _span = realand_tracy_span!("Resources::init");
+        let _span = clarion_tracy_span!("Resources::init");
 
         let supports_instancing = renderer.capabilities().contains(&Capability::Instancing);
         renderer.with_context(|gl| unsafe {

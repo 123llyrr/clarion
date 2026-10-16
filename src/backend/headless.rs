@@ -9,7 +9,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context as _;
-use realand_config::Config;
+use clarion_config::Config;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::egl::native::EGLSurfacelessDisplay;
@@ -355,7 +355,7 @@ mod tests {
         let mut config = Config::default();
         config.debug.disable_10bit_output = true;
         config.animations.window_open.custom_shader = Some("latest shader".into());
-        config.outputs.0.push(realand_config::Output {
+        config.outputs.0.push(clarion_config::Output {
             name: "headless-1".into(),
             off: true,
             ..Default::default()
@@ -375,10 +375,10 @@ mod tests {
         );
         assert!(state.backend.headless().config.outputs.0[0].off);
 
-        state.apply_transient_output_config("headless-1", realand_ipc::OutputAction::On);
+        state.apply_transient_output_config("headless-1", clarion_ipc::OutputAction::On);
         assert!(!state.backend.headless().config.outputs.0[0].off);
         // Device snapshots do not retain ambient access to later desktop writes.
-        state.realand.config.borrow_mut().outputs.0[0].off = true;
+        state.clarion.config.borrow_mut().outputs.0[0].off = true;
         assert!(!state.backend.headless().config.outputs.0[0].off);
     }
 
@@ -428,7 +428,7 @@ mod tests {
                 .unwrap();
         }
 
-        let State { backend, realand } = &mut state;
+        let State { backend, clarion } = &mut state;
         let Backend::Headless(headless) = backend else {
             unreachable!();
         };
@@ -446,33 +446,33 @@ mod tests {
         );
         assert!(headless.dmabuf_global.is_some());
         headless.add_output(
-            &mut crate::platform::device_bridge::DeviceCoordinator::new(realand),
+            &mut crate::platform::device_bridge::DeviceCoordinator::new(clarion),
             1,
             (64, 48),
         );
-        let output = realand.global_space.outputs().next().unwrap().clone();
-        realand.queue_redraw(&output);
+        let output = clarion.global_space.outputs().next().unwrap().clone();
+        clarion.queue_redraw(&output);
 
         assert!(matches!(
             headless.render(
-                &mut crate::frame_pipeline::FrameCoordinator::new(realand, &output),
+                &mut crate::frame_pipeline::FrameCoordinator::new(clarion, &output),
                 &output
             ),
             RenderResult::Submitted
         ));
         assert!(headless.native_targets[&output.name()].valid);
-        realand.queue_redraw(&output);
+        clarion.queue_redraw(&output);
         assert!(matches!(
             headless.render(
-                &mut crate::frame_pipeline::FrameCoordinator::new(realand, &output),
+                &mut crate::frame_pipeline::FrameCoordinator::new(clarion, &output),
                 &output
             ),
             RenderResult::NoDamage
         ));
 
-        realand.remove_output(&output);
+        clarion.remove_output(&output);
         headless.add_output(
-            &mut crate::platform::device_bridge::DeviceCoordinator::new(realand),
+            &mut crate::platform::device_bridge::DeviceCoordinator::new(clarion),
             2,
             (32, 32),
         );
@@ -497,30 +497,30 @@ mod tests {
         .unwrap();
 
         let output = {
-            let State { backend, realand } = &mut state;
+            let State { backend, clarion } = &mut state;
             backend.headless().add_output(
-                &mut crate::platform::device_bridge::DeviceCoordinator::new(realand),
+                &mut crate::platform::device_bridge::DeviceCoordinator::new(clarion),
                 1,
                 (64, 48),
             );
-            let output = realand.global_space.outputs().next().unwrap().clone();
-            realand
+            let output = clarion.global_space.outputs().next().unwrap().clone();
+            clarion
                 .output_state
                 .get_mut(&output)
                 .unwrap()
                 .schedule
                 .set_animations_remain(true);
-            realand.queue_redraw(&output);
+            clarion.queue_redraw(&output);
 
             assert!(matches!(
                 backend.headless().render(
-                    &mut crate::frame_pipeline::FrameCoordinator::new(realand, &output),
+                    &mut crate::frame_pipeline::FrameCoordinator::new(clarion, &output),
                     &output
                 ),
                 RenderResult::Submitted
             ));
             assert!(matches!(
-                realand.output_state[&output].schedule.redraw_state(),
+                clarion.output_state[&output].schedule.redraw_state(),
                 RedrawState::WaitingForEstimatedVBlank(_)
             ));
             output
@@ -530,7 +530,7 @@ mod tests {
             .dispatch(HEADLESS_FRAME_INTERVAL, &mut state)
             .unwrap();
         assert!(matches!(
-            state.realand.output_state[&output].schedule.redraw_state(),
+            state.clarion.output_state[&output].schedule.redraw_state(),
             RedrawState::Queued
         ));
     }

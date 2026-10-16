@@ -23,7 +23,7 @@ fn name_accessor_borrows_the_single_core_string_and_lookup_uses_stable_identity(
         let borrowed = workspace.name().unwrap();
         let core = layout.core.borrow();
         let owned = core
-            .space(realand_core::SpaceId(id.get()))
+            .space(clarion_core::SpaceId(id.get()))
             .unwrap()
             .name
             .as_ref()

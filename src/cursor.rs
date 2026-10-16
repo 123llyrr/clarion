@@ -300,7 +300,7 @@ mod asset_tests {
     }
     #[test]
     fn pending_asset_has_immediate_embedded_fallback_and_owner_completion_preserves_pixels() {
-        let mut manager = CursorManager::new("realand-test-missing-theme", 32);
+        let mut manager = CursorManager::new("clarion-test-missing-theme", 32);
         manager.set_cursor_image(CursorImageStatus::Named(CursorIcon::Wait));
         assert!(manager.get_cursor_with_name(CursorIcon::Wait, 2).is_none());
         let first = manager.get_default_cursor(2);
@@ -323,7 +323,7 @@ mod asset_tests {
     }
     #[test]
     fn negative_cache_and_empty_completion_keep_valid_fallback_without_per_frame_requests() {
-        let mut manager = CursorManager::new("realand-test-missing-theme", 32);
+        let mut manager = CursorManager::new("clarion-test-missing-theme", 32);
         manager.set_cursor_image(CursorImageStatus::Named(CursorIcon::Wait));
         manager.get_cursor_with_name(CursorIcon::Wait, 1);
         let failed = completion(&manager, CursorIcon::Wait, 1, Err("absent".into()));

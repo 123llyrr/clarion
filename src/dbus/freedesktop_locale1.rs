@@ -1,14 +1,14 @@
+use clarion_config::Xkb;
 use futures_util::StreamExt;
-use realand_config::Xkb;
 use zbus::names::InterfaceName;
 use zbus::{fdo, zvariant};
 
-pub enum Locale1ToRealand {
+pub enum Locale1ToClarion {
     XkbChanged(Xkb),
 }
 
 pub fn start(
-    to_realand: calloop::channel::Sender<Locale1ToRealand>,
+    to_clarion: calloop::channel::Sender<Locale1ToClarion>,
 ) -> anyhow::Result<zbus::blocking::Connection> {
     let conn = zbus::blocking::Connection::system()?;
 
@@ -69,8 +69,8 @@ pub fn start(
         };
 
         // Send the initial properties.
-        if let Err(err) = to_realand.send(Locale1ToRealand::XkbChanged(xkb.clone())) {
-            warn!("error sending message to realand: {err:?}");
+        if let Err(err) = to_clarion.send(Locale1ToClarion::XkbChanged(xkb.clone())) {
+            warn!("error sending message to clarion: {err:?}");
             return;
         };
 
@@ -127,8 +127,8 @@ pub fn start(
                 continue;
             }
 
-            if let Err(err) = to_realand.send(Locale1ToRealand::XkbChanged(xkb.clone())) {
-                warn!("error sending message to realand: {err:?}");
+            if let Err(err) = to_clarion.send(Locale1ToClarion::XkbChanged(xkb.clone())) {
+                warn!("error sending message to clarion: {err:?}");
                 return;
             };
         }

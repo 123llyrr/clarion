@@ -1,6 +1,6 @@
 use super::*;
 use crate::layout::dwindle::DwindleSpace;
-use realand_ipc::management::SessionTree;
+use clarion_ipc::management::SessionTree;
 
 fn fixture() -> (
     DwindleSpace<TestWindow>,
@@ -187,17 +187,17 @@ fn dwindle_core_batch_smart_insertion_matches_incremental_topology_and_sizes() {
 
 #[test]
 fn dwindle_core_split_cache_keeps_zero_width_leaves_and_fractional_origins() {
-    let bounds = realand_core::Rect::new(17.25, 11.5, 8., 6.);
-    let mut tree = realand_core::bsp::BspTree::new(bounds, 15., 32);
+    let bounds = clarion_core::Rect::new(17.25, 11.5, 8., 6.);
+    let mut tree = clarion_core::bsp::BspTree::new(bounds, 15., 32);
     assert!(tree.insert(0, None, None));
-    assert!(tree.insert(1, Some(&0), Some(realand_core::Axis::Horizontal)));
+    assert!(tree.insert(1, Some(&0), Some(clarion_core::Axis::Horizontal)));
     assert_eq!(
         tree.geometry(&0),
-        Some(realand_core::Rect::new(17.25, 11.5, 0., 6.))
+        Some(clarion_core::Rect::new(17.25, 11.5, 0., 6.))
     );
     assert_eq!(
         tree.geometry(&1),
-        Some(realand_core::Rect::new(25.25, 11.5, 0., 6.))
+        Some(clarion_core::Rect::new(25.25, 11.5, 0., 6.))
     );
 }
 
@@ -277,8 +277,8 @@ fn dwindle_policy_memory_normal_state_clears_later_fullscreen_and_invalid_restor
     let before = serde_json::to_value(space.session_tree(&|id| *id)).unwrap();
     let mut invalid = normal.clone();
     invalid.active = Some(0);
-    invalid.expanded = vec![(0, realand_core::bsp::PaneMode::Fullscreen)];
-    if let Some(realand_core::layout::BspNode::Split { ratio, .. }) = &mut invalid.topology {
+    invalid.expanded = vec![(0, clarion_core::bsp::PaneMode::Fullscreen)];
+    if let Some(clarion_core::layout::BspNode::Split { ratio, .. }) = &mut invalid.topology {
         *ratio = f64::NAN;
     }
     space.restore_policy(&invalid);

@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use realand_config::Config;
+use clarion_config::Config;
 use smithay::desktop::Window;
 use smithay::input::keyboard::Keysym;
 use smithay::output::Output;
@@ -21,7 +21,7 @@ fn setup() -> (Fixture, ClientId, Vec<WlSurface>, Vec<Window>) {
     let mut fixture = Fixture::with_config(config);
     fixture.add_output(1, (1280, 800));
     fixture.add_output(2, (1280, 800));
-    fixture.realand_focus_output(1);
+    fixture.clarion_focus_output(1);
     let client = fixture.add_client();
     let mut surfaces = Vec::new();
     let mut windows = Vec::new();
@@ -39,7 +39,7 @@ fn setup() -> (Fixture, ClientId, Vec<WlSurface>, Vec<Window>) {
         fixture.double_roundtrip(client);
         windows.push(
             fixture
-                .realand()
+                .clarion()
                 .layout
                 .active_window()
                 .unwrap()
@@ -48,10 +48,10 @@ fn setup() -> (Fixture, ClientId, Vec<WlSurface>, Vec<Window>) {
         );
         surfaces.push(surface);
     }
-    fixture.realand().layout.activate_window(&windows[0]);
-    fixture.realand_complete_animations();
-    fixture.realand().layout.toggle_window_spread();
-    fixture.realand_complete_animations();
+    fixture.clarion().layout.activate_window(&windows[0]);
+    fixture.clarion_complete_animations();
+    fixture.clarion().layout.toggle_window_spread();
+    fixture.clarion_complete_animations();
     (fixture, client, surfaces, windows)
 }
 
@@ -62,7 +62,7 @@ fn previews(fixture: &mut Fixture, output: &Output) -> HashSet<Window> {
     for y in (80..800).step_by(16) {
         for x in (16..1280).step_by(16) {
             if let Some((window, _)) = fixture
-                .realand()
+                .clarion()
                 .layout
                 .window_under(output, Point::from((x as f64, y as f64)))
             {
@@ -75,7 +75,7 @@ fn previews(fixture: &mut Fixture, output: &Output) -> HashSet<Window> {
 
 fn selected(fixture: &mut Fixture, output: &Output) -> Option<Window> {
     fixture
-        .realand()
+        .clarion()
         .layout
         .monitor_for_output(output)
         .unwrap()
@@ -85,12 +85,12 @@ fn selected(fixture: &mut Fixture, output: &Output) -> Option<Window> {
 #[test]
 fn title_and_app_id_changes_refresh_existing_spread_query_without_rule_changes_or_search_keys() {
     let (mut fixture, client, surfaces, windows) = setup();
-    let output = fixture.realand_output(1);
+    let output = fixture.clarion_output(1);
     let rules: Vec<_> = windows
         .iter()
         .map(|window| {
             fixture
-                .realand()
+                .clarion()
                 .layout
                 .find_window_and_output(window.wl_surface().unwrap().as_ref())
                 .unwrap()
@@ -100,7 +100,7 @@ fn title_and_app_id_changes_refresh_existing_spread_query_without_rule_changes_o
         })
         .collect();
     for ch in "needle".chars() {
-        assert!(fixture.realand().layout.spread_key(Keysym::from_char(ch)));
+        assert!(fixture.clarion().layout.spread_key(Keysym::from_char(ch)));
     }
     assert_eq!(
         previews(&mut fixture, &output),
@@ -157,7 +157,7 @@ fn title_and_app_id_changes_refresh_existing_spread_query_without_rule_changes_o
     for (window, expected) in windows.iter().zip(&rules) {
         assert_eq!(
             fixture
-                .realand()
+                .clarion()
                 .layout
                 .find_window_and_output(window.wl_surface().unwrap().as_ref())
                 .unwrap()
@@ -171,13 +171,13 @@ fn title_and_app_id_changes_refresh_existing_spread_query_without_rule_changes_o
 #[test]
 fn metadata_with_unchanged_search_membership_still_requests_title_repaint() {
     let (mut fixture, client, surfaces, windows) = setup();
-    let output = fixture.realand_output(1);
+    let output = fixture.clarion_output(1);
     // The empty query takes the allocation-free metadata path.
-    for state in fixture.realand().output_state.values_mut() {
+    for state in fixture.clarion().output_state.values_mut() {
         state.schedule.test_set_redraw(RedrawState::Idle);
     }
     let before = fixture
-        .realand()
+        .clarion()
         .frame_timings()
         .into_iter()
         .find(|timing| timing.output == output.name())
@@ -189,7 +189,7 @@ fn metadata_with_unchanged_search_membership_still_requests_title_repaint() {
         .set_title("NEEDLE ONE");
     fixture.double_roundtrip(client);
     let after = fixture
-        .realand()
+        .clarion()
         .frame_timings()
         .into_iter()
         .find(|timing| timing.output == output.name())

@@ -1,13 +1,13 @@
 use std::cell::{Cell, OnceCell, RefCell};
 
-use proptest::prelude::*;
-use proptest_derive::Arbitrary;
-use realand_config::utils::Flag;
-use realand_config::workspace::WorkspaceName;
-use realand_config::{
+use clarion_config::utils::Flag;
+use clarion_config::workspace::WorkspaceName;
+use clarion_config::{
     CenterFocusedColumn, FloatOrInt, OutputName, Struts, TabIndicatorLength, TabIndicatorPosition,
     WorkspaceReference,
 };
+use proptest::prelude::*;
+use proptest_derive::Arbitrary;
 use smithay::output::{Mode, PhysicalProperties, Subpixel};
 use smithay::utils::Rectangle;
 
@@ -26,6 +26,8 @@ mod lightweight_traversal;
 mod management;
 mod normal_move;
 mod output_affinity;
+mod renderer_recovery;
+mod scene_source;
 mod spread;
 mod stage;
 mod stage_drag;
@@ -38,7 +40,7 @@ fn dwindle_next_to_preserves_focus_when_not_activated() {
     for activate in [ActivateWindow::No, ActivateWindow::Smart] {
         let mut layout = check_ops([
             Op::AddOutput(1),
-            Op::SwitchTilingMode(Some(realand_ipc::TilingMode::Dwindle)),
+            Op::SwitchTilingMode(Some(clarion_ipc::TilingMode::Dwindle)),
             Op::AddWindow {
                 params: TestWindowParams::new(0),
             },
@@ -81,7 +83,7 @@ fn dwindle_next_to_preserves_focus_when_not_activated() {
 fn dwindle_next_to_activates_new_window_when_requested() {
     let mut layout = check_ops([
         Op::AddOutput(1),
-        Op::SwitchTilingMode(Some(realand_ipc::TilingMode::Dwindle)),
+        Op::SwitchTilingMode(Some(clarion_ipc::TilingMode::Dwindle)),
         Op::AddWindow {
             params: TestWindowParams::new(0),
         },
@@ -107,7 +109,7 @@ fn dwindle_focus_reveals_normal_window_and_preserves_expanded_state() {
     for mode in [SizingMode::Fullscreen, SizingMode::Maximized] {
         let mut layout = check_ops([
             Op::AddOutput(1),
-            Op::SwitchTilingMode(Some(realand_ipc::TilingMode::Dwindle)),
+            Op::SwitchTilingMode(Some(clarion_ipc::TilingMode::Dwindle)),
             Op::AddWindow {
                 params: TestWindowParams::new(0),
             },
@@ -187,7 +189,7 @@ fn dwindle_focus_reveals_normal_window_and_preserves_expanded_state() {
 fn dwindle_moving_pane_keeps_display_positions_and_input_together() {
     let mut layout = check_ops([
         Op::AddOutput(1),
-        Op::SwitchTilingMode(Some(realand_ipc::TilingMode::Dwindle)),
+        Op::SwitchTilingMode(Some(clarion_ipc::TilingMode::Dwindle)),
         Op::AddWindow {
             params: TestWindowParams::new(0),
         },
@@ -248,7 +250,7 @@ fn dwindle_expanded_pane_ignores_tree_move_when_focus_returns() {
     for mode in [SizingMode::Fullscreen, SizingMode::Maximized] {
         let mut layout = check_ops([
             Op::AddOutput(1),
-            Op::SwitchTilingMode(Some(realand_ipc::TilingMode::Dwindle)),
+            Op::SwitchTilingMode(Some(clarion_ipc::TilingMode::Dwindle)),
             Op::AddWindow {
                 params: TestWindowParams::new(0),
             },
@@ -298,7 +300,7 @@ fn dwindle_hidden_panes_remain_addressable_by_explicit_id() {
     for toggle in [false, true] {
         let mut layout = check_ops([
             Op::AddOutput(1),
-            Op::SwitchTilingMode(Some(realand_ipc::TilingMode::Dwindle)),
+            Op::SwitchTilingMode(Some(clarion_ipc::TilingMode::Dwindle)),
             Op::AddWindow {
                 params: TestWindowParams::new(0),
             },
@@ -365,7 +367,7 @@ fn dwindle_hidden_panes_remain_addressable_by_explicit_id() {
 #[test]
 fn dwindle_many_windows_keep_session_serializable() {
     use super::dwindle::DwindleSpace;
-    use realand_ipc::management::{
+    use clarion_ipc::management::{
         SessionLayout, SessionTree, SessionWindow, SessionWorkspace, MAX_SESSION_TREE_DEPTH,
     };
 
@@ -409,7 +411,7 @@ fn dwindle_many_windows_keep_session_serializable() {
             name: None,
             index: 0,
             output: None,
-            mode: realand_ipc::TilingMode::Dwindle,
+            mode: clarion_ipc::TilingMode::Dwindle,
             tree: Some(tree),
         }],
         windows: (0..96)
@@ -711,7 +713,7 @@ impl LayoutElement for TestWindow {
         self.0.animation_snapshot.take()
     }
 
-    fn render_normal<R: RealandRenderer>(
+    fn render_normal<R: ClarionRenderer>(
         &self,
         ctx: RenderCtx<R>,
         location: Point<f64, Logical>,
@@ -895,7 +897,7 @@ enum Op {
         #[proptest(strategy = "arbitrary_scale()")]
         scale: f64,
         #[proptest(strategy = "prop::option::of(arbitrary_layout_part().prop_map(Box::new))")]
-        layout_config: Option<Box<realand_config::LayoutPart>>,
+        layout_config: Option<Box<clarion_config::LayoutPart>>,
     },
     RemoveOutput(#[proptest(strategy = "1..=5usize")] usize),
     FocusOutput(#[proptest(strategy = "1..=5usize")] usize),
@@ -903,7 +905,7 @@ enum Op {
         #[proptest(strategy = "1..=5usize")]
         id: usize,
         #[proptest(strategy = "prop::option::of(arbitrary_layout_part().prop_map(Box::new))")]
-        layout_config: Option<Box<realand_config::LayoutPart>>,
+        layout_config: Option<Box<clarion_config::LayoutPart>>,
     },
     AddNamedWorkspace {
         #[proptest(strategy = "1..=5usize")]
@@ -911,7 +913,7 @@ enum Op {
         #[proptest(strategy = "prop::option::of(1..=5usize)")]
         output_name: Option<usize>,
         #[proptest(strategy = "prop::option::of(arbitrary_layout_part().prop_map(Box::new))")]
-        layout_config: Option<Box<realand_config::LayoutPart>>,
+        layout_config: Option<Box<clarion_config::LayoutPart>>,
     },
     UnnameWorkspace {
         #[proptest(strategy = "1..=5usize")]
@@ -921,15 +923,15 @@ enum Op {
     /// default scrolling mode.
     SwitchTilingMode(
         #[proptest(
-            strategy = "prop::option::of(prop_oneof![Just(realand_ipc::TilingMode::Scrolling), Just(realand_ipc::TilingMode::Dwindle)])"
+            strategy = "prop::option::of(prop_oneof![Just(clarion_ipc::TilingMode::Scrolling), Just(clarion_ipc::TilingMode::Dwindle)])"
         )]
-        Option<realand_ipc::TilingMode>,
+        Option<clarion_ipc::TilingMode>,
     ),
     UpdateWorkspaceLayoutConfig {
         #[proptest(strategy = "1..=5usize")]
         ws_name: usize,
         #[proptest(strategy = "prop::option::of(arbitrary_layout_part().prop_map(Box::new))")]
-        layout_config: Option<Box<realand_config::LayoutPart>>,
+        layout_config: Option<Box<clarion_config::LayoutPart>>,
     },
     AddWindow {
         params: TestWindowParams,
@@ -1241,7 +1243,7 @@ enum Op {
     ToggleOverview,
     UpdateConfig {
         #[proptest(strategy = "arbitrary_layout_part().prop_map(Box::new)")]
-        layout_config: Box<realand_config::LayoutPart>,
+        layout_config: Box<clarion_config::LayoutPart>,
     },
 }
 
@@ -1350,14 +1352,14 @@ impl Op {
                 layout.ensure_named_workspace(&WorkspaceConfig {
                     name: WorkspaceName(format!("ws{ws_name}")),
                     open_on_output: output_name.map(|name| format!("output{name}")),
-                    layout: layout_config.map(|x| realand_config::WorkspaceLayoutPart(*x)),
+                    layout: layout_config.map(|x| clarion_config::WorkspaceLayoutPart(*x)),
                 });
             }
             Op::UnnameWorkspace { ws_name } => {
                 layout.unname_workspace(&format!("ws{ws_name}"));
             }
             Op::SwitchTilingMode(mode) => {
-                let mode = mode.unwrap_or(realand_ipc::TilingMode::Scrolling);
+                let mode = mode.unwrap_or(clarion_ipc::TilingMode::Scrolling);
                 let Some(ws) = layout.active_workspace_mut() else {
                     return;
                 };
@@ -2122,7 +2124,7 @@ impl Op {
             }
             Op::UpdateConfig { layout_config } => {
                 let options = Options {
-                    layout: realand_config::Layout::from_part(&layout_config),
+                    layout: clarion_config::Layout::from_part(&layout_config),
                     ..Default::default()
                 };
 
@@ -2905,7 +2907,7 @@ fn open_right_of_on_different_workspace_ewaf() {
     ];
 
     let options = Options {
-        layout: realand_config::Layout {
+        layout: clarion_config::Layout {
             empty_workspace_above_first: true,
             ..Default::default()
         },
@@ -3090,8 +3092,8 @@ fn fixed_height_takes_max_non_auto_into_account() {
     ];
 
     let options = Options {
-        layout: realand_config::Layout {
-            border: realand_config::Border {
+        layout: clarion_config::Layout {
+            border: clarion_config::Border {
                 off: false,
                 width: 4.,
                 ..Default::default()
@@ -3177,7 +3179,7 @@ fn interactive_move_onto_empty_output_ewaf() {
     ];
 
     let options = Options {
-        layout: realand_config::Layout {
+        layout: clarion_config::Layout {
             empty_workspace_above_first: true,
             ..Default::default()
         },
@@ -3241,7 +3243,7 @@ fn interactive_move_onto_first_empty_workspace() {
         Op::InteractiveMoveEnd { window: 1 },
     ];
     let options = Options {
-        layout: realand_config::Layout {
+        layout: clarion_config::Layout {
             empty_workspace_above_first: true,
             ..Default::default()
         },
@@ -3327,7 +3329,7 @@ fn named_workspace_to_output_ewaf() {
         Op::AddOutput(2),
     ];
     let options = Options {
-        layout: realand_config::Layout {
+        layout: clarion_config::Layout {
             empty_workspace_above_first: true,
             ..Default::default()
         },
@@ -3349,7 +3351,7 @@ fn move_window_to_empty_workspace_above_first() {
         Op::MoveWorkspaceDown,
     ];
     let options = Options {
-        layout: realand_config::Layout {
+        layout: clarion_config::Layout {
             empty_workspace_above_first: true,
             ..Default::default()
         },
@@ -3369,7 +3371,7 @@ fn move_window_to_different_output() {
         Op::MoveWorkspaceToOutput(2),
     ];
     let options = Options {
-        layout: realand_config::Layout {
+        layout: clarion_config::Layout {
             empty_workspace_above_first: true,
             ..Default::default()
         },
@@ -3388,7 +3390,7 @@ fn close_window_empty_ws_above_first() {
         Op::CloseWindow(1),
     ];
     let options = Options {
-        layout: realand_config::Layout {
+        layout: clarion_config::Layout {
             empty_workspace_above_first: true,
             ..Default::default()
         },
@@ -3408,7 +3410,7 @@ fn add_and_remove_output() {
         Op::RemoveOutput(2),
     ];
     let options = Options {
-        layout: realand_config::Layout {
+        layout: clarion_config::Layout {
             empty_workspace_above_first: true,
             ..Default::default()
         },
@@ -3428,7 +3430,7 @@ fn switch_ewaf_on() {
 
     let mut layout = check_ops(ops);
     layout.update_options(Options {
-        layout: realand_config::Layout {
+        layout: clarion_config::Layout {
             empty_workspace_above_first: true,
             ..Default::default()
         },
@@ -3447,7 +3449,7 @@ fn switch_ewaf_off() {
     ];
 
     let options = Options {
-        layout: realand_config::Layout {
+        layout: clarion_config::Layout {
             empty_workspace_above_first: true,
             ..Default::default()
         },
@@ -3555,8 +3557,8 @@ fn interactive_move_from_workspace_with_layout_config() {
         Op::AddNamedWorkspace {
             ws_name: 1,
             output_name: Some(2),
-            layout_config: Some(Box::new(realand_config::LayoutPart {
-                border: Some(realand_config::BorderRule {
+            layout_config: Some(Box::new(clarion_config::LayoutPart {
+                border: Some(clarion_config::BorderRule {
                     on: true,
                     ..Default::default()
                 }),
@@ -3828,7 +3830,7 @@ fn set_first_workspace_name_ewaf() {
     ];
 
     let options = Options {
-        layout: realand_config::Layout {
+        layout: clarion_config::Layout {
             empty_workspace_above_first: true,
             ..Default::default()
         },
@@ -3924,7 +3926,7 @@ fn preset_column_width_fixed_correct_with_border() {
     ];
 
     let options = Options {
-        layout: realand_config::Layout {
+        layout: clarion_config::Layout {
             preset_column_widths: vec![PresetSize::Fixed(500)],
             ..Default::default()
         },
@@ -3937,9 +3939,9 @@ fn preset_column_width_fixed_correct_with_border() {
 
     // Add border.
     let options = Options {
-        layout: realand_config::Layout {
+        layout: clarion_config::Layout {
             preset_column_widths: vec![PresetSize::Fixed(500)],
-            border: realand_config::Border {
+            border: clarion_config::Border {
                 off: false,
                 width: 5.,
                 ..Default::default()
@@ -3976,7 +3978,7 @@ fn preset_column_width_reset_after_set_width() {
     ];
 
     let options = Options {
-        layout: realand_config::Layout {
+        layout: clarion_config::Layout {
             preset_column_widths: vec![PresetSize::Fixed(500), PresetSize::Fixed(1000)],
             ..Default::default()
         },
@@ -4217,7 +4219,7 @@ fn tabs_with_different_border() {
         Op::AddWindow {
             params: TestWindowParams {
                 rules: Some(ResolvedWindowRules {
-                    border: realand_config::BorderRule {
+                    border: clarion_config::BorderRule {
                         on: true,
                         ..Default::default()
                     },
@@ -4235,7 +4237,7 @@ fn tabs_with_different_border() {
     ];
 
     let options = Options {
-        layout: realand_config::Layout {
+        layout: clarion_config::Layout {
             struts: Struts {
                 left: FloatOrInt(0.),
                 right: FloatOrInt(0.),
@@ -4394,8 +4396,8 @@ prop_compose! {
     fn arbitrary_focus_ring()(
         off in any::<bool>(),
         width in prop::option::of(arbitrary_spacing().prop_map(FloatOrInt)),
-    ) -> realand_config::BorderRule {
-        realand_config::BorderRule {
+    ) -> clarion_config::BorderRule {
+        clarion_config::BorderRule {
             off,
             on: !off,
             width,
@@ -4408,8 +4410,8 @@ prop_compose! {
     fn arbitrary_border()(
         off in any::<bool>(),
         width in prop::option::of(arbitrary_spacing().prop_map(FloatOrInt)),
-    ) -> realand_config::BorderRule {
-        realand_config::BorderRule {
+    ) -> clarion_config::BorderRule {
+        clarion_config::BorderRule {
             off,
             on: !off,
             width,
@@ -4422,8 +4424,8 @@ prop_compose! {
     fn arbitrary_shadow()(
         off in any::<bool>(),
         softness in prop::option::of(arbitrary_spacing().prop_map(FloatOrInt)),
-    ) -> realand_config::ShadowRule {
-        realand_config::ShadowRule {
+    ) -> clarion_config::ShadowRule {
+        clarion_config::ShadowRule {
             off,
             on: !off,
             softness,
@@ -4442,8 +4444,8 @@ prop_compose! {
         length in prop::option::of((0f64..2f64)
             .prop_map(|x| TabIndicatorLength { total_proportion: Some(x) })),
         position in prop::option::of(arbitrary_tab_indicator_position()),
-    ) -> realand_config::TabIndicatorPart {
-        realand_config::TabIndicatorPart {
+    ) -> clarion_config::TabIndicatorPart {
+        clarion_config::TabIndicatorPart {
             off,
             on: !off,
             hide_when_single_tab,
@@ -4468,8 +4470,8 @@ prop_compose! {
         center_focused_column in prop::option::of(arbitrary_center_focused_column()),
         always_center_single_column in prop::option::of(any::<bool>().prop_map(Flag)),
         empty_workspace_above_first in prop::option::of(any::<bool>().prop_map(Flag)),
-    ) -> realand_config::LayoutPart {
-        realand_config::LayoutPart {
+    ) -> clarion_config::LayoutPart {
+        clarion_config::LayoutPart {
             gaps,
             struts,
             center_focused_column,
@@ -4502,7 +4504,7 @@ proptest! {
     ) {
         // eprintln!("{ops:?}");
         let options = Options {
-            layout: realand_config::Layout::from_part(&layout_config),
+            layout: clarion_config::Layout::from_part(&layout_config),
             ..Default::default()
         };
 

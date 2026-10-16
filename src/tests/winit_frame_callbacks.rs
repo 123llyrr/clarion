@@ -35,9 +35,9 @@ fn setup() -> (Fixture, ClientId, WlSurface, ServerSurface, Output) {
     f.double_roundtrip(id);
     f.client(id).window(&surface).ack_last_and_commit();
     f.double_roundtrip(id);
-    f.realand_complete_animations();
+    f.clarion_complete_animations();
     let server = f
-        .realand()
+        .clarion()
         .layout
         .windows()
         .next()
@@ -46,17 +46,17 @@ fn setup() -> (Fixture, ClientId, WlSurface, ServerSurface, Output) {
         .toplevel()
         .wl_surface()
         .clone();
-    let output = f.realand_output(1);
+    let output = f.clarion_output(1);
     // Render completion is driven by the actual nested helper below. Keep the
     // fixture's lightweight headless backend from submitting unrelated frames.
-    f.realand().monitors_active = false;
-    f.realand()
+    f.clarion().monitors_active = false;
+    f.clarion()
         .output_state
         .get_mut(&output)
         .unwrap()
         .schedule
         .test_set_clock(FrameClock::new(Some(REFRESH), false));
-    f.realand().update_primary_scanout_output(
+    f.clarion().update_primary_scanout_output(
         &output,
         &RenderElementStates {
             states: [(
@@ -72,7 +72,7 @@ fn setup() -> (Fixture, ClientId, WlSurface, ServerSurface, Output) {
         },
     );
     // Drain the configure allowance and mark this sequence already delivered.
-    f.realand().send_frame_callbacks(&output);
+    f.clarion().send_frame_callbacks(&output);
     suppress_fallback(&server, &output);
     (f, id, surface, server, output)
 }
@@ -100,7 +100,7 @@ fn request_frame(f: &mut Fixture, id: ClientId, surface: &WlSurface) -> Arc<Sync
 
 fn wait_for_deadline(f: &mut Fixture, output: &Output) {
     let started = Instant::now();
-    while f.realand().output_state[output]
+    while f.clarion().output_state[output]
         .schedule
         .nested_frame_timer()
         .is_some()
@@ -112,7 +112,7 @@ fn wait_for_deadline(f: &mut Fixture, output: &Output) {
             .dispatch(Some(REFRESH), &mut server.state)
             .unwrap();
     }
-    assert!(f.realand().output_state[output]
+    assert!(f.clarion().output_state[output]
         .schedule
         .nested_frame_timer()
         .is_none());
@@ -133,31 +133,31 @@ fn dispatch_past_old_deadline(f: &mut Fixture) {
 fn unchanged_frames_keep_one_deadline_and_send_one_callback() {
     let (mut f, id, surface, server, output) = setup();
     let callback = request_frame(&mut f, id, &surface);
-    let sequence = f.realand().output_state[&output]
+    let sequence = f.clarion().output_state[&output]
         .schedule
         .callback_sequence();
     let started = Instant::now();
-    finish_frame(f.realand(), &output, &RenderResult::NoDamage, started);
+    finish_frame(f.clarion(), &output, &RenderResult::NoDamage, started);
     assert_eq!(
-        f.realand().output_state[&output]
+        f.clarion().output_state[&output]
             .schedule
             .callback_sequence(),
         sequence
     );
-    let timer = f.realand().output_state[&output]
+    let timer = f.clarion().output_state[&output]
         .schedule
         .nested_frame_timer()
         .unwrap();
     for _ in 0..50 {
         // Later empty frames cannot postpone the first frame's deadline.
         finish_frame(
-            f.realand(),
+            f.clarion(),
             &output,
             &RenderResult::NoDamage,
             started + Duration::from_secs(60),
         );
         assert_eq!(
-            f.realand().output_state[&output]
+            f.clarion().output_state[&output]
                 .schedule
                 .nested_frame_timer(),
             Some(timer)
@@ -172,7 +172,7 @@ fn unchanged_frames_keep_one_deadline_and_send_one_callback() {
     f.double_roundtrip(id);
     assert!(callback.done.load(Ordering::Relaxed));
     assert_eq!(
-        f.realand().output_state[&output]
+        f.clarion().output_state[&output]
             .schedule
             .callback_sequence(),
         sequence.wrapping_add(1)
@@ -184,7 +184,7 @@ fn unchanged_frames_keep_one_deadline_and_send_one_callback() {
     f.double_roundtrip(id);
     assert!(!next.done.load(Ordering::Relaxed));
     assert_eq!(
-        f.realand().output_state[&output]
+        f.clarion().output_state[&output]
             .schedule
             .callback_sequence(),
         sequence.wrapping_add(1)
@@ -195,31 +195,31 @@ fn unchanged_frames_keep_one_deadline_and_send_one_callback() {
 fn submitted_frame_cancels_an_empty_frames_old_deadline() {
     let (mut f, id, surface, server, output) = setup();
     let callback = request_frame(&mut f, id, &surface);
-    let sequence = f.realand().output_state[&output]
+    let sequence = f.clarion().output_state[&output]
         .schedule
         .callback_sequence();
     finish_frame(
-        f.realand(),
+        f.clarion(),
         &output,
         &RenderResult::NoDamage,
         Instant::now(),
     );
-    assert!(f.realand().output_state[&output]
+    assert!(f.clarion().output_state[&output]
         .schedule
         .nested_frame_timer()
         .is_some());
     finish_frame(
-        f.realand(),
+        f.clarion(),
         &output,
         &RenderResult::Submitted,
         Instant::now(),
     );
-    assert!(f.realand().output_state[&output]
+    assert!(f.clarion().output_state[&output]
         .schedule
         .nested_frame_timer()
         .is_none());
     assert_eq!(
-        f.realand().output_state[&output]
+        f.clarion().output_state[&output]
             .schedule
             .callback_sequence(),
         sequence.wrapping_add(1)
@@ -233,7 +233,7 @@ fn submitted_frame_cancels_an_empty_frames_old_deadline() {
     f.double_roundtrip(id);
     assert!(!next.done.load(Ordering::Relaxed));
     assert_eq!(
-        f.realand().output_state[&output]
+        f.clarion().output_state[&output]
             .schedule
             .callback_sequence(),
         sequence.wrapping_add(1)
@@ -244,18 +244,18 @@ fn submitted_frame_cancels_an_empty_frames_old_deadline() {
 fn skipped_frame_does_not_advance_or_send_callbacks() {
     let (mut f, id, surface, _, output) = setup();
     let callback = request_frame(&mut f, id, &surface);
-    let sequence = f.realand().output_state[&output]
+    let sequence = f.clarion().output_state[&output]
         .schedule
         .callback_sequence();
-    finish_frame(f.realand(), &output, &RenderResult::Skipped, Instant::now());
+    finish_frame(f.clarion(), &output, &RenderResult::Skipped, Instant::now());
     f.double_roundtrip(id);
     assert!(!callback.done.load(Ordering::Relaxed));
-    assert!(f.realand().output_state[&output]
+    assert!(f.clarion().output_state[&output]
         .schedule
         .nested_frame_timer()
         .is_none());
     assert_eq!(
-        f.realand().output_state[&output]
+        f.clarion().output_state[&output]
             .schedule
             .callback_sequence(),
         sequence
@@ -267,46 +267,46 @@ fn removing_output_cancels_its_empty_frame_callback_deadline() {
     let (mut f, id, surface, _, output) = setup();
     let callback = request_frame(&mut f, id, &surface);
     finish_frame(
-        f.realand(),
+        f.clarion(),
         &output,
         &RenderResult::NoDamage,
         Instant::now(),
     );
-    assert!(f.realand().output_state[&output]
+    assert!(f.clarion().output_state[&output]
         .schedule
         .nested_frame_timer()
         .is_some());
-    f.realand().remove_output(&output);
+    f.clarion().remove_output(&output);
     dispatch_past_old_deadline(&mut f);
     f.double_roundtrip(id);
     assert!(!callback.done.load(Ordering::Relaxed));
-    assert!(!f.realand().output_state.contains_key(&output));
+    assert!(!f.clarion().output_state.contains_key(&output));
 }
 
 #[test]
 fn empty_frame_deadline_queues_the_next_animation_frame() {
     let (mut f, _, _, _, output) = setup();
-    f.realand().config_error_notification.show();
-    assert!(f.realand().animations_need_redraw(&output));
-    f.realand()
+    f.clarion().config_error_notification.show();
+    assert!(f.clarion().animations_need_redraw(&output));
+    f.clarion()
         .output_state
         .get_mut(&output)
         .unwrap()
         .schedule
         .test_set_redraw(RedrawState::Idle);
     finish_frame(
-        f.realand(),
+        f.clarion(),
         &output,
         &RenderResult::NoDamage,
         Instant::now(),
     );
     assert!(matches!(
-        f.realand().output_state[&output].schedule.redraw_state(),
+        f.clarion().output_state[&output].schedule.redraw_state(),
         RedrawState::Idle
     ));
     wait_for_deadline(&mut f, &output);
     assert!(matches!(
-        f.realand().output_state[&output].schedule.redraw_state(),
+        f.clarion().output_state[&output].schedule.redraw_state(),
         RedrawState::Queued
     ));
 }
@@ -315,29 +315,29 @@ fn empty_frame_deadline_queues_the_next_animation_frame() {
 fn sustained_presentation_backpressure_preserves_callbacks_and_recovery_cancels_old_deadline() {
     let (mut f, id, surface, server, output) = setup();
     let callback = request_frame(&mut f, id, &surface);
-    let sequence = f.realand().output_state[&output]
+    let sequence = f.clarion().output_state[&output]
         .schedule
         .callback_sequence();
     finish_frame(
-        f.realand(),
+        f.clarion(),
         &output,
         &RenderResult::NoDamage,
         Instant::now(),
     );
-    let deadline = f.realand().output_state[&output]
+    let deadline = f.clarion().output_state[&output]
         .schedule
         .nested_frame_timer()
         .unwrap();
     for _ in 0..1000 {
-        finish_frame(f.realand(), &output, &RenderResult::Skipped, Instant::now());
+        finish_frame(f.clarion(), &output, &RenderResult::Skipped, Instant::now());
         assert_eq!(
-            f.realand().output_state[&output]
+            f.clarion().output_state[&output]
                 .schedule
                 .nested_frame_timer(),
             Some(deadline)
         );
         assert_eq!(
-            f.realand().output_state[&output]
+            f.clarion().output_state[&output]
                 .schedule
                 .callback_sequence(),
             sequence
@@ -347,7 +347,7 @@ fn sustained_presentation_backpressure_preserves_callbacks_and_recovery_cancels_
     // submission advances this sequence and replaces the older empty deadline.
     assert!(!callback.done.load(Ordering::Relaxed));
     finish_frame(
-        f.realand(),
+        f.clarion(),
         &output,
         &RenderResult::Submitted,
         Instant::now(),
@@ -355,7 +355,7 @@ fn sustained_presentation_backpressure_preserves_callbacks_and_recovery_cancels_
     f.double_roundtrip(id);
     assert!(callback.done.load(Ordering::Relaxed));
     assert_eq!(
-        f.realand().output_state[&output]
+        f.clarion().output_state[&output]
             .schedule
             .callback_sequence(),
         sequence.wrapping_add(1)
@@ -365,7 +365,7 @@ fn sustained_presentation_backpressure_preserves_callbacks_and_recovery_cancels_
     dispatch_past_old_deadline(&mut f);
     f.double_roundtrip(id);
     assert!(!next.done.load(Ordering::Relaxed));
-    assert!(f.realand().output_state[&output]
+    assert!(f.clarion().output_state[&output]
         .schedule
         .nested_frame_timer()
         .is_none());
@@ -387,18 +387,18 @@ fn locking_fixture() -> (Fixture, Output, smithay::reexports::wayland_protocols:
     let manager: ExtSessionLockManagerV1 = registry.bind(global.name, 1, &client.qh, ());
     let lock = manager.lock(&client.qh, ());
     f.double_roundtrip(id);
-    let realand = f.realand();
+    let clarion = f.clarion();
     let LockState::WaitingForSurfaces {
         confirmation,
         deadline_token,
-    } = std::mem::take(&mut realand.lock_state)
+    } = std::mem::take(&mut clarion.lock_state)
     else {
         panic!("expected real pending SessionLocker");
     };
-    realand.event_loop.remove(deadline_token);
-    realand.lock_state = LockState::Locking(confirmation);
-    realand.monitors_active = true;
-    let output_state = realand.output_state.get_mut(&output).unwrap();
+    clarion.event_loop.remove(deadline_token);
+    clarion.lock_state = LockState::Locking(confirmation);
+    clarion.monitors_active = true;
+    let output_state = clarion.output_state.get_mut(&output).unwrap();
     output_state.lock_render_state = LockRenderState::Unlocked;
     output_state.schedule.test_set_redraw(RedrawState::Idle);
     (f, output, lock)
@@ -409,21 +409,21 @@ fn deferred_native_presentation_preserves_real_locker_until_locked_pixels_submit
     use crate::compositor::{LockRenderState, LockState};
     let (mut f, output, _lock) = locking_fixture();
     for _ in 0..1000 {
-        f.realand()
+        f.clarion()
             .finish_lock_frame(&output, &RenderResult::Skipped, true, true);
-        assert!(matches!(f.realand().lock_state, LockState::Locking(_)));
+        assert!(matches!(f.clarion().lock_state, LockState::Locking(_)));
         assert!(matches!(
-            f.realand().output_state[&output].lock_render_state,
+            f.clarion().output_state[&output].lock_render_state,
             LockRenderState::Unlocked
         ));
     }
     // Only a successful fresh locked composition acknowledges the real
     // SessionLocker. Repeated readiness timers must neither unlock nor ack it.
-    f.realand()
+    f.clarion()
         .finish_lock_frame(&output, &RenderResult::Submitted, true, false);
-    assert!(matches!(f.realand().lock_state, LockState::Locked(_)));
+    assert!(matches!(f.clarion().lock_state, LockState::Locked(_)));
     assert!(matches!(
-        f.realand().output_state[&output].lock_render_state,
+        f.clarion().output_state[&output].lock_render_state,
         LockRenderState::Locked
     ));
 }
@@ -432,23 +432,23 @@ fn deferred_native_presentation_preserves_real_locker_until_locked_pixels_submit
 fn genuine_native_render_failure_still_fails_the_lock_request() {
     use crate::compositor::LockState;
     let (mut f, output, _lock) = locking_fixture();
-    f.realand()
+    f.clarion()
         .finish_lock_frame(&output, &RenderResult::Skipped, true, false);
-    assert!(matches!(f.realand().lock_state, LockState::Unlocked));
+    assert!(matches!(f.clarion().lock_state, LockState::Unlocked));
 }
 
 #[test]
 fn gpu_capacity_deferral_keeps_the_real_locker_pending_on_every_backend() {
     use crate::compositor::{LockRenderState, LockState};
     let (mut f, output, _lock) = locking_fixture();
-    f.realand()
+    f.clarion()
         .finish_lock_frame(&output, &RenderResult::GpuDeferred, true, false);
-    assert!(matches!(f.realand().lock_state, LockState::Locking(_)));
+    assert!(matches!(f.clarion().lock_state, LockState::Locking(_)));
     assert!(matches!(
-        f.realand().output_state[&output].lock_render_state,
+        f.clarion().output_state[&output].lock_render_state,
         LockRenderState::Unlocked
     ));
-    f.realand()
+    f.clarion()
         .finish_lock_frame(&output, &RenderResult::Submitted, true, false);
-    assert!(matches!(f.realand().lock_state, LockState::Locked(_)));
+    assert!(matches!(f.clarion().lock_state, LockState::Locked(_)));
 }

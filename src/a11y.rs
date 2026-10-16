@@ -7,9 +7,9 @@ use accesskit::{
 };
 use accesskit_unix::Adapter;
 use calloop::LoopHandle;
-use realand_config::MruScope;
+use clarion_config::MruScope;
 
-use crate::compositor::{KeyboardFocus, Realand, State};
+use crate::compositor::{Clarion, KeyboardFocus, State};
 use crate::layout::workspace::WorkspaceId;
 use crate::utils::with_toplevel_role;
 use crate::window::mapped::MappedId;
@@ -79,7 +79,7 @@ impl A11y {
 
         self.event_loop
             .insert_source(rx, |e, _, state| match e {
-                calloop::channel::Event::Msg(msg) => state.realand.on_a11y_msg(msg),
+                calloop::channel::Event::Msg(msg) => state.clarion.on_a11y_msg(msg),
                 calloop::channel::Event::Closed => (),
             })
             .unwrap();
@@ -108,13 +108,13 @@ impl A11y {
     }
 }
 
-impl Realand {
+impl Clarion {
     pub fn refresh_a11y(&mut self) {
         if self.a11y.to_accesskit.is_none() {
             return;
         }
 
-        let _span = realand_tracy_span!("refresh_a11y");
+        let _span = clarion_tracy_span!("refresh_a11y");
 
         let mut announcement = None;
         let ws_id = self.layout.active_workspace().map(|ws| ws.id());
@@ -232,7 +232,7 @@ impl Realand {
             return;
         }
 
-        let _span = realand_tracy_span!("a11y_announce");
+        let _span = clarion_tracy_span!("a11y_announce");
 
         // Work around having to change node value for it to get announced.
         if announcement == self.a11y.last_announcement {
@@ -322,7 +322,7 @@ impl Realand {
 
         let tree = Tree {
             root: ID_ROOT,
-            toolkit_name: Some(String::from("realand")),
+            toolkit_name: Some(String::from("clarion")),
             toolkit_version: None,
         };
 

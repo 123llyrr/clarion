@@ -1,3 +1,3 @@
-//! Platform adapter for Realand's independent presentation clock.
+//! Platform adapter for Clarion's independent presentation clock.
 
-pub use realand_core::frame_clock::FrameClock;
+pub use clarion_timing::frame_clock::FrameClock;

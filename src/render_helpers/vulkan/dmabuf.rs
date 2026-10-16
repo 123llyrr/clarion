@@ -1,4 +1,4 @@
-//! DMA-BUF Zero-Copy Import for Vulkan in Realand.
+//! DMA-BUF Zero-Copy Import for Vulkan in Clarion.
 //!
 //! Imports Wayland client DMA-BUF buffers into Vulkan textures (VkImage & VkImageView)
 //! without CPU copy, leveraging VK_EXT_image_drm_format_modifier and VK_KHR_external_memory_fd.

@@ -4,7 +4,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use realand_config::{BlockOutFrom, Config, WindowRule};
+use clarion_config::{BlockOutFrom, Config, WindowRule};
 use smithay::backend::allocator::Fourcc;
 use smithay::output::Scale as OutputScale;
 use smithay::reexports::wayland_protocols::ext::background_effect::v1::client::{
@@ -142,14 +142,14 @@ fn map_pattern(f: &mut Fixture, client: ClientId) {
     window.set_size(80, 64);
     window.ack_last_and_commit();
     f.double_roundtrip(client);
-    f.realand().layout.toggle_window_floating(None);
-    f.realand().layout.move_floating_window(
+    f.clarion().layout.toggle_window_floating(None);
+    f.clarion().layout.move_floating_window(
         None,
-        realand_ipc::PositionChange::SetFixed(16.),
-        realand_ipc::PositionChange::SetFixed(16.),
+        clarion_ipc::PositionChange::SetFixed(16.),
+        clarion_ipc::PositionChange::SetFixed(16.),
         false,
     );
-    f.realand_complete_animations();
+    f.clarion_complete_animations();
     f.double_roundtrip(client);
 }
 
@@ -199,14 +199,14 @@ fn set_region(
 }
 
 fn pixels(f: &mut Fixture, output_index: u8, target: RenderTarget) -> Vec<u8> {
-    let output = f.realand_output(output_index);
-    let state = f.realand_state();
-    let realand = &mut state.realand;
-    realand.update_render_elements(None);
+    let output = f.clarion_output(output_index);
+    let state = f.clarion_state();
+    let clarion = &mut state.clarion;
+    clarion.update_render_elements(None);
     macro_rules! draw {
         ($renderer:expr) => {{
             let renderer = $renderer;
-            let elements = realand.render_to_vec(
+            let elements = clarion.render_to_vec(
                 RenderCtx {
                     renderer,
                     target,
@@ -236,7 +236,7 @@ fn pixels(f: &mut Fixture, output_index: u8, target: RenderTarget) -> Vec<u8> {
 }
 
 fn save_image(native: bool, scale: f64, phase: &str, pixels: &[u8]) {
-    let Some(dir) = std::env::var_os("REALAND_BLUR_PNG_DIR") else {
+    let Some(dir) = std::env::var_os("CLARION_BLUR_PNG_DIR") else {
         return;
     };
     std::fs::create_dir_all(&dir).unwrap();
@@ -273,15 +273,15 @@ fn test_layer_protocol(native: bool) {
         let mut f = Fixture::with_config(config);
         if native {
             let mut headless = crate::backend::Headless::new(
-                f.realand().config.clone(),
+                f.clarion().config.clone(),
                 crate::backend::RendererBackendType::Vulkan,
             );
             headless.add_renderer().unwrap();
             headless.init(&mut crate::platform::device_bridge::DeviceCoordinator::new(
-                f.realand(),
+                f.clarion(),
             ));
-            f.realand_state().backend = crate::backend::Backend::Headless(headless);
-            f.realand_state()
+            f.clarion_state().backend = crate::backend::Backend::Headless(headless);
+            f.clarion_state()
                 .backend
                 .with_renderer(|renderer| match renderer {
                     crate::render_helpers::renderer::AnyRenderer::Native(renderer) => eprintln!(
@@ -295,7 +295,7 @@ fn test_layer_protocol(native: bool) {
                 .unwrap();
         } else {
             f.init_gles_renderer();
-            f.realand_state()
+            f.clarion_state()
                 .backend
                 .with_renderer(|renderer| match renderer {
                     crate::render_helpers::renderer::AnyRenderer::Gles(renderer) => {
@@ -319,10 +319,10 @@ fn test_layer_protocol(native: bool) {
         }
         f.add_output(1, (320, 240));
         f.add_output(2, (320, 240));
-        f.realand_focus_output(1);
-        let output = f.realand_output(1);
+        f.clarion_focus_output(1);
+        let output = f.clarion_output(1);
         output.change_current_state(None, None, Some(OutputScale::Fractional(scale)), None);
-        f.realand().output_resized(&output);
+        f.clarion().output_resized(&output);
         let client = f.add_client();
         map_pattern(&mut f, client);
         let surface = map_glass(&mut f, client);
@@ -405,8 +405,8 @@ fn test_layer_protocol(native: bool) {
                 assert_eq!(sample(&capture, x, y), sample(&capture_baseline, x, y), "blur must sample the protected scene, not leak the output's application pixels");
             }
         }
-        let removed = f.realand_output(2);
-        f.realand().remove_output(&removed);
+        let removed = f.clarion_output(2);
+        f.clarion().remove_output(&removed);
         f.double_roundtrip(client);
         assert_pixels_eq!(
             pixels(&mut f, 1, RenderTarget::Output),
@@ -538,7 +538,7 @@ fn older_blocked_commit_cannot_consume_newer_blur_region_change() {
             let c = f.client(client);
             let effect = manager.get_background_effect(&surface, &c.qh, ());
             let server = f
-                .realand()
+                .clarion()
                 .mapped_layer_surfaces
                 .keys()
                 .find(|layer| layer.wl_surface().id().protocol_id() == surface.id().protocol_id())
@@ -585,8 +585,8 @@ fn older_blocked_commit_cannot_consume_newer_blur_region_change() {
             }
             let release = |f: &mut Fixture, barrier: &Barrier| {
                 barrier.signal();
-                let state = f.realand_state();
-                let dh = state.realand.display_handle.clone();
+                let state = f.clarion_state();
+                let dh = state.clarion.display_handle.clone();
                 state
                     .client_compositor_state(&server.client().unwrap())
                     .blocker_cleared(state, &dh);

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use realand_config::{BlockOutFrom, Config, LayerRule, Workspace, WorkspaceName};
+use clarion_config::{BlockOutFrom, Config, LayerRule, Workspace, WorkspaceName};
 use smithay::output::Scale as OutputScale;
 use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::{
     zwlr_layer_shell_v1::Layer, zwlr_layer_surface_v1::Anchor,
@@ -25,8 +25,8 @@ fn test_expo_layers(native: bool) {
             })
             .collect();
         config.layer_rules.push(LayerRule {
-            matches: vec![realand_config::layer_rule::Match {
-                layer: Some(realand_ipc::Layer::Bottom),
+            matches: vec![clarion_config::layer_rule::Match {
+                layer: Some(clarion_ipc::Layer::Bottom),
                 ..Default::default()
             }],
             block_out_from: Some(BlockOutFrom::ScreenCapture),
@@ -35,15 +35,15 @@ fn test_expo_layers(native: bool) {
         let mut f = Fixture::with_config(config);
         if native {
             let mut headless = crate::backend::Headless::new(
-                f.realand().config.clone(),
+                f.clarion().config.clone(),
                 crate::backend::RendererBackendType::Vulkan,
             );
             headless.add_renderer().unwrap();
             headless.init(&mut crate::platform::device_bridge::DeviceCoordinator::new(
-                f.realand(),
+                f.clarion(),
             ));
-            f.realand_state().backend = crate::backend::Backend::Headless(headless);
-            f.realand_state()
+            f.clarion_state().backend = crate::backend::Backend::Headless(headless);
+            f.clarion_state()
                 .backend
                 .with_renderer(|renderer| match renderer {
                     crate::render_helpers::renderer::AnyRenderer::Native(renderer) => eprintln!(
@@ -59,9 +59,9 @@ fn test_expo_layers(native: bool) {
             f.init_gles_renderer();
         }
         f.add_output(1, (1280, 800));
-        let output = f.realand_output(1);
+        let output = f.clarion_output(1);
         output.change_current_state(None, None, Some(OutputScale::Fractional(scale)), None);
-        f.realand().output_resized(&output);
+        f.clarion().output_resized(&output);
         let client = f.add_client();
         for (layer, namespace, size, color) in [
             (
@@ -106,13 +106,13 @@ fn test_expo_layers(native: bool) {
             panel.ack_last_and_commit();
             f.double_roundtrip(client);
         }
-        f.realand_complete_animations();
+        f.clarion_complete_animations();
         let desktop = pixels(&mut f, RenderTarget::Output);
-        f.realand().layout.toggle_expo();
+        f.clarion().layout.toggle_expo();
         assert_eq!(pixels(&mut f, RenderTarget::Output), desktop);
-        f.realand_complete_animations();
+        f.clarion_complete_animations();
 
-        let monitor = f.realand().layout.monitor_for_output(&output).unwrap();
+        let monitor = f.clarion().layout.monitor_for_output(&output).unwrap();
         let card_points: Vec<_> = monitor
             .workspaces_with_render_geo()
             .map(|(_, card)| {
@@ -140,19 +140,19 @@ fn test_expo_layers(native: bool) {
             assert!(at(&capture, bottom)[..3].iter().all(|c| *c < 10));
             assert_eq!(at(&capture, outside_bottom), outside);
         }
-        f.realand().layout.toggle_expo();
+        f.clarion().layout.toggle_expo();
         assert_eq!(pixels(&mut f, RenderTarget::Output), output_pixels);
-        let now = f.realand().clock.now_unadjusted();
-        f.realand()
+        let now = f.clarion().clock.now_unadjusted();
+        f.clarion()
             .clock
             .set_unadjusted(now + Duration::from_millis(80));
-        f.realand().advance_animations();
+        f.clarion().advance_animations();
         let closing = pixels(&mut f, RenderTarget::Output);
-        f.realand().layout.toggle_expo();
+        f.clarion().layout.toggle_expo();
         assert_eq!(pixels(&mut f, RenderTarget::Output), closing,
             "Expo reversal must retain wallpaper and Bottom layers at scale={scale}, native={native}");
-        f.realand().layout.toggle_expo();
-        f.realand_complete_animations();
+        f.clarion().layout.toggle_expo();
+        f.clarion_complete_animations();
         assert_eq!(pixels(&mut f, RenderTarget::Output), desktop);
     }
 }

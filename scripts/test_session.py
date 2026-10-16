@@ -9,10 +9,39 @@ import tempfile
 import unittest
 
 
-SESSION = Path(__file__).resolve().parents[1] / "resources" / "realand-session"
+SESSION = Path(__file__).resolve().parents[1] / "resources" / "clarion-session"
 
 
 class SessionTests(unittest.TestCase):
+    def test_legacy_active_session_is_rejected_before_importing_or_starting_services(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            mock_bin = root / "bin"
+            mock_bin.mkdir()
+            systemctl = mock_bin / "systemctl"
+            systemctl.write_text(
+                "#!/usr/bin/python3\n"
+                "import json, os, sys\n"
+                "with open(os.environ['SESSION_SERVICE_LOG'], 'a') as stream:\n"
+                "    stream.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+                "sys.exit(0 if sys.argv[-1] == 'realand.service' else 1)\n"
+            )
+            systemctl.chmod(0o755)
+            log = root / "services.jsonl"
+            environment = {
+                **os.environ, "SHELL": "", "PATH": f"{mock_bin}:/usr/bin:/bin",
+                "SESSION_SERVICE_LOG": str(log),
+            }
+            environment.pop("MANAGERPID", None)
+            environment.pop("SYSTEMD_EXEC_PID", None)
+            result = subprocess.run([str(SESSION)], env=environment, capture_output=True, timeout=5)
+            self.assertEqual(result.returncode, 1, result.stderr.decode())
+            self.assertEqual(
+                [json.loads(line) for line in log.read_text().splitlines()],
+                [["--user", "-q", "is-active", "clarion.service"],
+                 ["--user", "-q", "is-active", "realand.service"]],
+            )
+
     def test_login_shell_preserves_paths_and_arguments_as_data(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

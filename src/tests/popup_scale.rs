@@ -1,4 +1,4 @@
-use realand_config::Config;
+use clarion_config::Config;
 use smithay::reexports::wayland_protocols::xdg::shell::client::xdg_popup::XdgPopup;
 use smithay::reexports::wayland_protocols::xdg::shell::client::xdg_positioner::XdgPositioner;
 
@@ -55,9 +55,9 @@ fn popup_subsurfaces_inherit_output_scale_before_and_after_popup_creation() {
     // A popup remains attached to its parent window as it crosses displays. Both its root and
     // existing child surfaces must receive the destination output's new scale.
     f.add_output(2, (1920, 1080));
-    let output = f.realand_output(2);
+    let output = f.clarion_output(2);
     let window = f
-        .realand()
+        .clarion()
         .layout
         .windows()
         .next()
@@ -65,7 +65,7 @@ fn popup_subsurfaces_inherit_output_scale_before_and_after_popup_creation() {
         .1
         .window
         .clone();
-    f.realand()
+    f.clarion()
         .layout
         .move_to_output(Some(&window), &output, None, ActivateWindow::Yes);
     f.double_roundtrip(id);

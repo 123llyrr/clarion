@@ -1,6 +1,6 @@
 ## General principles
 
-Realand separates device-independent desktop policy from protocol integration, scene
+Clarion separates device-independent desktop policy from protocol integration, scene
 construction and GPU presentation. These principles guide that design; individual layout
 modes may make different geometry choices.
 
@@ -44,26 +44,26 @@ This does not impact performance, but helps avoid a lot of edge cases in the cod
 
 ### Be mindful of invisible state.
 
-This is realand state that is not immediately apparent from looking at the screen. This is not bad per se, but you should carefully consider how to reduce the surprise factor.
+This is clarion state that is not immediately apparent from looking at the screen. This is not bad per se, but you should carefully consider how to reduce the surprise factor.
 
 - For example, when a monitor disconnects, all its workspaces move to another connected monitor. In order to be able to restore these workspaces when the first monitor connects again, these workspaces keep the knowledge of which was their *original monitor*—this is an example of invisible state, since you can't tell it in any way by looking at the screen. This can have surprising consequences: imagine disconnecting a monitor at home, going to work, completely rearranging the windows there, then coming back home, and suddenly some random workspaces end up on your home monitor. In order to reduce this surprise factor, whenever a new window appears on a workspace, that workspace resets its *original monitor* to its current monitor. This way, the workspaces you actively worked on remain where they were.
-- For example, realand preserves the view position whenever a window appears, or whenever a window goes full-screen, to restore it afterward. This way, dealing with temporary things like dialogs opening and closing, or toggling full-screen, becomes less annoying, since it doesn't mess up the view position. This is also invisible state, as you cannot tell by looking at the screen where closing a window will restore the view position. If taken to the extreme (previous view position saved forever for every open window), this can be surprising, as closing long-running windows would result in the view shifting around pretty much randomly. To reduce this surprise factor, realand remembers only one last view position per workspace, and forgets this stored view position upon window focus change.
+- For example, clarion preserves the view position whenever a window appears, or whenever a window goes full-screen, to restore it afterward. This way, dealing with temporary things like dialogs opening and closing, or toggling full-screen, becomes less annoying, since it doesn't mess up the view position. This is also invisible state, as you cannot tell by looking at the screen where closing a window will restore the view position. If taken to the extreme (previous view position saved forever for every open window), this can be surprising, as closing long-running windows would result in the view shifting around pretty much randomly. To reduce this surprise factor, clarion remembers only one last view position per workspace, and forgets this stored view position upon window focus change.
 
 ## Module boundaries
 
-Realand keeps one compositor event loop. Modules own their state and expose operations
+Clarion keeps one compositor event loop. Modules own their state and expose operations
 for the events they handle. The native Vulkan backend retires submitted GPU work on a
 completion worker; desktop state remains owned by the compositor thread.
 
 | Owner | Responsibility | Integration contract |
 | --- | --- | --- |
-| `realand-core` | Desktop identity, layout strategies, interaction state, scene plans and presentation policy | Pure state and geometry without Smithay, Wayland or GPU dependencies. Returns effects for the platform to apply. |
+| `clarion-core` | Desktop identity, layout strategies, interaction state, scene plans and presentation policy | Pure state and geometry without Smithay, Wayland or GPU dependencies. Returns effects for the platform to apply. |
 | `layout` | Client-aware layout integration and visible window state | Applies core decisions to tiles and client constraints; handles protocol operations through the platform. |
 | `gestures` | Velocity, scroll accumulation and gesture sampling | Numeric deltas and timestamps, shared by input and layout. The old `input` tracker paths remain compatibility exports. |
 | `overview` | Compositor-level overview transitions | Input sends `OverviewCommand`; this boundary orders frame capture, grab teardown, layout changes and redraw. Confirmation during an ungrab must not recursively cancel the same grab. |
 | `input::hot_corner` | Per-output corner entry and exit hysteresis | `motion`, `reset` and `reset_output` own the latch. Rendering and frame callbacks cannot rearm it. |
 | `output_schedule` | Per-output redraw state, frame timing, retry and timer ownership | Integrates the core scheduler with submission/presentation events. Teardown cancels the owned timers on the event loop. |
-| `realand_config::schema` | Versioned editor metadata for configuration | The configuration crate generates its own descriptions. `realand-settings` consumes the public API and owns translated labels, groups and examples. `Config::parse` remains the validation authority. |
+| `clarion_config::schema` | Versioned editor metadata for configuration | The configuration crate generates its own descriptions. `clarion-settings` consumes the public API and owns translated labels, groups and examples. `Config::parse` remains the validation authority. |
 | `frame_pipeline` | Scene snapshots and frame preparation/feedback | `FramePort` exposes the scene and frame services needed by device rendering. |
 | `platform::device_bridge` | Device lifecycle and configuration/feedback | `DevicePort` restricts setup operations; the platform coordinator owns access to desktop integration state. |
 | `render_helpers::vulkan` | Native Vulkan composition, effects, resources and GPU synchronization | Implements renderer interfaces, pipeline preparation and asynchronous GPU completion. Output presentation remains a device-backend responsibility. |
@@ -83,11 +83,11 @@ Here are some design considerations for the window layout logic.
 
     The top left area of a window is more likely to contain something important, so it should always be visible.
 
-1. Setting window width or height to a fixed pixel size (e.g. `set-column-width 1280` or `default-column-width { fixed 1280; }`) will set the size of the window itself, however setting to a proportional size (e.g. `set-column-width 50%`) will set the size of the tile, including the border added by realand.
+1. Setting window width or height to a fixed pixel size (e.g. `set-column-width 1280` or `default-column-width { fixed 1280; }`) will set the size of the window itself, however setting to a proportional size (e.g. `set-column-width 50%`) will set the size of the tile, including the border added by clarion.
 
     - With proportions, the user is looking to tile multiple windows on the screen, so they should include borders.
     - With fixed sizes, the user wants to test a specific client size or take a specifically sized screenshot, so they should affect the window directly.
-    - After the size is set, it is always converted to a value that includes the borders, to make the code sane. That is, `set-column-width 1000` followed by changing the realand border width will resize the window accordingly.
+    - After the size is set, it is always converted to a value that includes the borders, to make the code sane. That is, `set-column-width 1000` followed by changing the clarion border width will resize the window accordingly.
 
 1. Fullscreen windows are a normal part of the scrolling layout.
 
@@ -101,13 +101,13 @@ Here are some design considerations for the window layout logic.
 
 ## Default config
 
-The [default config](https://github.com/realand-wm/realand/blob/master/resources/default-config.kdl) is intended to give a familiar, helpful, and not too jarring experience to new realand users.
+The [default config](https://github.com/123llyrr/realand/blob/main/resources/default-config.kdl) is intended to give a familiar, helpful, and not too jarring experience to new clarion users.
 Importantly, it is not a "suggested rice config"; we don't want to startle people with full-on rainbow borders and crazy shaders.
 
-Realand provides an integrated Shell and settings app while keeping the compositor
+Clarion provides an integrated Shell and settings app while keeping the compositor
 usable with external desktop components. The example config starts Waybar; Shell users
 should remove that startup line and follow the Shell installation instructions.
-Users can adjust the KDL config directly or use Realand's graphical settings app.
+Users can adjust the KDL config directly or use Clarion's graphical settings app.
 
 The default config is therefore thoroughly commented with links to the relevant wiki sections.
 We don't include every possible option in the default config to avoid overwhelming users too much; anything overly specific or uncommon can stay on the wiki.
@@ -115,7 +115,7 @@ The general rule is to include things that users are reasonably expected to want
 We do also advertise our more unique features though like screencast block-out-from.
 
 We default to CSD (`prefer-no-csd` is commented out).
-This gives new users easy and familiar way to move and close windows via their titlebars, especially considering that realand doesn't have serverside titlebars (so far at least).
+This gives new users easy and familiar way to move and close windows via their titlebars, especially considering that clarion doesn't have serverside titlebars (so far at least).
 
 Focus rings are drawn fully behind windows by default.
 While this unfortunately messes with window transparency, [which is a common source of confusion](./FAQ.md#why-are-transparent-windows-tinted-why-is-the-borderfocus-ring-showing-up-through-semitransparent-windows), defaulting to drawing focus rings only around windows would be even worse because it has holes inside clientside rounded corners.
@@ -138,4 +138,4 @@ The general system is: if a hotkey switches somewhere, then adding <kbd>Ctrl</kb
 Adding <kbd>Shift</kbd> does an alternative action: for focus and movement it starts going across monitors, for resizes it starts acting on window height rather than width, etc.
 Workspace switching on <kbd>Mod</kbd><kbd>U</kbd>/<kbd>I</kbd> is one key up from <kbd>Mod</kbd><kbd>J</kbd>/<kbd>K</kbd> used for window switching.
 
-Since <kbd>Alt</kbd> is a modifier in nested realand, binds with explicit <kbd>Alt</kbd> are mainly the ones only useful on the host, for example spawning a screen locker.
+Since <kbd>Alt</kbd> is a modifier in nested clarion, binds with explicit <kbd>Alt</kbd> are mainly the ones only useful on the host, for example spawning a screen locker.

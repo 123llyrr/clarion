@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use realand_core::trajectory::Trajectory;
+use clarion_motion::trajectory::Trajectory;
 
 mod bezier;
 use bezier::CubicBezier;
@@ -39,7 +39,7 @@ impl Animation {
         from: f64,
         to: f64,
         initial_velocity: f64,
-        config: realand_config::Animation,
+        config: clarion_config::Animation,
     ) -> Self {
         // Translate real-second gesture velocity into the shared clock domain.
         let initial_velocity = initial_velocity / clock.rate().max(0.001);
@@ -48,7 +48,7 @@ impl Animation {
         animation
     }
 
-    pub fn replace_config(&mut self, config: realand_config::Animation) {
+    pub fn replace_config(&mut self, config: clarion_config::Animation) {
         if config.off {
             self.trajectory.disable();
             return;
@@ -77,8 +77,8 @@ impl Animation {
             self.trajectory.initial_velocity()
         };
         self.trajectory = match config.kind {
-            realand_config::animations::Kind::Spring(p) => {
-                let _span = realand_tracy_span!("Animation::spring");
+            clarion_config::animations::Kind::Spring(p) => {
+                let _span = clarion_tracy_span!("Animation::spring");
                 Trajectory::spring_at(
                     start_time,
                     Spring {
@@ -93,7 +93,7 @@ impl Animation {
                     },
                 )
             }
-            realand_config::animations::Kind::Easing(p) => {
+            clarion_config::animations::Kind::Easing(p) => {
                 let duration = Duration::from_millis(u64::from(p.duration_ms));
                 if active || initial_velocity != 0. {
                     Trajectory::continuous_ease_at(start_time, from, to, initial_velocity, duration)
@@ -174,7 +174,7 @@ impl Animation {
     }
 
     pub fn spring(clock: Clock, spring: Spring) -> Self {
-        let _span = realand_tracy_span!("Animation::spring");
+        let _span = clarion_tracy_span!("Animation::spring");
         Self {
             trajectory: Trajectory::spring_at(clock.now(), spring),
             clock,
@@ -198,6 +198,10 @@ impl Animation {
             ),
             clock,
         }
+    }
+
+    pub(crate) fn has_fixed_duration(&self) -> bool {
+        self.trajectory.has_fixed_duration()
     }
 
     pub fn is_done(&self) -> bool {
@@ -277,8 +281,8 @@ impl Curve {
         self.into_core().sample(x)
     }
 
-    fn into_core(self) -> realand_core::trajectory::Curve {
-        use realand_core::trajectory::Curve as CoreCurve;
+    fn into_core(self) -> clarion_motion::trajectory::Curve {
+        use clarion_motion::trajectory::Curve as CoreCurve;
         match self {
             Self::Linear => CoreCurve::Linear,
             Self::EaseOutQuad => CoreCurve::EaseOutQuad,
@@ -289,14 +293,14 @@ impl Curve {
     }
 }
 
-impl From<realand_config::animations::Curve> for Curve {
-    fn from(value: realand_config::animations::Curve) -> Self {
+impl From<clarion_config::animations::Curve> for Curve {
+    fn from(value: clarion_config::animations::Curve) -> Self {
         match value {
-            realand_config::animations::Curve::Linear => Curve::Linear,
-            realand_config::animations::Curve::EaseOutQuad => Curve::EaseOutQuad,
-            realand_config::animations::Curve::EaseOutCubic => Curve::EaseOutCubic,
-            realand_config::animations::Curve::EaseOutExpo => Curve::EaseOutExpo,
-            realand_config::animations::Curve::CubicBezier(x1, y1, x2, y2) => {
+            clarion_config::animations::Curve::Linear => Curve::Linear,
+            clarion_config::animations::Curve::EaseOutQuad => Curve::EaseOutQuad,
+            clarion_config::animations::Curve::EaseOutCubic => Curve::EaseOutCubic,
+            clarion_config::animations::Curve::EaseOutExpo => Curve::EaseOutExpo,
+            clarion_config::animations::Curve::CubicBezier(x1, y1, x2, y2) => {
                 Curve::CubicBezier(CubicBezier::new(x1, y1, x2, y2))
             }
         }
@@ -307,11 +311,11 @@ impl From<realand_config::animations::Curve> for Curve {
 mod tests {
     use super::*;
 
-    fn easing_config(curve: realand_config::animations::Curve) -> realand_config::Animation {
-        realand_config::Animation {
+    fn easing_config(curve: clarion_config::animations::Curve) -> clarion_config::Animation {
+        clarion_config::Animation {
             off: false,
-            kind: realand_config::animations::Kind::Easing(
-                realand_config::animations::EasingParams {
+            kind: clarion_config::animations::Kind::Easing(
+                clarion_config::animations::EasingParams {
                     duration_ms: 400,
                     curve,
                 },
@@ -323,11 +327,11 @@ mod tests {
     fn easing_reversal_retains_real_velocity_at_all_clock_rates() {
         for rate in [0.25, 0.73, 1., 2.] {
             for curve in [
-                realand_config::animations::Curve::Linear,
-                realand_config::animations::Curve::EaseOutQuad,
-                realand_config::animations::Curve::EaseOutCubic,
-                realand_config::animations::Curve::EaseOutExpo,
-                realand_config::animations::Curve::CubicBezier(0.25, 0.1, 0.25, 1.),
+                clarion_config::animations::Curve::Linear,
+                clarion_config::animations::Curve::EaseOutQuad,
+                clarion_config::animations::Curve::EaseOutCubic,
+                clarion_config::animations::Curve::EaseOutExpo,
+                clarion_config::animations::Curve::CubicBezier(0.25, 0.1, 0.25, 1.),
             ] {
                 let mut clock = Clock::with_time(Duration::ZERO);
                 clock.set_rate(rate);
@@ -362,7 +366,7 @@ mod tests {
                     0.5,
                     0.5,
                     velocity,
-                    easing_config(realand_config::animations::Curve::EaseOutCubic),
+                    easing_config(clarion_config::animations::Curve::EaseOutCubic),
                 );
                 assert_eq!(animation.value(), 0.5);
                 assert!((animation.velocity() - velocity).abs() < 1e-12);
@@ -386,7 +390,7 @@ mod tests {
                         0.,
                         1.,
                         0.,
-                        easing_config(realand_config::animations::Curve::EaseOutCubic),
+                        easing_config(clarion_config::animations::Curve::EaseOutCubic),
                     ),
                     1 => Animation::spring(
                         clock.clone(),
@@ -403,7 +407,7 @@ mod tests {
                 clock.set_unadjusted(Duration::from_millis(80));
                 let pose = animation.value();
                 let velocity = animation.velocity();
-                animation.replace_config(easing_config(realand_config::animations::Curve::Linear));
+                animation.replace_config(easing_config(clarion_config::animations::Curve::Linear));
                 assert_eq!(animation.value(), pose);
                 assert!(
                     (animation.velocity() - velocity).abs() < 1e-12,
@@ -417,10 +421,10 @@ mod tests {
                 );
                 let pose = animation.value();
                 let velocity = animation.velocity();
-                animation.replace_config(realand_config::Animation {
+                animation.replace_config(clarion_config::Animation {
                     off: false,
-                    kind: realand_config::animations::Kind::Spring(
-                        realand_config::animations::SpringParams::MACOS_INTERACTIVE,
+                    kind: clarion_config::animations::Kind::Spring(
+                        clarion_config::animations::SpringParams::MACOS_INTERACTIVE,
                     ),
                 });
                 assert_eq!(animation.value(), pose);
@@ -432,11 +436,11 @@ mod tests {
     #[test]
     fn fresh_configured_presets_and_waiting_close_restarts_keep_curve_samples() {
         for curve in [
-            realand_config::animations::Curve::Linear,
-            realand_config::animations::Curve::EaseOutQuad,
-            realand_config::animations::Curve::EaseOutCubic,
-            realand_config::animations::Curve::EaseOutExpo,
-            realand_config::animations::Curve::CubicBezier(0.25, 0.1, 0.25, 1.),
+            clarion_config::animations::Curve::Linear,
+            clarion_config::animations::Curve::EaseOutQuad,
+            clarion_config::animations::Curve::EaseOutCubic,
+            clarion_config::animations::Curve::EaseOutExpo,
+            clarion_config::animations::Curve::CubicBezier(0.25, 0.1, 0.25, 1.),
         ] {
             let mut clock = Clock::with_time(Duration::ZERO);
             let fresh = Animation::new(clock.clone(), 0., 1., 0., easing_config(curve));
@@ -465,7 +469,7 @@ mod tests {
                 0.,
                 1.,
                 0.,
-                realand_config::animations::WorkspaceSwitchAnim::default().0,
+                clarion_config::animations::WorkspaceSwitchAnim::default().0,
             );
             clock.set_unadjusted(Duration::from_millis(80));
             let before = anim.value();
@@ -495,7 +499,7 @@ mod tests {
             0.,
             0.,
             10.,
-            realand_config::animations::WorkspaceSwitchAnim::default().0,
+            clarion_config::animations::WorkspaceSwitchAnim::default().0,
         );
         assert!(!anim.is_done());
         assert_eq!(anim.velocity(), 10.);
@@ -517,7 +521,7 @@ mod tests {
         clock.set_complete_instantly(true);
         assert_eq!(anim.velocity(), 0.);
         clock.set_complete_instantly(false);
-        let mut config = realand_config::animations::WorkspaceSwitchAnim::default().0;
+        let mut config = clarion_config::animations::WorkspaceSwitchAnim::default().0;
         config.off = true;
         let anim = Animation::new(clock.clone(), 0., 1., 10., config);
         let restarted = anim.restarted(20., 40., 15.);
@@ -697,10 +701,10 @@ mod tests {
             for (from, to, velocity) in [(0.9996, 1., -0.1), (0.0004, 0., 0.1)] {
                 let mut clock = Clock::with_time(Duration::ZERO);
                 clock.set_rate(rate);
-                let config = realand_config::Animation {
+                let config = clarion_config::Animation {
                     off: false,
-                    kind: realand_config::animations::Kind::Spring(
-                        realand_config::animations::SpringParams::MACOS_INTERACTIVE,
+                    kind: clarion_config::animations::Kind::Spring(
+                        clarion_config::animations::SpringParams::MACOS_INTERACTIVE,
                     ),
                 };
                 let animation = Animation::new(clock.clone(), from, to, velocity, config);

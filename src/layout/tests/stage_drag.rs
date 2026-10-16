@@ -3,7 +3,7 @@ use super::*;
 
 fn drag_layout(floating: bool, named: bool) -> Layout<TestWindow> {
     let options = Options {
-        animations: realand_config::Animations {
+        animations: clarion_config::Animations {
             off: true,
             ..Default::default()
         },
@@ -220,7 +220,7 @@ fn stage_cancel_restores_dwindle_split_tree() {
     check_ops_on_layout(
         &mut layout,
         [
-            Op::SwitchTilingMode(Some(realand_ipc::TilingMode::Dwindle)),
+            Op::SwitchTilingMode(Some(clarion_ipc::TilingMode::Dwindle)),
             Op::AddWindow {
                 params: TestWindowParams::new(1),
             },
@@ -294,7 +294,7 @@ fn stage_drag_begin_then_output_reconnect_keeps_unnamed_source() {
         );
         assert_eq!(
             layout.core.borrow().stage_drag_destination(),
-            Some(realand_core::SpaceId(source.get())),
+            Some(clarion_core::SpaceId(source.get())),
             "live stable source workspace outranks the replaced connector generation"
         );
         Op::FocusWorkspaceDown.apply(&mut layout);
@@ -486,15 +486,15 @@ fn stage_hidden_rail_drop_has_finite_placement_and_restores_cancelled_source() {
 #[test]
 fn stage_canvas_cancel_preserves_original_membership_before_and_after_canvas_exit() {
     for mode in [
-        realand_ipc::TilingMode::Scrolling,
-        realand_ipc::TilingMode::Dwindle,
+        clarion_ipc::TilingMode::Scrolling,
+        clarion_ipc::TilingMode::Dwindle,
     ] {
         for originally_floating in [false, true] {
             for exit_during_drag in [false, true] {
                 let mut layout = drag_layout(originally_floating, false);
                 Op::SwitchTilingMode(Some(mode)).apply(&mut layout);
                 let source = workspace_of(&layout, 0);
-                if !originally_floating && mode == realand_ipc::TilingMode::Scrolling {
+                if !originally_floating && mode == clarion_ipc::TilingMode::Scrolling {
                     let workspace = layout.active_workspace_mut().unwrap();
                     workspace.set_window_width(Some(&0), SizeChange::SetProportion(73.));
                     workspace.toggle_full_width();
@@ -545,7 +545,7 @@ fn stage_canvas_cancel_preserves_original_membership_before_and_after_canvas_exi
                         "restore must retain original canvas member until later canvas exit"
                     );
                 }
-                if !originally_floating && mode == realand_ipc::TilingMode::Scrolling {
+                if !originally_floating && mode == clarion_ipc::TilingMode::Scrolling {
                     let workspace = layout
                         .workspaces()
                         .find(|(_, _, workspace)| workspace.id() == source)
@@ -597,7 +597,7 @@ fn stage_retired_source_does_not_treat_same_named_replacement_as_old_output() {
     assert!(layout
         .core
         .borrow()
-        .space(realand_core::SpaceId(source.get()))
+        .space(clarion_core::SpaceId(source.get()))
         .is_none());
     layout.remove_output(&old_output);
     Op::FocusOutput(2).apply(&mut layout);
@@ -606,7 +606,7 @@ fn stage_retired_source_does_not_treat_same_named_replacement_as_old_output() {
     assert!(layout.core.borrow().output("output1").unwrap().generation > old_generation);
     assert_eq!(
         layout.core.borrow().stage_drag_destination(),
-        Some(realand_core::SpaceId(destination.get()))
+        Some(clarion_core::SpaceId(destination.get()))
     );
     layout.interactive_move_cancel(&0);
     assert_eq!(workspace_of(&layout, 0), destination);

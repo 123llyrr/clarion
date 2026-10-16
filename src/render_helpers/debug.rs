@@ -4,11 +4,11 @@ use smithay::backend::renderer::utils::CommitCounter;
 use smithay::backend::renderer::Color32F;
 use smithay::utils::Scale;
 
-use super::renderer::RealandRenderer;
+use super::renderer::ClarionRenderer;
 use super::solid_color::SolidColorRenderElement;
-use crate::compositor::OutputRenderElements;
+use crate::scene::OutputRenderElements;
 
-pub fn push_opaque_regions<R: RealandRenderer>(
+pub fn push_opaque_regions<R: ClarionRenderer>(
     elem: &OutputRenderElements<R>,
     scale: Scale<f64>,
     push: &mut dyn FnMut(OutputRenderElements<R>),
@@ -50,11 +50,11 @@ pub fn push_opaque_regions<R: RealandRenderer>(
     }
 }
 
-pub fn draw_damage<R: RealandRenderer>(
+pub fn draw_damage<R: ClarionRenderer>(
     damage_tracker: &mut OutputDamageTracker,
     elements: &mut Vec<OutputRenderElements<R>>,
 ) {
-    let _span = realand_tracy_span!("draw_damage");
+    let _span = clarion_tracy_span!("draw_damage");
 
     let Ok((_, scale, _)) = damage_tracker.mode().try_into() else {
         return;

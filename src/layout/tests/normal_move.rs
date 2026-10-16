@@ -1,7 +1,7 @@
 //! Exercise accepted pure move controls through the real Tile/protocol adapter.
 use super::*;
 
-fn fixture(mode: realand_ipc::TilingMode, floating: bool) -> Layout<TestWindow> {
+fn fixture(mode: clarion_ipc::TilingMode, floating: bool) -> Layout<TestWindow> {
     let mut options = Options::default();
     options.animations.off = true;
     let mut params = TestWindowParams::new(1);
@@ -87,7 +87,7 @@ fn detach(layout: &mut Layout<TestWindow>, output: Output, pointer: Point<f64, L
 }
 #[test]
 fn toggling_target_during_drag_preserves_column_preferences_and_commits_requested_lane() {
-    let mut layout = fixture(realand_ipc::TilingMode::Scrolling, false);
+    let mut layout = fixture(clarion_ipc::TilingMode::Scrolling, false);
     let workspace = layout.active_workspace_mut().unwrap();
     workspace.set_window_width(Some(&1), SizeChange::SetProportion(73.));
     workspace.toggle_full_width();
@@ -122,8 +122,8 @@ fn toggling_target_during_drag_preserves_column_preferences_and_commits_requeste
 #[test]
 fn source_layer_change_while_starting_is_used_by_the_next_accepted_motion() {
     for mode in [
-        realand_ipc::TilingMode::Scrolling,
-        realand_ipc::TilingMode::Dwindle,
+        clarion_ipc::TilingMode::Scrolling,
+        clarion_ipc::TilingMode::Dwindle,
     ] {
         let mut layout = fixture(mode, false);
         let (output, point) = begin(&mut layout);
@@ -157,8 +157,8 @@ fn source_layer_change_while_starting_is_used_by_the_next_accepted_motion() {
 #[test]
 fn normal_cancel_places_at_current_output_and_keeps_explicit_target_lane() {
     for mode in [
-        realand_ipc::TilingMode::Scrolling,
-        realand_ipc::TilingMode::Dwindle,
+        clarion_ipc::TilingMode::Scrolling,
+        clarion_ipc::TilingMode::Dwindle,
     ] {
         let mut layout = fixture(mode, false);
         let (output, point) = begin(&mut layout);
@@ -183,11 +183,11 @@ fn normal_cancel_places_at_current_output_and_keeps_explicit_target_lane() {
 }
 #[test]
 fn output_removal_and_mode_switch_keep_numeric_placement_until_no_output_drop() {
-    let mut layout = fixture(realand_ipc::TilingMode::Scrolling, false);
+    let mut layout = fixture(clarion_ipc::TilingMode::Scrolling, false);
     let (output, point) = begin(&mut layout);
     detach(&mut layout, output, point);
     layout.set_window_floating(Some(&1), true);
-    Op::SwitchTilingMode(Some(realand_ipc::TilingMode::Dwindle)).apply(&mut layout);
+    Op::SwitchTilingMode(Some(clarion_ipc::TilingMode::Dwindle)).apply(&mut layout);
     for index in [1, 2] {
         Op::RemoveOutput(index).apply(&mut layout);
         assert!(
@@ -214,7 +214,7 @@ fn output_removal_and_mode_switch_keep_numeric_placement_until_no_output_drop() 
 }
 #[test]
 fn fullscreen_floating_window_removal_acknowledges_restored_original_lane() {
-    let mut layout = fixture(realand_ipc::TilingMode::Scrolling, true);
+    let mut layout = fixture(clarion_ipc::TilingMode::Scrolling, true);
     layout.set_fullscreen(&1, true);
     Op::Communicate(1).apply(&mut layout);
     let (output, point) = begin(&mut layout);

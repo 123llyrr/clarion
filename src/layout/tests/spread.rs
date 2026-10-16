@@ -4,9 +4,9 @@ fn moving_spread(scale: f64) -> Layout<TestWindow> {
     let mut options = Options::default();
     options.layout.auto_stack_new_windows = false;
     options.animations.overview_open_close.0.kind =
-        realand_config::animations::Kind::Easing(realand_config::animations::EasingParams {
+        clarion_config::animations::Kind::Easing(clarion_config::animations::EasingParams {
             duration_ms: 1000,
-            curve: realand_config::animations::Curve::Linear,
+            curve: clarion_config::animations::Curve::Linear,
         });
     check_ops_with_options(
         options,
@@ -420,7 +420,7 @@ fn spread_motion_pixels_match_gles_and_preserve_desktop_endpoints() {
                     "Spread first frame must preserve desktop pixels"
                 );
             }
-            if let Some(directory) = std::env::var_os("REALAND_SPREAD_MORPH_PNG_DIR") {
+            if let Some(directory) = std::env::var_os("CLARION_SPREAD_MORPH_PNG_DIR") {
                 let path = std::path::Path::new(&directory)
                     .join(format!("supreme-spread-{scale}-{stage}.png"));
                 let file = std::fs::File::create(path).unwrap();
@@ -468,7 +468,7 @@ fn spread_filtered_returning_window_closes_at_preview_geometry_on_both_renderers
             options.layout.focus_ring.off = true;
             options.layout.shadow.on = false;
             options.animations.window_wobble.off = true;
-            options.animations.window_close.effect = realand_config::WindowCloseEffect::Fade;
+            options.animations.window_close.effect = clarion_config::WindowCloseEffect::Fade;
             options.animations.window_close.glide.off = true;
             layout.update_options(options);
             for (_, window) in layout.windows() {
@@ -534,7 +534,7 @@ fn spread_filtered_returning_window_closes_at_preview_geometry_on_both_renderers
                     elements.iter().rev(),
                 )
                 .unwrap();
-                if let Some(directory) = std::env::var_os("REALAND_SPREAD_MORPH_PNG_DIR") {
+                if let Some(directory) = std::env::var_os("CLARION_SPREAD_MORPH_PNG_DIR") {
                     let file = std::fs::File::create(std::path::Path::new(&directory).join(format!(
                         "supreme-spread-{}-closing-filtered-window-{stage}.png", $name
                     ))).unwrap();
@@ -663,7 +663,7 @@ fn spread_search_stops_redrawing_for_excluded_previews() {
 fn spread_finds_dwindle_windows_behind_fullscreen() {
     let mut layout = check_ops([
         Op::AddOutput(1),
-        Op::SwitchTilingMode(Some(realand_ipc::TilingMode::Dwindle)),
+        Op::SwitchTilingMode(Some(clarion_ipc::TilingMode::Dwindle)),
         Op::AddWindow {
             params: TestWindowParams::new(1),
         },
@@ -867,8 +867,8 @@ fn spread_update_cost_microbenchmark() {
 #[test]
 fn spread_initial_highlight_follows_focus_on_fractional_monitors() {
     for mode in [
-        realand_ipc::TilingMode::Scrolling,
-        realand_ipc::TilingMode::Dwindle,
+        clarion_ipc::TilingMode::Scrolling,
+        clarion_ipc::TilingMode::Dwindle,
     ] {
         let mut options = Options::default();
         options.layout.auto_stack_new_windows = false;
@@ -991,7 +991,7 @@ fn spread_arrow_keys_follow_visible_grid_without_crossing_row_edges() {
             monitor
                 .core
                 .borrow_mut()
-                .spread_action(realand_core::spread::SpreadAction::Reset {
+                .spread_action(clarion_core::spread::SpreadAction::Reset {
                     connector: monitor.output_name().clone(),
                     preferred,
                 });

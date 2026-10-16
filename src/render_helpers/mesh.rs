@@ -19,7 +19,7 @@ use super::vulkan::pipeline::MeshGpuVertex;
 use super::vulkan::VulkanTexture;
 use crate::backend::tty::{TtyFrame, TtyRenderer, TtyRendererError};
 
-pub use realand_core::deformation::MeshVertex;
+pub use clarion_core::deformation::MeshVertex;
 
 const EMPTY_VERTEX: MeshVertex = MeshVertex {
     position: [0.; 2],

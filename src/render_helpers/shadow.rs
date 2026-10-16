@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use clarion_config::{Color, CornerRadius};
 use glam::{Mat3, Vec2};
-use realand_config::{Color, CornerRadius};
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer, Uniform};
 use smithay::backend::renderer::utils::{CommitCounter, DamageSet, OpaqueRegions};
@@ -247,7 +247,7 @@ impl RenderElement<GlesRenderer> for ShadowRenderElement {
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
     ) -> Result<(), GlesError> {
-        let _span = realand_tracy_span!("ShadowRenderElement::draw");
+        let _span = clarion_tracy_span!("ShadowRenderElement::draw");
         frame.with_gpu_span(gpu_span_location!("ShadowRenderElement::draw"), |frame| {
             RenderElement::<GlesRenderer>::draw(
                 &self.inner,

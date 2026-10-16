@@ -1,11 +1,11 @@
 // This config is in the KDL format: https://kdl.dev
 // "/-" comments out the following node.
 // Check the wiki for a full description of the configuration:
-// https://realand-wm.github.io/realand/Configuration:-Introduction.html
+// https://github.com/123llyrr/realand/blob/main/docs/wiki/Configuration:-Introduction.md
 
 // Input device configuration.
 // Find the full list of options on the wiki:
-// https://realand-wm.github.io/realand/Configuration:-Input.html
+// https://github.com/123llyrr/realand/blob/main/docs/wiki/Configuration:-Input.md
 input {
     keyboard {
         xkb {
@@ -16,7 +16,7 @@ input {
             // layout "us,ru"
             // options "grp:win_space_toggle,compose:ralt,ctrl:nocaps"
 
-            // If this section is empty, realand will fetch xkb settings
+            // If this section is empty, clarion will fetch xkb settings
             // from org.freedesktop.locale1. You can control these using
             // localectl set-x11-keymap.
         }
@@ -70,10 +70,10 @@ input {
 }
 
 // You can configure outputs by their name, which you can find
-// by running `realand msg outputs` while inside a realand instance.
+// by running `clarion msg outputs` while inside a clarion instance.
 // The built-in laptop monitor is usually called "eDP-1".
 // Find more information on the wiki:
-// https://realand-wm.github.io/realand/Configuration:-Outputs.html
+// https://github.com/123llyrr/realand/blob/main/docs/wiki/Configuration:-Outputs.md
 // Remember to uncomment the node by removing "/-"!
 /-output "eDP-1" {
     // Uncomment this line to disable this output.
@@ -81,10 +81,10 @@ input {
 
     // Resolution and, optionally, refresh rate of the output.
     // The format is "<width>x<height>" or "<width>x<height>@<refresh rate>".
-    // If the refresh rate is omitted, realand will pick the highest refresh rate
+    // If the refresh rate is omitted, clarion will pick the highest refresh rate
     // for the resolution.
-    // If the mode is omitted altogether or is invalid, realand will pick one automatically.
-    // Run `realand msg outputs` while inside a realand instance to list all outputs and their modes.
+    // If the mode is omitted altogether or is invalid, clarion will pick one automatically.
+    // Run `clarion msg outputs` while inside a clarion instance to list all outputs and their modes.
     mode "1920x1080@120.030"
 
     // You can use integer or fractional scale, for example use 1.5 for 150% scale.
@@ -108,7 +108,7 @@ input {
 
 // Settings that influence how windows are positioned and sized.
 // Find more information on the wiki:
-// https://realand-wm.github.io/realand/Configuration:-Layout.html
+// https://github.com/123llyrr/realand/blob/main/docs/wiki/Configuration:-Layout.md
 layout {
     // Hyprland-style rounded windows. 0 keeps square corners.
     // The default 4th-power squircle is intentionally closer to macOS than a
@@ -121,7 +121,7 @@ layout {
     rounding 12
     rounding-power 4
 
-    // Realand: auto-stack new windows into the active column as a Hyprland-style
+    // Clarion: auto-stack new windows into the active column as a Hyprland-style
     // dwindle 2D dynamic tiling puzzle. When the column reaches max-windows-per-column
     // (default 3), the next window overflows to a new column on the right, which
     // repeats the same rule.
@@ -164,7 +164,7 @@ layout {
     // This is because windows using client-side decorations can have an arbitrary shape.
     //
     // If you don't like that, you should uncomment `prefer-no-csd` below.
-    // Realand will draw focus ring and border *around* windows that agree to omit their
+    // Clarion will draw focus ring and border *around* windows that agree to omit their
     // client-side decorations.
     //
     // Alternatively, you can override it with a window rule called
@@ -201,7 +201,7 @@ layout {
         //
         // active-gradient from="#80c8ff" to="#c7ff7f" angle=45
 
-        // Realand: Hyprland-style animated flowing gradient border!
+        // Clarion: Hyprland-style animated flowing gradient border!
         // Combine in="oklch longer hue" with rotate-deg-per-sec to make the gradient continuously rotate.
         // Positive values rotate clockwise, negative counter-clockwise.
         // For a more expressive look, replace active-color with an animated
@@ -215,7 +215,7 @@ layout {
         // inactive-gradient from="#505050" to="#808080" angle=45 relative-to="workspace-view"
     }
 
-    // Realand: Inactive window dimming.
+    // Clarion: Inactive window dimming.
     // Dims unfocused windows with an overlay to make the focused window stand out.
     // dim-inactive true
     // dim-factor 0.85
@@ -248,13 +248,13 @@ layout {
         // By default, the shadow draws only around its window, and not behind it.
         // Uncomment this setting to make the shadow draw behind its window.
         //
-        // Note that realand has no way of knowing about the CSD window corner
+        // Note that clarion has no way of knowing about the CSD window corner
         // radius. It has to assume that windows have square corners, leading to
         // shadow artifacts inside the CSD rounded corners. This setting fixes
         // those artifacts.
         //
         // However, instead you may want to set prefer-no-csd and/or
-        // geometry-corner-radius. Then, realand will know the corner radius and
+        // geometry-corner-radius. Then, clarion will know the corner radius and
         // draw the shadow correctly, without having to draw it behind the
         // window. These will also remove client-side shadows if the window
         // draws any.
@@ -291,7 +291,7 @@ layout {
 }
 
 // Add lines like this to spawn processes at startup.
-// Note that running realand as a session supports xdg-desktop-autostart,
+// Note that running clarion as a session supports xdg-desktop-autostart,
 // which may be more convenient to use.
 // See the binds section below for more spawn examples.
 
@@ -323,9 +323,9 @@ screenshot-path "~/Pictures/Screenshots/Screenshot from %Y-%m-%d %H-%M-%S.png"
 
 // Animation settings.
 // The wiki explains how to configure individual animations:
-// https://realand-wm.github.io/realand/Configuration:-Animations.html
+// https://github.com/123llyrr/realand/blob/main/docs/wiki/Configuration:-Animations.md
 animations {
-    // Realand: continuous vertical 3D workspace cube for keys and touchpad gestures.
+    // Clarion: continuous vertical 3D workspace cube for keys and touchpad gestures.
     workspace-switch {
         cube {
             // Spaces are intentionally a smooth slide by default. Enable
@@ -336,25 +336,25 @@ animations {
         }
     }
 
-    // A short fade with 2% scale; use effect "reveal" for the optional shaped reveal.
+    // Quick reveal from 94% size with a small rebound and zero-speed finish.
     window-open {
         // Reveal starts with the first mapped buffer; no extra fixed warm-up delay.
-        duration-ms 180
-        curve "ease-out-cubic"
+        duration-ms 200
+        curve "cubic-bezier" 0.16 1.4 0.30 1.0
         effect "fade"
-        popin 0.98
+        popin 0.94
 
         glide {
             off
         }
     }
 
-    // Realand: window close effect ported from denial.
+    // Clarion: window close effect ported from denial.
     // Built-in GPU shaders:
     // - "explosion": clean shard breakup without a shockwave ring or central flash
     // - "implode": gravitational black hole singularity collapse with vortex spin
     // - "fade": minimal smooth fade-out
-    // You can also override this with environment variable REALAND_WINDOW_CLOSE_EFFECT=explosion|implode|fade
+    // You can also override this with environment variable CLARION_WINDOW_CLOSE_EFFECT=explosion|implode|fade
     window-close {
         duration-ms 220
         curve "linear"
@@ -366,7 +366,7 @@ animations {
         }
     }
 
-    // Realand: elastic mesh while moving and resizing a window.
+    // Clarion: elastic mesh while moving and resizing a window.
     window-wobble {
         // Keep window motion stable by default; the elastic effect remains
         // available from Settings or by replacing `off` with `on`.
@@ -399,7 +399,7 @@ animations {
 
 // Window rules let you adjust behavior for individual windows.
 // Find more information on the wiki:
-// https://realand-wm.github.io/realand/Configuration:-Window-Rules.html
+// https://github.com/123llyrr/realand/blob/main/docs/wiki/Configuration:-Window-Rules.md
 
 // Work around WezTerm's initial configure bug
 // by setting an empty default-column-width.
@@ -456,12 +456,12 @@ binds {
     // when running as a winit window.
     //
     // Most actions that you can bind here can also be invoked programmatically with
-    // `realand msg action do-something`.
+    // `clarion msg action do-something`.
 
     // Mod-Shift-/, which is usually the same as Mod-?,
     // shows a list of important hotkeys.
     Mod+Shift+Slash { show-hotkey-overlay; }
-    Mod+Ctrl+Space hotkey-overlay-title="Command Center" { spawn "realand-settings" "--command-palette"; }
+    Mod+Ctrl+Space hotkey-overlay-title="Command Center" { spawn "clarion-settings" "--command-palette"; }
 
     // Suggested binds for running programs: terminal, app launcher, screen locker.
     Mod+T hotkey-overlay-title="Open a Terminal: alacritty" { spawn "alacritty"; }
@@ -501,7 +501,7 @@ binds {
     // or do a four-finger swipe up on a touchpad.
     Mod+O repeat=false { toggle-overview; }
 
-    // Realand: Open/close Wayfire-style Expo (2D workspace grid wall).
+    // Clarion: Open/close Wayfire-style Expo (2D workspace grid wall).
     // You can also move the mouse into the top-right hot corner!
     Mod+E repeat=false { toggle-expo; }
     // Search all windows on this output, including offscreen columns and inactive tabs.
@@ -512,7 +512,7 @@ binds {
     Mod+Ctrl+Z repeat=false { undo-layout; }
     Mod+Ctrl+Shift+Z repeat=false { redo-layout; }
 
-    // Realand: Scratchpad / Special workspace.
+    // Clarion: Scratchpad / Special workspace.
     // Toggle scratchpad drawer or send a window into/out of scratchpad.
     Mod+grave repeat=false { toggle-scratchpad; }
     Mod+Shift+grave repeat=false { move-window-to-scratchpad; }
@@ -626,7 +626,7 @@ binds {
     // Mod+TouchpadScrollUp   { spawn-sh "wpctl set-volume @DEFAULT_AUDIO_SINK@ 0.02-"; }
 
     // You can refer to workspaces by index. However, keep in mind that
-    // realand is a dynamic workspace system, so these commands are kind of
+    // clarion is a dynamic workspace system, so these commands are kind of
     // "best effort". Trying to refer to a workspace index bigger than
     // the current workspace count will instead refer to the bottommost
     // (empty) workspace.
@@ -719,16 +719,16 @@ binds {
     // rather than stacked on top of each other.
     Mod+W { toggle-column-tabbed-display; }
 
-    // Realand: switch the workspace-wide tiling engine between the scrolling
+    // Clarion: switch the workspace-wide tiling engine between the scrolling
     // layout (infinite column strip) and the Dwindle layout
     // (Hyprland style dynamic 2D BSP tiling).
     Mod+Shift+Space { switch-tiling-mode; }
 
-    // Realand: toggle the current column between Normal (vertical stack) and
+    // Clarion: toggle the current column between Normal (vertical stack) and
     // Dwindle (Hyprland style 2D spiral split) display modes.
     Mod+Shift+D { toggle-column-dwindle-display; }
 
-    // Realand: in the Dwindle tiling mode, force the split direction of the
+    // Clarion: in the Dwindle tiling mode, force the split direction of the
     // next window insertion (horizontal/vertical).
     Mod+Shift+S { toggle-dwindle-split; }
 
@@ -736,7 +736,7 @@ binds {
     // Note: if you uncomment these, make sure you do NOT have
     // a matching layout switch hotkey configured in xkb options above.
     // Having both at once on the same hotkey will break the switching,
-    // since it will switch twice upon pressing the hotkey (once by xkb, once by realand).
+    // since it will switch twice upon pressing the hotkey (once by xkb, once by clarion).
     // Do not reuse Mod+Shift+Space; that is bound to switch-tiling-mode above.
     // Mod+Space       { switch-layout "next"; }
     // Mod+Alt+Space   { switch-layout "prev"; }
@@ -746,13 +746,13 @@ binds {
     Alt+Print { screenshot-window; }
 
     // Applications such as remote-desktop clients and software KVM switches may
-    // request that realand stops processing the keyboard shortcuts defined here
+    // request that clarion stops processing the keyboard shortcuts defined here
     // so they may, for example, forward the key presses as-is to a remote machine.
     // It's a good idea to bind an escape hatch to toggle the inhibitor,
     // so a buggy application can't hold your session hostage.
     //
     // The allow-inhibiting=false property can be applied to other binds as well,
-    // which ensures realand always processes them, even when an inhibitor is active.
+    // which ensures clarion always processes them, even when an inhibitor is active.
     Mod+Escape allow-inhibiting=false { toggle-keyboard-shortcuts-inhibit; }
 
     // The quit action will show a confirmation dialog to avoid accidental exits.
@@ -784,8 +784,8 @@ gestures {
 
 // Graphics rendering backend.
 // Supported backends: "gles" (OpenGL ES, default) or "vulkan" (Vulkan 1.3 with DMA-BUF & Dynamic Rendering).
-// Can also be configured in debug { renderer "vulkan"; }, via REALAND_RENDERER env var, or --renderer CLI flag.
-// The default leaves both the backend and DRM device unset so Realand can choose
+// Can also be configured in debug { renderer "vulkan"; }, via CLARION_RENDERER env var, or --renderer CLI flag.
+// The default leaves both the backend and DRM device unset so Clarion can choose
 // a portable renderer and probe the available hardware. Uncomment these examples
 // only when explicitly selecting a backend or a specific render node:
 // renderer "vulkan"
@@ -796,6 +796,6 @@ gestures {
 // Bounded liquid glass for macOS Shell surfaces which request a blur mask.
 // An empty mask (including Launchpad) remains clear. Material is unaffected.
 layer-rule {
-    match namespace="^realand-shell(-dock)?$"
+    match namespace="^clarion-shell(-dock)?$"
     background-effect { liquid-glass true; }
 }

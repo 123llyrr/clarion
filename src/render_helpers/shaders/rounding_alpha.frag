@@ -1,4 +1,4 @@
-float realand_rounding_power() {
+float clarion_rounding_power() {
 #ifdef HAS_ROUNDING_POWER
     return rounding_power;
 #else
@@ -6,7 +6,7 @@ float realand_rounding_power() {
 #endif
 }
 
-float realand_rounding_alpha(vec2 coords, vec2 size, vec4 corner_radius) {
+float clarion_rounding_alpha(vec2 coords, vec2 size, vec4 corner_radius) {
     vec2 center;
     float radius;
 
@@ -28,11 +28,11 @@ float realand_rounding_alpha(vec2 coords, vec2 size, vec4 corner_radius) {
 
     // Hyprland superellipse: power 2 is a circle, higher values approach a squircle.
     vec2 delta = abs(coords - center);
-    float power = max(realand_rounding_power(), 2.0);
+    float power = max(clarion_rounding_power(), 2.0);
     float dist = pow(pow(delta.x, power) + pow(delta.y, power), 1.0 / power);
 
     // Manual smoothstep() between radius - half_px and radius + half_px
     // to avoid a division in clamp().
-    float t = clamp((dist - radius) * realand_scale + 0.5, 0.0, 1.0);
+    float t = clamp((dist - radius) * clarion_scale + 0.5, 0.0, 1.0);
     return 1.0 - t * t * (3.0 - 2.0 * t);
 }

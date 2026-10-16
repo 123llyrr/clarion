@@ -1,4 +1,4 @@
-//! Vulkan Device & Context Management for Realand.
+//! Vulkan Device & Context Management for Clarion.
 //!
 //! Handles VkInstance creation, physical device selection matching DRM KMS nodes,
 //! extension verification, and logical VkDevice creation.
@@ -205,6 +205,7 @@ pub struct VulkanContext {
     pub(super) vertex_buffers: std::sync::Mutex<Vec<StagingBuffer>>,
     pub info: VulkanBackendInfo,
     pub physical_device_properties: vk::PhysicalDeviceProperties,
+    _lifecycle: super::lifecycle::ContextLease,
 }
 
 unsafe impl Send for VulkanContext {}
@@ -236,6 +237,10 @@ impl VulkanContext {
         drm_node: Option<&DrmNode>,
         surface_handle: Option<VulkanSurfaceHandle>,
     ) -> Result<Arc<Self>, VulkanInitError> {
+        // Count even initialization failures and their driver cleanup. The lease
+        // moves into the last context field on success, covering arbitrary Arc owners.
+        let lifecycle = super::lifecycle::ContextLease::acquire()
+            .map_err(|_| VulkanInitError::VkError(vk::Result::ERROR_INITIALIZATION_FAILED))?;
         // Poisoning would only mean another initializer panicked while holding the
         // lock; the loader state is still consistent enough to retry.
         let _init_guard = VULKAN_INIT_LOCK
@@ -243,8 +248,8 @@ impl VulkanContext {
             .unwrap_or_else(|err| err.into_inner());
         let entry = unsafe { Entry::load() }?;
 
-        let app_name = CString::new("Realand Compositor").unwrap();
-        let engine_name = CString::new("Realand Vulkan Engine").unwrap();
+        let app_name = CString::new("Clarion Compositor").unwrap();
+        let engine_name = CString::new("Clarion Vulkan Engine").unwrap();
 
         let app_info = vk::ApplicationInfo::default()
             .application_name(&app_name)
@@ -310,7 +315,9 @@ impl VulkanContext {
             .application_info(&app_info)
             .enabled_extension_names(&filtered_instance_exts);
 
-        let instance = unsafe { entry.create_instance(&create_info, None) }?;
+        let instance_result = unsafe { entry.create_instance(&create_info, None) };
+        super::lifecycle::install_exit_hook_after_driver_initialization();
+        let instance = instance_result?;
 
         // Release the instance on every partial initialization failure.
         let mut instance_guard = InstanceDropGuard(Some(instance));
@@ -548,6 +555,7 @@ impl VulkanContext {
             vertex_buffers: std::sync::Mutex::new(Vec::new()),
             info,
             physical_device_properties: props,
+            _lifecycle: lifecycle,
         }))
     }
 

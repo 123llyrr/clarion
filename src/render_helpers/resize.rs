@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use clarion_config::CornerRadius;
 use glam::{Mat3, Vec2};
-use realand_config::CornerRadius;
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer, GlesTexture, Uniform};
 use smithay::backend::renderer::utils::{CommitCounter, DamageSet, OpaqueRegions};
@@ -11,7 +11,7 @@ use smithay::gpu_span_location;
 use smithay::utils::user_data::UserDataMap;
 use smithay::utils::{Buffer, Logical, Physical, Rectangle, Scale, Size, Transform};
 
-use super::renderer::{AsGlesFrame, RealandRenderer};
+use super::renderer::{AsGlesFrame, ClarionRenderer};
 use super::shader_element::ShaderRenderElement;
 use super::shaders::{mat3_uniform, ProgramType, Shaders};
 use crate::backend::tty::{TtyFrame, TtyRenderer, TtyRendererError};
@@ -155,20 +155,20 @@ impl ResizeRenderElement {
                 scale.x,
                 result_alpha,
                 Rc::new([
-                    mat3_uniform("realand_input_to_curr_geo", input_to_curr_geo),
-                    mat3_uniform("realand_curr_geo_to_prev_geo", curr_geo_to_prev_geo),
-                    mat3_uniform("realand_curr_geo_to_next_geo", curr_geo_to_next_geo),
-                    Uniform::new("realand_curr_geo_size", curr_geo_size.to_array()),
-                    mat3_uniform("realand_geo_to_tex_prev", geo_to_tex_prev),
-                    mat3_uniform("realand_geo_to_tex_next", geo_to_tex_next),
-                    Uniform::new("realand_progress", progress),
-                    Uniform::new("realand_clamped_progress", clamped_progress),
-                    Uniform::new("realand_corner_radius", <[f32; 4]>::from(corner_radius)),
-                    Uniform::new("realand_clip_to_geometry", clip_to_geometry),
+                    mat3_uniform("clarion_input_to_curr_geo", input_to_curr_geo),
+                    mat3_uniform("clarion_curr_geo_to_prev_geo", curr_geo_to_prev_geo),
+                    mat3_uniform("clarion_curr_geo_to_next_geo", curr_geo_to_next_geo),
+                    Uniform::new("clarion_curr_geo_size", curr_geo_size.to_array()),
+                    mat3_uniform("clarion_geo_to_tex_prev", geo_to_tex_prev),
+                    mat3_uniform("clarion_geo_to_tex_next", geo_to_tex_next),
+                    Uniform::new("clarion_progress", progress),
+                    Uniform::new("clarion_clamped_progress", clamped_progress),
+                    Uniform::new("clarion_corner_radius", <[f32; 4]>::from(corner_radius)),
+                    Uniform::new("clarion_clip_to_geometry", clip_to_geometry),
                 ]),
                 HashMap::from([
-                    (String::from("realand_tex_prev"), texture_prev),
-                    (String::from("realand_tex_next"), texture_next),
+                    (String::from("clarion_tex_prev"), texture_prev),
+                    (String::from("clarion_tex_next"), texture_next),
                 ]),
                 Kind::Unspecified,
             )
@@ -259,20 +259,20 @@ impl ResizeRenderElement {
                 scale.x,
                 result_alpha,
                 Rc::new([
-                    mat3_uniform("realand_input_to_curr_geo", input_to_curr_geo),
-                    mat3_uniform("realand_curr_geo_to_prev_geo", curr_geo_to_prev_geo),
-                    mat3_uniform("realand_curr_geo_to_next_geo", curr_geo_to_next_geo),
-                    Uniform::new("realand_curr_geo_size", curr_geo_size.to_array()),
-                    mat3_uniform("realand_geo_to_tex_prev", geo_to_tex_prev),
-                    mat3_uniform("realand_geo_to_tex_next", geo_to_tex_next),
-                    Uniform::new("realand_progress", progress),
-                    Uniform::new("realand_clamped_progress", clamped_progress),
-                    Uniform::new("realand_corner_radius", <[f32; 4]>::from(corner_radius)),
-                    Uniform::new("realand_clip_to_geometry", clip_to_geometry),
+                    mat3_uniform("clarion_input_to_curr_geo", input_to_curr_geo),
+                    mat3_uniform("clarion_curr_geo_to_prev_geo", curr_geo_to_prev_geo),
+                    mat3_uniform("clarion_curr_geo_to_next_geo", curr_geo_to_next_geo),
+                    Uniform::new("clarion_curr_geo_size", curr_geo_size.to_array()),
+                    mat3_uniform("clarion_geo_to_tex_prev", geo_to_tex_prev),
+                    mat3_uniform("clarion_geo_to_tex_next", geo_to_tex_next),
+                    Uniform::new("clarion_progress", progress),
+                    Uniform::new("clarion_clamped_progress", clamped_progress),
+                    Uniform::new("clarion_corner_radius", <[f32; 4]>::from(corner_radius)),
+                    Uniform::new("clarion_clip_to_geometry", clip_to_geometry),
                 ]),
                 HashMap::from([
-                    (String::from("realand_tex_prev"), texture_prev),
-                    (String::from("realand_tex_next"), texture_next),
+                    (String::from("clarion_tex_prev"), texture_prev),
+                    (String::from("clarion_tex_next"), texture_next),
                 ]),
                 Kind::Unspecified,
             )?
@@ -280,7 +280,7 @@ impl ResizeRenderElement {
         ))
     }
 
-    pub fn has_shader(renderer: &mut impl RealandRenderer) -> bool {
+    pub fn has_shader(renderer: &mut impl ClarionRenderer) -> bool {
         if let Some(gles) = renderer.as_gles_renderer() {
             Shaders::get(gles).program(ProgramType::Resize).is_some()
         } else if let Some(native) = renderer.as_native_renderer() {
@@ -343,7 +343,7 @@ impl RenderElement<GlesRenderer> for ResizeRenderElement {
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
     ) -> Result<(), GlesError> {
-        let _span = realand_tracy_span!("ResizeRenderElement::draw");
+        let _span = clarion_tracy_span!("ResizeRenderElement::draw");
         frame.with_gpu_span(gpu_span_location!("ResizeRenderElement::draw"), |frame| {
             RenderElement::<GlesRenderer>::draw(
                 &self.0,

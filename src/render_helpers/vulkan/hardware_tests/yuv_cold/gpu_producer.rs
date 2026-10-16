@@ -487,7 +487,7 @@ fn native_gpu_produced_nv12_cold_preparation_defers_without_owner_wait_or_overwr
 fn check_gpu_native_nv12(gate_preparation: bool) {
     let (vk, mut oracle, mut allocator) = setup();
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
-    let node = DrmNode::from_path(std::env::var_os("REALAND_VULKAN_TEST_NODE").unwrap()).unwrap();
+    let node = DrmNode::from_path(std::env::var_os("CLARION_VULKAN_TEST_NODE").unwrap()).unwrap();
     let producer = GpuProducer::new(&node);
     assert_ne!(
         producer.ctx.device.handle(),
@@ -644,7 +644,7 @@ fn check_gpu_native_nv12(gate_preparation: bool) {
             serde_json::json!({
                 "status": "PASS", "producer_kind": "vulkan_modifier_list_gpu_upload",
                 "producer_upload_verified": true, "independent_vulkan_devices": true,
-                "plane_offsets": producer.offsets, "plane_strides": producer.strides, "node": std::env::var("REALAND_VULKAN_TEST_NODE").ok(),
+                "plane_offsets": producer.offsets, "plane_strides": producer.strides, "node": std::env::var("CLARION_VULKAN_TEST_NODE").ok(),
                 "cold_admission_wall_ms": admission_wall.as_secs_f64() * 1000.,
                 "owner_fence_waits_during_cold_admission": 0,
                 "previous_target_pixels_preserved": true,
@@ -710,7 +710,7 @@ fn check_gpu_native_nv12(gate_preparation: bool) {
             "status": "PASS", "producer_kind": "vulkan_modifier_list_gpu_upload",
                 "producer_upload_verified": true, "independent_vulkan_devices": true,
                 "plane_offsets": producer.offsets, "plane_strides": producer.strides, "pixel_checks": 9, "cold_iterations": 1, "warm_iterations": 8,
-            "node": std::env::var("REALAND_VULKAN_TEST_NODE").ok(),
+            "node": std::env::var("CLARION_VULKAN_TEST_NODE").ok(),
             "producer": primary, "renderer_import_cache_cold": true, "driver_cache_cleared": false,
         "producer_visible_size": [16, 16], "pitch": pitch,
         "uv_offset": producer.offsets[1], "backing_bytes": backing_bytes,

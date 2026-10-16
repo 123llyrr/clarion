@@ -1,4 +1,4 @@
-use realand_config::PresetSize;
+use clarion_config::PresetSize;
 use smithay::desktop::Window;
 use smithay::output::Output;
 use smithay::wayland::shell::xdg::ToplevelSurface;

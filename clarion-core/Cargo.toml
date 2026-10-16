@@ -1,0 +1,13 @@
+[package]
+name = "clarion-core"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Device-independent desktop state, layout and presentation policy for Clarion"
+
+[dependencies]
+clarion-motion = { path = "../clarion-motion", version = "0.1.0" }
+smallvec = "1.15.2"

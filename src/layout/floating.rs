@@ -1,10 +1,10 @@
 use std::iter::zip;
 use std::rc::Rc;
 
-use realand_config::utils::MergeWith as _;
-use realand_config::{PresetSize, RelativeTo};
-use realand_core::layout::LiveLayoutPolicy;
-use realand_ipc::{PositionChange, SizeChange, WindowLayout};
+use clarion_config::utils::MergeWith as _;
+use clarion_config::{PresetSize, RelativeTo};
+use clarion_core::layout::LiveLayoutPolicy;
+use clarion_ipc::{PositionChange, SizeChange, WindowLayout};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size};
 
@@ -16,15 +16,15 @@ use super::{
     ConfigureIntent, InteractiveResizeData, LayoutElement, Options, RemovedTile, SizeFrac,
 };
 use crate::animation::{Animation, Clock};
+use crate::clarion_render_elements;
 use crate::layout::RenderLayer;
-use crate::realand_render_elements;
-use crate::render_helpers::renderer::RealandRenderer;
+use crate::render_helpers::renderer::ClarionRenderer;
 use crate::render_helpers::xray::XrayPos;
 use crate::render_helpers::RenderCtx;
 use crate::utils::transaction::TransactionBlocker;
 use crate::utils::ResizeEdge;
 use crate::window::ResolvedWindowRules;
-use realand_core::floating::{Direction, FloatingPolicy, Placement, PlacementChange};
+use clarion_core::floating::{Direction, FloatingPolicy, Placement, PlacementChange};
 
 /// By how many logical pixels the directional move commands move floating windows.
 pub const DIRECTIONAL_MOVE_PX: f64 = 50.;
@@ -35,7 +35,7 @@ pub struct FloatingSpace<W: LayoutElement> {
     /// Tiles in top-to-bottom order.
     tiles: Vec<Tile<W>>,
     /// Sole numeric camera owner; the adapter only converts coordinates/time.
-    canvas: Option<realand_core::canvas::CanvasPan>,
+    canvas: Option<clarion_core::canvas::CanvasPan>,
 
     /// Live stable-ID placement, stacking, focus and resize policy.
     policy: FloatingPolicy,
@@ -59,7 +59,7 @@ pub struct FloatingSpace<W: LayoutElement> {
     options: Rc<Options>,
 }
 
-realand_render_elements! {
+clarion_render_elements! {
     FloatingSpaceRenderElement<R> => {
         Tile = TileRenderElement<R>,
         ClosingWindow = ClosingWindowRenderElement,
@@ -80,8 +80,8 @@ trait PlacementBridge {
     fn update_from_tile<W: LayoutElement>(&mut self, tile: &Tile<W>);
 }
 
-fn core_area(area: Rectangle<f64, Logical>) -> realand_core::Rect {
-    realand_core::Rect::new(area.loc.x, area.loc.y, area.size.w, area.size.h)
+fn core_area(area: Rectangle<f64, Logical>) -> clarion_core::Rect {
+    clarion_core::Rect::new(area.loc.x, area.loc.y, area.size.w, area.size.h)
 }
 
 impl PlacementBridge for Placement {
@@ -94,7 +94,7 @@ impl PlacementBridge for Placement {
         let size = tile.tile_size();
         Self::new(
             core_area(area),
-            realand_core::Size::new(size.w, size.h),
+            clarion_core::Size::new(size.w, size.h),
             [position.x, position.y],
             unbounded,
         )
@@ -107,7 +107,7 @@ impl PlacementBridge for Placement {
     }
     fn update_from_tile<W: LayoutElement>(&mut self, tile: &Tile<W>) {
         let size = tile.tile_size();
-        self.set_size(realand_core::Size::new(size.w, size.h));
+        self.set_size(clarion_core::Size::new(size.w, size.h));
     }
 }
 
@@ -185,10 +185,10 @@ impl<W: LayoutElement> FloatingSpace<W> {
         options: Rc<Options>,
     ) {
         if self.options.layout.preset_column_widths != options.layout.preset_column_widths {
-            self.policy.clear_presets(realand_core::Axis::Horizontal);
+            self.policy.clear_presets(clarion_core::Axis::Horizontal);
         }
         if self.options.layout.preset_window_heights != options.layout.preset_window_heights {
-            self.policy.clear_presets(realand_core::Axis::Vertical);
+            self.policy.clear_presets(clarion_core::Axis::Vertical);
         }
         for (tile, data) in zip(&mut self.tiles, &mut self.policy) {
             tile.update_config(view_size, scale, options.clone());
@@ -232,7 +232,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
     pub fn are_animations_ongoing(&self) -> bool {
         self.canvas
             .as_ref()
-            .is_some_and(realand_core::canvas::CanvasPan::ongoing)
+            .is_some_and(clarion_core::canvas::CanvasPan::ongoing)
             || self.tiles.iter().any(Tile::are_animations_ongoing)
             || !self.closing_windows.is_empty()
     }
@@ -240,7 +240,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
     pub fn are_transitions_ongoing(&self) -> bool {
         self.canvas
             .as_ref()
-            .is_some_and(realand_core::canvas::CanvasPan::ongoing)
+            .is_some_and(clarion_core::canvas::CanvasPan::ongoing)
             || self.tiles.iter().any(Tile::are_transitions_ongoing)
             || !self.closing_windows.is_empty()
     }
@@ -452,7 +452,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
         let expected = win.expected_size().map(|size| [size.w, size.h]);
         let minimum = win.min_size();
         let maximum = win.max_size();
-        let size = realand_core::floating::restored_client_size(
+        let size = clarion_core::floating::restored_client_size(
             floating_size,
             !win.pending_sizing_mode().is_normal(),
             expected,
@@ -470,9 +470,9 @@ impl<W: LayoutElement> FloatingSpace<W> {
         let core_id = win.core_id();
         let pos = self.stored_or_default_tile_pos(&tile).unwrap_or_else(|| {
             let size = tile.tile_size();
-            let position = realand_core::floating::centered_position(
+            let position = clarion_core::floating::centered_position(
                 core_area(self.working_area),
-                realand_core::Size::new(size.w, size.h),
+                clarion_core::Size::new(size.w, size.h),
             );
             (position[0], position[1]).into()
         });
@@ -498,7 +498,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
             .policy
             .position_above(
                 self.tiles[idx].window().core_id(),
-                realand_core::Size::new(size.w, size.h),
+                clarion_core::Size::new(size.w, size.h),
             )
             .unwrap();
         tile.floating_pos = Some(self.logical_to_size_frac((position[0], position[1]).into()));
@@ -726,7 +726,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
         }
     }
 
-    fn sizing_input(&self, index: usize) -> realand_core::floating::SizingInput {
+    fn sizing_input(&self, index: usize) -> clarion_core::floating::SizingInput {
         let tile = &self.tiles[index];
         let window = tile.window();
         let current = window.expected_size().unwrap_or_else(|| window.size());
@@ -734,12 +734,12 @@ impl<W: LayoutElement> FloatingSpace<W> {
         let tile_size = tile.tile_expected_or_current_size();
         let minimum = window.min_size();
         let maximum = window.max_size();
-        realand_core::floating::SizingInput {
-            available: realand_core::Size::new(self.working_area.size.w, self.working_area.size.h),
+        clarion_core::floating::SizingInput {
+            available: clarion_core::Size::new(self.working_area.size.w, self.working_area.size.h),
             current_client: [current.w, current.h],
             expected_client: [expected.w, expected.h],
-            current_tile: realand_core::Size::new(tile_size.w, tile_size.h),
-            decoration: realand_core::Size::new(
+            current_tile: clarion_core::Size::new(tile_size.w, tile_size.h),
+            decoration: clarion_core::Size::new(
                 -tile.window_width_for_tile_width(0.),
                 -tile.window_height_for_tile_height(0.),
             ),
@@ -748,7 +748,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
         }
     }
 
-    fn toggle_window_size(&mut self, id: Option<&W::Id>, axis: realand_core::Axis, forwards: bool) {
+    fn toggle_window_size(&mut self, id: Option<&W::Id>, axis: clarion_core::Axis, forwards: bool) {
         let Some(id) = id.or(self.active_window_id()).cloned() else {
             return;
         };
@@ -756,8 +756,8 @@ impl<W: LayoutElement> FloatingSpace<W> {
         let input = self.sizing_input(index);
         let core_id = self.tiles[index].window().core_id();
         let presets = match axis {
-            realand_core::Axis::Horizontal => &self.options.layout.preset_column_widths,
-            realand_core::Axis::Vertical => &self.options.layout.preset_window_heights,
+            clarion_core::Axis::Horizontal => &self.options.layout.preset_column_widths,
+            clarion_core::Axis::Vertical => &self.options.layout.preset_window_heights,
         };
         let Some(size) = self.policy.cycle_preset(
             core_id,
@@ -777,7 +777,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
     fn set_window_size(
         &mut self,
         id: Option<&W::Id>,
-        axis: realand_core::Axis,
+        axis: clarion_core::Axis,
         change: SizeChange,
         animate: bool,
     ) {
@@ -787,15 +787,15 @@ impl<W: LayoutElement> FloatingSpace<W> {
         let index = self.idx_of(id).unwrap();
         let input = self.sizing_input(index);
         let change = match change {
-            SizeChange::SetFixed(value) => realand_core::floating::SizeChange::SetFixed(value),
+            SizeChange::SetFixed(value) => clarion_core::floating::SizeChange::SetFixed(value),
             SizeChange::SetProportion(value) => {
-                realand_core::floating::SizeChange::SetProportion(value)
+                clarion_core::floating::SizeChange::SetProportion(value)
             }
             SizeChange::AdjustFixed(value) => {
-                realand_core::floating::SizeChange::AdjustFixed(value)
+                clarion_core::floating::SizeChange::AdjustFixed(value)
             }
             SizeChange::AdjustProportion(value) => {
-                realand_core::floating::SizeChange::AdjustProportion(value)
+                clarion_core::floating::SizeChange::AdjustProportion(value)
             }
         };
         let size = self
@@ -808,7 +808,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
     }
 
     pub fn toggle_window_width(&mut self, id: Option<&W::Id>, forwards: bool) {
-        self.toggle_window_size(id, realand_core::Axis::Horizontal, forwards);
+        self.toggle_window_size(id, clarion_core::Axis::Horizontal, forwards);
     }
 
     pub fn start_open_animation(&mut self, id: &W::Id) -> bool {
@@ -821,15 +821,15 @@ impl<W: LayoutElement> FloatingSpace<W> {
     }
 
     pub fn toggle_window_height(&mut self, id: Option<&W::Id>, forwards: bool) {
-        self.toggle_window_size(id, realand_core::Axis::Vertical, forwards);
+        self.toggle_window_size(id, clarion_core::Axis::Vertical, forwards);
     }
 
     pub fn set_window_width(&mut self, id: Option<&W::Id>, change: SizeChange, animate: bool) {
-        self.set_window_size(id, realand_core::Axis::Horizontal, change, animate);
+        self.set_window_size(id, clarion_core::Axis::Horizontal, change, animate);
     }
 
     pub fn set_window_height(&mut self, id: Option<&W::Id>, change: SizeChange, animate: bool) {
-        self.set_window_size(id, realand_core::Axis::Vertical, change, animate);
+        self.set_window_size(id, clarion_core::Axis::Vertical, change, animate);
     }
 
     fn focus_directional(&mut self, direction: Direction) -> bool {
@@ -859,7 +859,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
     pub fn focus_leftmost(&mut self) {
         if let Some(id) = self
             .policy
-            .focus_extreme(realand_core::Axis::Horizontal, false)
+            .focus_extreme(clarion_core::Axis::Horizontal, false)
         {
             let id = self.physical_id(id).unwrap();
             self.activate_window(&id);
@@ -869,7 +869,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
     pub fn focus_rightmost(&mut self) {
         if let Some(id) = self
             .policy
-            .focus_extreme(realand_core::Axis::Horizontal, true)
+            .focus_extreme(clarion_core::Axis::Horizontal, true)
         {
             let id = self.physical_id(id).unwrap();
             self.activate_window(&id);
@@ -879,7 +879,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
     pub fn focus_topmost(&mut self) {
         if let Some(id) = self
             .policy
-            .focus_extreme(realand_core::Axis::Vertical, false)
+            .focus_extreme(clarion_core::Axis::Vertical, false)
         {
             let id = self.physical_id(id).unwrap();
             self.activate_window(&id);
@@ -889,7 +889,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
     pub fn focus_bottommost(&mut self) {
         if let Some(id) = self
             .policy
-            .focus_extreme(realand_core::Axis::Vertical, true)
+            .focus_extreme(clarion_core::Axis::Vertical, true)
         {
             let id = self.physical_id(id).unwrap();
             self.activate_window(&id);
@@ -939,16 +939,16 @@ impl<W: LayoutElement> FloatingSpace<W> {
         };
         let convert = |change| match change {
             PositionChange::SetFixed(value) => {
-                realand_core::floating::PositionChange::SetFixed(value)
+                clarion_core::floating::PositionChange::SetFixed(value)
             }
             PositionChange::SetProportion(value) => {
-                realand_core::floating::PositionChange::SetProportion(value)
+                clarion_core::floating::PositionChange::SetProportion(value)
             }
             PositionChange::AdjustFixed(value) => {
-                realand_core::floating::PositionChange::AdjustFixed(value)
+                clarion_core::floating::PositionChange::AdjustFixed(value)
             }
             PositionChange::AdjustProportion(value) => {
-                realand_core::floating::PositionChange::AdjustProportion(value)
+                clarion_core::floating::PositionChange::AdjustProportion(value)
             }
         };
         let change = self
@@ -996,14 +996,14 @@ impl<W: LayoutElement> FloatingSpace<W> {
         self.policy
             .commit_tile_size(
                 tile.window().core_id(),
-                realand_core::Size::new(size.w, size.h),
+                clarion_core::Size::new(size.w, size.h),
                 resize.map(|resize| resize.edges.bits()),
             )
             .unwrap();
         true
     }
 
-    pub fn render<R: RealandRenderer>(
+    pub fn render<R: ClarionRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         xray_pos: XrayPos,
@@ -1054,7 +1054,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
         let size = tile.window_size();
         if !self.policy.begin_resize(
             tile.window().core_id(),
-            realand_core::Size::new(size.w, size.h),
+            clarion_core::Size::new(size.w, size.h),
             edges.bits(),
         ) {
             return false;
@@ -1158,9 +1158,9 @@ impl<W: LayoutElement> FloatingSpace<W> {
         size: Size<f64, Logical>,
     ) -> Point<f64, Logical> {
         let area = self.working_area;
-        let rect = realand_core::geometry::clamp_rect(
-            realand_core::Rect::new(pos.x, pos.y, size.w, size.h),
-            realand_core::Rect::new(area.loc.x, area.loc.y, area.size.w, area.size.h),
+        let rect = clarion_core::geometry::clamp_rect(
+            clarion_core::Rect::new(pos.x, pos.y, size.w, size.h),
+            clarion_core::Rect::new(area.loc.x, area.loc.y, area.size.w, area.size.h),
         );
         Point::from((rect.x, rect.y))
     }
@@ -1197,11 +1197,11 @@ impl<W: LayoutElement> FloatingSpace<W> {
     ) -> Size<i32, Logical> {
         let border = self.options.layout.border.merged_with(&rules.border);
         let decoration = if border.off { 0. } else { border.width * 2. };
-        let size = realand_core::floating::initial_client_size(
+        let size = clarion_core::floating::initial_client_size(
             width.map(core_preset),
             height.map(core_preset),
-            realand_core::Size::new(self.working_area.size.w, self.working_area.size.h),
-            realand_core::Size::new(decoration, decoration),
+            clarion_core::Size::new(self.working_area.size.w, self.working_area.size.h),
+            clarion_core::Size::new(decoration, decoration),
         );
         (size[0], size[1]).into()
     }
@@ -1216,19 +1216,19 @@ impl<W: LayoutElement> FloatingSpace<W> {
                 .default_floating_position
                 .map(|position| {
                     let anchor = match position.relative_to {
-                        RelativeTo::TopLeft => realand_core::floating::Anchor::TopLeft,
-                        RelativeTo::TopRight => realand_core::floating::Anchor::TopRight,
-                        RelativeTo::BottomLeft => realand_core::floating::Anchor::BottomLeft,
-                        RelativeTo::BottomRight => realand_core::floating::Anchor::BottomRight,
-                        RelativeTo::Top => realand_core::floating::Anchor::Top,
-                        RelativeTo::Bottom => realand_core::floating::Anchor::Bottom,
-                        RelativeTo::Left => realand_core::floating::Anchor::Left,
-                        RelativeTo::Right => realand_core::floating::Anchor::Right,
+                        RelativeTo::TopLeft => clarion_core::floating::Anchor::TopLeft,
+                        RelativeTo::TopRight => clarion_core::floating::Anchor::TopRight,
+                        RelativeTo::BottomLeft => clarion_core::floating::Anchor::BottomLeft,
+                        RelativeTo::BottomRight => clarion_core::floating::Anchor::BottomRight,
+                        RelativeTo::Top => clarion_core::floating::Anchor::Top,
+                        RelativeTo::Bottom => clarion_core::floating::Anchor::Bottom,
+                        RelativeTo::Left => clarion_core::floating::Anchor::Left,
+                        RelativeTo::Right => clarion_core::floating::Anchor::Right,
                     };
                     let size = tile.tile_size();
-                    let position = realand_core::floating::anchored_position(
+                    let position = clarion_core::floating::anchored_position(
                         core_area(self.working_area),
-                        realand_core::Size::new(size.w, size.h),
+                        clarion_core::Size::new(size.w, size.h),
                         anchor,
                         [position.x.0, position.y.0],
                     );
@@ -1332,7 +1332,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
 }
 
 fn compute_toplevel_bounds(
-    border_config: realand_config::Border,
+    border_config: clarion_config::Border,
     working_area_size: Size<f64, Logical>,
 ) -> Size<i32, Logical> {
     let border = if border_config.off {
@@ -1340,16 +1340,16 @@ fn compute_toplevel_bounds(
     } else {
         border_config.width * 2.
     };
-    let size = realand_core::floating::client_bounds(
-        realand_core::Size::new(working_area_size.w, working_area_size.h),
-        realand_core::Size::new(border, border),
+    let size = clarion_core::floating::client_bounds(
+        clarion_core::Size::new(working_area_size.w, working_area_size.h),
+        clarion_core::Size::new(border, border),
     );
     (size[0], size[1]).into()
 }
 
-fn core_preset(preset: PresetSize) -> realand_core::floating::Preset {
+fn core_preset(preset: PresetSize) -> clarion_core::floating::Preset {
     match preset {
-        PresetSize::Fixed(value) => realand_core::floating::Preset::Fixed(value),
-        PresetSize::Proportion(value) => realand_core::floating::Preset::Proportion(value),
+        PresetSize::Fixed(value) => clarion_core::floating::Preset::Fixed(value),
+        PresetSize::Proportion(value) => clarion_core::floating::Preset::Proportion(value),
     }
 }

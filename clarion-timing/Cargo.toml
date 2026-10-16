@@ -1,0 +1,11 @@
+[package]
+name = "clarion-timing"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Device-independent presentation scheduling and frame budgets for Clarion"
+
+[dependencies]

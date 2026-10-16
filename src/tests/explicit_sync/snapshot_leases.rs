@@ -157,7 +157,7 @@ fn replaced_same_storage_snapshots_submit_without_owner_wait_and_release_on_idle
             let server_surface = fixture
                 .server
                 .state
-                .realand
+                .clarion
                 .root_surface
                 .keys()
                 .find(|server| server.id().protocol_id() == surface.id().protocol_id())
@@ -215,9 +215,9 @@ fn replaced_same_storage_snapshots_submit_without_owner_wait_and_release_on_idle
             Some(
                 "uniform sampler2D second;\n\
              vec4 close_color(vec3 p, vec3 s) {\n\
-             vec2 half_texel = vec2(0.5) / vec2(textureSize(realand_tex, 0));\n\
+             vec2 half_texel = vec2(0.5) / vec2(textureSize(clarion_tex, 0));\n\
              vec2 uv = clamp(p.xy, half_texel, vec2(1.0) - half_texel);\n\
-             return (texture2D(realand_tex, uv) + texture2D(second, uv)) / 2.0;\n\
+             return (texture2D(clarion_tex, uv) + texture2D(second, uv)) / 2.0;\n\
              }",
             ),
         );
@@ -232,13 +232,13 @@ fn replaced_same_storage_snapshots_submit_without_owner_wait_and_release_on_idle
             1.,
             1.,
             Rc::new([
-                mat3_uniform("realand_input_to_geo", glam::Mat3::IDENTITY),
-                mat3_uniform("realand_geo_to_tex", glam::Mat3::IDENTITY),
-                Uniform::new("realand_geo_size", [128., 64.]),
-                Uniform::new("realand_glide_enabled", 0f32),
+                mat3_uniform("clarion_input_to_geo", glam::Mat3::IDENTITY),
+                mat3_uniform("clarion_geo_to_tex", glam::Mat3::IDENTITY),
+                Uniform::new("clarion_geo_size", [128., 64.]),
+                Uniform::new("clarion_glide_enabled", 0f32),
             ]),
             HashMap::from([
-                ("realand_tex".into(), shader_inputs.remove(0)),
+                ("clarion_tex".into(), shader_inputs.remove(0)),
                 ("second".into(), shader_inputs.remove(0)),
             ]),
             Kind::Unspecified,
@@ -333,7 +333,7 @@ fn replaced_same_storage_snapshots_submit_without_owner_wait_and_release_on_idle
         fixture
             .server
             .state
-            .realand
+            .clarion
             .display_handle
             .flush_clients()
             .unwrap();

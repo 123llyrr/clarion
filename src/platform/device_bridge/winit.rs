@@ -6,24 +6,24 @@ use smithay::output::Output;
 use smithay::utils::{Physical, Size};
 use smithay::wayland::dmabuf::DmabufFeedbackBuilder;
 
-use crate::compositor::{Realand, State};
+use crate::compositor::{Clarion, State};
 use crate::render_helpers::{resources, shaders};
 
 use crate::backend::winit::native_window::{NativeDevice, NativeWindowEvent};
 use crate::backend::winit::*;
 
-impl crate::input::backend_ext::RealandInputDevice for NativeDevice {
+impl crate::input::backend_ext::ClarionInputDevice for NativeDevice {
     fn output(&self, _: &State) -> Option<Output> {
         None
     }
 }
 
 impl Winit {
-    fn platform_init(&mut self, realand: &mut Realand) {
+    fn platform_init(&mut self, clarion: &mut Clarion) {
         match &mut self.backend {
             WinitBackend::Gles(backend) => {
                 let renderer = backend.renderer();
-                if let Err(err) = renderer.bind_wl_display(&realand.display_handle) {
+                if let Err(err) = renderer.bind_wl_display(&clarion.display_handle) {
                     trace!("error binding legacy EGL to wl_display: {err}");
                 } else {
                     debug!("bound legacy EGL to wl_display");
@@ -50,21 +50,21 @@ impl Winit {
             }
         }
 
-        realand.update_shaders();
+        clarion.update_shaders();
 
-        self.platform_create_dmabuf_global(realand);
+        self.platform_create_dmabuf_global(clarion);
 
-        realand.add_output(self.output.clone(), None, false, false);
+        clarion.add_output(self.output.clone(), None, false, false);
     }
 
-    fn platform_create_dmabuf_global(&mut self, realand: &mut Realand) {
+    fn platform_create_dmabuf_global(&mut self, clarion: &mut Clarion) {
         let WinitBackend::Gles(backend) = &mut self.backend else {
             let WinitBackend::Native(native) = &mut self.backend else {
                 unreachable!()
             };
             self.dmabuf_global =
-                Some(realand.dmabuf_state.create_global::<State>(
-                    &realand.display_handle,
+                Some(clarion.dmabuf_state.create_global::<State>(
+                    &clarion.display_handle,
                     native.renderer.dmabuf_formats(),
                 ));
             return;
@@ -88,15 +88,15 @@ impl Winit {
 
         // Fallback to dmabuf v3 if we failed to build feedback.
         let dmabuf_global = match default_feedback() {
-            Ok(feedback) => realand
+            Ok(feedback) => clarion
                 .dmabuf_state
-                .create_global_with_default_feedback::<State>(&realand.display_handle, &feedback),
+                .create_global_with_default_feedback::<State>(&clarion.display_handle, &feedback),
             Err(err) => {
                 debug!("failed building default dmabuf feedback, falling back to v3: {err:?}");
                 let primary_formats = renderer.dmabuf_formats();
-                realand
+                clarion
                     .dmabuf_state
-                    .create_global::<State>(&realand.display_handle, primary_formats)
+                    .create_global::<State>(&clarion.display_handle, primary_formats)
             }
         };
         assert!(self.dmabuf_global.replace(dmabuf_global).is_none());
@@ -115,7 +115,7 @@ fn handle_resize(state: &mut State, size: Size<i32, Physical>) {
             // presentation consume or reject it before a resize replaces it.
             let output = winit.output.clone();
             let mut coordinator =
-                crate::frame_pipeline::FrameCoordinator::new(&mut state.realand, &output);
+                crate::frame_pipeline::FrameCoordinator::new(&mut state.clarion, &output);
             winit.defer_native_attempt(&mut coordinator, false);
             return;
         }
@@ -125,7 +125,7 @@ fn handle_resize(state: &mut State, size: Size<i32, Physical>) {
                 Ok(false) => {
                     let output = winit.output.clone();
                     let mut coordinator =
-                        crate::frame_pipeline::FrameCoordinator::new(&mut state.realand, &output);
+                        crate::frame_pipeline::FrameCoordinator::new(&mut state.clarion, &output);
                     winit.defer_native_attempt(&mut coordinator, false);
                     return;
                 }
@@ -133,7 +133,7 @@ fn handle_resize(state: &mut State, size: Size<i32, Physical>) {
                     warn!("error resizing nested Vulkan swapchain: {err:#}");
                     let output = winit.output.clone();
                     let mut coordinator =
-                        crate::frame_pipeline::FrameCoordinator::new(&mut state.realand, &output);
+                        crate::frame_pipeline::FrameCoordinator::new(&mut state.clarion, &output);
                     winit.defer_native_attempt(&mut coordinator, true);
                     return;
                 }
@@ -146,20 +146,20 @@ fn handle_resize(state: &mut State, size: Size<i32, Physical>) {
         }
     }
     let output = winit.output.clone();
-    let mut coordinator = crate::frame_pipeline::FrameCoordinator::new(&mut state.realand, &output);
+    let mut coordinator = crate::frame_pipeline::FrameCoordinator::new(&mut state.clarion, &output);
     winit.update_output_size(&mut coordinator, size);
 }
 
-pub(super) fn initialize(device: &mut Winit, realand: &mut Realand) {
-    device.platform_init(realand);
+pub(super) fn initialize(device: &mut Winit, clarion: &mut Clarion) {
+    device.platform_init(clarion);
 }
 pub(super) fn on_gles_event(state: &mut State, event: WinitEvent) {
     match event {
         WinitEvent::Resized { size, .. } => handle_resize(state, size),
         WinitEvent::Input(event) => state.process_input_event(event),
         WinitEvent::Focus(_) => (),
-        WinitEvent::Redraw => state.realand.queue_redraw(&state.backend.winit().output),
-        WinitEvent::CloseRequested => state.realand.stop_signal.stop(),
+        WinitEvent::Redraw => state.clarion.queue_redraw(&state.backend.winit().output),
+        WinitEvent::CloseRequested => state.clarion.stop_signal.stop(),
     }
 }
 pub(super) fn on_native_event(state: &mut State, event: NativeWindowEvent) {
@@ -167,7 +167,7 @@ pub(super) fn on_native_event(state: &mut State, event: NativeWindowEvent) {
         NativeWindowEvent::Resized(size) => handle_resize(state, size),
         NativeWindowEvent::Input(event) => state.process_input_event(event),
         NativeWindowEvent::Focus => (),
-        NativeWindowEvent::Redraw => state.realand.queue_redraw(&state.backend.winit().output),
-        NativeWindowEvent::CloseRequested => state.realand.stop_signal.stop(),
+        NativeWindowEvent::Redraw => state.clarion.queue_redraw(&state.backend.winit().output),
+        NativeWindowEvent::CloseRequested => state.clarion.stop_signal.stop(),
     }
 }

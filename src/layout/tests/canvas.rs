@@ -1,7 +1,7 @@
 //! Actual layout targets belong to one pure camera; output forecasts only sample.
 use super::*;
 
-fn fixture(mode: realand_ipc::TilingMode) -> Layout<TestWindow> {
+fn fixture(mode: clarion_ipc::TilingMode) -> Layout<TestWindow> {
     let mut options = Options::default();
     options.layout.auto_stack_new_windows = false;
     let mut layout = check_ops_with_options(
@@ -76,8 +76,8 @@ fn kinetic_input(layout: &mut Layout<TestWindow>) {
 #[test]
 fn canvas_presentation_forecasts_change_render_pose_without_mutating_targets_or_next_owner_tick() {
     for mode in [
-        realand_ipc::TilingMode::Scrolling,
-        realand_ipc::TilingMode::Dwindle,
+        clarion_ipc::TilingMode::Scrolling,
+        clarion_ipc::TilingMode::Dwindle,
     ] {
         let mut layout = fixture(mode);
         kinetic_input(&mut layout);
@@ -129,7 +129,7 @@ fn canvas_presentation_forecasts_change_render_pose_without_mutating_targets_or_
 
 #[test]
 fn new_canvas_gesture_owns_its_first_displacement_without_old_coasting_afterward() {
-    let mut layout = fixture(realand_ipc::TilingMode::Scrolling);
+    let mut layout = fixture(clarion_ipc::TilingMode::Scrolling);
     kinetic_input(&mut layout);
     layout.clock.set_unadjusted(Duration::from_millis(250));
     layout.advance_animations();
@@ -173,8 +173,8 @@ fn new_canvas_gesture_owns_its_first_displacement_without_old_coasting_afterward
 #[test]
 fn canvas_reset_and_toggle_remove_pending_forecast_without_reusing_an_old_camera() {
     for mode in [
-        realand_ipc::TilingMode::Scrolling,
-        realand_ipc::TilingMode::Dwindle,
+        clarion_ipc::TilingMode::Scrolling,
+        clarion_ipc::TilingMode::Dwindle,
     ] {
         let mut layout = fixture(mode);
         let initial = targets(&layout);

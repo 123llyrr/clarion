@@ -18,22 +18,26 @@ You can find documentation for various sections of the config on these wiki page
 
 ### Loading
 
-Realand will load configuration from `$XDG_CONFIG_HOME/realand/config.kdl` or `~/.config/realand/config.kdl`, falling back to `/etc/realand/config.kdl`.
-If both of these files are missing, realand will create `$XDG_CONFIG_HOME/realand/config.kdl` with the contents of [the default configuration file](https://github.com/realand-wm/realand/blob/master/resources/default-config.kdl), which are embedded into the realand binary at build time.
+Clarion will load configuration from `$XDG_CONFIG_HOME/clarion/config.kdl` or `~/.config/clarion/config.kdl`, falling back to `/etc/clarion/config.kdl`.
+During migration, an existing `realand/config.kdl` is selected only when the corresponding
+Clarion file is absent. `REALAND_CONFIG` is also accepted after the canonical `CLARION_CONFIG`.
+Files are not copied or rewritten; see the [migration guide](../clarion-migration.md).
+If both of these files are missing, clarion will create `$XDG_CONFIG_HOME/clarion/config.kdl` with the contents of [the default configuration file](https://github.com/123llyrr/realand/blob/main/resources/default-config.kdl), which are embedded into the clarion binary at build time.
 Please use the default configuration file as the starting point for your custom configuration.
 
 The configuration is live-reloaded.
 Simply edit and save the config file, and your changes will be applied.
 This includes key bindings, output settings like mode, window rules, and everything else.
 
-You can run `realand validate` to parse the config and see any errors.
+You can run `clarion validate` to parse the config and see any errors.
 
-To use a different config file path, pass it in the `--config` or `-c` argument to `realand`.
+To use a different config file path, pass it in the `--config` or `-c` argument to `clarion`.
 
-You can also set `$REALAND_CONFIG` to the path of the config file.
+You can also set `$CLARION_CONFIG` to the path of the config file.
 `--config` always takes precedence.
-If `--config` or `$REALAND_CONFIG` doesn't point to a real file, the config will not be loaded.
-If `$REALAND_CONFIG` is set to an empty string, it is ignored and the default config location is used instead.
+If `--config` or `$CLARION_CONFIG` doesn't point to a real file, the config will not be loaded.
+If `$CLARION_CONFIG` is set to an empty string, it is ignored. A nonempty legacy
+`$REALAND_CONFIG` is then considered before the default config location.
 
 ### Syntax
 
@@ -56,7 +60,7 @@ Also, you can put `/-` in front of a section to comment out the entire section:
 
 #### Flags
 
-Toggle options in realand are commonly represented as flags.
+Toggle options in clarion are commonly represented as flags.
 Writing out the flag enables it, and omitting it or commenting it out disables it.
 For example:
 
@@ -137,15 +141,15 @@ A notable exception is [`binds {}`](./Configuration:-Key-Bindings.md): they do n
 
 ### Breaking Change Policy
 
-As a rule, realand updates should not break existing config files.
-(For example, the default config from realand v0.1.0 still parses fine on v25.02 as I'm writing this.)
+As a rule, clarion updates should not break existing config files.
+(For example, the default config from clarion v0.1.0 still parses fine on v25.02 as I'm writing this.)
 
 Exceptions can be made for parsing bugs.
-For example, realand used to accept multiple binds to the same key, but this was not intended and did not do anything (the first bind was always used).
-A patch release changed realand from silently accepting this to causing a parsing failure.
+For example, clarion used to accept multiple binds to the same key, but this was not intended and did not do anything (the first bind was always used).
+A patch release changed clarion from silently accepting this to causing a parsing failure.
 This is not a blanket rule, I will consider the potential impact of every breaking change like this before deciding to carry on with it.
 
-Keep in mind that the breaking change policy applies only to realand releases.
+Keep in mind that the breaking change policy applies only to clarion releases.
 Commits between releases can and do occasionally break the config as new features are ironed out.
 However, I do try to limit these, since several people are running git builds.
 

@@ -6,28 +6,28 @@
 use smithay::backend::renderer::ImportDma;
 
 use crate::backend::headless::{Headless, HeadlessRenderer};
-use crate::compositor::Realand;
+use crate::compositor::Clarion;
 
 #[cfg(test)]
 use crate::backend::OutputId;
 #[cfg(test)]
 use crate::utils::logical_output;
 #[cfg(test)]
-use realand_config::OutputName;
+use clarion_config::OutputName;
 #[cfg(test)]
 use smithay::output::{Mode, Output, PhysicalProperties, Subpixel};
 #[cfg(test)]
 use smithay::utils::Size;
 
 impl Headless {
-    fn platform_init(&mut self, realand: &mut Realand) {
+    fn platform_init(&mut self, clarion: &mut Clarion) {
         if let Some(HeadlessRenderer::Native(renderer)) = self.renderer.as_mut() {
-            if let Err(error) = super::install_native_shader_wakeup(renderer, &realand.event_loop) {
+            if let Err(error) = super::install_native_shader_wakeup(renderer, &clarion.event_loop) {
                 warn!("error installing headless native shader completion: {error:#}");
             }
             if let Err(err) = renderer.install_completion_wakeup_with_callbacks(
-                &realand.event_loop,
-                |sample, state| state.realand.record_gpu_timing(sample),
+                &clarion.event_loop,
+                |sample, state| state.clarion.record_gpu_timing(sample),
                 crate::compositor::State::on_native_gpu_completion,
             ) {
                 warn!("error installing headless Vulkan completion wakeup: {err}");
@@ -35,10 +35,10 @@ impl Headless {
             // No DRM node is selected for headless rendering, so advertise the
             // supported formats through the v3 global without device feedback.
             self.dmabuf_global = Some(
-                realand
+                clarion
                     .dmabuf_state
                     .create_global::<crate::compositor::State>(
-                        &realand.display_handle,
+                        &clarion.display_handle,
                         renderer.dmabuf_formats(),
                     ),
             );
@@ -46,10 +46,10 @@ impl Headless {
     }
 
     #[cfg(test)]
-    fn platform_add_output(&mut self, realand: &mut Realand, n: u8, size: (u16, u16)) {
+    fn platform_add_output(&mut self, clarion: &mut Clarion, n: u8, size: (u16, u16)) {
         let connector = format!("headless-{n}");
         self.native_targets.retain(|name, _| {
-            realand
+            clarion
                 .global_space
                 .outputs()
                 .any(|output| output.name() == *name)
@@ -57,7 +57,7 @@ impl Headless {
         // Reusing a connector name must not reuse the previous output's damage
         // history or render target.
         self.native_targets.remove(&connector);
-        let make = "realand".to_string();
+        let make = "clarion".to_string();
         let model = "headless".to_string();
         let serial = n.to_string();
 
@@ -89,13 +89,13 @@ impl Headless {
         let physical_properties = output.physical_properties();
         self.ipc_outputs.lock().unwrap().insert(
             OutputId::next(),
-            realand_ipc::Output {
+            clarion_ipc::Output {
                 name: output.name(),
                 make: physical_properties.make,
                 model: physical_properties.model,
                 serial: None,
                 physical_size: None,
-                modes: vec![realand_ipc::Mode {
+                modes: vec![clarion_ipc::Mode {
                     width: size.0,
                     height: size.1,
                     refresh_rate: 60_000,
@@ -111,18 +111,18 @@ impl Headless {
             },
         );
 
-        realand.add_output(output, None, false, false);
+        clarion.add_output(output, None, false, false);
     }
 }
-pub(super) fn initialize(device: &mut Headless, realand: &mut Realand) {
-    device.platform_init(realand);
+pub(super) fn initialize(device: &mut Headless, clarion: &mut Clarion) {
+    device.platform_init(clarion);
 }
 #[cfg(test)]
 pub(super) fn add_output(
     device: &mut Headless,
-    realand: &mut Realand,
+    clarion: &mut Clarion,
     number: u8,
     size: (u16, u16),
 ) {
-    device.platform_add_output(realand, number, size);
+    device.platform_add_output(clarion, number, size);
 }

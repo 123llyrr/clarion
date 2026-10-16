@@ -1,15 +1,15 @@
 ### Overview
 
-The primary screencasting interface that realand offers is through portals and pipewire.
+The primary screencasting interface that clarion offers is through portals and pipewire.
 It is supported by [OBS], Firefox, Chromium, Electron, Telegram, and other apps.
 You can screencast both monitors and individual windows.
 
-In order to use it, you need a working D-Bus session, pipewire, `xdg-desktop-portal-gnome`, and [running realand as a session](./Getting-Started.md) (i.e. through `realand-session` or from a display manager).
+In order to use it, you need a working D-Bus session, pipewire, `xdg-desktop-portal-gnome`, and [running clarion as a session](./Getting-Started.md) (i.e. through `clarion-session` or from a display manager).
 On widely used distros this should all "just work".
 
-Alternatively, you can use tools that rely on the `wlr-screencopy` protocol, which realand also supports.
+Alternatively, you can use tools that rely on the `wlr-screencopy` protocol, which clarion also supports.
 
-There are several features in realand designed for screencasting.
+There are several features in clarion designed for screencasting.
 Let's take a look!
 
 ### Block out windows
@@ -48,10 +48,10 @@ Check [the corresponding wiki section](./Configuration:-Window-Rules.md#block-ou
 
 <sup>Since: 25.05</sup>
 
-Realand provides a special screencast stream that you can change dynamically.
-It shows up as "realand Dynamic Cast Target" in the screencast window dialog.
+Clarion provides a special screencast stream that you can change dynamically.
+It shows up as "clarion Dynamic Cast Target" in the screencast window dialog.
 
-![Screencast dialog showing realand Dynamic Cast Target.](https://github.com/user-attachments/assets/e236ce74-98ec-4f3a-a99b-29ac1ff324dd)
+![Screencast dialog showing clarion Dynamic Cast Target.](https://github.com/user-attachments/assets/e236ce74-98ec-4f3a-a99b-29ac1ff324dd)
 
 Choose it, then use the following binds to change what it shows.
 The stream won't start until you make your first target selection.
@@ -63,7 +63,7 @@ The stream won't start until you make your first target selection.
 You can also use these actions from the command line, for example to interactively pick which window to cast:
 
 ```sh
-$ realand msg action set-dynamic-cast-window --id $(realand msg --json pick-window | jq .id)
+$ clarion msg action set-dynamic-cast-window --id $(clarion msg --json pick-window | jq .id)
 ```
 
 <video controls src="https://github.com/user-attachments/assets/c617a9d6-7d5e-4f1f-b8cc-9301182d9634">
@@ -140,11 +140,11 @@ Here's an example showing a windowed-fullscreen Google Slides [presentation](htt
 ### Screen mirroring
 
 For presentations it can be useful to mirror an output to another.
-Currently, realand doesn't have built-in output mirroring, but you can use a third-party tool [`wl-mirror`](https://github.com/Ferdi265/wl-mirror) that mirrors an output to a window.
+Currently, clarion doesn't have built-in output mirroring, but you can use a third-party tool [`wl-mirror`](https://github.com/Ferdi265/wl-mirror) that mirrors an output to a window.
 Note that the command below requires [`jq`](https://jqlang.org/download/) to be installed.
 ```kdl
 binds {
-    Mod+P repeat=false { spawn-sh "wl-mirror $(realand msg --json focused-output | jq -r .name)"; }
+    Mod+P repeat=false { spawn-sh "wl-mirror $(clarion msg --json focused-output | jq -r .name)"; }
 }
 ```
 Focus the output you want to mirror, press <kbd>Mod</kbd><kbd>P</kbd> and move the `wl-mirror` window to the target output.

@@ -1,8 +1,8 @@
 use std::fmt::{self, Write as _};
 
+use clarion_config::Config;
 use insta::assert_snapshot;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use realand_config::Config;
 
 use super::*;
 use crate::layout::LayoutElement as _;
@@ -378,8 +378,8 @@ window-rule {{
         f.double_roundtrip(id);
     }
 
-    let realand = f.realand();
-    let (mon, ws_idx, ws, mapped) = realand
+    let clarion = f.clarion();
+    let (mon, ws_idx, ws, mapped) = clarion
         .layout
         .workspaces()
         .find_map(|(mon, ws_idx, ws)| {
@@ -408,7 +408,7 @@ window-rule {{
     // If the window ended up fullscreen, unfullscreen it and output the configure.
     let mut post_unfullscreen = String::new();
     if is_fullscreen {
-        f.realand().layout.set_fullscreen(&win, false);
+        f.clarion().layout.set_fullscreen(&win, false);
         f.double_roundtrip(id);
 
         let window = f.client(id).window(&surface);
@@ -658,11 +658,11 @@ layout {
 
     // If the window ended up fullscreen, unfullscreen it and output the configure.
     let mut post_unfullscreen = String::new();
-    let mapped = f.realand().layout.windows().next().unwrap().1;
+    let mapped = f.clarion().layout.windows().next().unwrap().1;
     let is_fullscreen = mapped.sizing_mode().is_fullscreen();
     let win = mapped.window.clone();
     if is_fullscreen {
-        f.realand().layout.set_fullscreen(&win, false);
+        f.clarion().layout.set_fullscreen(&win, false);
         f.double_roundtrip(id);
 
         let window = f.client(id).window(&surface);
@@ -841,11 +841,11 @@ window-rule {
 
     // If the window ended up fullscreen, unfullscreen it and output the configure.
     let mut post_unfullscreen = String::new();
-    let mapped = f.realand().layout.windows().next().unwrap().1;
+    let mapped = f.clarion().layout.windows().next().unwrap().1;
     let is_fullscreen = mapped.sizing_mode().is_fullscreen();
     let win = mapped.window.clone();
     if is_fullscreen {
-        f.realand().layout.set_fullscreen(&win, false);
+        f.clarion().layout.set_fullscreen(&win, false);
         f.double_roundtrip(id);
 
         let window = f.client(id).window(&surface);
@@ -861,11 +861,11 @@ window-rule {
 
     // If the window ended up maximized, unmaximize it and output the configure.
     let mut post_unmaximize = String::new();
-    let mapped = f.realand().layout.windows().next().unwrap().1;
+    let mapped = f.clarion().layout.windows().next().unwrap().1;
     let is_maximized = mapped.sizing_mode().is_maximized();
     let win = mapped.window.clone();
     if is_maximized {
-        f.realand().layout.set_maximized(&win, false);
+        f.clarion().layout.set_maximized(&win, false);
         f.double_roundtrip(id);
 
         let window = f.client(id).window(&surface);

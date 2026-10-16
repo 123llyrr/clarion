@@ -1,7 +1,7 @@
 use std::fmt::Write as _;
 
+use clarion_config::animations::{Curve, EasingParams, Kind};
 use insta::assert_snapshot;
-use realand_config::animations::{Curve, EasingParams, Kind};
 
 use super::*;
 
@@ -257,7 +257,7 @@ fn synchronized_zoom_and_workspace_switch_keep_velocity_when_interrupted() {
             let mut layout = check_ops([Op::AddOutput(1)]);
             layout.active_monitor().unwrap().add_workspace_bottom();
             layout.open_overview();
-            let config = realand_config::animations::OverviewOpenCloseAnim::default().0;
+            let config = clarion_config::animations::OverviewOpenCloseAnim::default().0;
             layout
                 .active_monitor()
                 .unwrap()
@@ -561,7 +561,7 @@ fn make_options() -> Options {
     });
 
     let mut options = Options {
-        layout: realand_config::Layout {
+        layout: clarion_config::Layout {
             gaps: 0.0,
             auto_stack_new_windows: false,
             ..Default::default()
@@ -605,7 +605,7 @@ fn set_up_two_in_column() -> Layout<TestWindow> {
 fn dwindle_tile_transitions_remain_active_while_idle() {
     let mut layout = check_ops([
         Op::AddOutput(1),
-        Op::SwitchTilingMode(Some(realand_ipc::TilingMode::Dwindle)),
+        Op::SwitchTilingMode(Some(clarion_ipc::TilingMode::Dwindle)),
         Op::AddWindow {
             params: TestWindowParams::new(0),
         },
@@ -684,7 +684,7 @@ fn clientside_height_change_doesnt_animate() {
     ");
 
     let ops = [
-        // The top window shrinks by itself, without a realand-issued resize.
+        // The top window shrinks by itself, without a clarion-issued resize.
         Op::SetForcedSize {
             id: 1,
             size: Some(Size::new(100, 50)),
@@ -1785,7 +1785,7 @@ fn clamped_tile_alpha_stops_redrawing_and_retains_held_target() {
             clock.clone(),
             Rc::new(Options::default()),
         );
-        let mut config = realand_config::animations::WindowMovementAnim::default().0;
+        let mut config = clarion_config::animations::WindowMovementAnim::default().0;
         let Kind::Spring(params) = &mut config.kind else {
             unreachable!()
         };
@@ -2080,7 +2080,7 @@ fn builtin_opening_releases_its_tile_transition_after_visible_spring_motion() {
             let mut clock = Clock::with_time(Duration::ZERO);
             let mut options = Options::default();
             options.animations.window_open.anim.kind =
-                Kind::Spring(realand_config::animations::SpringParams {
+                Kind::Spring(clarion_config::animations::SpringParams {
                     damping_ratio,
                     stiffness: 400,
                     epsilon: 0.0001,
@@ -2135,7 +2135,7 @@ fn overview_gesture_interruptions_keep_live_animation_position_and_velocity() {
             for mode_change in [false, true] {
                 let mut options = Options::default();
                 if easing {
-                    options.animations.overview_open_close.0 = realand_config::Animation {
+                    options.animations.overview_open_close.0 = clarion_config::Animation {
                         off: false,
                         kind: Kind::Easing(EasingParams {
                             duration_ms: 300,
@@ -2189,12 +2189,12 @@ fn overview_gesture_interruptions_keep_live_animation_position_and_velocity() {
 
 #[test]
 fn workspace_cancel_settles_from_core_pose_with_live_tracker_velocity() {
-    use realand_core::gestures::swipe_tracker::SwipeTracker;
+    use clarion_core::gestures::swipe_tracker::SwipeTracker;
     for rate in [0.5, 1., 2.] {
         for easing in [false, true] {
             let mut options = Options::default();
             if easing {
-                options.animations.workspace_switch.0 = realand_config::Animation {
+                options.animations.workspace_switch.0 = clarion_config::Animation {
                     off: false,
                     kind: Kind::Easing(EasingParams {
                         duration_ms: 300,

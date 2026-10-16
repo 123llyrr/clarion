@@ -1,8 +1,8 @@
-//! Event-loop adapter for the independent Realand per-output scheduler.
-//! State transitions and frame prediction live in realand-core. This adapter owns
+//! Event-loop adapter for the independent Clarion per-output scheduler.
+//! State transitions and frame prediction live in clarion-core. This adapter owns
 //! only platform timer removal, diagnostics, and conversion of backend outcomes.
 
-use realand_core::scheduling::{OutputScheduler, RenderOutcome, VblankTransition};
+use clarion_timing::scheduling::{OutputScheduler, RenderOutcome, VblankTransition};
 use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
 #[cfg(test)]
 use std::mem;
@@ -13,8 +13,8 @@ use crate::frame_clock::FrameClock;
 use crate::frame_stats::FrameStats;
 use crate::render_helpers::vulkan::timing::{GpuTimingSample, GpuTimingTag};
 
-pub use realand_core::scheduling::EstimatedVblankAction;
-pub type RedrawState = realand_core::scheduling::RedrawState<RegistrationToken>;
+pub use clarion_timing::scheduling::EstimatedVblankAction;
+pub type RedrawState = clarion_timing::scheduling::RedrawState<RegistrationToken>;
 
 /// Thread CPU time excludes blocking and scheduler preemption. Called only
 /// after fresh hardware feedback is accepted by FrameStats.
@@ -131,7 +131,7 @@ impl OutputSchedule {
         );
         self.core.presented(actual, target);
     }
-    pub(crate) fn timings(&self, name: String) -> realand_ipc::diagnostics::OutputFrameTimings {
+    pub(crate) fn timings(&self, name: String) -> clarion_ipc::diagnostics::OutputFrameTimings {
         self.stats
             .snapshot(name, self.core.clock(), self.core.latch_enabled())
     }
@@ -295,7 +295,7 @@ pub(crate) fn take_redraw_state_on_vblank<D>(
     name: &str,
 ) -> bool {
     apply_vblank_transition(
-        realand_core::scheduling::take_redraw_state_on_vblank(mem::take(redraw_state)),
+        clarion_timing::scheduling::take_redraw_state_on_vblank(mem::take(redraw_state)),
         event_loop,
         name,
     )
@@ -313,7 +313,7 @@ mod tests {
 
     #[test]
     fn teardown_cancels_owned_deadlines_without_a_compositor() {
-        // The scheduling owner needs no Wayland display, GPU, or Realand/State
+        // The scheduling owner needs no Wayland display, GPU, or Clarion/State
         // instance to retire every deadline, including an estimate behind a latch.
         let mut event_loop = EventLoop::<()>::try_new().unwrap();
         let handle = event_loop.handle();

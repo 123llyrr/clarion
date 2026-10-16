@@ -45,7 +45,7 @@ float corner_alpha(vec2 coords, vec2 size, float radius) {
     return 1.0 - smoothstep(radius - 0.7, radius + 0.7, dist);
 }
 
-float realand_rounding_alpha(vec2 coords, vec2 size, vec4 corner_radius) {
+float clarion_rounding_alpha(vec2 coords, vec2 size, vec4 corner_radius) {
     vec2 center;
     float radius;
 
@@ -132,8 +132,8 @@ void main() {
     if (pc.clip_enabled != 0.0 && pc.clip_matrix[1].w > 0.0) {
         mat3 input_to_geo = mat3(pc.clip_matrix[0].xyz, pc.clip_matrix[1].xyz, pc.clip_matrix[2].xyz);
         vec2 coords = (input_to_geo * vec3(in_uv, 1.0)).xy;
-        vec3 lens = realand_glass_lens(coords, pc.clip_size, pc.clip_radius, pc.clip_matrix[1].w);
-        sample_uv = clamp(in_uv + realand_glass_uv_offset(lens.xy, pc.clip_size, input_to_geo), vec2(0.0), vec2(1.0));
+        vec3 lens = clarion_glass_lens(coords, pc.clip_size, pc.clip_radius, pc.clip_matrix[1].w);
+        sample_uv = clamp(in_uv + clarion_glass_uv_offset(lens.xy, pc.clip_size, input_to_geo), vec2(0.0), vec2(1.0));
         glass_light = clamp(lens.z * pc.clip_matrix[2].w, 0.0, 1.0);
     }
     vec4 tex_color = texture(tex_sampler, sample_uv);
@@ -156,7 +156,7 @@ void main() {
         if (any(lessThan(coords, vec2(0.0))) || any(greaterThan(coords, vec2(1.0)))) {
             round_a = 0.0;
         } else {
-            round_a *= realand_rounding_alpha(coords * pc.clip_size, pc.clip_size, pc.clip_radius);
+            round_a *= clarion_rounding_alpha(coords * pc.clip_size, pc.clip_size, pc.clip_radius);
         }
     }
     color = color * pc.color_tint * (pc.alpha * round_a);

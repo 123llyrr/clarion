@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use realand_config::Config;
-use realand_ipc::{PositionChange, SizeChange};
+use clarion_config::Config;
+use clarion_ipc::{PositionChange, SizeChange};
 use smithay::backend::input::{TabletToolCapabilities, TabletToolDescriptor, TabletToolType};
 use smithay::desktop::Window;
 use smithay::input::pointer::Focus;
@@ -37,7 +37,7 @@ fn setup() -> (Fixture, ClientId, WlSurface, Window, TouchHandle<State>) {
     window.set_size(100, 100);
     window.ack_last_and_commit();
     f.double_roundtrip(client);
-    let layout = &mut f.realand().layout;
+    let layout = &mut f.clarion().layout;
     layout.toggle_window_floating(None);
     layout.move_floating_window(
         None,
@@ -46,8 +46,8 @@ fn setup() -> (Fixture, ClientId, WlSurface, Window, TouchHandle<State>) {
         false,
     );
     let window = layout.windows().next().unwrap().1.window.clone();
-    f.realand_complete_animations();
-    f.realand().clock.set_complete_instantly(true);
+    f.clarion_complete_animations();
+    f.clarion().clock.set_complete_instantly(true);
     f.double_roundtrip(client);
     f.client(client).window(&surface).ack_last_and_commit();
     f.double_roundtrip(client);
@@ -55,12 +55,12 @@ fn setup() -> (Fixture, ClientId, WlSurface, Window, TouchHandle<State>) {
         .window(&surface)
         .recent_configures()
         .for_each(drop);
-    let touch = f.realand().seat.add_touch();
+    let touch = f.clarion().seat.add_touch();
     // Both contacts precede the compositor grab, so the second contact does not
     // invoke MoveGrab's separate two-finger toggle-floating action.
     for slot in [1, 2] {
         touch.down(
-            f.realand_state(),
+            f.clarion_state(),
             None,
             &DownEvent {
                 slot: Some(slot).into(),
@@ -70,7 +70,7 @@ fn setup() -> (Fixture, ClientId, WlSurface, Window, TouchHandle<State>) {
             },
         );
     }
-    touch.frame(f.realand_state());
+    touch.frame(f.clarion_state());
     (f, client, surface, window, touch)
 }
 
@@ -84,7 +84,7 @@ fn start_data() -> AnyStartData<State> {
 
 fn motion(f: &mut Fixture, touch: &TouchHandle<State>, slot: u32, location: (f64, f64)) {
     touch.motion(
-        f.realand_state(),
+        f.clarion_state(),
         None,
         &MotionEvent {
             slot: Some(slot).into(),
@@ -96,7 +96,7 @@ fn motion(f: &mut Fixture, touch: &TouchHandle<State>, slot: u32, location: (f64
 
 fn up(f: &mut Fixture, touch: &TouchHandle<State>, slot: u32) {
     touch.up(
-        f.realand_state(),
+        f.clarion_state(),
         &UpEvent {
             slot: Some(slot).into(),
             serial: SERIAL_COUNTER.next_serial(),
@@ -106,17 +106,17 @@ fn up(f: &mut Fixture, touch: &TouchHandle<State>, slot: u32) {
 }
 
 fn position(f: &mut Fixture) -> Point<f64, Logical> {
-    f.realand().layout.session_layout().windows[0]
+    f.clarion().layout.session_layout().windows[0]
         .position
         .unwrap()
         .into()
 }
 
 fn overview_grab(f: &mut Fixture, window: Window, start: AnyStartData<State>) -> TouchOverviewGrab {
-    f.realand().layout.open_overview();
-    f.realand_complete_animations();
+    f.clarion().layout.open_overview();
+    f.clarion_complete_animations();
     let (output, workspace_id) = f
-        .realand()
+        .clarion()
         .layout
         .workspaces()
         .find_map(|(mon, _, ws)| {
@@ -132,13 +132,13 @@ fn overview_grab(f: &mut Fixture, window: Window, start: AnyStartData<State>) ->
         Some(workspace_id),
         true,
         Some(window),
-        f.realand().layout.overview_mode(),
+        f.clarion().layout.overview_mode(),
     )
 }
 
 fn grab_overview(f: &mut Fixture, window: Window, touch: &TouchHandle<State>) {
     let grab = overview_grab(f, window, start_data());
-    touch.set_grab(f.realand_state(), grab, SERIAL_COUNTER.next_serial());
+    touch.set_grab(f.clarion_state(), grab, SERIAL_COUNTER.next_serial());
 }
 
 #[test]
@@ -152,7 +152,7 @@ fn overview_tablet_release_and_proximity_out_have_distinct_semantics() {
         (START, true, true, true),           // Held pen leaving cancels its drag.
     ] {
         let (mut f, _, _, window, _) = setup();
-        let tablet_seat = f.realand().seat.tablet_seat();
+        let tablet_seat = f.clarion().seat.tablet_seat();
         let tablet = tablet_seat.add_tablet(&TabletDescriptor {
             name: "Overview regression tablet".into(),
             usb_id: None,
@@ -165,7 +165,7 @@ fn overview_tablet_release_and_proximity_out_have_distinct_semantics() {
             capabilities: TabletToolCapabilities::empty(),
         });
         pen.proximity_in(
-            f.realand_state(),
+            f.clarion_state(),
             None,
             tablet,
             &tool::ProximityInEvent {
@@ -176,7 +176,7 @@ fn overview_tablet_release_and_proximity_out_have_distinct_semantics() {
             },
         );
         pen.down(
-            f.realand_state(),
+            f.clarion_state(),
             &tool::DownEvent {
                 serial: SERIAL_COUNTER.next_serial(),
                 time: 10,
@@ -192,24 +192,24 @@ fn overview_tablet_release_and_proximity_out_have_distinct_semantics() {
             }),
         );
         pen.set_grab(
-            f.realand_state(),
+            f.clarion_state(),
             grab,
             10,
             SERIAL_COUNTER.next_serial(),
             Focus::Clear,
         );
         assert!(pen.is_grabbed());
-        pen.frame(f.realand_state(), 10);
+        pen.frame(f.clarion_state(), 10);
         if hold {
             dispatch_for(&mut f, Duration::from_millis(550));
-            let output = f.realand_output(1);
+            let output = f.clarion_output(1);
             assert!(f
-                .realand()
+                .clarion()
                 .layout
                 .interactive_move_is_moving_above_output(&output));
         }
         pen.motion(
-            f.realand_state(),
+            f.clarion_state(),
             None,
             &tool::MotionEvent {
                 location: target.into(),
@@ -219,7 +219,7 @@ fn overview_tablet_release_and_proximity_out_have_distinct_semantics() {
         );
         if proximity_out {
             pen.proximity_out(
-                f.realand_state(),
+                f.clarion_state(),
                 &tool::ProximityOutEvent {
                     serial: SERIAL_COUNTER.next_serial(),
                     time: 21,
@@ -227,7 +227,7 @@ fn overview_tablet_release_and_proximity_out_have_distinct_semantics() {
             );
         } else {
             pen.up(
-                f.realand_state(),
+                f.clarion_state(),
                 &tool::UpEvent {
                     serial: SERIAL_COUNTER.next_serial(),
                     time: 21,
@@ -235,9 +235,9 @@ fn overview_tablet_release_and_proximity_out_have_distinct_semantics() {
             );
         }
         assert!(!pen.is_grabbed());
-        assert_eq!(f.realand().layout.is_overview_open(), stays_open);
-        pen.frame(f.realand_state(), 21);
-        assert_eq!(f.realand().layout.is_overview_open(), stays_open);
+        assert_eq!(f.clarion().layout.is_overview_open(), stays_open);
+        pen.frame(f.clarion_state(), 21);
+        assert_eq!(f.clarion().layout.is_overview_open(), stays_open);
     }
 }
 
@@ -255,7 +255,7 @@ fn dispatch_for(f: &mut Fixture, duration: Duration) {
 #[test]
 fn overview_tablet_release_after_completed_mode_switch_does_not_commit_old_tap() {
     let (mut f, _, _, window, _) = setup();
-    let tablet_seat = f.realand().seat.tablet_seat();
+    let tablet_seat = f.clarion().seat.tablet_seat();
     let tablet = tablet_seat.add_tablet(&TabletDescriptor {
         name: "Overview mode switch tablet".into(),
         usb_id: None,
@@ -268,7 +268,7 @@ fn overview_tablet_release_after_completed_mode_switch_does_not_commit_old_tap()
         capabilities: TabletToolCapabilities::empty(),
     });
     pen.proximity_in(
-        f.realand_state(),
+        f.clarion_state(),
         None,
         tablet,
         &tool::ProximityInEvent {
@@ -279,7 +279,7 @@ fn overview_tablet_release_after_completed_mode_switch_does_not_commit_old_tap()
         },
     );
     pen.down(
-        f.realand_state(),
+        f.clarion_state(),
         &tool::DownEvent {
             serial: SERIAL_COUNTER.next_serial(),
             time: 10,
@@ -294,9 +294,9 @@ fn overview_tablet_release_after_completed_mode_switch_does_not_commit_old_tap()
             location: START.into(),
         }),
     );
-    let workspace = f.realand().layout.active_workspace().unwrap().id();
+    let workspace = f.clarion().layout.active_workspace().unwrap().id();
     pen.set_grab(
-        f.realand_state(),
+        f.clarion_state(),
         grab,
         10,
         SERIAL_COUNTER.next_serial(),
@@ -305,28 +305,28 @@ fn overview_tablet_release_after_completed_mode_switch_does_not_commit_old_tap()
     assert!(pen.is_grabbed());
     // Use the direct layout switch to exercise the grab's own guard rather
     // than State's proactive cancellation. Release follows the completed fade.
-    f.realand().layout.toggle_expo();
-    f.realand_complete_animations();
+    f.clarion().layout.toggle_expo();
+    f.clarion_complete_animations();
     assert!(pen.is_grabbed());
     pen.up(
-        f.realand_state(),
+        f.clarion_state(),
         &tool::UpEvent {
             serial: SERIAL_COUNTER.next_serial(),
             time: 21,
         },
     );
     assert!(!pen.is_grabbed());
-    assert!(f.realand().layout.is_overview_open());
+    assert!(f.clarion().layout.is_overview_open());
     assert_eq!(
-        f.realand().layout.overview_mode(),
+        f.clarion().layout.overview_mode(),
         crate::layout::OverviewMode::Expo
     );
     assert_eq!(
-        f.realand().layout.active_workspace().unwrap().id(),
+        f.clarion().layout.active_workspace().unwrap().id(),
         workspace
     );
-    pen.frame(f.realand_state(), 21);
-    assert!(f.realand().layout.is_overview_open());
+    pen.frame(f.clarion_state(), 21);
+    assert!(f.clarion().layout.is_overview_open());
 }
 
 #[test]
@@ -340,15 +340,15 @@ fn overview_release_recognizes_pending_swipe_instead_of_tapping() {
             motion(&mut f, &touch, 2, (500., 500.));
             up(&mut f, &touch, 2);
             assert!(touch.is_grabbed());
-            assert!(f.realand().layout.is_overview_open());
+            assert!(f.clarion().layout.is_overview_open());
             if frame_before_release {
-                touch.frame(f.realand_state());
+                touch.frame(f.clarion_state());
             }
             up(&mut f, &touch, 1);
             assert!(!touch.is_grabbed());
-            assert!(f.realand().layout.is_overview_open());
-            touch.frame(f.realand_state());
-            assert!(f.realand().layout.is_overview_open());
+            assert!(f.clarion().layout.is_overview_open());
+            touch.frame(f.clarion_state());
+            assert!(f.clarion().layout.is_overview_open());
         }
     }
 }
@@ -360,14 +360,14 @@ fn overview_cancel_or_replaced_grab_does_not_activate_a_tap() {
         grab_overview(&mut f, window, &touch);
         motion(&mut f, &touch, 1, (221., 221.));
         if cancel {
-            touch.cancel(f.realand_state());
+            touch.cancel(f.clarion_state());
         } else {
-            touch.unset_grab(f.realand_state());
+            touch.unset_grab(f.clarion_state());
         }
         assert!(!touch.is_grabbed());
-        assert!(f.realand().layout.is_overview_open());
-        touch.frame(f.realand_state());
-        assert!(f.realand().layout.is_overview_open());
+        assert!(f.clarion().layout.is_overview_open());
+        touch.frame(f.clarion_state());
+        assert!(f.clarion().layout.is_overview_open());
     }
 }
 
@@ -378,20 +378,20 @@ fn overview_normal_tap_still_activates_window() {
     motion(&mut f, &touch, 1, (221., 221.));
     up(&mut f, &touch, 1);
     assert!(!touch.is_grabbed());
-    assert!(!f.realand().layout.is_overview_open());
+    assert!(!f.clarion().layout.is_overview_open());
 }
 
 #[test]
 fn stationary_overview_touch_starts_drag_without_another_motion_event() {
     let (mut f, _, _, window, touch) = setup();
     grab_overview(&mut f, window, &touch);
-    let output = f.realand_output(1);
+    let output = f.clarion_output(1);
     // A touch device need not produce motion events for a stationary finger.
-    touch.frame(f.realand_state());
+    touch.frame(f.clarion_state());
     let deadline = std::time::Instant::now() + Duration::from_millis(650);
     while std::time::Instant::now() < deadline
         && !f
-            .realand()
+            .clarion()
             .layout
             .interactive_move_is_moving_above_output(&output)
     {
@@ -402,13 +402,13 @@ fn stationary_overview_touch_starts_drag_without_another_motion_event() {
             .unwrap();
     }
     assert!(f
-        .realand()
+        .clarion()
         .layout
         .interactive_move_is_moving_above_output(&output));
-    touch.cancel(f.realand_state());
-    assert!(f.realand().layout.is_overview_open());
+    touch.cancel(f.clarion_state());
+    assert!(f.clarion().layout.is_overview_open());
     assert!(!f
-        .realand()
+        .clarion()
         .layout
         .interactive_move_is_moving_above_output(&output));
 }
@@ -421,25 +421,25 @@ fn pending_overview_long_press_cannot_activate_after_cancel_or_context_change() 
         let (mut f, client, surface, window, touch) = setup();
         let before = position(&mut f);
         grab_overview(&mut f, window.clone(), &touch);
-        let output = f.realand_output(1);
-        touch.frame(f.realand_state());
+        let output = f.clarion_output(1);
+        touch.frame(f.clarion_state());
         match transition {
-            "cancel" => touch.cancel(f.realand_state()),
+            "cancel" => touch.cancel(f.clarion_state()),
             "replace" => {
                 let replacement =
-                    MoveGrab::new(f.realand_state(), start_data(), window, false, None).unwrap();
-                touch.set_grab(f.realand_state(), replacement, SERIAL_COUNTER.next_serial());
+                    MoveGrab::new(f.clarion_state(), start_data(), window, false, None).unwrap();
+                touch.set_grab(f.clarion_state(), replacement, SERIAL_COUNTER.next_serial());
             }
             "swipe" => {
                 motion(&mut f, &touch, 1, (120., 220.));
-                touch.frame(f.realand_state());
+                touch.frame(f.clarion_state());
             }
-            "mode" => f.realand().layout.toggle_expo(),
+            "mode" => f.clarion().layout.toggle_expo(),
             "modal" => {
-                assert!(f.realand().exit_confirm_dialog.show());
+                assert!(f.clarion().exit_confirm_dialog.show());
             }
-            "output" => f.realand().remove_output(&output),
-            "lock" => f.realand_state().cancel_grabs_for_lock(),
+            "output" => f.clarion().remove_output(&output),
+            "lock" => f.clarion_state().cancel_grabs_for_lock(),
             "destroy" => {
                 let window = f.client(client).window(&surface);
                 window.xdg_toplevel.destroy();
@@ -449,17 +449,17 @@ fn pending_overview_long_press_cannot_activate_after_cancel_or_context_change() 
             }
             _ => unreachable!(),
         }
-        let selected = f.realand().layout.stage_selected_for_output(&output);
+        let selected = f.clarion().layout.stage_selected_for_output(&output);
         dispatch_for(&mut f, Duration::from_millis(550));
-        assert!(f.realand().layout.is_overview_open(), "{transition}");
+        assert!(f.clarion().layout.is_overview_open(), "{transition}");
         assert!(!f
-            .realand()
+            .clarion()
             .layout
             .interactive_move_is_moving_above_output(&output));
         if !matches!(transition, "output" | "destroy") {
             assert_eq!(position(&mut f), before, "{transition}");
             assert_eq!(
-                f.realand().layout.stage_selected_for_output(&output),
+                f.clarion().layout.stage_selected_for_output(&output),
                 selected
             );
         }
@@ -470,7 +470,7 @@ fn pending_overview_long_press_cannot_activate_after_cancel_or_context_change() 
         } else if transition != "swipe" {
             assert!(!touch.is_grabbed(), "{transition}");
         }
-        touch.cancel(f.realand_state());
+        touch.cancel(f.clarion_state());
     }
 }
 
@@ -481,7 +481,7 @@ fn overview_move_release_keeps_the_last_position() {
         grab_overview(&mut f, window, &touch);
         // A held contact followed by movement starts a window drag.
         touch.motion(
-            f.realand_state(),
+            f.clarion_state(),
             None,
             &MotionEvent {
                 slot: Some(1).into(),
@@ -489,9 +489,9 @@ fn overview_move_release_keeps_the_last_position() {
                 time: 520,
             },
         );
-        touch.frame(f.realand_state());
+        touch.frame(f.clarion_state());
         touch.motion(
-            f.realand_state(),
+            f.clarion_state(),
             None,
             &MotionEvent {
                 slot: Some(1).into(),
@@ -500,10 +500,10 @@ fn overview_move_release_keeps_the_last_position() {
             },
         );
         if frame_before_release {
-            touch.frame(f.realand_state());
+            touch.frame(f.clarion_state());
         }
         touch.up(
-            f.realand_state(),
+            f.clarion_state(),
             &UpEvent {
                 slot: Some(1).into(),
                 serial: SERIAL_COUNTER.next_serial(),
@@ -511,7 +511,7 @@ fn overview_move_release_keeps_the_last_position() {
             },
         );
         assert!(!touch.is_grabbed());
-        f.realand_complete_animations();
+        f.clarion_complete_animations();
         position(&mut f)
     };
     assert_eq!(run(false), run(true));
@@ -522,8 +522,8 @@ fn move_release_applies_pending_motion_only_for_the_starting_contact() {
     let run = |frame_before_release| {
         let (mut f, _client, _surface, window, touch) = setup();
         let initial = position(&mut f);
-        let grab = MoveGrab::new(f.realand_state(), start_data(), window, false, None).unwrap();
-        touch.set_grab(f.realand_state(), grab, SERIAL_COUNTER.next_serial());
+        let grab = MoveGrab::new(f.clarion_state(), start_data(), window, false, None).unwrap();
+        touch.set_grab(f.clarion_state(), grab, SERIAL_COUNTER.next_serial());
 
         motion(&mut f, &touch, 1, (260., 280.));
         motion(&mut f, &touch, 2, (500., 500.));
@@ -535,14 +535,14 @@ fn move_release_applies_pending_motion_only_for_the_starting_contact() {
         assert_eq!(position(&mut f), initial);
 
         if frame_before_release {
-            touch.frame(f.realand_state());
+            touch.frame(f.clarion_state());
         }
         up(&mut f, &touch, 1);
         assert!(!touch.is_grabbed());
-        f.realand_complete_animations();
+        f.clarion_complete_animations();
         let final_position = position(&mut f);
         assert_ne!(final_position, initial);
-        touch.frame(f.realand_state());
+        touch.frame(f.clarion_state());
         assert_eq!(position(&mut f), final_position);
         final_position
     };
@@ -556,20 +556,20 @@ fn move_release_applies_pending_motion_only_for_the_starting_contact() {
 fn move_grab_overview_release_commits_but_cancel_and_replacement_do_not_tap() {
     for action in [0, 1, 2] {
         let (mut f, _, _, window, touch) = setup();
-        f.realand().layout.open_overview();
-        f.realand_complete_animations();
-        let grab = MoveGrab::new(f.realand_state(), start_data(), window, false, None).unwrap();
-        touch.set_grab(f.realand_state(), grab, SERIAL_COUNTER.next_serial());
+        f.clarion().layout.open_overview();
+        f.clarion_complete_animations();
+        let grab = MoveGrab::new(f.clarion_state(), start_data(), window, false, None).unwrap();
+        touch.set_grab(f.clarion_state(), grab, SERIAL_COUNTER.next_serial());
         motion(&mut f, &touch, 1, (221., 221.));
         match action {
             0 => up(&mut f, &touch, 1),
-            1 => touch.cancel(f.realand_state()),
-            _ => touch.unset_grab(f.realand_state()),
+            1 => touch.cancel(f.clarion_state()),
+            _ => touch.unset_grab(f.clarion_state()),
         }
         assert!(!touch.is_grabbed());
-        assert_eq!(f.realand().layout.is_overview_open(), action != 0);
-        touch.frame(f.realand_state());
-        assert_eq!(f.realand().layout.is_overview_open(), action != 0);
+        assert_eq!(f.clarion().layout.is_overview_open(), action != 0);
+        touch.frame(f.clarion_state());
+        assert_eq!(f.clarion().layout.is_overview_open(), action != 0);
     }
 }
 
@@ -578,29 +578,29 @@ fn stage_move_grab_cancel_or_replacement_restores_position_over_valid_card() {
     for cancel in [false, true] {
         let (mut f, _, _, window, touch) = setup();
         let before = position(&mut f);
-        f.realand().layout.open_overview();
-        f.realand_complete_animations();
-        let grab = MoveGrab::new(f.realand_state(), start_data(), window, false, None).unwrap();
-        touch.set_grab(f.realand_state(), grab, SERIAL_COUNTER.next_serial());
+        f.clarion().layout.open_overview();
+        f.clarion_complete_animations();
+        let grab = MoveGrab::new(f.clarion_state(), start_data(), window, false, None).unwrap();
+        touch.set_grab(f.clarion_state(), grab, SERIAL_COUNTER.next_serial());
         motion(&mut f, &touch, 1, (640., 380.));
-        touch.frame(f.realand_state());
-        let output = f.realand().layout.outputs().next().unwrap().clone();
+        touch.frame(f.clarion_state());
+        let output = f.clarion().layout.outputs().next().unwrap().clone();
         assert!(f
-            .realand()
+            .clarion()
             .layout
             .interactive_move_is_moving_above_output(&output));
         if cancel {
-            touch.cancel(f.realand_state());
+            touch.cancel(f.clarion_state());
         } else {
-            touch.unset_grab(f.realand_state());
+            touch.unset_grab(f.clarion_state());
         }
-        f.realand_complete_animations();
+        f.clarion_complete_animations();
         assert!(!touch.is_grabbed());
         assert!(!f
-            .realand()
+            .clarion()
             .layout
             .interactive_move_is_moving_above_output(&output));
-        assert!(f.realand().layout.is_stage_open());
+        assert!(f.clarion().layout.is_stage_open());
         assert_eq!(position(&mut f), before);
     }
 }
@@ -614,36 +614,36 @@ fn stage_move_grab_release_without_final_motion_respects_modal_priority() {
                 f.init_gles_renderer();
             }
             let before = position(&mut f);
-            f.realand().layout.open_overview();
-            f.realand_complete_animations();
-            let grab = MoveGrab::new(f.realand_state(), start_data(), window, false, None).unwrap();
-            touch.set_grab(f.realand_state(), grab, SERIAL_COUNTER.next_serial());
+            f.clarion().layout.open_overview();
+            f.clarion_complete_animations();
+            let grab = MoveGrab::new(f.clarion_state(), start_data(), window, false, None).unwrap();
+            touch.set_grab(f.clarion_state(), grab, SERIAL_COUNTER.next_serial());
             if moving {
                 motion(&mut f, &touch, 1, (640., 380.));
-                touch.frame(f.realand_state());
+                touch.frame(f.clarion_state());
             }
             match modal {
-                "exit" => assert!(f.realand().exit_confirm_dialog.show()),
+                "exit" => assert!(f.clarion().exit_confirm_dialog.show()),
                 "mru" => {
-                    let wmru = crate::ui::mru::WindowMru::new(f.realand());
-                    let clock = f.realand().clock.clone();
-                    let output = f.realand_output(1);
-                    f.realand().window_mru_ui.open(clock, wmru, output);
-                    assert!(f.realand().window_mru_ui.is_open());
+                    let wmru = crate::ui::mru::WindowMru::new(f.clarion());
+                    let clock = f.clarion().clock.clone();
+                    let output = f.clarion_output(1);
+                    f.clarion().window_mru_ui.open(clock, wmru, output);
+                    assert!(f.clarion().window_mru_ui.is_open());
                 }
                 _ => {
-                    f.realand_state().open_screenshot_ui(false, None);
-                    assert!(f.realand().screenshot_ui.is_open());
+                    f.clarion_state().open_screenshot_ui(false, None);
+                    assert!(f.clarion().screenshot_ui.is_open());
                 }
             }
             // No final motion/frame occurs after the modal grabs priority.
             up(&mut f, &touch, 1);
             assert!(!touch.is_grabbed());
             assert!(
-                f.realand().layout.is_stage_open(),
+                f.clarion().layout.is_stage_open(),
                 "modal={modal}, moving={moving}"
             );
-            f.realand_complete_animations();
+            f.clarion_complete_animations();
             assert_eq!(position(&mut f), before, "modal={modal}, moving={moving}");
         }
     }
@@ -653,17 +653,17 @@ fn stage_move_grab_release_without_final_motion_respects_modal_priority() {
 fn resize_release_applies_pending_motion_only_for_the_starting_contact() {
     let (mut f, client, surface, window, touch) = setup();
     assert!(f
-        .realand()
+        .clarion()
         .layout
         .interactive_resize_begin(window.clone(), ResizeEdge::BOTTOM_RIGHT));
     touch.set_grab(
-        f.realand_state(),
+        f.clarion_state(),
         ResizeGrab::new(start_data(), window),
         SERIAL_COUNTER.next_serial(),
     );
 
     let before = f
-        .realand()
+        .clarion()
         .layout
         .windows()
         .next()
@@ -676,7 +676,7 @@ fn resize_release_applies_pending_motion_only_for_the_starting_contact() {
     up(&mut f, &touch, 2);
     assert!(touch.is_grabbed());
     assert_eq!(
-        f.realand()
+        f.clarion()
             .layout
             .windows()
             .next()
@@ -698,7 +698,7 @@ fn resize_release_applies_pending_motion_only_for_the_starting_contact() {
             .size,
         (140, 160)
     );
-    touch.frame(f.realand_state());
+    touch.frame(f.clarion_state());
     f.double_roundtrip(client);
     assert_eq!(
         f.client(client)
@@ -713,16 +713,16 @@ fn resize_release_applies_pending_motion_only_for_the_starting_contact() {
 fn resize_release_does_not_reapply_an_already_consumed_motion() {
     let (mut f, client, surface, window, touch) = setup();
     assert!(f
-        .realand()
+        .clarion()
         .layout
         .interactive_resize_begin(window.clone(), ResizeEdge::BOTTOM_RIGHT));
     touch.set_grab(
-        f.realand_state(),
+        f.clarion_state(),
         ResizeGrab::new(start_data(), window),
         SERIAL_COUNTER.next_serial(),
     );
     motion(&mut f, &touch, 1, (260., 280.));
-    touch.frame(f.realand_state());
+    touch.frame(f.clarion_state());
     f.double_roundtrip(client);
     assert_eq!(
         f.client(client)
@@ -745,7 +745,7 @@ fn resize_release_does_not_reapply_an_already_consumed_motion() {
 
     // A separate size action can arrive after the last motion frame. Releasing
     // the contact must not replay that older location over the new request.
-    f.realand()
+    f.clarion()
         .layout
         .set_column_width(SizeChange::SetFixed(180));
     f.double_roundtrip(client);
@@ -762,13 +762,13 @@ fn resize_release_does_not_reapply_an_already_consumed_motion() {
     // Nested Winit emits a frame after every touch event. Frames from another
     // contact, or with no motion at all, must not replay the primary contact.
     motion(&mut f, &touch, 2, (500., 500.));
-    touch.frame(f.realand_state());
+    touch.frame(f.clarion_state());
     up(&mut f, &touch, 2);
-    touch.frame(f.realand_state());
-    touch.frame(f.realand_state());
+    touch.frame(f.clarion_state());
+    touch.frame(f.clarion_state());
     assert!(touch.is_grabbed());
     assert_eq!(
-        f.realand()
+        f.clarion()
             .layout
             .windows()
             .next()
@@ -787,7 +787,7 @@ fn resize_release_does_not_reapply_an_already_consumed_motion() {
     );
 
     up(&mut f, &touch, 1);
-    touch.frame(f.realand_state());
+    touch.frame(f.clarion_state());
     f.double_roundtrip(client);
     assert!(f
         .client(client)

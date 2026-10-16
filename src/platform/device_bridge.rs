@@ -11,11 +11,12 @@ use smithay::reexports::calloop::{Dispatcher, LoopHandle};
 
 use crate::backend::winit::native_window::NativeWindowLoop;
 use crate::backend::{Headless, Tty, Winit};
-use crate::compositor::{Realand, State};
+use crate::compositor::{Clarion, State};
 use crate::render_helpers::vulkan::native::NativeRenderer;
 
 mod headless;
 mod tty;
+mod vulkan_recovery;
 mod winit;
 
 /// Opaque registration ownership. No accessor exposes the callback state or event loop.
@@ -27,6 +28,10 @@ pub(crate) trait DeviceSetup {
     fn register_udev(&mut self, backend: UdevBackend) -> UdevInventory;
     fn register_libinput(&mut self, backend: LibinputInputBackend);
     fn register_session(&mut self, notifier: LibSeatSessionNotifier);
+    fn register_vulkan_recovery(
+        &mut self,
+        source: smithay::reexports::calloop::ping::PingSource,
+    ) -> anyhow::Result<()>;
     fn register_nested_gles(
         &mut self,
         events: WinitEventLoop,
@@ -74,6 +79,17 @@ impl DeviceSetup for DeviceBootstrap {
             .insert_source(notifier, |event, _, state| tty::on_session(state, event))
             .unwrap();
     }
+    fn register_vulkan_recovery(
+        &mut self,
+        source: smithay::reexports::calloop::ping::PingSource,
+    ) -> anyhow::Result<()> {
+        self.event_loop
+            .insert_source(source, |(), &mut (), state| {
+                vulkan_recovery::on_completion(state);
+            })
+            .map_err(|error| anyhow::anyhow!("cannot attach Vulkan recovery: {}", error.error))?;
+        Ok(())
+    }
     fn register_nested_gles(
         &mut self,
         events: WinitEventLoop,
@@ -95,7 +111,7 @@ impl DeviceSetup for DeviceBootstrap {
         install_native_shader_wakeup(renderer, &self.event_loop)?;
         Ok(renderer.install_completion_wakeup_with_callbacks(
             &self.event_loop,
-            |sample, state| state.realand.record_gpu_timing(sample),
+            |sample, state| state.clarion.record_gpu_timing(sample),
             State::on_native_gpu_completion,
         )?)
     }
@@ -147,40 +163,40 @@ pub(crate) trait DevicePort {
 /// Lifecycle coordinator above the device backend. The reference cannot be recovered
 /// through DevicePort, DeviceSetup, Deref, or a callback registration capability.
 pub(crate) struct DeviceCoordinator<'a> {
-    realand: &'a mut Realand,
+    clarion: &'a mut Clarion,
 }
 
 impl<'a> DeviceCoordinator<'a> {
-    pub(crate) fn new(realand: &'a mut Realand) -> Self {
-        Self { realand }
+    pub(crate) fn new(clarion: &'a mut Clarion) -> Self {
+        Self { clarion }
     }
 }
 
 impl DevicePort for DeviceCoordinator<'_> {
     fn initialize_tty(&mut self, device: &mut Tty) {
-        tty::initialize(device, self.realand);
+        tty::initialize(device, self.clarion);
     }
     fn initialize_winit(&mut self, device: &mut Winit) {
-        winit::initialize(device, self.realand);
+        winit::initialize(device, self.clarion);
     }
     fn initialize_headless(&mut self, device: &mut Headless) {
-        headless::initialize(device, self.realand);
+        headless::initialize(device, self.clarion);
     }
     #[cfg(test)]
     fn add_headless_output(&mut self, device: &mut Headless, number: u8, size: (u16, u16)) {
-        headless::add_output(device, self.realand, number, size);
+        headless::add_output(device, self.clarion, number, size);
     }
     fn set_tty_vrr(&mut self, device: &mut Tty, output: &Output, enabled: bool) {
-        tty::set_vrr(device, self.realand, output, enabled);
+        tty::set_vrr(device, self.clarion, output, enabled);
     }
     fn update_tty_ignored_nodes(&mut self, device: &mut Tty) {
-        tty::update_ignored_nodes(device, self.realand);
+        tty::update_ignored_nodes(device, self.clarion);
     }
     fn configure_tty_outputs(&mut self, device: &mut Tty) {
-        tty::configure_outputs(device, self.realand);
+        tty::configure_outputs(device, self.clarion);
     }
     fn estimated_vblank(&mut self, output: Output) {
-        tty::estimated_vblank(self.realand, output);
+        tty::estimated_vblank(self.clarion, output);
     }
 }
 
@@ -191,20 +207,24 @@ pub(crate) fn native_renderer_with_wakeup(
     event_loop: &LoopHandle<'static, State>,
 ) -> Option<NativeRenderer> {
     let mut renderer = Tty::create_vulkan_renderer(node, config)?;
-    if let Err(error) = install_native_shader_wakeup(&mut renderer, event_loop) {
-        warn!("{error:#}; using GLES fallback");
-        return None;
-    }
-    if let Err(error) = renderer
-        .install_completion_wakeup_with_callbacks(
-            event_loop,
-            |sample, state| state.realand.record_gpu_timing(sample),
-            State::on_native_gpu_completion,
-        )
-        .context("error attaching Vulkan completion wakeup")
-    {
+    if let Err(error) = attach_native_renderer_wakeup(&mut renderer, event_loop) {
         warn!("{error:#}; using GLES fallback");
         return None;
     }
     Some(renderer)
+}
+
+fn attach_native_renderer_wakeup(
+    renderer: &mut NativeRenderer,
+    event_loop: &LoopHandle<'static, State>,
+) -> anyhow::Result<()> {
+    install_native_shader_wakeup(renderer, event_loop)?;
+    renderer
+        .install_completion_wakeup_with_callbacks(
+            event_loop,
+            |sample, state| state.clarion.record_gpu_timing(sample),
+            State::on_native_gpu_completion,
+        )
+        .context("error attaching Vulkan completion wakeup")?;
+    Ok(())
 }

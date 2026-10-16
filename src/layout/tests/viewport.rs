@@ -1,6 +1,6 @@
 //! The production clock/config adapter must retain the pure viewport's C1 handoff.
 use super::*;
-use realand_config::animations::{Curve, EasingParams, Kind};
+use clarion_config::animations::{Curve, EasingParams, Kind};
 
 fn fixture(rate: f64, easing: bool) -> Layout<TestWindow> {
     let mut options = Options::default();

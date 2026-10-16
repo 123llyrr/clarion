@@ -2,9 +2,9 @@ use core::f64;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use realand_config::utils::MergeWith as _;
-use realand_config::{Color, CornerRadius, GradientInterpolation};
-use realand_ipc::WindowLayout;
+use clarion_config::utils::MergeWith as _;
+use clarion_config::{Color, CornerRadius, GradientInterpolation};
+use clarion_ipc::WindowLayout;
 use smithay::backend::renderer::element::{Element, Kind};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size};
@@ -18,15 +18,15 @@ use super::{
     SizeFrac, RESIZE_ANIMATION_THRESHOLD,
 };
 use crate::animation::{Animation, Clock};
+use crate::clarion_render_elements;
 use crate::layout::SizingMode;
-use crate::realand_render_elements;
 use crate::render_helpers::background_effect::BackgroundEffectElement;
 use crate::render_helpers::border::BorderRenderElement;
 use crate::render_helpers::clipped_surface::{ClippedSurfaceRenderElement, RoundedCornerDamage};
 use crate::render_helpers::damage::ExtraDamage;
 use crate::render_helpers::mesh::MeshRenderElement;
 use crate::render_helpers::offscreen::{OffscreenBuffer, OffscreenData, OffscreenRenderElement};
-use crate::render_helpers::renderer::{AnyRenderer, RealandRenderer};
+use crate::render_helpers::renderer::{AnyRenderer, ClarionRenderer};
 use crate::render_helpers::resize::{
     capture_resize_texture, CapturedResizeTexture, ResizeRenderElement,
 };
@@ -113,7 +113,7 @@ pub struct Tile<W: LayoutElement> {
     wobble_native_offscreen: crate::render_helpers::offscreen::NativeOffscreenBuffer,
 
     /// Destination supplied by the shell, in this output's logical coordinates.
-    minimize_target: Option<realand_ipc::DockTarget>,
+    minimize_target: Option<clarion_ipc::DockTarget>,
     minimize_reduce_motion: bool,
     genie: RefCell<Option<super::minimized::Genie>>,
     genie_offscreen: [OffscreenBuffer; RenderTarget::COUNT],
@@ -150,7 +150,7 @@ pub struct Tile<W: LayoutElement> {
     pub(super) options: Rc<Options>,
 }
 
-realand_render_elements! {
+clarion_render_elements! {
     TileRenderElement<R> => {
         LayoutElement = LayoutElementRenderElement<R>,
         FocusRing = FocusRingRenderElement,
@@ -319,9 +319,9 @@ impl ResizeMomentum {
         clock: Clock,
         window_velocity: Point<f64, Logical>,
         tile_velocity: Point<f64, Logical>,
-        config: realand_config::Animation,
+        config: clarion_config::Animation,
     ) -> Option<Self> {
-        if config.off || !matches!(config.kind, realand_config::animations::Kind::Spring(_)) {
+        if config.off || !matches!(config.kind, clarion_config::animations::Kind::Spring(_)) {
             return None;
         }
         let amplitude = window_velocity
@@ -433,7 +433,7 @@ fn resize_decoration_animation(
     from: f64,
     to: f64,
     clock: Clock,
-    config: realand_config::Animation,
+    config: clarion_config::Animation,
 ) -> Option<Animation> {
     let (from, velocity) = previous
         .as_ref()
@@ -470,7 +470,7 @@ impl MoveAnimation {
         previous: Option<Self>,
         offset: f64,
         clock: Clock,
-        config: realand_config::Animation,
+        config: clarion_config::Animation,
     ) -> Self {
         // Keep an independent amplitude so a zero-distance reversal can still
         // carry momentum, and tiny remaining distances don't amplify velocity.
@@ -513,7 +513,7 @@ impl AlphaAnimation {
         from: f64,
         to: f64,
         clock: Clock,
-        config: realand_config::Animation,
+        config: clarion_config::Animation,
     ) -> Self {
         let (current, velocity, offscreen, native_offscreen) = if let Some(previous) = previous {
             let (current, velocity) = previous.visible_state();
@@ -689,6 +689,27 @@ impl<W: LayoutElement> Tile<W> {
         self.shadow.update_config(shadow_config);
 
         self.window.update_config(self.options.blur);
+    }
+
+    /// Retire cached pixels from the previous native-device epoch. Client buffer
+    /// leases held by submitted GPU work are retained by that work's Arc owners.
+    /// Geometry, focus, minimization and interaction state remain unchanged.
+    pub(crate) fn on_native_renderer_replaced(&mut self) {
+        self.resize_animation = None;
+        self.pending_resize_snapshot = None;
+        self.native_unmap_snapshot = None;
+        let _ = self.window.take_native_animation_snapshot();
+        self.window.set_offscreen_data(None);
+        if let Some(open) = &self.open_animation {
+            open.clear_native_cache();
+        }
+        if let Some(alpha) = &self.alpha_animation {
+            alpha.native_offscreen.clear();
+        }
+        self.wobble_native_offscreen.clear();
+        for buffer in &self.genie_native_offscreen {
+            buffer.clear();
+        }
     }
 
     pub fn update_shaders(&mut self) {
@@ -1297,7 +1318,7 @@ impl<W: LayoutElement> Tile<W> {
     pub fn animate_move_from_with_config(
         &mut self,
         from: Point<f64, Logical>,
-        config: realand_config::Animation,
+        config: clarion_config::Animation,
     ) {
         self.animate_move_x_from_with_config(from.x, config);
         self.animate_move_y_from_with_config(from.y, config);
@@ -1310,7 +1331,7 @@ impl<W: LayoutElement> Tile<W> {
     pub fn animate_move_x_from_with_config(
         &mut self,
         from: f64,
-        config: realand_config::Animation,
+        config: clarion_config::Animation,
     ) {
         let current_offset = self.render_offset().x;
 
@@ -1330,7 +1351,7 @@ impl<W: LayoutElement> Tile<W> {
     pub fn animate_move_y_from_with_config(
         &mut self,
         from: f64,
-        config: realand_config::Animation,
+        config: clarion_config::Animation,
     ) {
         let current_offset = self.render_offset().y;
 
@@ -1370,7 +1391,7 @@ impl<W: LayoutElement> Tile<W> {
         }
     }
 
-    pub fn animate_alpha(&mut self, from: f64, to: f64, config: realand_config::Animation) {
+    pub fn animate_alpha(&mut self, from: f64, to: f64, config: clarion_config::Animation) {
         self.alpha_animation = Some(AlphaAnimation::retarget(
             self.alpha_animation.take(),
             from,
@@ -1761,7 +1782,7 @@ impl<W: LayoutElement> Tile<W> {
         Point::from((0., y))
     }
 
-    fn render_inner<R: RealandRenderer>(
+    fn render_inner<R: ClarionRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         location: Point<f64, Logical>,
@@ -1769,7 +1790,7 @@ impl<W: LayoutElement> Tile<W> {
         focus_ring: bool,
         push: &mut dyn FnMut(TileRenderElement<R>),
     ) {
-        let _span = realand_tracy_span!("Tile::render_inner");
+        let _span = clarion_tracy_span!("Tile::render_inner");
 
         let scale = Scale::from(self.scale);
         let fullscreen_progress = self.fullscreen_progress();
@@ -2153,7 +2174,7 @@ impl<W: LayoutElement> Tile<W> {
         );
     }
 
-    pub fn render<R: RealandRenderer>(
+    pub fn render<R: ClarionRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         location: Point<f64, Logical>,
@@ -2301,10 +2322,10 @@ impl<W: LayoutElement> Tile<W> {
     /// this registration removes an existing presentation that needs repainting.
     pub fn set_minimize_target(
         &mut self,
-        target: Option<realand_ipc::DockTarget>,
+        target: Option<clarion_ipc::DockTarget>,
         reduce_motion: bool,
     ) -> bool {
-        self.minimize_target = target.filter(realand_ipc::DockTarget::is_valid);
+        self.minimize_target = target.filter(clarion_ipc::DockTarget::is_valid);
         self.minimize_reduce_motion = reduce_motion;
         if reduce_motion || self.minimize_target.is_none() {
             let repaint = self.genie_ongoing();
@@ -2387,7 +2408,7 @@ impl<W: LayoutElement> Tile<W> {
 
     /// A parked tile only uses this presentation path; failure therefore cannot
     /// accidentally reveal a logically minimized window.
-    pub fn render_genie<R: RealandRenderer>(
+    pub fn render_genie<R: ClarionRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         xray_pos: XrayPos,
@@ -2480,7 +2501,7 @@ impl<W: LayoutElement> Tile<W> {
         self.window().set_offscreen_data(None);
     }
 
-    fn render_without_wobble<R: RealandRenderer>(
+    fn render_without_wobble<R: ClarionRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         location: Point<f64, Logical>,
@@ -2488,7 +2509,7 @@ impl<W: LayoutElement> Tile<W> {
         focus_ring: bool,
         push: &mut dyn FnMut(TileRenderElement<R>),
     ) {
-        let _span = realand_tracy_span!("Tile::render");
+        let _span = clarion_tracy_span!("Tile::render");
 
         let scale = Scale::from(self.scale);
 
@@ -2555,9 +2576,7 @@ impl<W: LayoutElement> Tile<W> {
                     }
                 }
             } else {
-                let progress = open.progress();
-                let popin_ratio = open.popin_ratio();
-                let current_scale = popin_ratio + (1.0 - popin_ratio) * (progress as f64);
+                let current_scale = open.scale();
                 let tile_size = self.animated_tile_size();
                 let center: Point<f64, Logical> = Point::new(
                     location.x + tile_size.w * 0.5,
@@ -2719,13 +2738,14 @@ impl<W: LayoutElement> Tile<W> {
         xray: Option<&mut Xray>,
         _xray_has_blocked_out_layers: bool,
         xray_pos: XrayPos,
-    ) {
+    ) -> bool {
         if self.native_unmap_snapshot.is_none() {
             match self.render_snapshot_native(renderer, xray.as_deref(), xray_pos) {
                 Ok(snapshot) => self.native_unmap_snapshot = Some(snapshot),
                 Err(err) => warn!("error capturing native unmap snapshot: {err:?}"),
             }
         }
+        self.native_unmap_snapshot.is_some()
     }
 
     pub fn store_unmap_snapshot_if_empty(
@@ -2750,7 +2770,7 @@ impl<W: LayoutElement> Tile<W> {
         xray_has_blocked_out_layers: bool,
         xray_pos: XrayPos,
     ) -> TileRenderSnapshot {
-        let _span = realand_tracy_span!("Tile::render_snapshot");
+        let _span = clarion_tracy_span!("Tile::render_snapshot");
 
         let mut contents = Vec::new();
         self.render(
@@ -2898,7 +2918,7 @@ impl<W: LayoutElement> Tile<W> {
 mod move_tests {
     use std::time::Duration;
 
-    use realand_config::animations::{Kind, SpringParams, WindowMovementAnim};
+    use clarion_config::animations::{Kind, SpringParams, WindowMovementAnim};
 
     use super::*;
 
@@ -2930,7 +2950,7 @@ mod move_tests {
 mod alpha_tests {
     use std::time::Duration;
 
-    use realand_config::animations::{Curve, EasingParams, Kind, WindowMovementAnim};
+    use clarion_config::animations::{Curve, EasingParams, Kind, WindowMovementAnim};
 
     use super::*;
 
@@ -2994,7 +3014,7 @@ mod alpha_tests {
     fn returning_to_opaque_preserves_custom_easing_and_disabled_animations() {
         for off in [false, true] {
             let mut clock = Clock::with_time(Duration::ZERO);
-            let config = realand_config::Animation {
+            let config = clarion_config::Animation {
                 off,
                 kind: Kind::Easing(EasingParams {
                     duration_ms: 400,
@@ -3078,7 +3098,7 @@ mod alpha_tests {
 mod resize_tests {
     use std::time::Duration;
 
-    use realand_config::animations::{Curve, EasingParams, Kind, WindowResizeAnim};
+    use clarion_config::animations::{Curve, EasingParams, Kind, WindowResizeAnim};
 
     use super::*;
 
@@ -3169,14 +3189,14 @@ mod resize_tests {
     fn resize_momentum_preserves_custom_easing_and_animation_off() {
         let clock = Clock::with_time(Duration::ZERO);
         for config in [
-            realand_config::Animation {
+            clarion_config::Animation {
                 off: false,
                 kind: Kind::Easing(EasingParams {
                     duration_ms: 300,
                     curve: Curve::Linear,
                 }),
             },
-            realand_config::Animation {
+            clarion_config::Animation {
                 off: true,
                 ..WindowResizeAnim::default().anim
             },

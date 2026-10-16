@@ -28,8 +28,8 @@ pub struct BlurOptions {
     pub offset: f64,
 }
 
-impl From<realand_config::Blur> for BlurOptions {
-    fn from(config: realand_config::Blur) -> Self {
+impl From<clarion_config::Blur> for BlurOptions {
+    fn from(config: clarion_config::Blur) -> Self {
         Self {
             passes: config.passes,
             offset: config.offset,
@@ -113,7 +113,7 @@ impl Blur {
         source: &GlesTexture,
         options: BlurOptions,
     ) -> anyhow::Result<()> {
-        let _span = realand_tracy_span!("Blur::prepare_textures");
+        let _span = clarion_tracy_span!("Blur::prepare_textures");
 
         let passes = options.passes.clamp(1, 31) as usize;
         let size = source.size();
@@ -169,7 +169,7 @@ impl Blur {
         source: &GlesTexture,
         options: BlurOptions,
     ) -> anyhow::Result<GlesTexture> {
-        let _span = realand_tracy_span!("Blur::render");
+        let _span = clarion_tracy_span!("Blur::render");
         trace!("rendering blur");
 
         ensure!(

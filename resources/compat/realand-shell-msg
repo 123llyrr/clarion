@@ -1,0 +1,9 @@
+#!/bin/sh
+# Compatibility entry point for existing desktop key bindings.
+case "$0" in
+  */*)
+    canonical="${0%/*}/clarion-shell-msg"
+    if [ -x "$canonical" ]; then exec "$canonical" "$@"; fi
+    ;;
+esac
+exec clarion-shell-msg "$@"

@@ -8,15 +8,15 @@ use zbus::zvariant::{SerializeDict, Type, Value};
 use super::Start;
 
 pub struct Introspect {
-    to_realand: calloop::channel::Sender<IntrospectToRealand>,
-    from_realand: async_channel::Receiver<RealandToIntrospect>,
+    to_clarion: calloop::channel::Sender<IntrospectToClarion>,
+    from_clarion: async_channel::Receiver<ClarionToIntrospect>,
 }
 
-pub enum IntrospectToRealand {
+pub enum IntrospectToClarion {
     GetWindows,
 }
 
-pub enum RealandToIntrospect {
+pub enum ClarionToIntrospect {
     Windows(HashMap<u64, WindowProperties>),
 }
 
@@ -37,15 +37,15 @@ pub struct WindowProperties {
 #[interface(name = "org.gnome.Shell.Introspect")]
 impl Introspect {
     async fn get_windows(&self) -> fdo::Result<HashMap<u64, WindowProperties>> {
-        if let Err(err) = self.to_realand.send(IntrospectToRealand::GetWindows) {
-            warn!("error sending message to realand: {err:?}");
+        if let Err(err) = self.to_clarion.send(IntrospectToClarion::GetWindows) {
+            warn!("error sending message to clarion: {err:?}");
             return Err(fdo::Error::Failed("internal error".to_owned()));
         }
 
-        match self.from_realand.recv().await {
-            Ok(RealandToIntrospect::Windows(windows)) => Ok(windows),
+        match self.from_clarion.recv().await {
+            Ok(ClarionToIntrospect::Windows(windows)) => Ok(windows),
             Err(err) => {
-                warn!("error receiving message from realand: {err:?}");
+                warn!("error receiving message from clarion: {err:?}");
                 Err(fdo::Error::Failed("internal error".to_owned()))
             }
         }
@@ -59,12 +59,12 @@ impl Introspect {
 
 impl Introspect {
     pub fn new(
-        to_realand: calloop::channel::Sender<IntrospectToRealand>,
-        from_realand: async_channel::Receiver<RealandToIntrospect>,
+        to_clarion: calloop::channel::Sender<IntrospectToClarion>,
+        from_clarion: async_channel::Receiver<ClarionToIntrospect>,
     ) -> Self {
         Self {
-            to_realand,
-            from_realand,
+            to_clarion,
+            from_clarion,
         }
     }
 }

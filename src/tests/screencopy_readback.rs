@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use realand_config::{Color, Config};
+use clarion_config::{Color, Config};
 use smithay::backend::allocator::Fourcc;
 use smithay::reexports::wayland_protocols_wlr::screencopy::v1::client::{
     zwlr_screencopy_frame_v1::{self, ZwlrScreencopyFrameV1},
@@ -148,7 +148,7 @@ fn setup(native: bool) -> (Fixture, ClientId, ZwlrScreencopyManagerV1, WlShm) {
         use crate::backend::headless::HeadlessRenderer;
         use crate::render_helpers::vulkan::{native::NativeRenderer, VulkanRenderer};
         let path =
-            std::env::var_os("REALAND_VULKAN_TEST_NODE").expect("set REALAND_VULKAN_TEST_NODE");
+            std::env::var_os("CLARION_VULKAN_TEST_NODE").expect("set CLARION_VULKAN_TEST_NODE");
         let node = smithay::backend::drm::DrmNode::from_path(&path).unwrap();
         let mut renderer = VulkanRenderer::new();
         renderer.init_from_drm_node(Some(&node)).unwrap();
@@ -159,20 +159,20 @@ fn setup(native: bool) -> (Fixture, ClientId, ZwlrScreencopyManagerV1, WlShm) {
         let mut renderer = NativeRenderer::new(renderer).unwrap();
         crate::render_helpers::shaders::init_native(
             &mut renderer,
-            &f.realand().config.borrow().animations,
+            &f.clarion().config.borrow().animations,
         );
         renderer
             .prepare_output_format_for_test(Fourcc::Xrgb8888)
             .unwrap();
         let mut headless = crate::backend::Headless::new(
-            f.realand().config.clone(),
+            f.clarion().config.clone(),
             crate::backend::RendererBackendType::Vulkan,
         );
         headless.renderer = Some(HeadlessRenderer::Native(Box::new(renderer)));
         headless.init(&mut crate::platform::device_bridge::DeviceCoordinator::new(
-            f.realand(),
+            f.clarion(),
         ));
-        f.realand_state().backend = crate::backend::Backend::Headless(headless);
+        f.clarion_state().backend = crate::backend::Backend::Headless(headless);
     } else {
         f.init_gles_renderer();
     }
@@ -225,7 +225,7 @@ fn capture(
     let len = OFFSET + stride * height + 11;
     static NEXT: AtomicU64 = AtomicU64::new(1);
     let path = std::env::temp_dir().join(format!(
-        "realand-screencopy-{}-{}",
+        "clarion-screencopy-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
@@ -286,19 +286,19 @@ fn pump_until(f: &mut Fixture, id: ClientId, done: impl Fn() -> bool) {
 }
 
 fn drive_damage(f: &mut Fixture) {
-    let output = f.realand_output(1);
-    let state = f.realand_state();
-    state.realand.update_render_elements(Some(&output));
+    let output = f.clarion_output(1);
+    let state = f.clarion_state();
+    state.clarion.update_render_elements(Some(&output));
     // The headless GLES fixture intentionally renders frame callbacks only.
     // Drive the same capture redraw entry used by real device backends.
     state
         .backend
         .with_renderer(|renderer| match renderer {
             crate::render_helpers::renderer::AnyRenderer::Gles(gles) => state
-                .realand
+                .clarion
                 .render_for_screencopy_with_damage(gles, &output),
             crate::render_helpers::renderer::AnyRenderer::Native(native) => state
-                .realand
+                .clarion
                 .render_for_screencopy_with_damage(native, &output),
         })
         .unwrap();
@@ -357,8 +357,8 @@ fn lifecycle_paths(native: bool) {
     removed.frame.copy(&removed.buffer);
     f.client(id).connection.flush().unwrap();
     f.state.server.dispatch();
-    let output = f.realand_output(1);
-    f.realand().remove_output(&output);
+    let output = f.clarion_output(1);
+    f.clarion().remove_output(&output);
     pump_until(&mut f, id, || removed.events.lock().unwrap().failed > 0);
     assert_eq!(removed.events.lock().unwrap().ready, 0);
     assert_eq!(removed.bytes(), vec![SENTINEL; removed.len]);
@@ -407,7 +407,7 @@ fn gles_real_client_cancel_output_removal_and_job_limit_never_publish_stale_read
 }
 
 #[test]
-#[ignore = "requires REALAND_VULKAN_TEST_NODE selecting a physical Vulkan render node"]
+#[ignore = "requires CLARION_VULKAN_TEST_NODE selecting a physical Vulkan render node"]
 fn native_real_client_shm_screencopy_preserves_pixels_lifecycle_and_bounds() {
     success_paths(true);
     lifecycle_paths(true);

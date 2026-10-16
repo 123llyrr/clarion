@@ -193,7 +193,7 @@ vec4 color_mix(vec4 color1, vec4 color2, float color_ratio) {
     return premul_rect(vec4(linear_to_srgb(color_out.rgb), color_out.a));
 }
 
-float realand_rounding_alpha(vec2 coords, vec2 size, vec4 corner_radius) {
+float clarion_rounding_alpha(vec2 coords, vec2 size, vec4 corner_radius) {
     vec2 center;
     float radius;
 
@@ -243,7 +243,7 @@ void main() {
     frac = clamp(frac, 0.0, 1.0);
 
     vec4 color = color_mix(pc.color_from, pc.color_to, frac);
-    color = color * realand_rounding_alpha(coords_geo, pc.geo_size, pc.outer_radius);
+    color = color * clarion_rounding_alpha(coords_geo, pc.geo_size, pc.outer_radius);
 
     if (pc.border_width > 0.0) {
         vec2 inner_coords = coords_geo - vec2(pc.border_width);
@@ -253,7 +253,7 @@ void main() {
         vec2 edge = min(inner_coords, inner_geo_size - inner_coords);
         float coverage = clamp(min(edge.x, edge.y) * pc.scale + 0.5, 0.0, 1.0);
         vec4 inner_radius = max(pc.outer_radius - vec4(pc.border_width), vec4(0.0));
-        float inner_alpha = min(coverage, realand_rounding_alpha(inner_coords, inner_geo_size, inner_radius));
+        float inner_alpha = min(coverage, clarion_rounding_alpha(inner_coords, inner_geo_size, inner_radius));
         color *= 1.0 - inner_alpha;
     }
 

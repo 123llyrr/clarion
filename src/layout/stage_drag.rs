@@ -1,6 +1,6 @@
 //! Apply pure Stage restoration intents to the physical Tile and scene pose.
 use super::*;
-use realand_core::stage_drag::{
+use clarion_core::stage_drag::{
     StageCapture, StageDragAction, StageRestoreIntent, StageRestorePosition,
 };
 
@@ -93,9 +93,9 @@ impl<W: LayoutElement> Layout<W> {
         workspace.activate_window(window);
         if let Some(display) = intent.display {
             workspace.set_column_display(match display {
-                realand_core::policy_memory::ColumnDisplay::Normal => ColumnDisplay::Normal,
-                realand_core::policy_memory::ColumnDisplay::Tabbed => ColumnDisplay::Tabbed,
-                realand_core::policy_memory::ColumnDisplay::Dwindle => ColumnDisplay::Dwindle,
+                clarion_core::policy_memory::ColumnDisplay::Normal => ColumnDisplay::Normal,
+                clarion_core::policy_memory::ColumnDisplay::Tabbed => ColumnDisplay::Tabbed,
+                clarion_core::policy_memory::ColumnDisplay::Dwindle => ColumnDisplay::Dwindle,
             });
         }
         if intent.maximized {
@@ -176,7 +176,7 @@ impl<W: LayoutElement> Layout<W> {
                 workspace
                     .scrolling()
                     .columns()
-                    .map(|column| realand_core::workspace_state::RestoreColumn {
+                    .map(|column| clarion_core::workspace_state::RestoreColumn {
                         id: column.id().get(),
                         windows: column
                             .tiles()

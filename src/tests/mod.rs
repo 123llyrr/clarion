@@ -26,6 +26,7 @@ mod qt_app_menu;
 mod remove_output;
 mod resize_commits;
 mod screencopy_readback;
+mod shutdown;
 mod spread_input;
 mod spread_metadata;
 mod stage_input;

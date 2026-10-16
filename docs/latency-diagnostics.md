@@ -1,6 +1,6 @@
 # 输入卡顿与主循环耗时诊断
 
-新版 Realand 会在单次顶层操作耗时达到 16 ms 时记录 `realand::latency` 警告。渲染子阶段使用 4 ms 阈值，便于定位多个短阶段叠加造成的慢帧。不包括事件循环空闲等待；无需启用 Tracy 或安装额外分析器。这些阈值是固定的诊断阈值，不代表所有刷新率下的帧预算。
+新版 Clarion 会在单次顶层操作耗时达到 16 ms 时记录 `clarion::latency` 警告。渲染子阶段使用 4 ms 阈值，便于定位多个短阶段叠加造成的慢帧。不包括事件循环空闲等待；无需启用 Tracy 或安装额外分析器。这些阈值是固定的诊断阈值，不代表所有刷新率下的帧预算。
 
 记录以下阶段：
 
@@ -33,8 +33,8 @@ Vulkan fence 计时位于公共等待入口，覆盖异步提交后的背压与�
 先重新登录，确保运行的是带有新诊断的合成器。替换磁盘上的二进制不会更新已经运行的进程。
 
 ```sh
-journalctl --user -u realand.service -f -o cat
-python3 scripts/diagnose-latency.py --seconds 15 --output /tmp/realand-latency.json
+journalctl --user -u clarion.service -f -o cat
+python3 scripts/diagnose-latency.py --seconds 15 --output /tmp/clarion-latency.json
 ```
 
 没有 systemd 用户服务时可传 `--pid PID`。采样时保持正常操作，最好在出现卡顿的相同应用、显示器和动效组合下采集；对比空闲与编译等高负载场景。
@@ -56,7 +56,7 @@ python3 scripts/diagnose-latency.py --seconds 15 --output /tmp/realand-latency.j
 
 ## KMS 帧调度
 
-物理输出可用 `realand msg frame-timings` 查看最近渲染耗时、预测呈现偏差和当前 latch 预算；`realand msg --json frame-timings` 适合保存两次快照作比较。`late_presentations` 与 `fixed_refresh_presentations` 是累计计数，应比较同一输出在相同负载下两次快照的增量。没有历史呈现时间的首帧和缺少目标时间的帧不计入预测偏差。嵌套或无头输出不会使用 KMS latch 调度。
+物理输出可用 `clarion msg frame-timings` 查看最近渲染耗时、预测呈现偏差和当前 latch 预算；`clarion msg --json frame-timings` 适合保存两次快照作比较。`late_presentations` 与 `fixed_refresh_presentations` 是累计计数，应比较同一输出在相同负载下两次快照的增量。没有历史呈现时间的首帧和缺少目标时间的帧不计入预测偏差。嵌套或无头输出不会使用 KMS latch 调度。
 
 `kms_latch_delay_ms` 是计划等待时长，`kms_latch_wakeup_lateness_ms` 是定时器回调相对计划期限的实际晚醒时间（提前唤醒记为零）。若晚醒 P95 偏高，应先检查主线程负载和调度等待；若晚醒很小但硬件呈现仍迟到，应继续检查回调后的主循环处理、渲染、GPU 同步和 KMS 提交阶段。这个指标不包含回调后等待实际重绘及渲染所花的时间。
 
@@ -85,13 +85,13 @@ GLES 与 Vulkan 在 KMS 拒绝提交时，也按输出独立安排重试。首�
 以下微基准对 128 个窗口的全部结果、单个结果、空结果分别测量装饰更新阶段；不包含 GPU 绘制、呈现和端到端输入延迟。前后比较必须使用相同编译配置和尽量一致的系统负载。
 
 ```sh
-cargo test --locked -p realand --lib layout::tests::spread::spread_update_cost_microbenchmark -- --ignored --nocapture --test-threads=1
+cargo test --locked -p clarion --lib layout::tests::spread::spread_update_cost_microbenchmark -- --ignored --nocapture --test-threads=1
 ```
 
 装饰损坏计数回归使用渲染节点创建离屏环境，验证静止帧保留计数、切换选中项仍产生必要损坏；不取得 DRM 显示控制权。把下面路径替换为实际渲染节点：
 
 ```sh
-REALAND_VULKAN_TEST_NODE=/dev/dri/renderD128 cargo test --locked -p realand --lib layout::tests::spread::spread_static_decorations_keep_damage_counters -- --ignored --nocapture --test-threads=1
+CLARION_VULKAN_TEST_NODE=/dev/dri/renderD128 cargo test --locked -p clarion --lib layout::tests::spread::spread_static_decorations_keep_damage_counters -- --ignored --nocapture --test-threads=1
 ```
 
 ## 手势与多屏交互
@@ -111,16 +111,16 @@ REALAND_VULKAN_TEST_NODE=/dev/dri/renderD128 cargo test --locked -p realand --li
 新增 GPU 回归在未加载自定义着色器时验证预热，并对 RGBA8 与 10-bit 目标执行真实绘制、像素读回和重复调用句柄复用检查。它不切换实际显示模式，也不证明当前显示器正在使用 10-bit：
 
 ```sh
-REALAND_VULKAN_TEST_NODE=/dev/dri/renderD128 cargo test --locked -p realand --lib native_output_prewarm_builds_standard_formats_before_first_draw -- --ignored --nocapture --test-threads=1
+CLARION_VULKAN_TEST_NODE=/dev/dri/renderD128 cargo test --locked -p clarion --lib native_output_prewarm_builds_standard_formats_before_first_draw -- --ignored --nocapture --test-threads=1
 ```
 
 ## 内存占用与泄漏排查
 
 ```sh
-python3 scripts/diagnose-memory.py --seconds 300 --interval 5 --output /tmp/realand-memory.json
+python3 scripts/diagnose-memory.py --seconds 300 --interval 5 --output /tmp/clarion-memory.json
 ```
 
-报告同时记录合成器进程的 RSS/PSS/匿名内存、打开的 fd 数量，以及所在 systemd 服务 cgroup 的匿名内存、文件缓存和共享内存。`memory.stat` 的 `file` 已包含 `shmem`，不能把这些字段相加。服务 cgroup 还包含 Xwayland 等子进程及共享缓冲区，不能把它的总量直接当作 Realand 的 Rust 堆占用。先记录空闲基线，再用固定操作重复创建和销毁窗口、录屏或热插拔；操作结束后继续采样，比较进程匿名内存、fd 数和 cgroup 共享内存是否回落。短时间增长可能来自正常缓存或驱动分配，单次采样无法证明泄漏；GPU 显存也未必完整反映在这些计数中。
+报告同时记录合成器进程的 RSS/PSS/匿名内存、打开的 fd 数量，以及所在 systemd 服务 cgroup 的匿名内存、文件缓存和共享内存。`memory.stat` 的 `file` 已包含 `shmem`，不能把这些字段相加。服务 cgroup 还包含 Xwayland 等子进程及共享缓冲区，不能把它的总量直接当作 Clarion 的 Rust 堆占用。先记录空闲基线，再用固定操作重复创建和销毁窗口、录屏或热插拔；操作结束后继续采样，比较进程匿名内存、fd 数和 cgroup 共享内存是否回落。短时间增长可能来自正常缓存或驱动分配，单次采样无法证明泄漏；GPU 显存也未必完整反映在这些计数中。
 
 
 ## 高性能与动画流畅度的验收方向
@@ -160,7 +160,7 @@ python3 scripts/diagnose-memory.py --seconds 300 --interval 5 --output /tmp/real
 可用下面的微基准检查弹性网格计算成本（单位为微秒），它不包含 GPU 渲染、输入队列或 KMS 提交：
 
 ```sh
-cargo test --release -p realand --lib layout::wobble::tests::dynamic_mesh_frame_cost_microbenchmark -- --ignored --nocapture --test-threads=1
+cargo test --release -p clarion --lib layout::wobble::tests::dynamic_mesh_frame_cost_microbenchmark -- --ignored --nocapture --test-threads=1
 ```
 
 ## 弹簧动画初始化成本
@@ -174,12 +174,12 @@ cargo test --release -p realand --lib layout::wobble::tests::dynamic_mesh_frame_
 回归将新结果与旧扫描逐项比较，覆盖正反向移动、初速度反向、不同刚度和容差、零位移、退化参数及截止边界。以下独立优化构建可重复运行计算微基准，不需要打开显示会话：
 
 ```sh
-realand_spring_wrapper=$(mktemp /tmp/realand-spring-wrapper.XXXXXX.rs)
-printf '#[path = "%s/src/animation/spring.rs"] mod spring;\n' "$PWD" > "$realand_spring_wrapper"
-rustc --crate-name realand_spring_tests --edition=2021 --test -O "$realand_spring_wrapper" -o /tmp/realand-spring-tests
-/tmp/realand-spring-tests
-/tmp/realand-spring-tests clamped_search_initialization_microbenchmark --ignored --nocapture
-rm -- "$realand_spring_wrapper"
+clarion_spring_wrapper=$(mktemp /tmp/clarion-spring-wrapper.XXXXXX.rs)
+printf '#[path = "%s/src/animation/spring.rs"] mod spring;\n' "$PWD" > "$clarion_spring_wrapper"
+rustc --crate-name clarion_spring_tests --edition=2021 --test -O "$clarion_spring_wrapper" -o /tmp/clarion-spring-tests
+/tmp/clarion-spring-tests
+/tmp/clarion-spring-tests clamped_search_initialization_microbenchmark --ignored --nocapture
+rm -- "$clarion_spring_wrapper"
 ```
 
 微基准只测 128 个默认临界阻尼弹簧的目标时间计算，交替运行旧扫描与新查找并报告中位数。它不包含 GPU 渲染、呈现或端到端输入延迟，也不意味着全部动画路径或整帧耗时会按同一比例下降。

@@ -5,7 +5,7 @@ For example, a 170 Hz monitor can draw a frame every ~5.88 ms.
 
 Most of the time, the compositor doesn't actually redraw the monitor: when nothing changes on screen (e.g. you're reading a document and aren't moving your cursor), it would be wasteful to wake up the GPU to composite the same image.
 During an animation however, screen contents do change every frame.
-Each output uses its own presentation clock and adaptive budget from `realand-core`.
+Each output uses its own presentation clock and adaptive budget from `clarion-core`.
 The scheduler predicts a presentation target and reserves time for wake-up, scene work,
 rendering and submission before that target.
 
@@ -17,7 +17,7 @@ corrects the prediction and adjusts the budget for subsequent frames.
 
 The budget retains rollback history while testing smaller reserves, so a short cheap
 part of a periodic workload does not immediately discard a previously working reserve.
-Provisional reductions let it recover after sustained load decreases. These are Realand
+Provisional reductions let it recover after sustained load decreases. These are Clarion
 scheduling policies and are covered by periodic-load and recovery regressions.
 
 With native Vulkan, submitted GPU resources are retired by a completion worker. GPU
@@ -37,12 +37,12 @@ There are hence several properties that a compositor wants from its timing syste
    Also, fetching the current system time [can be quite expensive](https://mastodon.online/@YaLTeR/109934977035721850) in terms of overhead.
 1. It should be reasonably easy to implement an animation slow-down preference, so all animations can be slowed down or sped up by the same factor.
 
-The solution in realand is a `LazyClock`, a clock that remembers one timestamp.
+The solution in clarion is a `LazyClock`, a clock that remembers one timestamp.
 Initially, the timestamp is empty, so when you ask `LazyClock` for the current time, it will fetch and return the system time, and also remember it.
 Subsequently, it will keep returning the same timestamp that it had remembered.
 
 You can also clear the timestamp, then `LazyClock` will fetch the system time anew when it's needed.
-In realand, the timestamp is cleared at the end of every event loop iteration, right before going to sleep waiting for new events.
+In clarion, the timestamp is cleared at the end of every event loop iteration, right before going to sleep waiting for new events.
 This way, anything that happens next (like a user key press) will fetch and use the most up-to-date timestamp as soon as one is needed, but then the processing code will keep getting the exact same timestamp, since `LazyClock` stores it.
 
 For presentation reads, `Clock::project_to()` temporarily projects the clock to an
@@ -58,5 +58,5 @@ works on the underlying `LazyClock` and preserves the rate adjustment.
 That is, overriding the timestamp and then querying the `AdjustableClock` will return a *different* timestamp that is correct and consistent with the adjustments made by `AdjustableClock`.
 This is reflected in the API by naming the function `Clock::set_unadjusted()` (and there's also `Clock::now_unadjusted()` to get the raw timestamp).
 
-The clock is shared among all animations in realand through passing around and storing a reference-counted pointer.
+The clock is shared among all animations in clarion through passing around and storing a reference-counted pointer.
 This way, overriding the time automatically applies to everything, whereas in tests we can use a separate clock per test so that they don't interfere with each other.

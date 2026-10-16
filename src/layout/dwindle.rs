@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use realand_config::utils::MergeWith as _;
-use realand_core::bsp::{BspArrangement, BspSnapshot, BspTree, Direction, PaneMode};
-use realand_core::layout::{BspNode, LiveLayoutPolicy};
-use realand_ipc::{SizeChange, WindowLayout};
+use clarion_config::utils::MergeWith as _;
+use clarion_core::bsp::{BspArrangement, BspSnapshot, BspTree, Direction, PaneMode};
+use clarion_core::layout::{BspNode, LiveLayoutPolicy};
+use clarion_ipc::{SizeChange, WindowLayout};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size};
 
@@ -16,8 +16,8 @@ use super::{
     RemovedTile, RenderLayer, SizingMode,
 };
 use crate::animation::{Animation, Clock};
-use crate::realand_render_elements;
-use crate::render_helpers::renderer::RealandRenderer;
+use crate::clarion_render_elements;
+use crate::render_helpers::renderer::ClarionRenderer;
 use crate::render_helpers::xray::XrayPos;
 use crate::render_helpers::RenderCtx;
 use crate::utils::transaction::Transaction;
@@ -44,12 +44,12 @@ impl SplitDirection {
 }
 
 // Bound session topology independently of protocol/renderer payloads.
-const MAX_SPLIT_DEPTH: usize = realand_ipc::management::MAX_SESSION_TREE_DEPTH;
+const MAX_SPLIT_DEPTH: usize = clarion_ipc::management::MAX_SESSION_TREE_DEPTH;
 
-fn core_rect(rect: Rectangle<f64, Logical>) -> realand_core::Rect {
-    realand_core::Rect::new(rect.loc.x, rect.loc.y, rect.size.w, rect.size.h)
+fn core_rect(rect: Rectangle<f64, Logical>) -> clarion_core::Rect {
+    clarion_core::Rect::new(rect.loc.x, rect.loc.y, rect.size.w, rect.size.h)
 }
-fn platform_rect(rect: realand_core::Rect) -> Rectangle<f64, Logical> {
+fn platform_rect(rect: clarion_core::Rect) -> Rectangle<f64, Logical> {
     Rectangle::new((rect.x, rect.y).into(), (rect.width, rect.height).into())
 }
 
@@ -142,7 +142,7 @@ impl<W: LayoutElement> TileStore<W> {
         let slot = &mut self.slots[idx];
         Some((slot.tile.as_mut(), slot.geometry))
     }
-    fn apply_placement(&mut self, id: &u64, bounds: realand_core::Rect) {
+    fn apply_placement(&mut self, id: &u64, bounds: clarion_core::Rect) {
         let Some(index) = self.core_index.get(id).copied() else {
             return;
         };
@@ -234,7 +234,7 @@ impl<W: LayoutElement> TileStore<W> {
     }
 }
 
-realand_render_elements! {
+clarion_render_elements! {
     DwindleSpaceRenderElement<R> => {
         Tile = TileRenderElement<R>,
         ClosingWindow = ClosingWindowRenderElement,
@@ -252,7 +252,7 @@ pub struct DwindleSpace<W: LayoutElement> {
     scale: f64,
     clock: Clock,
     options: Rc<Options>,
-    interactive_resize: Option<realand_core::bsp::SplitResize>,
+    interactive_resize: Option<clarion_core::bsp::SplitResize>,
 }
 
 impl<W: LayoutElement> DwindleSpace<W> {
@@ -1096,8 +1096,8 @@ impl<W: LayoutElement> DwindleSpace<W> {
         }
         let id = self.core_id(&window).unwrap();
         let size = self.tree.geometry(&id).unwrap().size();
-        self.interactive_resize = Some(realand_core::bsp::SplitResize::new(
-            realand_core::resize::Resize::new(id, size, edges.bits()),
+        self.interactive_resize = Some(clarion_core::bsp::SplitResize::new(
+            clarion_core::resize::Resize::new(id, size, edges.bits()),
         ));
 
         true
@@ -1240,7 +1240,7 @@ impl<W: LayoutElement> DwindleSpace<W> {
     }
 
     /// Render tiles with their decoration elements.
-    pub fn render<R: RealandRenderer>(
+    pub fn render<R: ClarionRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         xray_pos: XrayPos,
@@ -1276,7 +1276,7 @@ impl<W: LayoutElement> DwindleSpace<W> {
 }
 
 fn compute_toplevel_bounds(
-    border_config: realand_config::Border,
+    border_config: clarion_config::Border,
     working_area_size: Size<f64, Logical>,
     extra_size: Size<f64, Logical>,
     gaps: f64,
@@ -1298,8 +1298,8 @@ impl<W: LayoutElement> DwindleSpace<W> {
     pub(super) fn session_tree(
         &self,
         index: &impl Fn(&W::Id) -> usize,
-    ) -> Option<realand_ipc::management::SessionTree> {
-        use realand_ipc::management::SessionTree;
+    ) -> Option<clarion_ipc::management::SessionTree> {
+        use clarion_ipc::management::SessionTree;
         fn encode<I>(node: &BspNode<I>, index: &impl Fn(&I) -> usize) -> SessionTree {
             match node {
                 BspNode::Leaf(id) => SessionTree::Leaf(index(id)),
@@ -1309,7 +1309,7 @@ impl<W: LayoutElement> DwindleSpace<W> {
                     first,
                     second,
                 } => SessionTree::Split {
-                    vertical: *axis == realand_core::Axis::Vertical,
+                    vertical: *axis == clarion_core::Axis::Vertical,
                     ratio: *ratio,
                     first: Box::new(encode(first, index)),
                     second: Box::new(encode(second, index)),
@@ -1358,10 +1358,10 @@ impl<W: LayoutElement> DwindleSpace<W> {
 
     pub(super) fn restore_session_tree(
         &mut self,
-        tree: &realand_ipc::management::SessionTree,
+        tree: &clarion_ipc::management::SessionTree,
         handles: &[Option<W::Id>],
     ) {
-        use realand_ipc::management::SessionTree;
+        use clarion_ipc::management::SessionTree;
         fn decode(node: &SessionTree) -> BspNode<usize> {
             match node {
                 SessionTree::Leaf(index) => BspNode::Leaf(*index),
@@ -1372,9 +1372,9 @@ impl<W: LayoutElement> DwindleSpace<W> {
                     second,
                 } => BspNode::Split {
                     axis: if *vertical {
-                        realand_core::Axis::Vertical
+                        clarion_core::Axis::Vertical
                     } else {
-                        realand_core::Axis::Horizontal
+                        clarion_core::Axis::Horizontal
                     },
                     ratio: *ratio,
                     first: Box::new(decode(first)),

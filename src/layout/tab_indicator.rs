@@ -1,13 +1,13 @@
 use std::iter::zip;
 use std::mem;
 
-use realand_config::{CornerRadius, Gradient, GradientRelativeTo, TabIndicatorPosition};
+use clarion_config::{CornerRadius, Gradient, GradientRelativeTo, TabIndicatorPosition};
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
 use super::tile::Tile;
 use super::LayoutElement;
 use crate::animation::{Animation, Clock};
-use crate::realand_render_elements;
+use crate::clarion_render_elements;
 use crate::render_helpers::border::BorderRenderElement;
 use crate::render_helpers::renderer::DecorationRenderer;
 use crate::utils::{
@@ -19,7 +19,7 @@ pub struct TabIndicator {
     shader_locs: Vec<Point<f64, Logical>>,
     shaders: Vec<BorderRenderElement>,
     open_anim: Option<Animation>,
-    config: realand_config::TabIndicator,
+    config: clarion_config::TabIndicator,
 }
 
 #[derive(Debug)]
@@ -30,14 +30,14 @@ pub struct TabInfo {
     pub geometry: Rectangle<f64, Logical>,
 }
 
-realand_render_elements! {
+clarion_render_elements! {
     TabIndicatorRenderElement => {
         Gradient = BorderRenderElement,
     }
 }
 
 impl TabIndicator {
-    pub fn new(config: realand_config::TabIndicator) -> Self {
+    pub fn new(config: clarion_config::TabIndicator) -> Self {
         Self {
             shader_locs: Vec::new(),
             shaders: Vec::new(),
@@ -46,7 +46,7 @@ impl TabIndicator {
         }
     }
 
-    pub fn update_config(&mut self, config: realand_config::TabIndicator) {
+    pub fn update_config(&mut self, config: clarion_config::TabIndicator) {
         self.config = config;
     }
 
@@ -68,7 +68,7 @@ impl TabIndicator {
         self.open_anim.is_some()
     }
 
-    pub fn start_open_animation(&mut self, clock: Clock, config: realand_config::Animation) {
+    pub fn start_open_animation(&mut self, clock: Clock, config: clarion_config::Animation) {
         if self.config.off {
             return;
         }
@@ -368,7 +368,7 @@ impl TabIndicator {
         }
     }
 
-    pub fn config(&self) -> realand_config::TabIndicator {
+    pub fn config(&self) -> clarion_config::TabIndicator {
         self.config
     }
 }
@@ -379,7 +379,7 @@ impl TabInfo {
         position: Point<f64, Logical>,
         is_active: bool,
         is_urgent: bool,
-        config: &realand_config::TabIndicator,
+        config: &clarion_config::TabIndicator,
     ) -> Self {
         let rules = tile.window().rules();
         let rule = rules.tab_indicator;
@@ -450,7 +450,7 @@ mod tests {
     fn update(indicator: &mut TabIndicator, enabled: bool, count: usize) {
         let area = Rectangle::from_size(Size::new(800., 600.));
         let tabs = (0..count).map(|_| TabInfo {
-            gradient: Gradient::from(realand_config::Color::new_unpremul(1., 1., 1., 1.)),
+            gradient: Gradient::from(clarion_config::Color::new_unpremul(1., 1., 1., 1.)),
             geometry: area,
         });
         indicator.update_render_elements(enabled, area, area, count, tabs, true, 1.);
@@ -461,7 +461,7 @@ mod tests {
         for hidden_by in ["disabled", "off", "single", "empty"] {
             let mut clock = Clock::with_time(Duration::ZERO);
             let mut indicator = TabIndicator::new(Default::default());
-            let animation = realand_config::animations::WindowMovementAnim::default().0;
+            let animation = clarion_config::animations::WindowMovementAnim::default().0;
             indicator.start_open_animation(clock.clone(), animation);
             clock.set_unadjusted(Duration::from_millis(50));
             update(&mut indicator, true, 2);
@@ -487,14 +487,14 @@ mod tests {
 
     #[test]
     fn disabled_indicator_does_not_start_animation() {
-        let config = realand_config::TabIndicator {
+        let config = clarion_config::TabIndicator {
             off: true,
             ..Default::default()
         };
         let mut indicator = TabIndicator::new(config);
         indicator.start_open_animation(
             Clock::with_time(Duration::ZERO),
-            realand_config::animations::WindowMovementAnim::default().0,
+            clarion_config::animations::WindowMovementAnim::default().0,
         );
         assert!(!indicator.are_animations_ongoing());
     }
@@ -505,7 +505,7 @@ mod tests {
             let mut clock = Clock::with_time(Duration::ZERO);
             clock.set_rate(rate);
             let mut indicator = TabIndicator::new(Default::default());
-            let config = realand_config::animations::WindowMovementAnim::default().0;
+            let config = clarion_config::animations::WindowMovementAnim::default().0;
             indicator.start_open_animation(clock.clone(), config);
             clock.set_unadjusted(Duration::from_millis(80));
             let before = indicator.open_anim.as_ref().unwrap();
@@ -532,7 +532,7 @@ mod tests {
         for (prune, rendered) in [(false, false), (false, true), (true, true)] {
             let mut clock = Clock::with_time(Duration::ZERO);
             let mut indicator = TabIndicator::new(Default::default());
-            let config = realand_config::animations::WindowOpenAnim::default().anim;
+            let config = clarion_config::animations::WindowOpenAnim::default().anim;
             indicator.start_open_animation(clock.clone(), config);
             clock.set_unadjusted(Duration::from_secs(10));
             if rendered {
@@ -558,7 +558,7 @@ mod tests {
         update(&mut indicator, false, 2);
         indicator.start_open_animation(
             clock,
-            realand_config::animations::WindowMovementAnim::default().0,
+            clarion_config::animations::WindowMovementAnim::default().0,
         );
         assert_eq!(indicator.open_anim.as_ref().unwrap().value(), 0.);
     }
@@ -573,7 +573,7 @@ mod tests {
         ] {
             let clock = Clock::with_time(Duration::ZERO);
             let mut indicator = TabIndicator::new(Default::default());
-            let config = realand_config::animations::WindowMovementAnim::default().0;
+            let config = clarion_config::animations::WindowMovementAnim::default().0;
             indicator.open_anim = Some(Animation::new(clock.clone(), value, 1., velocity, config));
             indicator.start_open_animation(clock, config);
             let anim = indicator.open_anim.as_ref().unwrap();

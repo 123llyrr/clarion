@@ -20,7 +20,7 @@ varying vec2 v_coords;
 uniform float tint;
 #endif
 
-uniform float realand_scale;
+uniform float clarion_scale;
 
 uniform vec2 geo_size;
 uniform vec4 corner_radius;
@@ -28,15 +28,15 @@ uniform mat3 input_to_geo;
 #define HAS_ROUNDING_POWER
 uniform float rounding_power;
 
-float realand_rounding_alpha(vec2 coords, vec2 size, vec4 corner_radius);
+float clarion_rounding_alpha(vec2 coords, vec2 size, vec4 corner_radius);
 vec4 postprocess(vec4 color);
-vec4 realand_sample_background(vec2 uv);
+vec4 clarion_sample_background(vec2 uv);
 
 void main() {
     vec3 coords_geo = input_to_geo * vec3(v_coords, 1.0);
 
     // Sample the texture.
-    vec4 color = realand_sample_background(v_coords);
+    vec4 color = clarion_sample_background(v_coords);
 #if defined(NO_ALPHA)
     color = vec4(color.rgb, 1.0);
 #endif
@@ -48,7 +48,7 @@ void main() {
         color = vec4(0.0);
     } else {
         // Apply corner rounding inside geometry.
-        color = color * realand_rounding_alpha(coords_geo.xy * geo_size, geo_size, corner_radius);
+        color = color * clarion_rounding_alpha(coords_geo.xy * geo_size, geo_size, corner_radius);
     }
 
     // Apply final alpha and tint.

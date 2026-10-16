@@ -135,7 +135,7 @@ include optional=true "optional-config.kdl"
 include "required-config.kdl"
 ```
 
-When an optional include file is missing, realand will emit a warning in the logs on every config reload.
+When an optional include file is missing, clarion will emit a warning in the logs on every config reload.
 This reminds you that the file is missing while still loading the config successfully.
 
 The optional file is still watched for changes, so if you create it later, the config will automatically reload and apply the new settings.

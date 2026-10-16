@@ -13,15 +13,15 @@ use anyhow::Context;
 use async_channel::{Receiver, Sender, TrySendError};
 use calloop::futures::Scheduler;
 use calloop::io::Async;
-use directories::BaseDirs;
-use futures_util::io::{AsyncReadExt, BufReader};
-use futures_util::{select_biased, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, FutureExt as _};
-use realand_config::OutputName;
-use realand_ipc::state::{EventStreamState, EventStreamStatePart as _};
-use realand_ipc::{
+use clarion_config::OutputName;
+use clarion_ipc::state::{EventStreamState, EventStreamStatePart as _};
+use clarion_ipc::{
     Action, Event, KeyboardLayouts, OutputConfigChanged, Overview, Reply, Request, Response,
     Timestamp, WindowLayout, Workspace,
 };
+use directories::BaseDirs;
+use futures_util::io::{AsyncReadExt, BufReader};
+use futures_util::{select_biased, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, FutureExt as _};
 use smithay::desktop::layer_map_for_output;
 use smithay::input::pointer::{
     CursorIcon, CursorImageStatus, Focus, GrabStartData as PointerGrabStartData,
@@ -47,7 +47,7 @@ const EVENT_STREAM_BUFFER_SIZE: usize = 64;
 // A saved session is capped at 4 MiB by settings; allow JSON escaping overhead.
 // Keep the same bound for every request, reply, and event line so both sides
 // enforce one predictable protocol limit.
-const MAX_IPC_LINE_BYTES: usize = realand_ipc::socket::MAX_LINE_BYTES;
+const MAX_IPC_LINE_BYTES: usize = clarion_ipc::socket::MAX_LINE_BYTES;
 
 pub struct IpcServer {
     /// Path to the IPC socket.
@@ -83,11 +83,11 @@ impl IpcServer {
         event_loop: &LoopHandle<'static, State>,
         wayland_socket_name: Option<&OsStr>,
     ) -> anyhow::Result<Self> {
-        let _span = realand_tracy_span!("Ipc::start");
+        let _span = clarion_tracy_span!("Ipc::start");
 
         let socket_path = if let Some(wayland_socket_name) = wayland_socket_name {
             let wayland_socket_name = wayland_socket_name.to_string_lossy();
-            let socket_name = format!("realand.{wayland_socket_name}.{}.sock", process::id());
+            let socket_name = format!("clarion.{wayland_socket_name}.{}.sock", process::id());
             let mut socket_path = socket_dir();
             socket_path.push(socket_name);
 
@@ -145,7 +145,7 @@ impl IpcServer {
     }
 
     #[cfg(test)]
-    pub(crate) fn test_windows(&self) -> Vec<realand_ipc::Window> {
+    pub(crate) fn test_windows(&self) -> Vec<clarion_ipc::Window> {
         self.event_stream_state
             .borrow()
             .windows
@@ -188,7 +188,7 @@ fn bind_private_socket(socket_path: &Path) -> anyhow::Result<UnixListener> {
 }
 
 fn on_new_ipc_client(state: &mut State, stream: UnixStream) {
-    let _span = realand_tracy_span!("on_new_ipc_client");
+    let _span = clarion_tracy_span!("on_new_ipc_client");
     // A connection can be queued between bind() and chmod(), particularly
     // when the endpoint is in /tmp. Authenticate the accepted peer as well.
     if let Err(err) = check_ipc_peer(&stream) {
@@ -197,7 +197,7 @@ fn on_new_ipc_client(state: &mut State, stream: UnixStream) {
     }
     trace!("new IPC client connected");
 
-    let stream = match state.realand.event_loop.adapt_io(stream) {
+    let stream = match state.clarion.event_loop.adapt_io(stream) {
         Ok(stream) => stream,
         Err(err) => {
             warn!("error making IPC stream async: {err:?}");
@@ -205,12 +205,12 @@ fn on_new_ipc_client(state: &mut State, stream: UnixStream) {
         }
     };
 
-    let ipc_server = state.realand.ipc_server.as_ref().unwrap();
+    let ipc_server = state.clarion.ipc_server.as_ref().unwrap();
 
     let ctx = ClientCtx {
-        owned_tasks: state.realand.owned_tasks.clone(),
-        event_loop: state.realand.event_loop.clone(),
-        scheduler: state.realand.scheduler.clone(),
+        owned_tasks: state.clarion.owned_tasks.clone(),
+        event_loop: state.clarion.event_loop.clone(),
+        scheduler: state.clarion.scheduler.clone(),
         ipc_outputs: state.backend.ipc_outputs(),
         event_streams: ipc_server.event_streams.clone(),
         event_stream_state: ipc_server.event_stream_state.clone(),
@@ -221,7 +221,7 @@ fn on_new_ipc_client(state: &mut State, stream: UnixStream) {
             warn!("error handling IPC client: {err:?}");
         }
     };
-    if let Err(err) = state.realand.scheduler.schedule(future) {
+    if let Err(err) = state.clarion.scheduler.schedule(future) {
         warn!("error scheduling IPC stream future: {err:?}");
     }
 }
@@ -380,7 +380,7 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
         Request::FrameTimings => {
             let (tx, rx) = async_channel::bounded(1);
             ctx.event_loop.insert_idle(move |state| {
-                let _ = tx.send_blocking(state.realand.frame_timings());
+                let _ = tx.send_blocking(state.clarion.frame_timings());
             });
             Response::FrameTimings(rx.recv().await.map_err(|e| e.to_string())?)
         }
@@ -402,9 +402,9 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
         Request::ManagementState => {
             let (tx, rx) = async_channel::bounded(1);
             ctx.event_loop.insert_idle(move |state| {
-                let layout = &state.realand.layout;
+                let layout = &state.clarion.layout;
                 let (groups, undo_steps, redo_steps) = layout.management_status();
-                let result = realand_ipc::management::ManagementState {
+                let result = clarion_ipc::management::ManagementState {
                     groups,
                     undo_steps,
                     redo_steps,
@@ -424,29 +424,29 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             let (tx, rx) = async_channel::bounded(1);
             ctx.event_loop.insert_idle(move |state| {
                 let mut layers = Vec::new();
-                for output in state.realand.global_space.outputs() {
+                for output in state.clarion.global_space.outputs() {
                     let name = output.name();
                     for surface in layer_map_for_output(output).layers() {
                         let layer = match surface.layer() {
-                            Layer::Background => realand_ipc::Layer::Background,
-                            Layer::Bottom => realand_ipc::Layer::Bottom,
-                            Layer::Top => realand_ipc::Layer::Top,
-                            Layer::Overlay => realand_ipc::Layer::Overlay,
+                            Layer::Background => clarion_ipc::Layer::Background,
+                            Layer::Bottom => clarion_ipc::Layer::Bottom,
+                            Layer::Top => clarion_ipc::Layer::Top,
+                            Layer::Overlay => clarion_ipc::Layer::Overlay,
                         };
                         let keyboard_interactivity =
                             match surface.cached_state().keyboard_interactivity {
                                 KeyboardInteractivity::None => {
-                                    realand_ipc::LayerSurfaceKeyboardInteractivity::None
+                                    clarion_ipc::LayerSurfaceKeyboardInteractivity::None
                                 }
                                 KeyboardInteractivity::Exclusive => {
-                                    realand_ipc::LayerSurfaceKeyboardInteractivity::Exclusive
+                                    clarion_ipc::LayerSurfaceKeyboardInteractivity::Exclusive
                                 }
                                 KeyboardInteractivity::OnDemand => {
-                                    realand_ipc::LayerSurfaceKeyboardInteractivity::OnDemand
+                                    clarion_ipc::LayerSurfaceKeyboardInteractivity::OnDemand
                                 }
                             };
 
-                        layers.push(realand_ipc::LayerSurface {
+                        layers.push(clarion_ipc::LayerSurface {
                             namespace: surface.namespace().to_owned(),
                             output: name.clone(),
                             layer,
@@ -476,7 +476,7 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
         Request::PickWindow => {
             let (tx, rx) = async_channel::bounded(1);
             ctx.event_loop.insert_idle(move |state| {
-                let pointer = state.realand.seat.get_pointer().unwrap();
+                let pointer = state.clarion.seat.get_pointer().unwrap();
                 let start_data = PointerGrabStartData {
                     focus: None,
                     button: 0,
@@ -486,13 +486,13 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
                 // The `WindowPickGrab` ungrab handler will cancel the previous ongoing pick, if
                 // any.
                 pointer.set_grab(state, grab, SERIAL_COUNTER.next_serial(), Focus::Clear);
-                state.realand.pick_window = Some(tx);
+                state.clarion.pick_window = Some(tx);
                 state
-                    .realand
+                    .clarion
                     .cursor_manager
                     .set_cursor_image(CursorImageStatus::Named(CursorIcon::Crosshair));
                 // Redraw to update the cursor.
-                state.realand.queue_redraw_all();
+                state.clarion.queue_redraw_all();
             });
             let result = rx.recv().await;
             let id = result.map_err(|_| String::from("error getting picked window info"))?;
@@ -535,13 +535,13 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
                         } else {
                             None
                         };
-                        Ok((realand_config::Action::from(action), session))
+                        Ok((clarion_config::Action::from(action), session))
                     })?
                     .finish()
                     .await?
             } else {
                 validate_action(&action)?;
-                (realand_config::Action::from(action), None)
+                (clarion_config::Action::from(action), None)
             };
 
             let (tx, rx) = async_channel::bounded(1);
@@ -549,7 +549,7 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             ctx.event_loop.insert_idle(move |state| {
                 // Make sure some logic like workspace clean-up has a chance to run before doing
                 // actions.
-                state.realand.advance_animations();
+                state.clarion.advance_animations();
                 let result = if let Some(session) = session {
                     state.apply_session_layout_restore(
                         restore_token.expect("prepared session token"),
@@ -630,7 +630,7 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             let (tx, rx) = async_channel::bounded(1);
             ctx.event_loop.insert_idle(move |state| {
                 let active_output = state
-                    .realand
+                    .clarion
                     .layout
                     .active_output()
                     .map(|output| output.name());
@@ -670,11 +670,11 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
 
 pub(crate) fn parse_session_layout(
     json: &str,
-) -> Result<realand_ipc::management::SessionLayout, String> {
+) -> Result<clarion_ipc::management::SessionLayout, String> {
     if json.len() > 4 * 1024 * 1024 {
         return Err("会话文件过大".into());
     }
-    let session: realand_ipc::management::SessionLayout =
+    let session: clarion_ipc::management::SessionLayout =
         serde_json::from_str(json).map_err(|e| e.to_string())?;
     session.validate()?;
     Ok(session)
@@ -704,7 +704,7 @@ fn validate_action(action: &Action) -> Result<(), String> {
     | Action::LoadConfigFile { path } = action
     {
         if let Some(path) = path {
-            // Relative paths are resolved against the realand compositor's working directory, which
+            // Relative paths are resolved against the clarion compositor's working directory, which
             // is almost certainly not what you want.
             if !Path::new(path).is_absolute() {
                 return Err(format!("path must be absolute: {path}"));
@@ -752,14 +752,14 @@ fn make_ipc_window(
     mapped: &Mapped,
     workspace_id: Option<WorkspaceId>,
     layout: WindowLayout,
-) -> realand_ipc::Window {
+) -> clarion_ipc::Window {
     // Reading SurfaceData inside with_toplevel_role would acquire the same
     // Smithay surface mutex twice and deadlock IPC/focus refresh.
     let gtk_app_menu =
         crate::handlers::gtk_shell::surface_menu(mapped.toplevel().wl_surface()).map(Box::new);
     let app_menu =
         crate::handlers::qt_app_menu::surface_menu(mapped.toplevel().wl_surface()).map(Box::new);
-    with_toplevel_role(mapped.toplevel(), |role| realand_ipc::Window {
+    with_toplevel_role(mapped.toplevel(), |role| clarion_ipc::Window {
         id: mapped.id().get(),
         title: role.title.clone(),
         app_id: role.app_id.clone(),
@@ -778,7 +778,7 @@ fn make_ipc_window(
 
 impl State {
     pub fn ipc_keyboard_layouts_changed(&mut self) {
-        let keyboard = self.realand.seat.get_keyboard().unwrap();
+        let keyboard = self.clarion.seat.get_keyboard().unwrap();
         let keyboard_layouts = keyboard.with_xkb_state(self, |context| {
             let xkb = context.xkb().lock().unwrap();
             let layouts = xkb.layouts();
@@ -790,7 +790,7 @@ impl State {
             }
         });
 
-        let Some(server) = &self.realand.ipc_server else {
+        let Some(server) = &self.clarion.ipc_server else {
             return;
         };
 
@@ -803,13 +803,13 @@ impl State {
     }
 
     pub fn ipc_refresh_keyboard_layout_index(&mut self) {
-        let keyboard = self.realand.seat.get_keyboard().unwrap();
+        let keyboard = self.clarion.seat.get_keyboard().unwrap();
         let idx = keyboard.with_xkb_state(self, |context| {
             let xkb = context.xkb().lock().unwrap();
             xkb.active_layout().0 as u8
         });
 
-        let Some(server) = &self.realand.ipc_server else {
+        let Some(server) = &self.clarion.ipc_server else {
             return;
         };
 
@@ -832,17 +832,17 @@ impl State {
     }
 
     fn ipc_refresh_workspaces(&mut self) {
-        let Some(server) = &self.realand.ipc_server else {
+        let Some(server) = &self.clarion.ipc_server else {
             return;
         };
 
-        let _span = realand_tracy_span!("State::ipc_refresh_workspaces");
+        let _span = clarion_tracy_span!("State::ipc_refresh_workspaces");
 
         let mut state = server.event_stream_state.borrow_mut();
         let state = &mut state.workspaces;
 
         let mut events = Vec::new();
-        let layout = &self.realand.layout;
+        let layout = &self.clarion.layout;
         let focused_ws_id = layout.active_workspace().map(|ws| ws.id().get());
 
         // Check for workspace changes.
@@ -931,17 +931,17 @@ impl State {
     }
 
     pub(crate) fn ipc_refresh_windows(&mut self) {
-        let Some(server) = &self.realand.ipc_server else {
+        let Some(server) = &self.clarion.ipc_server else {
             return;
         };
 
-        let _span = realand_tracy_span!("State::ipc_refresh_windows");
+        let _span = clarion_tracy_span!("State::ipc_refresh_windows");
 
         let mut state = server.event_stream_state.borrow_mut();
         let state = &mut state.windows;
 
         let mut events = Vec::new();
-        let layout = &self.realand.layout;
+        let layout = &self.clarion.layout;
 
         let mut batch_change_layouts: Vec<(u64, WindowLayout)> = Vec::new();
 
@@ -1043,13 +1043,13 @@ impl State {
     }
 
     pub fn ipc_refresh_overview(&mut self) {
-        let Some(server) = &self.realand.ipc_server else {
+        let Some(server) = &self.clarion.ipc_server else {
             return;
         };
 
         let mut state = server.event_stream_state.borrow_mut();
         let state = &mut state.overview;
-        let is_open = self.realand.layout.is_overview_open();
+        let is_open = self.clarion.layout.is_overview_open();
 
         if state.is_open == is_open {
             return;
@@ -1061,11 +1061,11 @@ impl State {
     }
 
     pub fn ipc_refresh_casts(&mut self) {
-        let Some(server) = &self.realand.ipc_server else {
+        let Some(server) = &self.clarion.ipc_server else {
             return;
         };
 
-        let _span = realand_tracy_span!("State::ipc_refresh_casts");
+        let _span = clarion_tracy_span!("State::ipc_refresh_casts");
 
         let mut state = server.event_stream_state.borrow_mut();
         let state = &mut state.casts;
@@ -1077,18 +1077,18 @@ impl State {
         #[cfg(feature = "xdp-gnome-screencast")]
         {
             // Check pending dynamic casts.
-            for pending in &self.realand.casting.pending_dynamic_casts {
+            for pending in &self.clarion.casting.pending_dynamic_casts {
                 let stream_id = pending.stream_id.get();
                 seen.insert(stream_id);
 
                 // Pending dynamic casts don't change any properties, so we only need to check if
                 // it's missing from the state.
                 if !state.casts.contains_key(&stream_id) {
-                    let cast = realand_ipc::Cast {
+                    let cast = clarion_ipc::Cast {
                         session_id: pending.session_id.get(),
                         stream_id,
-                        kind: realand_ipc::CastKind::PipeWire,
-                        target: realand_ipc::CastTarget::Nothing {},
+                        kind: clarion_ipc::CastKind::PipeWire,
+                        target: clarion_ipc::CastTarget::Nothing {},
                         is_dynamic_target: true,
                         is_active: false,
                         pid: None,
@@ -1099,7 +1099,7 @@ impl State {
             }
 
             // Check active casts.
-            for cast in &self.realand.casting.casts {
+            for cast in &self.clarion.casting.casts {
                 let stream_id = cast.stream_id.get();
                 seen.insert(stream_id);
 
@@ -1110,10 +1110,10 @@ impl State {
                         || !cast.target.matches(&existing.target)
                         || existing.pw_node_id != pw_node_id
                 }) {
-                    let cast = realand_ipc::Cast {
+                    let cast = clarion_ipc::Cast {
                         session_id: cast.session_id.get(),
                         stream_id,
-                        kind: realand_ipc::CastKind::PipeWire,
+                        kind: clarion_ipc::CastKind::PipeWire,
                         target: cast.target.make_ipc(),
                         is_dynamic_target: cast.dynamic_target,
                         is_active: cast.is_active(),
@@ -1129,9 +1129,9 @@ impl State {
         //
         // First, clear expired casts. Ideally we'd have a deadline timer, but our 1 second frame
         // callback timer calls refresh regularly, so that's fine as is.
-        self.realand.screencopy_state.clear_expired_casts();
+        self.clarion.screencopy_state.clear_expired_casts();
 
-        for queue in self.realand.screencopy_state.queues() {
+        for queue in self.clarion.screencopy_state.queues() {
             if let Some(cast_info) = queue.cast() {
                 let stream_id = cast_info.stream_id.get();
                 seen.insert(stream_id);
@@ -1139,15 +1139,15 @@ impl State {
                 if state.casts.get(&stream_id).is_none_or(|existing| {
                     // Only this property can change.
                     match &existing.target {
-                        realand_ipc::CastTarget::Output { name } => *name != cast_info.output_name,
+                        clarion_ipc::CastTarget::Output { name } => *name != cast_info.output_name,
                         _ => true,
                     }
                 }) {
-                    let cast = realand_ipc::Cast {
+                    let cast = clarion_ipc::Cast {
                         session_id: cast_info.session_id.get(),
                         stream_id,
-                        kind: realand_ipc::CastKind::WlrScreencopy,
-                        target: realand_ipc::CastTarget::Output {
+                        kind: clarion_ipc::CastKind::WlrScreencopy,
+                        target: clarion_ipc::CastTarget::Output {
                             name: cast_info.output_name.clone(),
                         },
                         is_dynamic_target: false,
@@ -1176,7 +1176,7 @@ impl State {
     }
 
     pub fn ipc_config_loaded(&mut self, failed: bool) {
-        let Some(server) = &self.realand.ipc_server else {
+        let Some(server) = &self.clarion.ipc_server else {
             return;
         };
         let mut state = server.event_stream_state.borrow_mut();
@@ -1187,7 +1187,7 @@ impl State {
     }
 
     pub fn ipc_screenshot_taken(&mut self, path: Option<String>) {
-        let Some(server) = &self.realand.ipc_server else {
+        let Some(server) = &self.clarion.ipc_server else {
             return;
         };
         let mut state = server.event_stream_state.borrow_mut();
@@ -1195,6 +1195,122 @@ impl State {
         let event = Event::ScreenshotCaptured { path };
         state.apply(event.clone());
         server.send_event(event);
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use std::io::{Read as _, Write as _};
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::time::{Duration, Instant};
+
+    use calloop::EventLoop;
+    use clarion_config::Config;
+    use smithay::reexports::wayland_server::Display;
+
+    use super::*;
+
+    fn assert_pending_clients_released(teardown: impl FnOnce(EventLoop<'static, State>, State)) {
+        let mut event_loop = EventLoop::try_new().unwrap();
+        let mut state = State::new(
+            Config::default(),
+            event_loop.handle(),
+            event_loop.get_signal(),
+            Display::new().unwrap(),
+            true,
+            false,
+            false,
+            crate::backend::RendererBackendType::Gles,
+        )
+        .unwrap();
+        let weak_loop = event_loop.handle().downgrade();
+        let scheduler = state.clarion.scheduler.clone();
+
+        // Exercise real peer authentication, Async IO, the production scheduler
+        // and both IPC futures. Keep clients open when dispatch stops.
+        let (mut partial_request, server) = UnixStream::pair().unwrap();
+        partial_request.write_all(b"\"Vers").unwrap();
+        on_new_ipc_client(&mut state, server);
+        let (mut event_stream, server) = UnixStream::pair().unwrap();
+        event_stream.write_all(b"\"EventStream\"\n").unwrap();
+        on_new_ipc_client(&mut state, server);
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while state
+            .clarion
+            .ipc_server
+            .as_ref()
+            .unwrap()
+            .event_streams
+            .borrow()
+            .is_empty()
+        {
+            assert!(
+                Instant::now() < deadline,
+                "real IPC event stream did not open"
+            );
+            event_loop
+                .dispatch(Duration::from_millis(1), &mut state)
+                .unwrap();
+        }
+        // The stream task was queued by the request task; poll it into its
+        // pending IO/channel wait before stopping the loop.
+        event_loop.dispatch(Duration::ZERO, &mut state).unwrap();
+
+        // Leave a transaction ping undispatched too. Its callback must not
+        // independently keep the source slab alive after owner teardown.
+        let transaction = crate::utils::transaction::Transaction::new();
+        transaction.register_deadline_timer(&event_loop.handle());
+        drop(transaction);
+
+        teardown(event_loop, state);
+
+        assert!(
+            scheduler.schedule(async {}).is_err(),
+            "the stopped executor must cancel futures and reject later scheduling"
+        );
+        partial_request.set_nonblocking(true).unwrap();
+        assert_eq!(
+            partial_request.read(&mut [0; 1]).unwrap(),
+            0,
+            "teardown must close the pending half-line request without another dispatch"
+        );
+        assert!(
+            weak_loop.expired(),
+            "cancelled IPC Async objects and transaction callbacks must release LoopInner"
+        );
+        // event_stream is deliberately kept open until after the lifetime checks.
+        drop(event_stream);
+    }
+
+    #[test]
+    fn explicit_shutdown_cancels_active_ipc_before_loop_drop() {
+        assert_pending_clients_released(|event_loop, mut state| {
+            state.prepare_shutdown();
+            state.prepare_shutdown();
+            drop(state);
+            drop(event_loop);
+        });
+    }
+
+    #[test]
+    fn owner_drop_cancels_active_ipc_before_loop_drop() {
+        assert_pending_clients_released(|event_loop, state| {
+            drop(state);
+            drop(event_loop);
+        });
+    }
+
+    #[test]
+    fn unwind_cancels_active_ipc_without_source_borrow_reentry() {
+        assert_pending_clients_released(|event_loop, state| {
+            let result = catch_unwind(AssertUnwindSafe(move || {
+                let _event_loop = event_loop;
+                let _state = state;
+                panic!("injected owner unwind with active IPC");
+            }));
+            assert!(result.is_err());
+        });
     }
 }
 
@@ -1281,7 +1397,7 @@ mod socket_tests {
             .as_nanos();
         let suffix = NEXT_SOCKET_ID.fetch_add(1, Ordering::Relaxed);
         let path = env::temp_dir().join(format!(
-            "realand-ipc-permissions-{}-{nonce}-{suffix}.sock",
+            "clarion-ipc-permissions-{}-{nonce}-{suffix}.sock",
             process::id()
         ));
 

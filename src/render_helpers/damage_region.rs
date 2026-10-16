@@ -1,6 +1,6 @@
-//! Platform rectangle conversion for Realand's shared scene region policy.
+//! Platform rectangle conversion for Clarion's shared scene region policy.
 
-use realand_core::region::PixelRectangle;
+use clarion_core::region::PixelRectangle;
 use smithay::utils::{Rectangle, Size};
 
 struct Coordinates<K>(std::marker::PhantomData<K>);
@@ -14,18 +14,18 @@ impl<K> PixelRectangle for Coordinates<K> {
     }
 }
 
-pub(super) type DamageRegions<K> = realand_core::region::DamageRegions<Rectangle<i32, K>>;
+pub(super) type DamageRegions<K> = clarion_core::region::DamageRegions<Rectangle<i32, K>>;
 
 #[cfg(test)]
 fn clipped<K>(rect: Rectangle<i32, K>, size: Size<i32, K>) -> Option<Rectangle<i32, K>> {
-    realand_core::region::clipped::<Coordinates<K>>(rect, [size.w, size.h])
+    clarion_core::region::clipped::<Coordinates<K>>(rect, [size.w, size.h])
 }
 
 pub(super) fn disjoint_damage<K>(
     damage: &[Rectangle<i32, K>],
     size: Size<i32, K>,
 ) -> DamageRegions<K> {
-    realand_core::region::disjoint_damage::<Coordinates<K>>(damage, [size.w, size.h])
+    clarion_core::region::disjoint_damage::<Coordinates<K>>(damage, [size.w, size.h])
 }
 
 #[cfg(test)]

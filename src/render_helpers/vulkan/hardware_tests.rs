@@ -1,5 +1,6 @@
 //! Opt-in real GPU regression tests. No display master or running session is required.
 
+mod lifecycle;
 mod yuv_cold;
 
 #[cfg(test)]
@@ -284,7 +285,7 @@ mod resize_capture_regressions {
         use crate::render_helpers::solid_color::SolidColorBuffer;
         use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
         use crate::render_helpers::{BakedBuffer, RenderCtx};
-        use realand_config::BlockOutFrom;
+        use clarion_config::BlockOutFrom;
         use smithay::backend::renderer::element::Kind;
         use smithay::backend::renderer::ImportDma;
 
@@ -393,8 +394,8 @@ pub(crate) fn setup() -> (
     GlesRenderer,
     GbmAllocator<Arc<std::fs::File>>,
 ) {
-    let path = std::env::var("REALAND_VULKAN_TEST_NODE")
-        .expect("set REALAND_VULKAN_TEST_NODE to a render node");
+    let path = std::env::var("CLARION_VULKAN_TEST_NODE")
+        .expect("set CLARION_VULKAN_TEST_NODE to a render node");
     let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -456,7 +457,7 @@ fn intel_primary_node(ctx: &VulkanContext) -> Option<std::path::PathBuf> {
     if vendor != 0x8086 {
         return None;
     }
-    let selected = DrmNode::from_path(std::env::var_os("REALAND_VULKAN_TEST_NODE")?).ok()?;
+    let selected = DrmNode::from_path(std::env::var_os("CLARION_VULKAN_TEST_NODE")?).ok()?;
     let primary = selected.node_with_type(NodeType::Primary)?.ok()?;
     let device = |node: &DrmNode| {
         std::fs::canonicalize(format!(
@@ -751,6 +752,11 @@ fn native_idle_gpu_completion(teardown_before_completion: bool) {
     let (vk, _gles, _allocator) = setup();
     let ctx = vk.ctx.as_ref().unwrap().clone();
     let mut renderer = NativeRenderer::new(vk).unwrap();
+    // This fixture exercises prepared rendering; wait on the bounded test-only
+    // preparer before its pixel, timing or ownership assertions begin.
+    renderer
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let mut event_loop = smithay::reexports::calloop::EventLoop::<()>::try_new().unwrap();
     renderer
         .install_completion_wakeup(&event_loop.handle())
@@ -3328,7 +3334,7 @@ mod shm_protocol {
         let parent = compositor.create_surface(&qh, ());
         let child = compositor.create_surface(&qh, ());
         let _subsurface = subcompositor.get_subsurface(&child, &parent, &qh, ());
-        let fd = unsafe { libc::memfd_create(c"realand-sync-child".as_ptr(), libc::MFD_CLOEXEC) };
+        let fd = unsafe { libc::memfd_create(c"clarion-sync-child".as_ptr(), libc::MFD_CLOEXEC) };
         assert!(fd >= 0);
         let file = unsafe { std::fs::File::from_raw_fd(fd) };
         file.set_len(128).unwrap();
@@ -3404,7 +3410,7 @@ mod shm_protocol {
         let compositor: wl_compositor::WlCompositor =
             registry.bind(client_state.compositor.unwrap(), 2, &qh, ());
         let client_surface = compositor.create_surface(&qh, ());
-        let fd = unsafe { libc::memfd_create(c"realand-shm-test".as_ptr(), libc::MFD_CLOEXEC) };
+        let fd = unsafe { libc::memfd_create(c"clarion-shm-test".as_ptr(), libc::MFD_CLOEXEC) };
         assert!(fd >= 0);
         let file = unsafe { std::fs::File::from_raw_fd(fd) };
         file.set_len(512).unwrap();
@@ -3636,7 +3642,7 @@ mod shm_protocol {
                     Transform::Flipped270,
                 ] {
                     let geometry = Rectangle::new((1., 0.5).into(), (6., 3.).into());
-                    let radius = realand_config::CornerRadius {
+                    let radius = clarion_config::CornerRadius {
                         top_left: 1.,
                         top_right: 1.5,
                         bottom_right: 0.5,
@@ -4168,6 +4174,11 @@ fn native_lazy_snapshot_composition_and_privacy_branches() {
     };
     let (vk, _oracle, _allocator) = setup();
     let mut renderer = NativeRenderer::new(vk).unwrap();
+    // This fixture exercises prepared rendering; wait on the bounded test-only
+    // preparer before its pixel, timing or ownership assertions begin.
+    renderer
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let baked = |color: [f32; 4], x: f64, width: f64| BakedBuffer {
         buffer: SolidColorBuffer::new((width, 2.), color),
         location: (x, 3.).into(),
@@ -4191,7 +4202,7 @@ fn native_lazy_snapshot_composition_and_privacy_branches() {
         RenderTarget::ScreenCapture,
     ] {
         if target == RenderTarget::ScreenCapture {
-            snapshot.block_out_from = Some(realand_config::BlockOutFrom::ScreenCapture);
+            snapshot.block_out_from = Some(clarion_config::BlockOutFrom::ScreenCapture);
         }
         let (texture, geo) = snapshot
             .texture(
@@ -4520,7 +4531,7 @@ fn native_frozen_snapshot_queues_copies_and_draws_without_cpu_wait() {
         if target == RenderTarget::ScreenCapture {
             // ScreenCapture blocking also masks screencasts. Enable it only
             // for the last draw so this test samples all three cache branches.
-            snapshot.block_out_from = Some(realand_config::BlockOutFrom::ScreenCapture);
+            snapshot.block_out_from = Some(clarion_config::BlockOutFrom::ScreenCapture);
         }
         let (texture, _) = snapshot
             .texture(
@@ -4798,7 +4809,7 @@ fn native_config_notification_matches_gles() {
     clock.set_complete_instantly(true);
     let mut notification = ConfigErrorNotification::new(
         clock,
-        Rc::new(RefCell::new(realand_config::Config::default())),
+        Rc::new(RefCell::new(clarion_config::Config::default())),
     );
     let output = Output::new(
         "notification-test".into(),
@@ -4822,7 +4833,7 @@ fn native_config_notification_matches_gles() {
         );
         for created in [true, false] {
             if created {
-                notification.show_created(Path::new("/tmp/realand/config.kdl"));
+                notification.show_created(Path::new("/tmp/clarion/config.kdl"));
             } else {
                 notification.show();
             }
@@ -4883,10 +4894,10 @@ fn native_hotkeys_and_exit_dialog_match_gles() {
 
     let (vk, mut reference, _) = setup();
     let mut native = native::NativeRenderer::new(vk).unwrap();
-    let config = Rc::new(RefCell::new(realand_config::Config::default()));
+    let config = Rc::new(RefCell::new(clarion_config::Config::default()));
     let mut clock = Clock::with_time(Duration::ZERO);
     let mut dialog = ExitConfirmDialog::new(clock.clone(), config.clone());
-    let mut hotkeys = HotkeyOverlay::new(config, realand_config::ModKey::Super);
+    let mut hotkeys = HotkeyOverlay::new(config, clarion_config::ModKey::Super);
     let output = Output::new(
         "ui-test".into(),
         PhysicalProperties {
@@ -4939,7 +4950,7 @@ fn native_hotkeys_and_exit_dialog_match_gles() {
             .zip(&expected_pixels)
             .all(|(a, b)| a.abs_diff(*b) <= 2));
         assert!(actual_pixels.as_chunks::<4>().0.iter().any(|p| p[3] > 100));
-        hotkeys.on_hotkey_config_updated(realand_config::ModKey::Alt);
+        hotkeys.on_hotkey_config_updated(clarion_config::ModKey::Alt);
         assert_ne!(
             actual.id(),
             hotkeys.render_with(&mut native, &output).unwrap().id()
@@ -5007,7 +5018,7 @@ fn native_hotkeys_and_exit_dialog_match_gles() {
 #[ignore = "requires real DRM render node, Vulkan and GLES reference"]
 fn native_border_element_gradients_crop_and_transforms() {
     use crate::render_helpers::{border::BorderRenderElement, render_to_vec, resources, shaders};
-    use realand_config::{
+    use clarion_config::{
         Color, CornerRadius, GradientColorSpace, GradientInterpolation, HueInterpolation,
     };
     use smithay::backend::renderer::element::{Element, RenderElement};
@@ -5169,7 +5180,7 @@ fn native_border_element_gradients_crop_and_transforms() {
 #[ignore = "requires real DRM render node, Vulkan and GLES reference"]
 fn native_shadow_element_blur_cutout_and_transforms() {
     use crate::render_helpers::{render_to_vec, resources, shaders, shadow::ShadowRenderElement};
-    use realand_config::{Color, CornerRadius};
+    use clarion_config::{Color, CornerRadius};
     use smithay::backend::renderer::element::{Element, RenderElement};
     let (vk, mut reference, _) = setup();
     let mut native = native::NativeRenderer::new(vk).unwrap();
@@ -5339,7 +5350,7 @@ fn native_layout_decorations_match_gles() {
         shadow::Shadow,
     };
     use crate::render_helpers::{render_to_vec, resources, shaders};
-    use realand_config::{Color, CornerRadius, Gradient, GradientRelativeTo};
+    use clarion_config::{Color, CornerRadius, Gradient, GradientRelativeTo};
     use std::time::Duration;
     let (vk, mut reference, _) = setup();
     let mut native = native::NativeRenderer::new(vk).unwrap();
@@ -5348,13 +5359,13 @@ fn native_layout_decorations_match_gles() {
     let mut gradient = Gradient::from(Color::new_unpremul(0.8, 0.2, 0.1, 0.8));
     gradient.to = Color::new_unpremul(0.1, 0.6, 0.8, 0.6);
     gradient.relative_to = GradientRelativeTo::WorkspaceView;
-    gradient.rotate_deg_per_sec = Some(realand_config::FloatOrInt(45.));
-    let mut focus = FocusRing::new(realand_config::FocusRing {
+    gradient.rotate_deg_per_sec = Some(clarion_config::FloatOrInt(45.));
+    let mut focus = FocusRing::new(clarion_config::FocusRing {
         active_gradient: Some(gradient),
         urgent_gradient: Some(gradient),
         ..Default::default()
     });
-    let mut shadow = Shadow::new(realand_config::Shadow {
+    let mut shadow = Shadow::new(clarion_config::Shadow {
         on: true,
         softness: 8.,
         spread: 2.,
@@ -5467,11 +5478,11 @@ fn native_layout_decorations_match_gles() {
             );
         }
     }
-    focus.update_config(realand_config::FocusRing {
+    focus.update_config(clarion_config::FocusRing {
         off: true,
         ..Default::default()
     });
-    shadow.update_config(realand_config::Shadow::default());
+    shadow.update_config(clarion_config::Shadow::default());
     focus.render(&mut native, (0., 0.).into(), &mut |_| {
         panic!("disabled focus ring rendered")
     });
@@ -5492,7 +5503,7 @@ fn native_tabs_and_insert_hints_match_gles() {
         tab_indicator::{TabIndicator, TabInfo},
     };
     use crate::render_helpers::{render_to_vec, resources, shaders};
-    use realand_config::{Color, CornerRadius, Gradient, GradientRelativeTo, TabIndicatorPosition};
+    use clarion_config::{Color, CornerRadius, Gradient, GradientRelativeTo, TabIndicatorPosition};
     use std::time::Duration;
     let (vk, mut reference, _) = setup();
     let mut native = native::NativeRenderer::new(vk).unwrap();
@@ -5513,7 +5524,7 @@ fn native_tabs_and_insert_hints_match_gles() {
             TabIndicatorPosition::Bottom,
         ] {
             for gap in [0., 2.] {
-                let config = realand_config::TabIndicator {
+                let config = clarion_config::TabIndicator {
                     position,
                     gaps_between_tabs: gap,
                     corner_radius: 3.,
@@ -5525,7 +5536,7 @@ fn native_tabs_and_insert_hints_match_gles() {
                 clock.set_unadjusted(Duration::ZERO);
                 tabs.start_open_animation(
                     clock.clone(),
-                    realand_config::Config::default()
+                    clarion_config::Config::default()
                         .animations
                         .window_movement
                         .0,
@@ -5596,7 +5607,7 @@ fn native_tabs_and_insert_hints_match_gles() {
                 });
             }
         }
-        let mut hint = InsertHintElement::new(realand_config::InsertHint {
+        let mut hint = InsertHintElement::new(clarion_config::InsertHint {
             gradient: Some(gradient),
             ..Default::default()
         });
@@ -5625,7 +5636,7 @@ fn native_tabs_and_insert_hints_match_gles() {
         )
         .unwrap();
         assert!(a.iter().zip(&b).all(|(a, b)| a.abs_diff(*b) <= 3));
-        hint.update_config(realand_config::InsertHint {
+        hint.update_config(clarion_config::InsertHint {
             off: true,
             ..Default::default()
         });
@@ -6344,7 +6355,7 @@ fn native_framebuffer_effect_blur_noise_saturation_and_opaque_capture() {
         framebuffer_effect::{FramebufferEffect, FramebufferEffectElement, NativeInner},
         resources, shaders,
     };
-    use realand_config::CornerRadius;
+    use clarion_config::CornerRadius;
     use smithay::backend::renderer::element::{Element, RenderElement};
     use smithay::backend::renderer::{Frame, ImportMem, Texture};
     use smithay::utils::user_data::UserDataMap;
@@ -6356,6 +6367,14 @@ fn native_framebuffer_effect_blur_noise_saturation_and_opaque_capture() {
     let xrgb_mods = modifiers(&vk, &reference, Fourcc::Xrgb8888);
     let argb_mods = modifiers(&vk, &reference, Fourcc::Argb8888);
     let mut native = native::NativeRenderer::new(vk).unwrap();
+    // This fixture exercises prepared rendering; wait on the bounded test-only
+    // preparer before its pixel, timing or ownership assertions begin.
+    native
+        .prepare_output_format_for_test(Fourcc::Xrgb8888)
+        .unwrap();
+    native
+        .prepare_output_format_for_test(Fourcc::Argb8888)
+        .unwrap();
 
     let (w, h) = (64, 48);
     let full = Rectangle::from_size((w as i32, h as i32).into());
@@ -6604,7 +6623,6 @@ fn native_noise_keeps_transparent_pixels_premultiplied() {
 #[test]
 #[ignore = "requires real DRM render node, Vulkan"]
 fn native_scene_full_desktop_migration() {
-    use crate::compositor::OutputRenderElements;
     use crate::render_helpers::{
         primary_gpu_texture::PrimaryGpuTextureRenderElement,
         render_to_dmabuf,
@@ -6612,6 +6630,7 @@ fn native_scene_full_desktop_migration() {
         texture::{TextureBuffer, TextureRenderElement},
         vulkan::native,
     };
+    use crate::scene::OutputRenderElements;
     use smithay::backend::allocator::dmabuf::Dmabuf;
     use smithay::backend::renderer::damage::OutputDamageTracker;
     use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
@@ -6626,6 +6645,11 @@ fn native_scene_full_desktop_migration() {
     drop(reference);
 
     let mut native = native::NativeRenderer::new(vk).unwrap();
+    // This fixture exercises prepared rendering; wait on the bounded test-only
+    // preparer before its pixel, timing or ownership assertions begin.
+    native
+        .prepare_output_format_for_test(Fourcc::Argb8888)
+        .unwrap();
     let mods: Vec<_> = native
         .dmabuf_formats()
         .iter()
@@ -6794,11 +6818,11 @@ fn native_scene_full_desktop_migration() {
 #[ignore = "requires real DRM render node, KMS sync export and Vulkan"]
 fn native_dmabuf_sync_export_and_renderer_recreation() {
     use super::native;
-    use crate::compositor::OutputRenderElements;
     use crate::render_helpers::{
         render_to_dmabuf,
         solid_color::{SolidColorBuffer, SolidColorRenderElement},
     };
+    use crate::scene::OutputRenderElements;
     use smithay::backend::allocator::dmabuf::Dmabuf;
     use smithay::backend::renderer::damage::OutputDamageTracker;
     use smithay::backend::renderer::element::{Kind, RenderElementStates};
@@ -6874,7 +6898,7 @@ fn native_dmabuf_sync_export_and_renderer_recreation() {
     // Recreate the renderer. This does not inject DEVICE_LOST or exercise KMS.
     drop(native);
     let mut recovered_vk = crate::render_helpers::vulkan::VulkanRenderer::new();
-    let node_path = std::env::var("REALAND_VULKAN_TEST_NODE")
+    let node_path = std::env::var("CLARION_VULKAN_TEST_NODE")
         .unwrap_or_else(|_| "/dev/dri/renderD128".to_string());
     let drm_node = smithay::backend::drm::DrmNode::from_path(&node_path).unwrap();
     recovered_vk
@@ -6926,7 +6950,6 @@ fn native_dmabuf_sync_export_and_renderer_recreation() {
 #[test]
 #[ignore = "requires real DRM render node and Vulkan"]
 fn native_offscreen_multioutput_scaling_rotation_and_readback() {
-    use crate::compositor::OutputRenderElements;
     use crate::render_helpers::{
         primary_gpu_texture::PrimaryGpuTextureRenderElement,
         render_to_dmabuf,
@@ -6935,6 +6958,7 @@ fn native_offscreen_multioutput_scaling_rotation_and_readback() {
         texture::{TextureBuffer, TextureRenderElement},
         vulkan::native,
     };
+    use crate::scene::OutputRenderElements;
     use smithay::backend::allocator::dmabuf::Dmabuf;
     use smithay::backend::renderer::damage::OutputDamageTracker;
     use smithay::backend::renderer::element::{Kind, RenderElementStates};
@@ -7222,7 +7246,7 @@ fn native_screenshot_selection_pixels_and_pointer() {
             });
             let mut ui = ScreenshotUi::new(
                 Clock::default(),
-                Rc::new(RefCell::new(realand_config::Config::default())),
+                Rc::new(RefCell::new(clarion_config::Config::default())),
             );
             assert!(ui.open_native(
                 &mut renderer,
@@ -7307,7 +7331,7 @@ fn native_screenshot_selection_survives_output_changes() {
         let mut ui = ScreenshotUi::Closed {
             last_selection: old.map(|rect| (available.downgrade(), rect)),
             clock: Clock::default(),
-            config: Rc::new(RefCell::new(realand_config::Config::default())),
+            config: Rc::new(RefCell::new(clarion_config::Config::default())),
         };
         let captures = std::array::from_fn(|_| {
             let texture = renderer
@@ -7598,14 +7622,14 @@ fn native_animation_three_sampled_textures() {
         Some(
             "uniform sampler2D second;\nuniform sampler2D third;\n\
              vec4 close_color(vec3 p, vec3 s) {\n\
-             return (texture2D(realand_tex, p.xy) + texture2D(second, p.xy) + texture2D(third, p.xy)) / 3.0;\n}",
+             return (texture2D(clarion_tex, p.xy) + texture2D(second, p.xy) + texture2D(third, p.xy)) / 3.0;\n}",
         ),
     );
     renderer
         .wait_for_animation_program_for_test(ProgramType::Close, &source)
         .unwrap();
     let input = [
-        ("realand_tex", [90, 0, 0, 255]),
+        ("clarion_tex", [90, 0, 0, 255]),
         ("second", [0, 90, 0, 255]),
         ("third", [0, 0, 90, 255]),
     ]
@@ -7618,10 +7642,10 @@ fn native_animation_three_sampled_textures() {
     })
     .collect::<HashMap<_, _>>();
     let uniforms: Rc<[Uniform<'static>]> = Rc::new([
-        mat3_uniform("realand_input_to_geo", glam::Mat3::IDENTITY),
-        mat3_uniform("realand_geo_to_tex", glam::Mat3::IDENTITY),
-        Uniform::new("realand_geo_size", [8., 8.]),
-        Uniform::new("realand_glide_enabled", 0f32),
+        mat3_uniform("clarion_input_to_geo", glam::Mat3::IDENTITY),
+        mat3_uniform("clarion_geo_to_tex", glam::Mat3::IDENTITY),
+        Uniform::new("clarion_geo_size", [8., 8.]),
+        Uniform::new("clarion_glide_enabled", 0f32),
     ]);
     let element = ShaderRenderElement::new_native(
         &mut renderer,
@@ -7823,7 +7847,7 @@ fn native_animation_prewarm_keeps_old_and_new_close_programs() {
         1.,
         1.,
         Rc::new([]),
-        HashMap::from([(String::from("realand_tex"), texture)]),
+        HashMap::from([(String::from("clarion_tex"), texture)]),
         Kind::Unspecified,
     )
     .unwrap();
@@ -7878,7 +7902,7 @@ fn native_animation_shaders_match_gles() {
         (
             shaders::ProgramType::Open,
             Some(
-                "vec4 open_color(vec3 p, vec3 s) { return texture2D(realand_tex, p.xy) * realand_progress; }",
+                "vec4 open_color(vec3 p, vec3 s) { return texture2D(clarion_tex, p.xy) * clarion_progress; }",
             ),
         ),
     ] {
@@ -7891,22 +7915,22 @@ fn native_animation_shaders_match_gles() {
             [0.12f32, 0.30, 0.45, 1.].map(|progress| (glide, progress))
         }) {
             let uniforms: Rc<[Uniform<'static>]> = Rc::new([
-                shaders::mat3_uniform("realand_input_to_geo", glam::Mat3::IDENTITY),
-                shaders::mat3_uniform("realand_geo_to_tex", glam::Mat3::IDENTITY),
-                Uniform::new("realand_geo_size", [64., 40.]),
-                Uniform::new("realand_progress", progress),
-                Uniform::new("realand_clamped_progress", progress),
-                Uniform::new("realand_random_seed", 0.375f32),
-                Uniform::new("realand_glide_enabled", glide),
-                Uniform::new("realand_glide_tilt", 0.25f32),
-                Uniform::new("realand_glide_depth", 0.1f32),
-                Uniform::new("realand_popin_ratio", 0.8f32),
+                shaders::mat3_uniform("clarion_input_to_geo", glam::Mat3::IDENTITY),
+                shaders::mat3_uniform("clarion_geo_to_tex", glam::Mat3::IDENTITY),
+                Uniform::new("clarion_geo_size", [64., 40.]),
+                Uniform::new("clarion_progress", progress),
+                Uniform::new("clarion_clamped_progress", progress),
+                Uniform::new("clarion_random_seed", 0.375f32),
+                Uniform::new("clarion_glide_enabled", glide),
+                Uniform::new("clarion_glide_tilt", 0.25f32),
+                Uniform::new("clarion_glide_depth", 0.1f32),
+                Uniform::new("clarion_popin_ratio", 0.8f32),
             ]);
             let uniforms: Rc<[Uniform<'static>]> = uniforms
                 .iter()
                 .filter(|uniform| {
                     matches!(kind, shaders::ProgramType::Open)
-                        || uniform.name != "realand_popin_ratio"
+                        || uniform.name != "clarion_popin_ratio"
                 })
                 .cloned()
                 .collect::<Vec<_>>()
@@ -7919,7 +7943,7 @@ fn native_animation_shaders_match_gles() {
                 1.,
                 0.8,
                 uniforms.clone(),
-                HashMap::from([("realand_tex".into(), texture.clone())]),
+                HashMap::from([("clarion_tex".into(), texture.clone())]),
                 Kind::Unspecified,
             )
             .unwrap();
@@ -7930,7 +7954,7 @@ fn native_animation_shaders_match_gles() {
                 1.,
                 0.8,
                 uniforms,
-                HashMap::from([("realand_tex".into(), ref_texture.clone())]),
+                HashMap::from([("clarion_tex".into(), ref_texture.clone())]),
                 Kind::Unspecified,
             );
             for transform in [Transform::Normal, Transform::_90, Transform::Flipped] {
@@ -8028,7 +8052,7 @@ fn native_custom_shader_compiler_completion_prepares_on_idle_owner() {
         f: &mut Fixture,
         mut action: impl FnMut(&mut native::NativeRenderer) -> T,
     ) -> T {
-        f.realand_state()
+        f.clarion_state()
             .backend
             .with_renderer(|renderer| {
                 let AnyRenderer::Native(native) = renderer else {
@@ -8067,11 +8091,11 @@ fn native_custom_shader_compiler_completion_prepares_on_idle_owner() {
         .unwrap();
     let first = animation_source(
         kind,
-        Some("vec4 close_color(vec3 p, vec3 s) { return texture2D(realand_tex,p.xy)*0.25; }"),
+        Some("vec4 close_color(vec3 p, vec3 s) { return texture2D(clarion_tex,p.xy)*0.25; }"),
     );
     let second = animation_source(
         kind,
-        Some("vec4 close_color(vec3 p, vec3 s) { return texture2D(realand_tex,p.xy)*0.75; }"),
+        Some("vec4 close_color(vec3 p, vec3 s) { return texture2D(clarion_tex,p.xy)*0.75; }"),
     );
     assert!(Arc::ptr_eq(
         &renderer.configure_animation_program(kind, &first).unwrap(),
@@ -8086,7 +8110,7 @@ fn native_custom_shader_compiler_completion_prepares_on_idle_owner() {
     let records = Rc::new(RefCell::new(Vec::new()));
     let cpu_records = records.clone();
     let owner = std::thread::current().id();
-    let mut config = realand_config::Config::default();
+    let mut config = clarion_config::Config::default();
     config.animations.off = true;
     config.hotkey_overlay.skip_at_startup = true;
     let mut f = Fixture::with_config(config);
@@ -8107,24 +8131,24 @@ fn native_custom_shader_compiler_completion_prepares_on_idle_owner() {
         }
     }).unwrap();
     let mut headless = crate::backend::Headless::new(
-        f.realand().config.clone(),
+        f.clarion().config.clone(),
         crate::backend::RendererBackendType::Vulkan,
     );
     headless.renderer = Some(HeadlessRenderer::Native(Box::new(renderer)));
     headless.init(&mut crate::platform::device_bridge::DeviceCoordinator::new(
-        f.realand(),
+        f.clarion(),
     ));
-    f.realand_state().backend = crate::backend::Backend::Headless(headless);
+    f.clarion_state().backend = crate::backend::Backend::Headless(headless);
     f.add_output(1, (64, 40));
-    let output = f.realand_output(1);
-    f.realand().output_state.get_mut(&output).unwrap().schedule =
+    let output = f.clarion_output(1);
+    f.clarion().output_state.get_mut(&output).unwrap().schedule =
         crate::output_schedule::OutputSchedule::new(
             Some(Duration::from_nanos(16_666_667)),
             false,
             false,
         );
     assert!(matches!(
-        f.realand().output_state[&output].schedule.redraw_state(),
+        f.clarion().output_state[&output].schedule.redraw_state(),
         crate::output_schedule::RedrawState::Idle
     ));
     wait(&mut f, |native| {
@@ -8138,7 +8162,7 @@ fn native_custom_shader_compiler_completion_prepares_on_idle_owner() {
     assert_eq!(records.borrow().len(), 2);
     assert!(records.borrow().iter().all(|record| record.success));
     assert!(matches!(
-        f.realand().output_state[&output].schedule.redraw_state(),
+        f.clarion().output_state[&output].schedule.redraw_state(),
         crate::output_schedule::RedrawState::Queued
     ));
     let (first_program, second_program) = with_native(&mut f, |native| {
@@ -8241,6 +8265,11 @@ fn native_xray_background_cache_and_target_isolation() {
     use smithay::backend::renderer::element::Kind;
     let (vk, _gles, _) = setup();
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
+    // This fixture exercises prepared rendering; wait on the bounded test-only
+    // preparer before its pixel, timing or ownership assertions begin.
+    renderer
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let mut xray = Xray::new();
     xray.workspaces.push((
         Rectangle::from_size((32., 24.).into()),
@@ -8500,6 +8529,11 @@ fn native_transition_and_closing_capture_targets() {
     use std::time::Duration;
     let (vk, _gles, _) = setup();
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
+    // This fixture exercises prepared rendering; wait on the bounded test-only
+    // preparer before its pixel, timing or ownership assertions begin.
+    renderer
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let colors = [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]];
     let textures = colors.map(|color| {
         renderer
@@ -8554,10 +8588,10 @@ fn native_transition_and_closing_capture_targets() {
             0.,
             1.,
             0.,
-            realand_config::Animations::default().window_close.anim,
+            clarion_config::Animations::default().window_close.anim,
         ),
         Default::default(),
-        realand_config::WindowCloseEffect::Fade,
+        clarion_config::WindowCloseEffect::Fade,
         None,
         Some(NativeTileSnapshot {
             targets: textures.map(|t| (t, (0., 0.).into())),
@@ -8638,10 +8672,10 @@ fn native_closing_animation_owns_a_stable_dmabuf_snapshot() {
             0.,
             1.,
             0.,
-            realand_config::Animations::default().window_close.anim,
+            clarion_config::Animations::default().window_close.anim,
         ),
         Default::default(),
-        realand_config::WindowCloseEffect::Fade,
+        clarion_config::WindowCloseEffect::Fade,
         None,
         None,
         Some(source.clone()),
@@ -8716,7 +8750,7 @@ fn native_explosion_close_does_not_tint_pixels_outside_the_window_area() {
             crate::animation::Curve::Linear,
         ),
         Default::default(),
-        realand_config::WindowCloseEffect::Explosion,
+        clarion_config::WindowCloseEffect::Explosion,
         None,
         Some(NativeTileSnapshot {
             targets: std::array::from_fn(|_| (texture.clone(), (0., 0.).into())),
@@ -8828,12 +8862,12 @@ fn explosion_transparent_snapshot_has_no_flash_or_ring() {
     );
     for progress in [0., 0.08, 0.2, 0.37, 0.38, 0.5, 0.75, 1.] {
         let uniforms: Rc<[Uniform<'static>]> = Rc::new([
-            shaders::mat3_uniform("realand_input_to_geo", glam::Mat3::IDENTITY),
-            shaders::mat3_uniform("realand_geo_to_tex", glam::Mat3::IDENTITY),
-            Uniform::new("realand_geo_size", [128., 96.]),
-            Uniform::new("realand_progress", progress),
-            Uniform::new("realand_clamped_progress", progress),
-            Uniform::new("realand_glide_enabled", 0f32),
+            shaders::mat3_uniform("clarion_input_to_geo", glam::Mat3::IDENTITY),
+            shaders::mat3_uniform("clarion_geo_to_tex", glam::Mat3::IDENTITY),
+            Uniform::new("clarion_geo_size", [128., 96.]),
+            Uniform::new("clarion_progress", progress),
+            Uniform::new("clarion_clamped_progress", progress),
+            Uniform::new("clarion_glide_enabled", 0f32),
         ]);
         let element = ShaderRenderElement::new_native(
             &mut native,
@@ -8843,7 +8877,7 @@ fn explosion_transparent_snapshot_has_no_flash_or_ring() {
             1.,
             1.,
             uniforms.clone(),
-            HashMap::from([("realand_tex".into(), texture.clone())]),
+            HashMap::from([("clarion_tex".into(), texture.clone())]),
             Kind::Unspecified,
         )
         .unwrap();
@@ -8854,7 +8888,7 @@ fn explosion_transparent_snapshot_has_no_flash_or_ring() {
             1.,
             1.,
             uniforms,
-            HashMap::from([("realand_tex".into(), ref_texture.clone())]),
+            HashMap::from([("clarion_tex".into(), ref_texture.clone())]),
             Kind::Unspecified,
         );
         let actual = render_to_vec(
@@ -9376,7 +9410,7 @@ fn native_regional_framebuffer_blur_matches_full_pass_pixels() {
         framebuffer_effect::{FramebufferEffect, FramebufferEffectElement, NativeInner},
     };
     use crate::utils::region::TransformedRegion;
-    use realand_config::CornerRadius;
+    use clarion_config::CornerRadius;
     use smithay::backend::renderer::element::{Element, RenderElement};
     use smithay::backend::renderer::ImportMem;
     use smithay::utils::user_data::UserDataMap;
@@ -9710,7 +9744,7 @@ fn native_transition_batch_preserves_live_backdrop_pixels() {
         transition_capture::TransitionCapture,
     };
     use smithay::backend::renderer::element::Kind;
-    crate::realand_render_elements! {
+    crate::clarion_render_elements! {
         CaptureTestElement => {
             Solid = SolidColorRenderElement,
             Effect = FramebufferEffectElement,
@@ -9743,7 +9777,7 @@ fn native_transition_batch_preserves_live_backdrop_pixels() {
                         subregion: None,
                         clip: Some((
                             Rectangle::new((22., 10.).into(), (86., 76.).into()),
-                            realand_config::CornerRadius::from(9.),
+                            clarion_config::CornerRadius::from(9.),
                         )),
                         scale: 1.,
                     },
@@ -9890,8 +9924,11 @@ fn lightweight_window_open_matches_gles_and_preserves_group_opacity() {
 
     let (vk, mut gles, _) = setup();
     let mut native = native::NativeRenderer::new(vk).unwrap();
+    native
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     for scale in [1., 1.25, 2.] {
-        let config = realand_config::animations::WindowOpenAnim::default();
+        let config = clarion_config::animations::WindowOpenAnim::default();
         let mut clock = Clock::with_time(Duration::ZERO);
         let make = || {
             OpenAnimation::new(
@@ -9906,7 +9943,7 @@ fn lightweight_window_open_matches_gles_and_preserves_group_opacity() {
         let gles_open = make();
         let under = SolidColorBuffer::new((48., 32.), [1., 0., 0., 1.]);
         let mut over = SolidColorBuffer::new((20., 16.), [0., 1., 0., 1.]);
-        for millis in [0, 16, 90, 135, 180] {
+        for millis in [0, 16, 60, 90, 135, 180, 200] {
             clock.set_unadjusted(Duration::from_millis(millis));
             // A new client buffer during the animation must replace cached pixels.
             if millis == 135 {
@@ -10010,7 +10047,7 @@ fn liquid_glass_matches_gles_preserves_masks_and_restores_state() {
     use smithay::backend::renderer::{ImportMem, RendererSuper};
     use std::sync::Arc;
 
-    crate::realand_render_elements! {
+    crate::clarion_render_elements! {
         GlassTestElement<R> => {
             Texture = TextureRenderElement<<R as RendererSuper>::TextureId>,
             Effect = FramebufferEffectElement,
@@ -10024,6 +10061,11 @@ fn liquid_glass_matches_gles_preserves_masks_and_restores_state() {
         .postprocess_and_clip
         .is_some());
     let mut native = native::NativeRenderer::new(vk).unwrap();
+    // This fixture exercises prepared rendering; wait on the bounded test-only
+    // preparer before its pixel, timing or ownership assertions begin.
+    native
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let effect = FramebufferEffect::new();
     let pattern: Vec<u8> = (0..96 * 80)
         .flat_map(|i| {
@@ -10057,7 +10099,7 @@ fn liquid_glass_matches_gles_preserves_masks_and_restores_state() {
                         None,
                         RenderParams {
                             geometry,
-                            clip: Some((geometry, realand_config::CornerRadius::from(8.))),
+                            clip: Some((geometry, clarion_config::CornerRadius::from(8.))),
                             // Two independent bands: the gap must retain untouched background.
                             subregion: Some(TransformedRegion {
                                 rects: Arc::new(vec![
@@ -10171,7 +10213,7 @@ fn native_panel_glass_removal_repaints_old_bounds() {
         solid_color::{SolidColorBuffer, SolidColorRenderElement},
     };
     use smithay::backend::renderer::{damage::OutputDamageTracker, element::Kind};
-    crate::realand_render_elements! {
+    crate::clarion_render_elements! {
         PanelTestElement => {
             Solid = SolidColorRenderElement,
             Effect = FramebufferEffectElement,
@@ -10180,6 +10222,11 @@ fn native_panel_glass_removal_repaints_old_bounds() {
     let (vk, mut oracle, mut allocator) = setup();
     let mods = modifiers(&vk, &oracle, Fourcc::Argb8888);
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
+    // This fixture exercises prepared rendering; wait on the bounded test-only
+    // preparer before its pixel, timing or ownership assertions begin.
+    renderer
+        .prepare_output_format_for_test(Fourcc::Argb8888)
+        .unwrap();
     let stripes: Vec<_> = (0..64)
         .map(|i| {
             let v = if i % 2 == 0 { 0.9 } else { 0.2 };
@@ -10253,7 +10300,7 @@ fn native_panel_glass_removal_repaints_old_bounds() {
                                     subregion: None,
                                     clip: Some((
                                         geometry,
-                                        realand_config::CornerRadius::from(if part == 0 {
+                                        clarion_config::CornerRadius::from(if part == 0 {
                                             0.
                                         } else {
                                             8.

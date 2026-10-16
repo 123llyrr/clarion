@@ -1,4 +1,4 @@
-There are several ways to make a window big on realand: maximizing the column, maximizing the window to edges, and fullscreening the window.
+There are several ways to make a window big on clarion: maximizing the column, maximizing the window to edges, and fullscreening the window.
 Let's look at their differences.
 
 ## Maximized (full-width) columns
@@ -21,7 +21,7 @@ This is the same maximize as you can find on other desktop environments and oper
 You will still see your bar, but not struts, gaps, or borders.
 
 Windows are aware of their maximized-to-edges status and generally respond by squaring their corners.
-Windows can also control maximizing-to-edges: when you click on the square icon in the window's titlebar, or double-click on the titlebar, the window will request realand to maximize or unmaximize itself.
+Windows can also control maximizing-to-edges: when you click on the square icon in the window's titlebar, or double-click on the titlebar, the window will request clarion to maximize or unmaximize itself.
 
 You can put multiple maximized windows into a [tabbed column](./Tabs.md), but not into a regular column.
 
@@ -36,7 +36,7 @@ You can also force a window to go fullscreen via `fullscreen-window` (bound to <
 Fullscreen windows cover the entire screen.
 Similarly to maximize-to-edges, windows are aware of their fullscreen status, and can respond by hiding their titlebars or other parts of the UI.
 
-Realand renders a solid black backdrop behind fullscreen windows.
+Clarion renders a solid black backdrop behind fullscreen windows.
 This backdrop helps match the screen size when the window itself remains too small (e.g. if you try to fullscreen a fixed-size dialog window), which is the behavior [defined by the Wayland protocol](https://wayland.app/protocols/xdg-shell#xdg_toplevel:request:set_fullscreen).
 
 When a fullscreen window is focused and not animating, it will cover floating windows and the top layer-shell layer.
@@ -58,20 +58,20 @@ Thanks to scrollable tiling, fullscreen and maximized windows remain a normal pa
 
 Fullscreen and maximize-to-edges are both special states that the windows are aware of and can control.
 Windows sometimes want to restore their fullscreen or, more frequently, maximized state when they open.
-The best opportunity for this is during the *initial configure* sequence when the window tells realand everything it should know before opening the window.
+The best opportunity for this is during the *initial configure* sequence when the window tells clarion everything it should know before opening the window.
 If the window does this, then `open-maximized-to-edges` and `open-fullscreen` window rules have a chance to block or adjust the request.
 
-However, some clients tend to request to be maximized shortly *after* the initial configure sequence, when the realand already sent them the initial size request (sometimes even after showing on screen, resulting in a quick resize right after opening).
-From realand's point of view, the window is already open by this point, so if the window does this, then the `open-maximized-to-edges` and `open-fullscreen` window rules don't do anything.
+However, some clients tend to request to be maximized shortly *after* the initial configure sequence, when the clarion already sent them the initial size request (sometimes even after showing on screen, resulting in a quick resize right after opening).
+From clarion's point of view, the window is already open by this point, so if the window does this, then the `open-maximized-to-edges` and `open-fullscreen` window rules don't do anything.
 
 ## Windowed fullscreen
 
 <sup>Since: 25.05</sup>
 
-Realand can also tell a window that it's in fullscreen without actually making it fullscreen, via the `toggle-windowed-fullscreen` action.
+Clarion can also tell a window that it's in fullscreen without actually making it fullscreen, via the `toggle-windowed-fullscreen` action.
 This is generally useful for screencasting browser-based presentations, when you want to hide the browser UI, but still have the window sized as a normal window.
 
-When in windowed fullscreen, you can use the realand action to maximize or unmaximize the window.
+When in windowed fullscreen, you can use the clarion action to maximize or unmaximize the window.
 Window-side titlebar maximize buttons and gestures may not work, since the window will always think that it's in fullscreen.
 
 See also windowed fullscreen on the [screencasting features wiki page](./Screencasting.md#windowed-fakedetached-fullscreen).

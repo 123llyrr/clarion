@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use anyhow::Context as _;
-use realand_config::{Config, OutputName};
+use clarion_config::{Config, OutputName};
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::element::RenderElementStates;
@@ -135,15 +135,15 @@ impl Winit {
         setup: &mut impl DeviceSetup,
         requested_renderer: RendererBackendType,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let _span = realand_tracy_span!("Winit::new");
+        let _span = clarion_tracy_span!("Winit::new");
         let config = Rc::new(super::DeviceSettings::from(&*config.borrow()));
 
         let builder = WindowAttributes::default()
             .with_surface_size(LogicalSize::new(1280.0, 800.0))
             // .with_resizable(false)
-            .with_title("realand")
+            .with_title("clarion")
             .with_platform_attributes(Box::new(
-                WindowAttributesWayland::default().with_name("realand", ""),
+                WindowAttributesWayland::default().with_name("clarion", ""),
             ));
         let (backend, gles_events, native_events) = if requested_renderer.is_vulkan() {
             let (window, native_events) = NativeWindowLoop::create(builder)?;
@@ -212,13 +212,13 @@ impl Winit {
         let physical_properties = output.physical_properties();
         let ipc_outputs = Arc::new(Mutex::new(HashMap::from([(
             OutputId::next(),
-            realand_ipc::Output {
+            clarion_ipc::Output {
                 name: output.name(),
                 make: physical_properties.make,
                 model: physical_properties.model,
                 serial: None,
                 physical_size: None,
-                modes: vec![realand_ipc::Mode {
+                modes: vec![clarion_ipc::Mode {
                     width: backend.window_size().w.clamp(0, u16::MAX as i32) as u16,
                     height: backend.window_size().h.clamp(0, u16::MAX as i32) as u16,
                     refresh_rate: 60_000,
@@ -293,7 +293,7 @@ impl Winit {
         port: &mut impl crate::frame_pipeline::FramePort,
         output: &Output,
     ) -> RenderResult {
-        let _span = realand_tracy_span!("Winit::render");
+        let _span = clarion_tracy_span!("Winit::render");
         self.last_attempt_deferred = false;
 
         if matches!(self.backend, WinitBackend::Native(_)) && self.retry.waiting(Instant::now()) {
@@ -471,7 +471,7 @@ impl Winit {
     }
 }
 
-pub(crate) fn refresh_ipc_output_size(output: &Output, snapshot: &mut realand_ipc::Output) {
+pub(crate) fn refresh_ipc_output_size(output: &Output, snapshot: &mut clarion_ipc::Output) {
     let size = output.current_mode().unwrap().size;
     let mode = &mut snapshot.modes[0];
     mode.width = size.w.clamp(0, u16::MAX as i32) as u16;
@@ -707,7 +707,7 @@ mod tests {
         assert!(states.is_none() && changed);
     }
 
-    fn output_and_snapshot() -> (Output, realand_ipc::Output) {
+    fn output_and_snapshot() -> (Output, clarion_ipc::Output) {
         let output = Output::new(
             "resize-test".into(),
             PhysicalProperties {
@@ -727,13 +727,13 @@ mod tests {
             Some(Scale::Fractional(1.25)),
             Some((10, 20).into()),
         );
-        let snapshot = realand_ipc::Output {
+        let snapshot = clarion_ipc::Output {
             name: output.name(),
             make: "test".into(),
             model: "test".into(),
             serial: None,
             physical_size: None,
-            modes: vec![realand_ipc::Mode {
+            modes: vec![clarion_ipc::Mode {
                 width: 1280,
                 height: 800,
                 refresh_rate: 60_000,
@@ -769,13 +769,13 @@ mod tests {
         );
         assert_eq!(
             snapshot.logical,
-            Some(realand_ipc::LogicalOutput {
+            Some(clarion_ipc::LogicalOutput {
                 x: 10,
                 y: 20,
                 width: 1517,
                 height: 1720,
                 scale: 1.25,
-                transform: realand_ipc::Transform::Normal,
+                transform: clarion_ipc::Transform::Normal,
             })
         );
 
@@ -795,13 +795,13 @@ mod tests {
         );
         assert_eq!(
             snapshot.logical,
-            Some(realand_ipc::LogicalOutput {
+            Some(clarion_ipc::LogicalOutput {
                 x: -240,
                 y: 36,
                 width: 719,
                 height: 1279,
                 scale: 1.5,
-                transform: realand_ipc::Transform::_90,
+                transform: clarion_ipc::Transform::_90,
             })
         );
     }

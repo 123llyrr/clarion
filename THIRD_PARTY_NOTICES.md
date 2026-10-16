@@ -1,6 +1,6 @@
 # Third-party notices
 
-Realand is distributed under the [GNU General Public License, version 3 or later](LICENSE).
+Clarion is distributed under the [GNU General Public License, version 3 or later](LICENSE).
 Individual files and dependencies retain their copyright notices and license terms.
 This index accompanies those records; it does not replace source headers or dependency licenses.
 
@@ -16,5 +16,5 @@ This index accompanies those records; it does not replace source headers or depe
 Other Rust, Flutter and system-library dependencies are identified by their manifests, lockfiles and retained source notices.
 Fonts, icons and reference assets retain their resource-specific rights and provenance;
 the project's GPL license does not replace those terms. See the
-[Shell resource record](realand-shell/assets/macos/README.txt) and
-[Settings resource record](realand-settings/assets/macos/provenance.json).
+[Shell resource record](clarion-shell/assets/macos/README.txt) and
+[Settings resource record](clarion-settings/assets/macos/provenance.json).

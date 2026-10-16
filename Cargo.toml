@@ -1,17 +1,20 @@
 [workspace]
 exclude = ["third_party/smithay"]
 members = [
-    "realand-core",
-    "realand-config",
-    "realand-ipc",
-    "realand-visual-tests",
-    "realand-settings",
+    "clarion-core",
+    "clarion-motion",
+    "clarion-timing",
+    "clarion-scene",
+    "clarion-config",
+    "clarion-ipc",
+    "clarion-visual-tests",
+    "clarion-settings",
 ]
 
 [workspace.package]
 version = "0.1.0"
 description = "A modern Wayland compositor with an independent desktop core and native Vulkan backend"
-authors = ["Realand Contributors"]
+authors = ["Clarion Contributors", "Realand Contributors"]
 license = "GPL-3.0-or-later"
 edition = "2021"
 repository = "https://github.com/123llyrr/realand"
@@ -41,7 +44,7 @@ rev = "4cf0b62028039661477d482ec4758b687d8f4392"
 # path = "../smithay/smithay-drm-extras"
 
 [package]
-name = "realand"
+name = "clarion"
 version.workspace = true
 description.workspace = true
 authors.workspace = true
@@ -79,9 +82,12 @@ keyframe = { version = "1.1.1", default-features = false }
 libc = "0.2.189"
 libdisplay-info = "0.3.0"
 log = { version = "0.4.33", features = ["max_level_trace", "release_max_level_debug"] }
-realand-config = { version = "0.1.0", path = "realand-config" }
-realand-core = { version = "0.1.0", path = "realand-core" }
-realand-ipc = { version = "0.1.0", path = "realand-ipc", features = ["clap"] }
+clarion-config = { version = "0.1.0", path = "clarion-config" }
+clarion-core = { version = "0.1.0", path = "clarion-core" }
+clarion-motion = { version = "0.1.0", path = "clarion-motion" }
+clarion-timing = { version = "0.1.0", path = "clarion-timing" }
+clarion-scene = { version = "0.1.0", path = "clarion-scene" }
+clarion-ipc = { version = "0.1.0", path = "clarion-ipc", features = ["clap"] }
 ordered-float = "5.3.0"
 pango = { version = "0.21.5", features = ["v1_44"] }
 pangocairo = "0.21.5"
@@ -163,7 +169,7 @@ debug = "line-tables-only"
 overflow-checks = true
 lto = "thin"
 
-[profile.release.package.realand-config]
+[profile.release.package.clarion-config]
 # knuffel with chomsky generates a metric ton of debuginfo.
 debug = false
 
@@ -174,28 +180,39 @@ similar.opt-level = 3
 [package.metadata.generate-rpm]
 version = "0.1.0"
 assets = [
-    { source = "target/release/realand", dest = "/usr/bin/", mode = "755" },
-    { source = "target/release/realand-settings", dest = "/usr/bin/", mode = "755" },
-    { source = "resources/realand-session", dest = "/usr/bin/", mode = "755" },
-    { source = "resources/realand.desktop", dest = "/usr/share/wayland-sessions/", mode = "644" },
-    { source = "resources/realand-portals.conf", dest = "/usr/share/xdg-desktop-portal/", mode = "644" },
-    { source = "resources/realand.service", dest = "/usr/lib/systemd/user/", mode = "644" },
-    { source = "resources/realand-shutdown.target", dest = "/usr/lib/systemd/user/", mode = "644" },
+    { source = "target/release/clarion", dest = "/usr/bin/", mode = "755" },
+    { source = "target/release/clarion-settings", dest = "/usr/bin/", mode = "755" },
+    { source = "resources/clarion-session", dest = "/usr/bin/", mode = "755" },
+    { source = "resources/clarion.desktop", dest = "/usr/share/wayland-sessions/", mode = "644" },
+    { source = "resources/clarion-portals.conf", dest = "/usr/share/xdg-desktop-portal/", mode = "644" },
+    { source = "resources/clarion.service", dest = "/usr/lib/systemd/user/", mode = "644" },
+    { source = "resources/clarion-shutdown.target", dest = "/usr/lib/systemd/user/", mode = "644" },
+    { source = "resources/compat/realand", dest = "/usr/bin/realand", mode = "755" },
+    { source = "resources/compat/realand-session", dest = "/usr/bin/realand-session", mode = "755" },
+    { source = "resources/compat/realand-settings", dest = "/usr/bin/realand-settings", mode = "755" },
+    { source = "resources/clarion-shell-msg", dest = "/usr/bin/clarion-shell-msg", mode = "755" },
+    { source = "resources/compat/realand-shell-msg", dest = "/usr/bin/realand-shell-msg", mode = "755" },
 ]
 [package.metadata.generate-rpm.requires]
 alacritty = "*"
 fuzzel = "*"
+python3 = "*"
 
 [package.metadata.deb]
-depends = "alacritty, fuzzel"
+depends = "alacritty, fuzzel, python3"
 assets = [
-    ["target/release/realand", "usr/bin/", "755"],
-    ["target/release/realand-settings", "usr/bin/", "755"],
-    ["resources/realand-session", "usr/bin/", "755"],
-    ["resources/realand.desktop", "/usr/share/wayland-sessions/", "644"],
-    ["resources/realand-portals.conf", "/usr/share/xdg-desktop-portal/", "644"],
-    ["resources/realand.service", "/usr/lib/systemd/user/", "644"],
-    ["resources/realand-shutdown.target", "/usr/lib/systemd/user/", "644"],
+    ["target/release/clarion", "usr/bin/", "755"],
+    ["target/release/clarion-settings", "usr/bin/", "755"],
+    ["resources/clarion-session", "usr/bin/", "755"],
+    ["resources/clarion.desktop", "/usr/share/wayland-sessions/", "644"],
+    ["resources/clarion-portals.conf", "/usr/share/xdg-desktop-portal/", "644"],
+    ["resources/clarion.service", "/usr/lib/systemd/user/", "644"],
+    ["resources/clarion-shutdown.target", "/usr/lib/systemd/user/", "644"],
+    ["resources/compat/realand", "usr/bin/realand", "755"],
+    ["resources/compat/realand-session", "usr/bin/realand-session", "755"],
+    ["resources/compat/realand-settings", "usr/bin/realand-settings", "755"],
+    ["resources/clarion-shell-msg", "usr/bin/clarion-shell-msg", "755"],
+    ["resources/compat/realand-shell-msg", "usr/bin/realand-shell-msg", "755"],
 ]
 
 # Keep the compositor damage/occlusion fix reproducible across machines.

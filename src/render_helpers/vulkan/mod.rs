@@ -1,8 +1,8 @@
-//! Vulkan Rendering Backend architecture for Realand.
+//! Vulkan Rendering Backend architecture for Clarion.
 //!
 //! Inspired by Gamescope (Valve), wlroots (`wlr_vk_renderer`), and Smithay.
 //! This module provides the core types and traits required to integrate Vulkan rendering
-//! into Realand's compositing pipeline without breaking existing GLES pipelines.
+//! into Clarion's compositing pipeline without breaking existing GLES pipelines.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -24,6 +24,7 @@ pub mod dmabuf;
 mod fd_import;
 pub mod frame;
 pub mod hdr;
+pub mod lifecycle;
 mod memory;
 pub mod native;
 pub mod pipeline;
@@ -136,7 +137,7 @@ impl ImageLayoutState {
     }
 }
 
-/// Representation of a Vulkan texture / image handle in Realand.
+/// Representation of a Vulkan texture / image handle in Clarion.
 #[derive(Clone)]
 pub struct VulkanTexture {
     pub width: u32,
@@ -271,7 +272,24 @@ struct CachedTarget {
     last_commit: Option<smithay::backend::renderer::utils::CommitCounter>,
 }
 
-/// Core Vulkan renderer instance for Realand.
+/// Driver-owned initialization only. This Send bundle contains no renderer caches,
+/// Wayland objects, or Rc values; recovery prepares it on its one bounded worker.
+pub(crate) struct PreparedVulkanDevice {
+    pub ctx: Arc<VulkanContext>,
+    pub pipeline_mgr: Arc<VulkanPipelineManager>,
+}
+
+impl PreparedVulkanDevice {
+    fn from_context(ctx: Arc<VulkanContext>) -> Result<Self, VulkanInitError> {
+        let pipeline_mgr = Arc::new(VulkanPipelineManager::new(
+            ctx.clone(),
+            vk::Format::B8G8R8A8_UNORM,
+        )?);
+        Ok(Self { ctx, pipeline_mgr })
+    }
+}
+
+/// Core Vulkan renderer instance for Clarion.
 pub struct VulkanRenderer {
     pub info: VulkanBackendInfo,
     pub ctx: Option<Arc<VulkanContext>>,
@@ -309,10 +327,13 @@ impl VulkanRenderer {
     /// Initialize the renderer on a preselected Vulkan device, for example a
     /// WSI device whose graphics queue can present to the host window.
     pub fn init_with_context(&mut self, ctx: Arc<VulkanContext>) -> Result<(), VulkanInitError> {
-        let pipeline_mgr = Arc::new(VulkanPipelineManager::new(
-            ctx.clone(),
-            vk::Format::B8G8R8A8_UNORM,
-        )?);
+        self.init_prepared_device(PreparedVulkanDevice::from_context(ctx)?);
+        Ok(())
+    }
+
+    /// Owner-only cache construction after all driver initialization has finished.
+    pub(crate) fn init_prepared_device(&mut self, device: PreparedVulkanDevice) {
+        let PreparedVulkanDevice { ctx, pipeline_mgr } = device;
         self.target_cache.clear();
         self.scratch_textures = Arc::default();
         self.texture_cache = Rc::new(RefCell::new(HashMap::new()));
@@ -324,7 +345,17 @@ impl VulkanRenderer {
         ));
         self.pipeline_mgr = Some(pipeline_mgr);
         self.ctx = Some(ctx);
-        Ok(())
+    }
+
+    pub(crate) fn prepared_device(&self) -> PreparedVulkanDevice {
+        PreparedVulkanDevice {
+            ctx: self.ctx.as_ref().expect("initialized renderer").clone(),
+            pipeline_mgr: self
+                .pipeline_mgr
+                .as_ref()
+                .expect("initialized renderer")
+                .clone(),
+        }
     }
 
     pub fn import_dmabuf(&self, dmabuf: &Dmabuf) -> Result<VulkanTexture, VulkanImportError> {
@@ -839,15 +870,15 @@ mod tests {
     use smithay::backend::allocator::Fourcc;
 
     fn gpu_test_renderer() -> Option<VulkanRenderer> {
-        let path = std::env::var_os("REALAND_VULKAN_TEST_NODE");
-        let required = std::env::var_os("REALAND_REQUIRE_VULKAN").is_some();
+        let path = std::env::var_os("CLARION_VULKAN_TEST_NODE");
+        let required = std::env::var_os("CLARION_REQUIRE_VULKAN").is_some();
         assert!(
             !required || path.is_some(),
-            "REALAND_REQUIRE_VULKAN requires REALAND_VULKAN_TEST_NODE to select a physical GPU"
+            "CLARION_REQUIRE_VULKAN requires CLARION_VULKAN_TEST_NODE to select a physical GPU"
         );
         let node = path.as_ref().map(|path| {
             DrmNode::from_path(path)
-                .unwrap_or_else(|err| panic!("invalid REALAND_VULKAN_TEST_NODE {path:?}: {err}"))
+                .unwrap_or_else(|err| panic!("invalid CLARION_VULKAN_TEST_NODE {path:?}: {err}"))
         });
         let mut renderer = VulkanRenderer::new();
         match renderer.init_from_drm_node(node.as_ref()) {

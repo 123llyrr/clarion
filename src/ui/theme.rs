@@ -1,8 +1,8 @@
 //! Shared design tokens for the compositor's built-in Cairo-rendered UI.
 //!
 //! These values intentionally mirror the Material 3 dark scheme used by
-//! realand-shell (`realand-shell/lib/theme/shell_theme.dart`) and the palette
-//! in realand-settings (`realand-settings/src/theme.rs`), so the built-in
+//! clarion-shell (`clarion-shell/lib/theme/shell_theme.dart`) and the palette
+//! in clarion-settings (`clarion-settings/src/theme.rs`), so the built-in
 //! panels, the shell and the settings app read as one product. Colors are
 //! normalized 0..=1 RGB tuples ready for `cairo::Context::set_source_rgb`.
 

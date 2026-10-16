@@ -55,7 +55,7 @@ fn named_origin() -> (Layout<TestWindow>, Output, Output, WorkspaceId) {
         layout
             .core
             .borrow()
-            .space(realand_core::SpaceId(space.get()))
+            .space(clarion_core::SpaceId(space.get()))
             .unwrap()
             .output_preference,
         "Maker Screen LEFT"
@@ -82,7 +82,7 @@ fn pure_output_alias_matcher_agrees_with_the_existing_configuration_oracle() {
                     model: model.map(str::to_owned),
                     serial: serial.map(str::to_owned),
                 };
-                let pure = realand_core::output_identity::OutputIdentity {
+                let pure = clarion_core::output_identity::OutputIdentity {
                     connector: oracle.connector.clone(),
                     make: oracle.make.clone(),
                     model: oracle.model.clone(),
@@ -148,7 +148,7 @@ fn actual_no_output_interval_keeps_return_affinity_and_rejects_same_connector_wi
         layout
             .core
             .borrow()
-            .space(realand_core::SpaceId(space.get()))
+            .space(clarion_core::SpaceId(space.get()))
             .unwrap()
             .output_preference,
         "Maker Screen LEFT"
@@ -173,7 +173,7 @@ fn actual_explicit_move_to_current_output_changes_the_core_return_preference_onc
         layout
             .core
             .borrow()
-            .space(realand_core::SpaceId(space.get()))
+            .space(clarion_core::SpaceId(space.get()))
             .unwrap()
             .output_preference,
         "Maker Screen RIGHT"

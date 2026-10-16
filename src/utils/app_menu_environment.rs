@@ -17,7 +17,7 @@ impl AppMenuEnvironment {
     pub fn enable() -> Self {
         let mut previous = Vec::new();
         if let Some(home) = env::var_os("HOME") {
-            let root = Path::new(&home).join(".local/lib/realand-appmenu/current");
+            let root = Path::new(&home).join(".local/lib/clarion-appmenu/current");
             let module = root.join("lib/gtk-3.0/modules/libappmenu-gtk-module.so");
             let schemas = root.join("share/glib-2.0/schemas");
             let assets_ready = module.is_file()
@@ -128,9 +128,9 @@ mod tests {
 
     #[test]
     fn preserves_existing_modules_and_uses_absolute_installed_paths() {
-        let module = Path::new("/home/test/.local/lib/realand-appmenu/current/lib/gtk-3.0/modules/libappmenu-gtk-module.so");
+        let module = Path::new("/home/test/.local/lib/clarion-appmenu/current/lib/gtk-3.0/modules/libappmenu-gtk-module.so");
         let schemas =
-            Path::new("/home/test/.local/lib/realand-appmenu/current/share/glib-2.0/schemas");
+            Path::new("/home/test/.local/lib/clarion-appmenu/current/share/glib-2.0/schemas");
         let result = plan(
             module,
             schemas,

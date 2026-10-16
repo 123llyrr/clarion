@@ -66,7 +66,7 @@ blur {
 
 ### `spawn-at-startup`
 
-Add lines like this to spawn processes at realand startup.
+Add lines like this to spawn processes at clarion startup.
 
 `spawn-at-startup` accepts a path to the program binary as the first argument, followed by arguments to the program.
 
@@ -77,14 +77,14 @@ spawn-at-startup "waybar"
 spawn-at-startup "alacritty"
 ```
 
-Note that running realand as a systemd session supports xdg-desktop-autostart out of the box, which may be more convenient to use.
-Thanks to this, apps that you configured to autostart in GNOME will also "just work" in realand, without any manual `spawn-at-startup` configuration.
+Note that running clarion as a systemd session supports xdg-desktop-autostart out of the box, which may be more convenient to use.
+Thanks to this, apps that you configured to autostart in GNOME will also "just work" in clarion, without any manual `spawn-at-startup` configuration.
 
 ### `spawn-sh-at-startup`
 
 <sup>Since: 25.08</sup>
 
-Add lines like this to run shell commands at realand startup.
+Add lines like this to run shell commands at clarion startup.
 
 The argument is a single string that is passed verbatim to `sh`.
 You can use shell variables, pipelines, `~` expansion and everything else as expected.
@@ -98,7 +98,7 @@ spawn-sh-at-startup "qs -c ~/source/qs/MyAwesomeShell"
 
 ### `prefer-no-csd`
 
-This flag will make realand ask the applications to omit their client-side decorations.
+This flag will make clarion ask the applications to omit their client-side decorations.
 
 If an application will specifically ask for CSD, the request will be honored.
 Additionally, clients will be informed that they are tiled, removing some rounded corners.
@@ -108,7 +108,7 @@ With `prefer-no-csd` set, applications that negotiate server-side decorations th
 > [!NOTE]
 > Unlike most other options, changing `prefer-no-csd` will not entirely affect already running applications.
 > It will make some windows rectangular, but won't remove the title bars.
-> This mainly has to do with realand working around a [bug in SDL2](https://github.com/libsdl-org/SDL/issues/8173) that prevents SDL2 applications from starting.
+> This mainly has to do with clarion working around a [bug in SDL2](https://github.com/libsdl-org/SDL/issues/8173) that prevents SDL2 applications from starting.
 >
 > Restart applications after changing `prefer-no-csd` in the config to fully apply it.
 
@@ -123,7 +123,7 @@ A `~` at the front will be expanded to the home directory.
 
 The path is formatted with `strftime(3)` to give you the screenshot date and time.
 
-Realand will create the last folder of the path if it doesn't exist.
+Clarion will create the last folder of the path if it doesn't exist.
 
 ```kdl
 screenshot-path "~/Pictures/Screenshots/Screenshot from %Y-%m-%d %H-%M-%S.png"
@@ -137,7 +137,7 @@ screenshot-path null
 
 ### `environment`
 
-Override environment variables for processes spawned by realand.
+Override environment variables for processes spawned by clarion.
 
 ```kdl
 environment {
@@ -153,8 +153,8 @@ Note that these variables do not propagate to the systemd global environment, so
 In particular, if you start a desktop shell like DankMaterialShell through systemd, then use its built-in application launcher, the apps won't see these environment variables.
 
 If you want all processes to see the environment variables, you can set them in your login shell config instead (i.e. `~/.bash_profile`).
-The `realand-session` shell script runs through the login shell and imports all environment variables to systemd before starting realand.
-Keep in mind that all compositors will see variables set in the login shell, not just realand.
+The `clarion-session` shell script runs through the login shell and imports all environment variables to systemd before starting clarion.
+Keep in mind that all compositors will see variables set in the login shell, not just clarion.
 
 ### `cursor`
 
@@ -278,11 +278,11 @@ overview {
 
 Settings for integration with [xwayland-satellite](https://github.com/Supreeeme/xwayland-satellite).
 
-When a recent enough xwayland-satellite is detected, realand will create the X11 sockets and set `DISPLAY`, then automatically spawn `xwayland-satellite` when an X11 client tries to connect.
-If Xwayland dies, realand will keep watching the X11 socket and restart `xwayland-satellite` as needed.
+When a recent enough xwayland-satellite is detected, clarion will create the X11 sockets and set `DISPLAY`, then automatically spawn `xwayland-satellite` when an X11 client tries to connect.
+If Xwayland dies, clarion will keep watching the X11 socket and restart `xwayland-satellite` as needed.
 This is very similar to how built-in Xwayland works in other compositors.
 
-`off` disables the integration: realand won't create an X11 socket and won't set the `DISPLAY` environment variable.
+`off` disables the integration: clarion won't create an X11 socket and won't set the `DISPLAY` environment variable.
 
 `path` sets the path to the `xwayland-satellite` binary.
 By default, it's just `xwayland-satellite`, so it's looked up like any other non-absolute program name.
@@ -319,7 +319,7 @@ These navigation keys are consumed by the overlay without activating the underly
 
 #### `skip-at-startup`
 
-Set the `skip-at-startup` flag if you don't want to see the hotkey help at realand startup.
+Set the `skip-at-startup` flag if you don't want to see the hotkey help at clarion startup.
 
 ```kdl
 hotkey-overlay {
@@ -331,7 +331,7 @@ hotkey-overlay {
 
 <sup>Since: 25.08</sup>
 
-By default, realand will show the most important actions even if they aren't bound to any key, to prevent confusion.
+By default, clarion will show the most important actions even if they aren't bound to any key, to prevent confusion.
 Set the `hide-not-bound` flag if you want to hide all actions not bound to any key.
 
 ```kdl

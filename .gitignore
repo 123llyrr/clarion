@@ -30,7 +30,7 @@ __pycache__/
 .vscode/
 
 # Local Shell debug symbols
-/realand-shell/debug_info/
+/clarion-shell/debug_info/
 
 # Promotional media belongs in release attachments, not source snapshots
 /promo/

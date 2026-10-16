@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use realand_config::{Action, BlockOutFrom, Config, Workspace, WorkspaceName};
-use realand_ipc::{DockEdge, DockTarget, MinimizeEffect, PositionChange, TilingMode};
+use clarion_config::{Action, BlockOutFrom, Config, Workspace, WorkspaceName};
+use clarion_ipc::{DockEdge, DockTarget, MinimizeEffect, PositionChange, TilingMode};
 use smithay::desktop::Window;
 use smithay::output::Scale as OutputScale;
 use smithay::utils::{Logical, Point};
@@ -54,19 +54,19 @@ fn add(f: &mut Fixture, floating: bool, x: f64, color: [u32; 4]) -> TestWindow {
     w.set_size(320, 240);
     w.ack_last_and_commit();
     f.double_roundtrip(client);
-    let w = f.realand().layout.active_window().unwrap();
+    let w = f.clarion().layout.active_window().unwrap();
     let id = w.id().get();
     let mapped = w.window.clone();
     if floating {
-        f.realand().layout.set_window_floating(Some(&mapped), true);
-        f.realand().layout.move_floating_window(
+        f.clarion().layout.set_window_floating(Some(&mapped), true);
+        f.clarion().layout.move_floating_window(
             Some(&mapped),
             PositionChange::SetFixed(x),
             PositionChange::SetFixed(100.),
             false,
         );
     }
-    f.realand_complete_animations();
+    f.clarion_complete_animations();
     f.double_roundtrip(client);
     TestWindow {
         client,
@@ -99,7 +99,7 @@ fn target_style_on_output(
     edge: DockEdge,
     effect: MinimizeEffect,
 ) {
-    let output = f.realand_output(n);
+    let output = f.clarion_output(n);
     let size = crate::utils::output_size(&output);
     let (x, y) = match edge {
         DockEdge::Bottom => (size.w - 120., size.h - 72.),
@@ -107,7 +107,7 @@ fn target_style_on_output(
         DockEdge::Right => (size.w - 72., size.h - 120.),
         DockEdge::Top => (size.w - 120., 24.),
     };
-    f.realand_state().do_action(
+    f.clarion_state().do_action(
         Action::SetMinimizeTarget {
             id: w.id,
             target: Some(DockTarget {
@@ -126,7 +126,7 @@ fn target_style_on_output(
 }
 
 fn clear_output_redraws(f: &mut Fixture) {
-    for output in f.realand().output_state.values_mut() {
+    for output in f.clarion().output_state.values_mut() {
         output
             .schedule
             .test_set_redraw(crate::output_schedule::RedrawState::Idle);
@@ -134,9 +134,9 @@ fn clear_output_redraws(f: &mut Fixture) {
 }
 
 fn assert_output_redraw(f: &mut Fixture, n: u8, queued: bool) {
-    let output = f.realand_output(n);
+    let output = f.clarion_output(n);
     assert_eq!(
-        f.realand().output_state[&output].schedule.is_queued(),
+        f.clarion().output_state[&output].schedule.is_queued(),
         queued,
         "unexpected redraw on output {n}"
     );
@@ -160,7 +160,7 @@ fn minimize_target_registration_does_not_draw_advisory_geometry() {
         assert_output_redraw(&mut f, 1, false);
         assert_output_redraw(&mut f, 2, false);
     }
-    f.realand_state().do_action(
+    f.clarion_state().do_action(
         Action::SetMinimizeTarget {
             id: w.id,
             target: None,
@@ -184,14 +184,14 @@ fn minimize_target_registration_draws_only_a_cancelled_animation_output() {
             for effect in [MinimizeEffect::Genie, MinimizeEffect::Scale] {
                 let mut f = fixture();
                 f.add_output(2, (1024, 768));
-                f.realand_focus_output(2);
+                f.clarion_focus_output(2);
                 let w = add(&mut f, true, 100., [u32::MAX, 0, 0, u32::MAX]);
                 target_style_on_output(&mut f, &w, false, 2, DockEdge::Bottom, effect);
-                f.realand_state()
+                f.clarion_state()
                     .do_action(Action::MinimizeWindowById(w.id), false);
                 if restoring {
-                    f.realand_complete_animations();
-                    f.realand_state()
+                    f.clarion_complete_animations();
+                    f.clarion_state()
                         .do_action(Action::FocusWindow(w.id), false);
                 }
                 assert!(genie(&mut f, &w));
@@ -209,7 +209,7 @@ fn minimize_target_registration_draws_only_a_cancelled_animation_output() {
                     // still repaint the old visible animation's final frame.
                     target_style_on_output(&mut f, &w, false, 1, DockEdge::Left, effect);
                 } else {
-                    f.realand_state().do_action(
+                    f.clarion_state().do_action(
                         Action::SetMinimizeTarget {
                             id: w.id,
                             target: None,
@@ -225,7 +225,7 @@ fn minimize_target_registration_draws_only_a_cancelled_animation_output() {
                 clear_output_redraws(&mut f);
                 // Repeating the cancellation must not keep rendering an idle
                 // display after the removed mesh has been repainted.
-                f.realand_state().do_action(
+                f.clarion_state().do_action(
                     Action::SetMinimizeTarget {
                         id: w.id,
                         target: None,
@@ -245,11 +245,11 @@ fn secondary_output_minimizes_independently_and_invalid_targets_finish_safely() 
     let mut f = fixture();
     f.add_output(2, (1024, 768));
     let first = add(&mut f, true, 100., [u32::MAX, 0, 0, u32::MAX]);
-    f.realand_focus_output(2);
+    f.clarion_focus_output(2);
     let second = add(&mut f, true, 100., [0, u32::MAX, 0, u32::MAX]);
     target_on_output(&mut f, &second, false, 2);
-    f.realand_focus_output(1);
-    f.realand_state()
+    f.clarion_focus_output(1);
+    f.clarion_state()
         .do_action(Action::MinimizeWindowById(second.id), false);
     assert!(
         genie(&mut f, &second),
@@ -263,13 +263,13 @@ fn secondary_output_minimizes_independently_and_invalid_targets_finish_safely() 
     assert!(!genie(&mut f, &second));
     assert!(is_minimized(&mut f, &second));
     for (name, x, width) in [
-        (f.realand_output(1).name(), 40., 48.),
-        (f.realand_output(2).name(), -1., 48.),
-        (f.realand_output(2).name(), f64::NAN, 48.),
-        (f.realand_output(2).name(), 1000., 48.),
-        (f.realand_output(2).name(), 40., 0.),
+        (f.clarion_output(1).name(), 40., 48.),
+        (f.clarion_output(2).name(), -1., 48.),
+        (f.clarion_output(2).name(), f64::NAN, 48.),
+        (f.clarion_output(2).name(), 1000., 48.),
+        (f.clarion_output(2).name(), 40., 0.),
     ] {
-        f.realand_state().do_action(
+        f.clarion_state().do_action(
             Action::SetMinimizeTarget {
                 id: second.id,
                 target: Some(DockTarget {
@@ -285,18 +285,18 @@ fn secondary_output_minimizes_independently_and_invalid_targets_finish_safely() 
             },
             false,
         );
-        f.realand_state()
+        f.clarion_state()
             .do_action(Action::FocusWindow(second.id), false);
         assert!(!genie(&mut f, &second));
-        f.realand_state()
+        f.clarion_state()
             .do_action(Action::MinimizeWindowById(second.id), false);
         assert!(!genie(&mut f, &second));
         assert!(is_minimized(&mut f, &second));
     }
-    f.realand_complete_animations();
-    let output = f.realand_output(2);
-    assert!(!f.realand().layout.are_transitions_ongoing(Some(&output)));
-    f.realand().layout.verify_invariants();
+    f.clarion_complete_animations();
+    let output = f.clarion_output(2);
+    assert!(!f.clarion().layout.are_transitions_ongoing(Some(&output)));
+    f.clarion().layout.verify_invariants();
 }
 
 #[test]
@@ -306,7 +306,7 @@ fn restore_retains_floating_position_and_scrolling_column_order() {
         let first = add(&mut f, floating, 100., [u32::MAX, 0, 0, u32::MAX]);
         let _second = add(&mut f, floating, 500., [0, u32::MAX, 0, u32::MAX]);
         let order = |f: &mut Fixture| {
-            f.realand()
+            f.clarion()
                 .layout
                 .active_workspace()
                 .unwrap()
@@ -316,7 +316,7 @@ fn restore_retains_floating_position_and_scrolling_column_order() {
         };
         let before = order(&mut f);
         let position = |f: &mut Fixture| {
-            f.realand()
+            f.clarion()
                 .layout
                 .active_workspace()
                 .unwrap()
@@ -326,18 +326,18 @@ fn restore_retains_floating_position_and_scrolling_column_order() {
                 .unwrap()
         };
         let original_position = position(&mut f);
-        f.realand_state()
+        f.clarion_state()
             .do_action(Action::MinimizeWindowById(first.id), false);
-        f.realand_state()
+        f.clarion_state()
             .do_action(Action::FocusWindow(first.id), false);
-        f.realand_complete_animations();
+        f.clarion_complete_animations();
         f.double_roundtrip(first.client);
         if floating {
             assert_eq!(position(&mut f), original_position);
         } else {
             assert_eq!(order(&mut f), before);
         }
-        f.realand().layout.verify_invariants();
+        f.clarion().layout.verify_invariants();
     }
 }
 
@@ -349,7 +349,7 @@ fn reservation_and_same_extent_scale_changes_keep_logical_target() {
     target(&mut f, &w, false);
     let mut bar = super::stage_render::StageTestBar::new(&mut f);
     bar.configure(&mut f, false, 40, Layer::Top);
-    f.realand_state()
+    f.clarion_state()
         .do_action(Action::MinimizeWindowById(w.id), false);
     assert!(
         genie(&mut f, &w),
@@ -360,15 +360,15 @@ fn reservation_and_same_extent_scale_changes_keep_logical_target() {
         genie(&mut f, &w),
         "working-area-only reflow must not complete the mesh"
     );
-    f.realand_complete_animations();
-    f.realand_state()
+    f.clarion_complete_animations();
+    f.clarion_state()
         .do_action(Action::FocusWindow(w.id), false);
     assert!(genie(&mut f, &w));
-    f.realand_complete_animations();
-    f.realand_state()
+    f.clarion_complete_animations();
+    f.clarion_state()
         .do_action(Action::MinimizeWindowById(w.id), false);
     assert!(genie(&mut f, &w));
-    let output = f.realand_output(1);
+    let output = f.clarion_output(1);
     output.change_current_state(
         Some(smithay::output::Mode {
             size: (1600, 1000).into(),
@@ -378,28 +378,28 @@ fn reservation_and_same_extent_scale_changes_keep_logical_target() {
         Some(OutputScale::Fractional(1.25)),
         None,
     );
-    f.realand().output_resized(&output);
+    f.clarion().output_resized(&output);
     assert_eq!(crate::utils::output_size(&output), (1280., 800.).into());
     assert!(
         !genie(&mut f, &w),
         "scale change must release old-scale mesh resources"
     );
-    f.realand_state()
+    f.clarion_state()
         .do_action(Action::FocusWindow(w.id), false);
     assert!(
         genie(&mut f, &w),
         "unchanged logical extent must retain the target"
     );
     output.change_current_state(None, Some(smithay::utils::Transform::_180), None, None);
-    f.realand().output_resized(&output);
+    f.clarion().output_resized(&output);
     assert!(!genie(&mut f, &w));
-    f.realand_state()
+    f.clarion_state()
         .do_action(Action::MinimizeWindowById(w.id), false);
     assert!(
         genie(&mut f, &w),
         "same-extent transform must retain logical target"
     );
-    f.realand().layout.verify_invariants();
+    f.clarion().layout.verify_invariants();
 }
 
 #[test]
@@ -407,7 +407,7 @@ fn destroying_window_during_live_genie_removes_animation_and_repaint_work() {
     let mut f = fixture();
     let w = add(&mut f, true, 100., [u32::MAX, 0, 0, u32::MAX]);
     target(&mut f, &w, false);
-    f.realand_state()
+    f.clarion_state()
         .do_action(Action::MinimizeWindowById(w.id), false);
     assert!(genie(&mut f, &w));
     let c = f.client(w.client);
@@ -422,10 +422,10 @@ fn destroying_window_during_live_genie_removes_animation_and_repaint_work() {
     window.xdg_surface.destroy();
     window.surface.destroy();
     f.double_roundtrip(w.client);
-    assert_eq!(f.realand().layout.windows().count(), 0);
-    let output = f.realand_output(1);
-    assert!(!f.realand().layout.are_transitions_ongoing(Some(&output)));
-    f.realand().layout.verify_invariants();
+    assert_eq!(f.clarion().layout.windows().count(), 0);
+    let output = f.clarion_output(1);
+    assert!(!f.clarion().layout.are_transitions_ongoing(Some(&output)));
+    f.clarion().layout.verify_invariants();
 }
 
 fn save_image(
@@ -436,7 +436,7 @@ fn save_image(
     phase: &str,
     pixels: &[u8],
 ) {
-    let Some(dir) = std::env::var_os("REALAND_GENIE_PNG_DIR") else {
+    let Some(dir) = std::env::var_os("CLARION_GENIE_PNG_DIR") else {
         return;
     };
     std::fs::create_dir_all(&dir).unwrap();
@@ -455,7 +455,7 @@ fn save_image(
 }
 
 fn is_minimized(f: &mut Fixture, w: &TestWindow) -> bool {
-    f.realand()
+    f.clarion()
         .layout
         .windows()
         .find(|(_, m)| m.id().get() == w.id)
@@ -465,12 +465,12 @@ fn is_minimized(f: &mut Fixture, w: &TestWindow) -> bool {
 }
 
 fn keyboard_window(f: &mut Fixture) -> Option<Window> {
-    match &f.realand().keyboard_focus {
+    match &f.clarion().keyboard_focus {
         crate::compositor::KeyboardFocus::Layout {
             surface: Some(surface),
         } => {
             let surface = surface.clone();
-            f.realand()
+            f.clarion()
                 .layout
                 .find_window_and_output(&surface)
                 .map(|(m, _)| m.window.clone())
@@ -480,7 +480,7 @@ fn keyboard_window(f: &mut Fixture) -> Option<Window> {
 }
 
 fn genie(f: &mut Fixture, w: &TestWindow) -> bool {
-    f.realand()
+    f.clarion()
         .layout
         .workspaces()
         .flat_map(|(_, _, ws)| ws.tiles())
@@ -494,23 +494,23 @@ fn xdg_minimize_preserves_mapping_commits_workspace_and_switches_real_focus() {
     for mode in [TilingMode::Scrolling, TilingMode::Dwindle] {
         for floating in [false, true] {
             let mut f = fixture();
-            f.realand()
+            f.clarion()
                 .layout
                 .active_workspace_mut()
                 .unwrap()
                 .set_tiling_mode(mode);
             let first = add(&mut f, floating, 100., [u32::MAX, 0, 0, u32::MAX]);
             let second = add(&mut f, floating, 500., [0, u32::MAX, 0, u32::MAX]);
-            let ws_id = f.realand().layout.active_workspace().unwrap().id();
+            let ws_id = f.clarion().layout.active_workspace().unwrap().id();
             f.client(second.client)
                 .window(&second.surface)
                 .xdg_toplevel
                 .set_minimized();
             f.double_roundtrip(second.client);
             assert!(is_minimized(&mut f, &second));
-            assert_eq!(f.realand().layout.windows().count(), 2);
+            assert_eq!(f.clarion().layout.windows().count(), 2);
             assert_eq!(keyboard_window(&mut f), Some(first.mapped.clone()));
-            assert_eq!(f.realand().layout.active_workspace().unwrap().id(), ws_id);
+            assert_eq!(f.clarion().layout.active_workspace().unwrap().id(), ws_id);
             // The client is still mapped and can commit new content without losing
             // hooks or mutating the workspace's ordinary tiling/focus geometry.
             let w = f.client(second.client).window(&second.surface);
@@ -519,7 +519,7 @@ fn xdg_minimize_preserves_mapping_commits_workspace_and_switches_real_focus() {
             w.commit();
             f.double_roundtrip(second.client);
             let (m, _) = f
-                .realand()
+                .clarion()
                 .layout
                 .windows()
                 .find(|(_, m)| m.id().get() == second.id)
@@ -527,23 +527,23 @@ fn xdg_minimize_preserves_mapping_commits_workspace_and_switches_real_focus() {
                 .unwrap();
             assert_eq!(m.size().w, 321);
             assert!(m.is_minimized());
-            let output = f.realand_output(1);
+            let output = f.clarion_output(1);
             for point in [
                 Point::<f64, Logical>::from((510., 120.)),
                 (600., 220.).into(),
             ] {
                 assert!(f
-                    .realand()
+                    .clarion()
                     .layout
                     .window_under(&output, point)
                     .is_none_or(|(m, _)| m.id().get() != second.id));
             }
-            f.realand_state()
+            f.clarion_state()
                 .do_action(Action::FocusWindow(second.id), false);
             f.double_roundtrip(second.client);
             assert!(!is_minimized(&mut f, &second));
             assert_eq!(keyboard_window(&mut f), Some(second.mapped.clone()));
-            f.realand().layout.verify_invariants();
+            f.clarion().layout.verify_invariants();
         }
     }
 }
@@ -552,22 +552,22 @@ fn xdg_minimize_preserves_mapping_commits_workspace_and_switches_real_focus() {
 fn minimizing_last_window_keeps_workspace_and_ipc_identity_and_can_close_hidden() {
     let mut f = fixture();
     let w = add(&mut f, true, 100., [u32::MAX, 0, 0, u32::MAX]);
-    let ws_id = f.realand().layout.active_workspace().unwrap().id();
-    f.realand_state()
+    let ws_id = f.clarion().layout.active_workspace().unwrap().id();
+    f.clarion_state()
         .do_action(Action::MinimizeWindowById(w.id), false);
     f.double_roundtrip(w.client);
     assert!(keyboard_window(&mut f).is_none());
-    assert!(f.realand().layout.focus().is_none());
+    assert!(f.clarion().layout.focus().is_none());
     let mut ids = Vec::new();
-    f.realand().layout.with_windows(|m, _, ws, layout| {
+    f.clarion().layout.with_windows(|m, _, ws, layout| {
         ids.push((m.id().get(), ws, m.is_minimized()));
         assert!(layout.tile_pos_in_workspace_view.is_none());
     });
     assert_eq!(ids, vec![(w.id, Some(ws_id), true)]);
-    f.realand().layout.switch_workspace(1);
-    f.realand_complete_animations();
-    assert!(f.realand().layout.find_workspace_by_id(ws_id).is_some());
-    f.realand_state()
+    f.clarion().layout.switch_workspace(1);
+    f.clarion_complete_animations();
+    assert!(f.clarion().layout.find_workspace_by_id(ws_id).is_some());
+    f.clarion_state()
         .do_action(Action::CloseWindowById(w.id), false);
     f.double_roundtrip(w.client);
     assert!(f.client(w.client).window(&w.surface).close_requested);
@@ -584,8 +584,8 @@ fn minimizing_last_window_keeps_workspace_and_ipc_identity_and_can_close_hidden(
     w.surface.destroy();
     let client = c.id;
     f.double_roundtrip(client);
-    assert_eq!(f.realand().layout.windows().count(), 0);
-    f.realand().layout.verify_invariants();
+    assert_eq!(f.clarion().layout.windows().count(), 0);
+    f.clarion().layout.verify_invariants();
 }
 
 #[test]
@@ -593,10 +593,10 @@ fn targets_reduced_motion_output_changes_and_explicit_mutations_finish_cleanly()
     let mut f = fixture();
     let w = add(&mut f, true, 100., [u32::MAX, 0, 0, u32::MAX]);
     target(&mut f, &w, false);
-    f.realand_state()
+    f.clarion_state()
         .do_action(Action::MinimizeWindowById(w.id), false);
     assert!(genie(&mut f, &w));
-    f.realand_state().do_action(
+    f.clarion_state().do_action(
         Action::SetMinimizeTarget {
             id: w.id,
             target: None,
@@ -606,55 +606,55 @@ fn targets_reduced_motion_output_changes_and_explicit_mutations_finish_cleanly()
     );
     assert!(!genie(&mut f, &w));
     assert!(is_minimized(&mut f, &w));
-    f.realand_state()
+    f.clarion_state()
         .do_action(Action::FocusWindow(w.id), false);
     assert!(!genie(&mut f, &w));
     target(&mut f, &w, true);
-    f.realand_state()
+    f.clarion_state()
         .do_action(Action::MinimizeWindowById(w.id), false);
     assert!(!genie(&mut f, &w));
     assert!(is_minimized(&mut f, &w));
     // An explicit sizing mutation safely restores the parked ID before the
     // ordinary floating/scrolling handlers dereference it.
-    f.realand_state().do_action(
+    f.clarion_state().do_action(
         Action::SetWindowWidthById {
             id: w.id,
-            change: realand_ipc::SizeChange::SetFixed(400),
+            change: clarion_ipc::SizeChange::SetFixed(400),
         },
         false,
     );
     assert!(!is_minimized(&mut f, &w));
     target(&mut f, &w, false);
-    f.realand_state()
+    f.clarion_state()
         .do_action(Action::MinimizeWindowById(w.id), false);
     assert!(genie(&mut f, &w));
-    f.realand().layout.complete_minimize_animations();
+    f.clarion().layout.complete_minimize_animations();
     assert!(!genie(&mut f, &w));
     assert!(is_minimized(&mut f, &w));
-    let output = f.realand_output(1);
-    f.realand_state()
+    let output = f.clarion_output(1);
+    f.clarion_state()
         .do_action(Action::FocusWindow(w.id), false);
-    f.realand_complete_animations();
-    f.realand_state()
+    f.clarion_complete_animations();
+    f.clarion_state()
         .do_action(Action::MinimizeWindowById(w.id), false);
     assert!(genie(&mut f, &w));
-    f.realand().remove_output(&output);
+    f.clarion().remove_output(&output);
     assert!(!genie(&mut f, &w));
-    assert_eq!(f.realand().layout.windows().count(), 1);
+    assert_eq!(f.clarion().layout.windows().count(), 1);
     f.add_output(2, (1024, 768));
-    f.realand_state()
+    f.clarion_state()
         .do_action(Action::FocusWindow(w.id), false);
     f.double_roundtrip(w.client);
     assert!(!is_minimized(&mut f, &w));
     assert_eq!(keyboard_window(&mut f), Some(w.mapped.clone()));
-    f.realand().layout.verify_invariants();
+    f.clarion().layout.verify_invariants();
 }
 
 #[test]
 fn dock_activation_restores_minimized_window_and_exits_every_overview() {
     for style in [
-        realand_config::OverviewStyle::Stage,
-        realand_config::OverviewStyle::Strip,
+        clarion_config::OverviewStyle::Stage,
+        clarion_config::OverviewStyle::Strip,
     ] {
         for action in [
             Action::ToggleOverview,
@@ -662,32 +662,32 @@ fn dock_activation_restores_minimized_window_and_exits_every_overview() {
             Action::ToggleWindowSpread,
         ] {
             let mut f = fixture();
-            f.realand().config.borrow_mut().overview.style = style;
-            let config = f.realand().config.clone();
-            f.realand().layout.update_config(&config.borrow());
+            f.clarion().config.borrow_mut().overview.style = style;
+            let config = f.clarion().config.clone();
+            f.clarion().layout.update_config(&config.borrow());
             let _first = add(&mut f, true, 500., [0, u32::MAX, 0, u32::MAX]);
             let w = add(&mut f, true, 100., [u32::MAX, 0, 0, u32::MAX]);
             target(&mut f, &w, false);
-            f.realand_state()
+            f.clarion_state()
                 .do_action(Action::MinimizeWindowById(w.id), false);
-            f.realand_complete_animations();
-            f.realand_state().do_action(action, false);
-            f.realand_complete_animations();
-            assert!(f.realand().layout.is_overview_open());
-            f.realand_state()
+            f.clarion_complete_animations();
+            f.clarion_state().do_action(action, false);
+            f.clarion_complete_animations();
+            assert!(f.clarion().layout.is_overview_open());
+            f.clarion_state()
                 .do_action(Action::FocusWindow(u64::MAX), false);
             assert!(
-                f.realand().layout.is_overview_open(),
+                f.clarion().layout.is_overview_open(),
                 "invalid IDs must retain overview"
             );
-            f.realand_state()
+            f.clarion_state()
                 .do_action(Action::FocusWindow(w.id), false);
-            f.realand_complete_animations();
+            f.clarion_complete_animations();
             f.double_roundtrip(w.client);
-            assert!(!f.realand().layout.is_overview_open());
+            assert!(!f.clarion().layout.is_overview_open());
             assert!(!is_minimized(&mut f, &w));
             assert_eq!(keyboard_window(&mut f), Some(w.mapped.clone()));
-            f.realand().layout.verify_invariants();
+            f.clarion().layout.verify_invariants();
         }
     }
 }
@@ -699,7 +699,7 @@ fn real_session_lock_releases_minimize_presentation_and_blocks_restore() {
     let mut f = fixture();
     let w = add(&mut f, true, 100., [u32::MAX, 0, 0, u32::MAX]);
     target(&mut f, &w, false);
-    f.realand_state()
+    f.clarion_state()
         .do_action(Action::MinimizeWindowById(w.id), false);
     assert!(genie(&mut f, &w));
     let client = f.add_client();
@@ -715,12 +715,12 @@ fn real_session_lock_releases_minimize_presentation_and_blocks_restore() {
     let _lock = manager.lock(&c.qh, ());
     f.double_roundtrip(client);
     assert!(!matches!(
-        f.realand().lock_state,
+        f.clarion().lock_state,
         crate::compositor::LockState::Unlocked
     ));
     assert!(!genie(&mut f, &w));
     assert!(is_minimized(&mut f, &w));
-    f.realand_state()
+    f.clarion_state()
         .do_action(Action::FocusWindow(w.id), false);
     assert!(is_minimized(&mut f, &w));
     assert_ne!(keyboard_window(&mut f), Some(w.mapped.clone()));
@@ -729,12 +729,12 @@ fn real_session_lock_releases_minimize_presentation_and_blocks_restore() {
     f.client(w.client).window(&w.surface).set_maximized();
     f.double_roundtrip(w.client);
     assert!(!genie(&mut f, &w));
-    f.realand().unlock();
-    f.realand_state()
+    f.clarion().unlock();
+    f.clarion_state()
         .do_action(Action::FocusWindow(w.id), false);
-    f.realand_complete_animations();
+    f.clarion_complete_animations();
     target(&mut f, &w, false);
-    f.realand_state()
+    f.clarion_state()
         .do_action(Action::MinimizeWindowById(w.id), false);
     assert!(
         genie(&mut f, &w),
@@ -754,20 +754,20 @@ fn test_pixels(native: bool) {
                 let mut f = fixture();
                 if native {
                     let mut backend = crate::backend::Headless::new(
-                        f.realand().config.clone(),
+                        f.clarion().config.clone(),
                         crate::backend::RendererBackendType::Vulkan,
                     );
                     backend.add_renderer().unwrap();
                     backend.init(&mut crate::platform::device_bridge::DeviceCoordinator::new(
-                        f.realand(),
+                        f.clarion(),
                     ));
-                    f.realand_state().backend = crate::backend::Backend::Headless(backend);
+                    f.clarion_state().backend = crate::backend::Backend::Headless(backend);
                 } else {
                     f.init_gles_renderer();
                 }
-                let output = f.realand_output(1);
+                let output = f.clarion_output(1);
                 output.change_current_state(None, None, Some(OutputScale::Fractional(scale)), None);
-                f.realand().output_resized(&output);
+                f.clarion().output_resized(&output);
                 let w = add(&mut f, true, 80. / scale, [u32::MAX, 0, 0, u32::MAX]);
                 target_style_on_output(&mut f, &w, false, 1, edge, effect);
                 let before = super::stage_render::pixels(&mut f, RenderTarget::Output);
@@ -784,9 +784,9 @@ fn test_pixels(native: bool) {
                     red(&before) > 20_000,
                     "expected real red source pixels at {scale}"
                 );
-                let now = f.realand().clock.now_unadjusted();
-                f.realand().clock.set_unadjusted(now);
-                f.realand_state()
+                let now = f.clarion().clock.now_unadjusted();
+                f.clarion().clock.set_unadjusted(now);
+                f.clarion_state()
                     .do_action(Action::MinimizeWindowById(w.id), false);
                 let start = super::stage_render::pixels(&mut f, RenderTarget::Output);
                 save_image(native, scale, edge, effect, "start", &start);
@@ -820,13 +820,13 @@ fn test_pixels(native: bool) {
                     before == start,
                     "start frame must preserve the complete source image"
                 );
-                f.realand().clock.set_unadjusted(
+                f.clarion().clock.set_unadjusted(
                     now + Duration::from_millis(match effect {
                         MinimizeEffect::Genie => 250,
                         MinimizeEffect::Scale => 175,
                     }),
                 );
-                f.realand().advance_animations();
+                f.clarion().advance_animations();
                 let middle = super::stage_render::pixels(&mut f, RenderTarget::Output);
                 save_image(native, scale, edge, effect, "middle", &middle);
                 let red_bounds = |pixels: &[u8]| {
@@ -867,7 +867,7 @@ fn test_pixels(native: bool) {
                     red(&middle) > 500 && red(&middle) < red(&before),
                     "{edge:?}/{effect:?} must deform genuine client content at {scale}"
                 );
-                f.realand_state()
+                f.clarion_state()
                     .do_action(Action::FocusWindow(w.id), false);
                 let reversed = super::stage_render::pixels(&mut f, RenderTarget::Output);
                 save_image(native, scale, edge, effect, "reversed", &reversed);
@@ -875,7 +875,7 @@ fn test_pixels(native: bool) {
                     middle == reversed,
                     "reversal must continue from the current composed frame at {scale}"
                 );
-                f.realand_complete_animations();
+                f.clarion_complete_animations();
                 f.double_roundtrip(w.client);
                 let restored = super::stage_render::pixels(&mut f, RenderTarget::Output);
                 save_image(native, scale, edge, effect, "restored", &restored);
@@ -885,20 +885,20 @@ fn test_pixels(native: bool) {
                 // Verify target-specific privacy during mesh flattening as well as in
                 // the normal window path: capturing Output first must not leak its image.
 
-                let rule = realand_config::WindowRule {
+                let rule = clarion_config::WindowRule {
                     block_out_from: Some(BlockOutFrom::ScreenCapture),
                     ..Default::default()
                 };
-                f.realand()
+                f.clarion()
                     .config
                     .borrow_mut()
                     .window_rules
                     .push(rule.clone());
-                f.realand().layout.with_windows_mut(|m, _| {
+                f.clarion().layout.with_windows_mut(|m, _| {
                     m.recompute_window_rules(std::slice::from_ref(&rule), false);
                 });
-                f.realand().layout.update_window(&w.mapped, None);
-                f.realand_state()
+                f.clarion().layout.update_window(&w.mapped, None);
+                f.clarion_state()
                     .do_action(Action::MinimizeWindowById(w.id), false);
                 let on_screen = super::stage_render::pixels(&mut f, RenderTarget::Output);
                 assert!(red(&on_screen) > 500);
@@ -909,12 +909,12 @@ fn test_pixels(native: bool) {
                     0,
                     "blocked source leaked through Genie on scale {scale}"
                 );
-                f.realand_complete_animations();
+                f.clarion_complete_animations();
                 let hidden = super::stage_render::pixels(&mut f, RenderTarget::Output);
                 save_image(native, scale, edge, effect, "hidden", &hidden);
                 assert_eq!(red(&hidden), 0);
                 assert!(!genie(&mut f, &w));
-                assert!(!f.realand().layout.are_transitions_ongoing(Some(&output)));
+                assert!(!f.clarion().layout.are_transitions_ongoing(Some(&output)));
             }
         }
     }

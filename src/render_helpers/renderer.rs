@@ -7,22 +7,22 @@ use super::vulkan::native::NativeRenderer;
 use crate::backend::tty::{TtyFrame, TtyRenderer};
 
 /// Trait with our main renderer requirements to save on the typing.
-pub trait RealandRenderer:
+pub trait ClarionRenderer:
     ImportAll
     + ImportMem
     + ExportMem
     + Bind<Dmabuf>
-    + Renderer<TextureId = Self::RealandTextureId, Error = Self::RealandError>
+    + Renderer<TextureId = Self::ClarionTextureId, Error = Self::ClarionError>
     + AsGlesRenderer
     + AsNativeRenderer
     + ClipRenderer
 {
     // Associated types to work around the instability of associated type bounds.
-    type RealandTextureId: Texture + Clone + Send + 'static;
-    type RealandError: std::error::Error + Send + Sync + 'static;
+    type ClarionTextureId: Texture + Clone + Send + 'static;
+    type ClarionError: std::error::Error + Send + Sync + 'static;
 }
 
-impl<R> RealandRenderer for R
+impl<R> ClarionRenderer for R
 where
     R: ImportAll
         + ImportMem
@@ -34,8 +34,8 @@ where
     R::TextureId: Texture + Clone + Send + 'static,
     R::Error: std::error::Error + Send + Sync + 'static,
 {
-    type RealandTextureId = R::TextureId;
-    type RealandError = R::Error;
+    type ClarionTextureId = R::TextureId;
+    type ClarionError = R::Error;
 }
 
 /// Backend capabilities needed by layout decorations, independent of GLES access.
@@ -44,7 +44,7 @@ pub trait DecorationRenderer: Renderer {
     fn supports_shadow(&mut self) -> bool;
 }
 
-impl<R: RealandRenderer> DecorationRenderer for R {
+impl<R: ClarionRenderer> DecorationRenderer for R {
     fn supports_border(&mut self) -> bool {
         if let Some(gles) = self.as_gles_renderer() {
             super::shaders::Shaders::get(gles)
@@ -137,9 +137,9 @@ impl RendererBackendType {
     /// Resolve the renderer backend following precedence:
     /// 1. Explicit CLI argument (`--renderer <vulkan|gles>`)
     /// 2. Config file (`renderer "vulkan"` or `debug { renderer "vulkan" }`)
-    /// 3. Environment variable `REALAND_RENDERER`
+    /// 3. Environment variable `CLARION_RENDERER`
     /// 4. Default (`Gles`)
-    pub fn resolve(cli_renderer: Option<Self>, config: &realand_config::Config) -> Self {
+    pub fn resolve(cli_renderer: Option<Self>, config: &clarion_config::Config) -> Self {
         if let Some(cli) = cli_renderer {
             return cli;
         }
@@ -151,10 +151,10 @@ impl RendererBackendType {
         Self::from_env()
     }
 
-    pub fn from_config(cfg: realand_config::RendererBackendConfig) -> Self {
+    pub fn from_config(cfg: clarion_config::RendererBackendConfig) -> Self {
         match cfg {
-            realand_config::RendererBackendConfig::Gles => Self::Gles,
-            realand_config::RendererBackendConfig::Vulkan => Self::Vulkan,
+            clarion_config::RendererBackendConfig::Gles => Self::Gles,
+            clarion_config::RendererBackendConfig::Vulkan => Self::Vulkan,
         }
     }
 
@@ -175,10 +175,10 @@ impl RendererBackendType {
         }
     }
 
-    /// Detect configured renderer backend from environment variable (`REALAND_RENDERER`).
+    /// Detect configured renderer backend from environment variable (`CLARION_RENDERER`).
     /// Defaults to `Gles` if unset or invalid.
     pub fn from_env() -> Self {
-        match std::env::var("REALAND_RENDERER") {
+        match std::env::var("CLARION_RENDERER") {
             Ok(val) => match Self::parse(&val) {
                 Ok(backend) => backend,
                 Err(err) => {
@@ -349,7 +349,7 @@ macro_rules! with_any_renderer_for_output {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use realand_config::Config;
+    use clarion_config::Config;
     use std::path::Path;
 
     #[test]

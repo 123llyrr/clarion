@@ -3,10 +3,10 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Mutex;
 
+use clarion_config::Config;
 use ordered_float::NotNan;
 use pangocairo::cairo::{self, ImageSurface};
 use pangocairo::pango::{Alignment, FontDescription};
-use realand_config::Config;
 use smithay::backend::renderer::element::utils::RescaleRenderElement;
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::{ContextId, ImportMem, Texture};
@@ -16,10 +16,10 @@ use smithay::utils::user_data::UserDataMap;
 use smithay::utils::{Point, Transform};
 
 use crate::animation::{Animation, Clock};
-use crate::realand_render_elements;
+use crate::clarion_render_elements;
 use crate::render_helpers::memory::MemoryBuffer;
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
-use crate::render_helpers::renderer::RealandRenderer;
+use crate::render_helpers::renderer::ClarionRenderer;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
 use crate::utils::{output_size, to_physical_precise_round};
@@ -39,7 +39,7 @@ pub struct ExitConfirmDialog {
     config: Rc<RefCell<Config>>,
 }
 
-realand_render_elements! {
+clarion_render_elements! {
     ExitConfirmDialogRenderElement => {
         Texture = RescaleRenderElement<PrimaryGpuTextureRenderElement>,
         SolidColor = SolidColorRenderElement,
@@ -170,7 +170,16 @@ impl ExitConfirmDialog {
         matches!(self.state, State::Showing(_) | State::Hiding(_))
     }
 
-    pub fn render<R: RealandRenderer>(
+    pub(crate) fn on_native_renderer_replaced(&self) {
+        if let Some(cache) = self
+            .textures
+            .get::<DialogTextures<crate::render_helpers::vulkan::VulkanTexture>>()
+        {
+            cache.0.borrow_mut().clear();
+        }
+    }
+
+    pub fn render<R: ClarionRenderer>(
         &self,
         renderer: &mut R,
         output: &Output,
@@ -235,7 +244,7 @@ impl ExitConfirmDialog {
             State::Showing(anim) | State::Hiding(anim) => (anim.value(), anim.clamped_value()),
             State::Visible => (1., 1.),
         };
-        let _span = realand_tracy_span!("ExitConfirmDialog::render");
+        let _span = clarion_tracy_span!("ExitConfirmDialog::render");
 
         // Can be out of range when starting from past 0. or 1. from a spring bounce.
         let clamped_value = clamped_value.clamp(0., 1.);
@@ -309,7 +318,7 @@ impl ExitConfirmDialog {
 }
 
 fn render(scale: f64) -> anyhow::Result<MemoryBuffer> {
-    let _span = realand_tracy_span!("exit_confirm_dialog::render");
+    let _span = clarion_tracy_span!("exit_confirm_dialog::render");
 
     let markup = text(true);
 
@@ -376,7 +385,7 @@ fn text(markup: bool) -> String {
     };
 
     format!(
-        "Are you sure you want to exit realand?\n\n\
+        "Are you sure you want to exit clarion?\n\n\
          Press {key} to confirm."
     )
 }
@@ -384,7 +393,7 @@ fn text(markup: bool) -> String {
 #[cfg(feature = "dbus")]
 pub fn a11y_node() -> accesskit::Node {
     let mut node = accesskit::Node::new(accesskit::Role::AlertDialog);
-    node.set_label("Exit realand");
+    node.set_label("Exit clarion");
     node.set_description(text(false));
     node.set_modal();
     node

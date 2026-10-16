@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use glam::{Mat3, Vec2};
-use realand_config::{
+use clarion_config::{
     Color, CornerRadius, GradientColorSpace, GradientInterpolation, HueInterpolation,
 };
+use glam::{Mat3, Vec2};
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer, Uniform};
 use smithay::backend::renderer::utils::{CommitCounter, DamageSet, OpaqueRegions};
@@ -306,7 +306,7 @@ impl RenderElement<GlesRenderer> for BorderRenderElement {
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
     ) -> Result<(), GlesError> {
-        let _span = realand_tracy_span!("BorderRenderElement::draw");
+        let _span = clarion_tracy_span!("BorderRenderElement::draw");
         frame.with_gpu_span(gpu_span_location!("BorderRenderElement::draw"), |frame| {
             RenderElement::<GlesRenderer>::draw(
                 &self.inner,

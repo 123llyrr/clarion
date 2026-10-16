@@ -36,15 +36,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build tests
-        run: cargo test --locked --no-run --all --exclude realand-visual-tests
+        run: cargo test --locked --no-run --all --exclude clarion-visual-tests
 
       - name: Test
-        run: cargo test --locked --all --exclude realand-visual-tests -- --nocapture
+        run: cargo test --locked --all --exclude clarion-visual-tests -- --nocapture
 
       - name: Check session scripts
         run: |
-          sh -n resources/realand-session
+          sh -n resources/clarion-session
+          for wrapper in resources/compat/*; do sh -n "$wrapper"; done
           bash -n scripts/install-session.sh scripts/check-vulkan.sh scripts/check-project.sh
+          python3 scripts/check_module_boundaries.py
           python3 -m unittest discover -s scripts -p 'test_*.py'
 
   build:
@@ -141,10 +143,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build tests
-        run: cargo test --no-run --all --exclude realand-visual-tests --release
+        run: cargo test --no-run --all --exclude clarion-visual-tests --release
 
       - name: Test
-        run: cargo test --all --exclude realand-visual-tests --release
+        run: cargo test --all --exclude clarion-visual-tests --release
 
   visual-tests:
     strategy:
@@ -168,7 +170,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --package realand-visual-tests
+        run: cargo build --package clarion-visual-tests
 
   msrv:
     strategy:
@@ -254,7 +256,7 @@ jobs:
   freebsd:
     runs-on: ubuntu-24.04
     env:
-      CARGO_HOME: /home/runner/work/realand/realand/cargo-home
+      CARGO_HOME: ${{ github.workspace }}/cargo-home
 
     steps:
       - uses: actions/checkout@v6
@@ -307,7 +309,7 @@ jobs:
       - run: nix flake check -L
 
   publish-wiki:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.REALAND_PUBLISH_WIKI == 'true'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && (vars.CLARION_PUBLISH_WIKI == 'true' || (vars.CLARION_PUBLISH_WIKI == '' && vars.REALAND_PUBLISH_WIKI == 'true'))
     needs:
       - publish-docs
     permissions:
@@ -324,7 +326,7 @@ jobs:
           path: docs/wiki/
 
   publish-docs:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.REALAND_PUBLISH_DOCS == 'true'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && (vars.CLARION_PUBLISH_DOCS == 'true' || (vars.CLARION_PUBLISH_DOCS == '' && vars.REALAND_PUBLISH_DOCS == 'true'))
     needs:
       - test
     permissions:
@@ -345,16 +347,16 @@ jobs:
         run: uv sync --locked --all-extras --dev
         working-directory: docs/
 
-      - name: Generate realand documentation
+      - name: Generate clarion documentation
         run: uv run mkdocs build
         working-directory: docs/
 
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Generate rustdoc documentation
-        run: cargo doc --no-deps -p realand-ipc
+        run: cargo doc --no-deps -p clarion-ipc
 
-      - run: mkdir -p publish/realand_ipc
+      - run: mkdir -p publish/clarion_ipc
       - run: cp -r ./target/doc/* ./publish/
       - run: cp -r ./docs/site/* ./publish/
 

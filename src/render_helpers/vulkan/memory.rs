@@ -6,7 +6,7 @@ use ash::vk;
 use smithay::backend::allocator::Fourcc;
 use smithay::utils::{Buffer, Rectangle};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, OnceLock};
+use std::sync::{mpsc, Arc};
 
 // Includes cancelled or timed-out jobs whose GPU allocations are still live.
 // The screenshot UI applies a smaller admission quota before submitting work.
@@ -17,6 +17,7 @@ static READBACK_BYTES: AtomicUsize = AtomicUsize::new(0);
 
 struct ReadbackPermit {
     bytes: usize,
+    _lifecycle: super::lifecycle::TaskLease,
 }
 
 impl ReadbackPermit {
@@ -24,12 +25,22 @@ impl ReadbackPermit {
         if bytes > MAX_READBACK_BYTES {
             return Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY);
         }
+        let lifecycle = super::lifecycle::TaskLease::acquire()
+            .map_err(|_| vk::Result::ERROR_INITIALIZATION_FAILED)?;
+        // Admit a readback only after its fixed retirement queue exists. A
+        // cancelled job can then retire even after process admission closes.
+        if retirement_sender().is_none() {
+            return Err(vk::Result::ERROR_INITIALIZATION_FAILED);
+        }
         READBACK_JOBS
             .fetch_update(Ordering::AcqRel, Ordering::Relaxed, |jobs| {
                 (jobs < MAX_READBACK_JOBS).then_some(jobs + 1)
             })
             .map_err(|_| vk::Result::ERROR_OUT_OF_HOST_MEMORY)?;
-        let mut permit = Self { bytes: 0 };
+        let mut permit = Self {
+            bytes: 0,
+            _lifecycle: lifecycle,
+        };
         permit.grow_to(bytes)?;
         Ok(permit)
     }
@@ -62,25 +73,51 @@ struct RetiredReadback {
     _permit: ReadbackPermit,
 }
 
-fn retirement_sender() -> Option<&'static mpsc::Sender<RetiredReadback>> {
-    static SENDER: OnceLock<Option<mpsc::Sender<RetiredReadback>>> = OnceLock::new();
-    SENDER.get_or_init(|| {
-        let (sender, receiver) = mpsc::channel::<RetiredReadback>();
-        std::thread::Builder::new().name("realand-readback-retire".into()).spawn(move || {
-            while let Ok(mut retired) = receiver.recv() {
-                // Never hold command_lock during a fence wait. Upload's normal
-                // destructor can return resources to its bounded pools afterward.
-                let result = unsafe { retired.copy.ctx.device.wait_for_fences(&[retired.copy.fence], true, u64::MAX) };
-                if let Err(error) = result {
-                    warn!(?error, "Vulkan readback retirement failed; retaining bounded in-flight GPU resources");
-                    // Keep the image, device, command, staging allocation and
-                    // admission permit together. A lost device must not free
-                    // resources that could still be referenced by queued work.
-                    std::mem::forget(retired);
-                } else { retired.copy.submitted = false; }
-            }
-        }).ok().map(|_| sender)
-    }).as_ref()
+enum RetirementMessage {
+    Work(RetiredReadback),
+    Wake(super::lifecycle::Wake),
+}
+fn retirement_sender() -> Option<&'static Arc<mpsc::Sender<RetirementMessage>>> {
+    static SENDER: super::lifecycle::ServiceCell<Arc<mpsc::Sender<RetirementMessage>>> =
+        super::lifecycle::ServiceCell::new();
+    SENDER
+        .get_or_try_init(|| {
+            let (sender, receiver) = mpsc::channel::<RetirementMessage>();
+            let sender = Arc::new(sender);
+            let wake = super::lifecycle::unbounded_queue_waker(&sender, RetirementMessage::Wake);
+            super::lifecycle::spawn_worker("clarion-readback-retire", wake, move |stop| {
+                fn retire(mut retired: RetiredReadback) {
+                    let result = unsafe {
+                        retired.copy.ctx.device.wait_for_fences(&[retired.copy.fence], true, u64::MAX)
+                    };
+                    if let Err(error) = result {
+                        warn!(?error, "Vulkan readback retirement failed; retaining bounded in-flight GPU resources");
+                        super::lifecycle::record_quarantine();
+                        std::mem::forget(retired);
+                    } else {
+                        retired.copy.submitted = false;
+                    }
+                }
+                while let Ok(message) = receiver.recv() {
+                    match message {
+                        RetirementMessage::Work(retired) => retire(retired),
+                        RetirementMessage::Wake(wake) => {
+                            drop(wake);
+                            if stop.should_exit() {
+                                for message in receiver.try_iter() {
+                                    if let RetirementMessage::Work(retired) = message {
+                                        retire(retired);
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            })?;
+            Ok::<_, std::io::Error>(sender)
+        })
+        .ok()
 }
 
 /// Owned transfer resources; no renderer, Wayland client or mapped pointer is
@@ -164,12 +201,14 @@ impl Drop for PendingReadback {
                 _permit: permit,
             };
             if let Some(sender) = retirement_sender() {
-                if let Err(error) = sender.send(retired) {
+                if let Err(error) = sender.send(RetirementMessage::Work(retired)) {
                     warn!("Vulkan readback retirement worker unavailable; retaining bounded GPU resources");
+                    super::lifecycle::record_quarantine();
                     std::mem::forget(error.0);
                 }
             } else {
                 warn!("Vulkan readback retirement worker unavailable; retaining bounded GPU resources");
+                super::lifecycle::record_quarantine();
                 std::mem::forget(retired);
             }
         }
@@ -800,6 +839,7 @@ impl Drop for Upload {
                 warn!(?err, "Vulkan transfer fence wait failed; retaining in-flight GPU resources until process exit");
                 // The texture owns the context as well as the image. Leaking
                 // only raw staging handles would still free both on unwinding.
+                super::lifecycle::record_quarantine();
                 std::mem::forget(self.texture.take());
                 self.command = vk::CommandBuffer::null();
                 self.fence = vk::Fence::null();
@@ -857,7 +897,9 @@ impl Drop for PendingUpload {
     fn drop(&mut self) {
         if let Err(err) = self.wait() {
             warn!(?err, "Vulkan SHM upload fence wait failed; retaining in-flight GPU resources until process exit");
+            super::lifecycle::record_quarantine();
             std::mem::forget(self.texture.take());
+            super::lifecycle::record_quarantine();
             std::mem::forget(self.ctx.clone());
             return;
         }

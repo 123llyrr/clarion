@@ -22,12 +22,12 @@ fn set_fullscreen_on_removed_output_does_not_panic() {
     // Grab the second output's wl_output proxy on the client side.
     let wl_output = f.client(id).output("headless-2");
 
-    // Remove the output on the realand side. Its wl_output global is disabled but not yet
+    // Remove the output on the clarion side. Its wl_output global is disabled but not yet
     // destroyed, so the client's wl_output resource is still valid and usable.
-    let output = f.realand_output(2);
-    f.realand().remove_output(&output);
+    let output = f.clarion_output(2);
+    f.clarion().remove_output(&output);
 
-    // Request fullscreen on the now-removed wl_output. realand must not panic.
+    // Request fullscreen on the now-removed wl_output. clarion must not panic.
     let window = f.client(id).window(&surface);
     window.set_fullscreen(Some(&wl_output));
     f.double_roundtrip(id);

@@ -27,7 +27,7 @@ fn setup() -> (Fixture, ClientId, WlSurface, ServerSurface, WpCommitTimerV1) {
     surface.commit();
     fixture.double_roundtrip(id);
     let server_surface = fixture
-        .realand()
+        .clarion()
         .root_surface
         .keys()
         .find(|candidate| candidate.id().protocol_id() == surface.id().protocol_id())
@@ -110,7 +110,7 @@ fn future_timestamp_blocks_until_its_monotonic_deadline() {
     });
     assert_eq!(scale(&server_surface), 2);
     assert!(get_monotonic_time() >= deadline);
-    assert!(fixture.realand().commit_timing.scheduled.is_empty());
+    assert!(fixture.clarion().commit_timing.scheduled.is_empty());
 }
 
 #[test]
@@ -167,18 +167,18 @@ fn multiple_deadlines_share_one_timer_and_rearm_for_the_next_commit() {
     surface.set_buffer_scale(3);
     surface.commit();
     fixture.double_roundtrip(id);
-    assert_eq!(fixture.realand().commit_timing.scheduled.len(), 1);
+    assert_eq!(fixture.clarion().commit_timing.scheduled.len(), 1);
 
     dispatch_until(&mut fixture, Duration::from_millis(140), |_| {
         scale(&server_surface) == 2
     });
     assert_eq!(scale(&server_surface), 2);
-    assert_eq!(fixture.realand().commit_timing.scheduled.len(), 1);
+    assert_eq!(fixture.clarion().commit_timing.scheduled.len(), 1);
     dispatch_until(&mut fixture, Duration::from_secs(1), |_| {
         scale(&server_surface) == 3
     });
     assert_eq!(scale(&server_surface), 3);
-    assert!(fixture.realand().commit_timing.scheduled.is_empty());
+    assert!(fixture.clarion().commit_timing.scheduled.is_empty());
 }
 
 #[test]
@@ -205,10 +205,10 @@ fn fifo_and_commit_timing_constraints_must_both_clear() {
     });
     assert_eq!(scale(&server_surface), 1, "FIFO remains pending");
 
-    let realand = fixture.realand();
-    realand.fifo.expire(
+    let clarion = fixture.clarion();
+    clarion.fifo.expire(
         get_monotonic_time() + Duration::from_secs(2),
-        &realand.blocker_cleared_tx,
+        &clarion.blocker_cleared_tx,
     );
     fixture.double_roundtrip(id);
     assert_eq!(scale(&server_surface), 2);
@@ -236,11 +236,11 @@ fn destroying_surface_cancels_timer_and_releases_its_barriers() {
     set_timestamp(&timer, get_monotonic_time() + Duration::from_secs(60));
     surface.commit();
     fixture.double_roundtrip(id);
-    assert_eq!(fixture.realand().commit_timing.scheduled.len(), 1);
+    assert_eq!(fixture.clarion().commit_timing.scheduled.len(), 1);
     surface.destroy();
     timer.destroy();
     fixture.double_roundtrip(id);
-    assert!(fixture.realand().commit_timing.scheduled.is_empty());
+    assert!(fixture.clarion().commit_timing.scheduled.is_empty());
 }
 
 #[test]
@@ -341,10 +341,10 @@ fn unsigned_seconds_cannot_wrap_into_an_expired_deadline() {
     fixture.double_roundtrip(id);
 
     assert_eq!(scale(&server_surface), 1);
-    assert_eq!(fixture.realand().commit_timing.scheduled.len(), 1);
+    assert_eq!(fixture.clarion().commit_timing.scheduled.len(), 1);
 
     surface.destroy();
     timer.destroy();
     fixture.double_roundtrip(id);
-    assert!(fixture.realand().commit_timing.scheduled.is_empty());
+    assert!(fixture.clarion().commit_timing.scheduled.is_empty());
 }

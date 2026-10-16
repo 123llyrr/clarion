@@ -12,10 +12,10 @@ use std::{io, mem};
 
 use anyhow::{anyhow, bail, ensure, Context};
 use bytemuck::cast_slice_mut;
+use clarion_config::output::{MaxBpc, Modeline};
+use clarion_config::{Config, OutputName};
+use clarion_ipc::{HSyncPolarity, VSyncPolarity};
 use drm_ffi::drm_mode_modeinfo;
-use realand_config::output::{MaxBpc, Modeline};
-use realand_config::{Config, OutputName};
-use realand_ipc::{HSyncPolarity, VSyncPolarity};
 use smithay::backend::allocator::dmabuf::{AsDmabuf, Dmabuf};
 use smithay::backend::allocator::format::FormatSet;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
@@ -63,7 +63,14 @@ use crate::utils::{get_monotonic_time, is_laptop_panel};
 pub(crate) use crate::output_schedule::take_redraw_state_on_vblank;
 
 pub(crate) mod gles_fallback;
+pub(crate) mod recovery;
 pub(crate) mod renderer_init;
+
+pub(crate) type VulkanRecoveryWorker = recovery::RecoveryWorker<
+    DrmNode,
+    crate::render_helpers::vulkan::native::PreparedNativeDevice,
+    Arc<crate::render_helpers::vulkan::VulkanContext>,
+>;
 use gles_fallback::GlesFallback;
 use renderer_init::resolve_gles_render_node;
 
@@ -101,6 +108,11 @@ pub struct Tty {
     /// Active native Vulkan hardware renderer for display compositing.
     pub(crate) native_renderer: Option<crate::render_helpers::vulkan::native::NativeRenderer>,
     pub(crate) requested_renderer: crate::backend::RendererBackendType,
+    pub(crate) vulkan_recovery: VulkanRecoveryWorker,
+    pub(crate) vulkan_recovery_generation: Option<u64>,
+    pub(crate) vulkan_recovery_attempt: u8,
+    pub(crate) vulkan_recovery_retry_after: Duration,
+    pub(crate) vulkan_recovery_watchdog: Option<RegistrationToken>,
     /// Tracy names require static storage; keep one set per connector across output rebuilds.
     pub(crate) tracy_output_names: HashMap<String, TracyOutputNames>,
 }
@@ -397,7 +409,7 @@ impl OutputDevice {
         &self,
         should_be_off: &dyn Fn(crtc::Handle, &connector::Info) -> bool,
     ) -> anyhow::Result<()> {
-        let _span = realand_tracy_span!("OutputDevice::cleanup_disconnected_resources");
+        let _span = clarion_tracy_span!("OutputDevice::cleanup_disconnected_resources");
 
         let res_handles = self
             .drm
@@ -415,7 +427,7 @@ impl OutputDevice {
         cleanup.extend(res_handles.crtcs());
 
         for (conn, info) in self.drm_scanner.connectors() {
-            // We only keep the connector if it has a CRTC and the output isn't off in realand.
+            // We only keep the connector if it has a CRTC and the output isn't off in clarion.
             if let Some(crtc) = self.drm_scanner.crtc_for_connector(conn) {
                 // Verify that the connector's current CRTC matches the CRTC we expect. If not,
                 // clear the CRTC and the connector so that all connectors can get the expected
@@ -736,11 +748,11 @@ impl Tty {
         setup: &mut impl DeviceSetup,
         requested_renderer: crate::backend::RendererBackendType,
     ) -> anyhow::Result<Self> {
-        let _span = realand_tracy_span!("Tty::new");
+        let _span = clarion_tracy_span!("Tty::new");
         let config = Rc::new(super::DeviceSettings::from(&*config.borrow()));
 
         let (session, notifier) = LibSeatSession::new().context(
-            "Error creating a session. This might mean that you're trying to run realand on a TTY \
+            "Error creating a session. This might mean that you're trying to run clarion on a TTY \
              that is already busy, for example if you're running this inside tmux that had been \
              originally started on a different TTY",
         )?;
@@ -753,12 +765,12 @@ impl Tty {
         let mut libinput = Libinput::new_with_udev(LibinputSessionInterface::from(session.clone()));
         unsafe { init_libinput_plugin_system(&libinput) };
         {
-            let _span = realand_tracy_span!("Libinput::udev_assign_seat");
+            let _span = clarion_tracy_span!("Libinput::udev_assign_seat");
             libinput.udev_assign_seat(&seat_name)
         }
         .map_err(|()| anyhow!("error assigning the seat to libinput"))?;
 
-        // If the session is not active at startup (e.g. realand was launched from a different TTY),
+        // If the session is not active at startup (e.g. clarion was launched from a different TTY),
         // suspend libinput now so that when ActivateSession fires, libinput.resume() performs a
         // full re-enumeration of input devices instead of being a no-op.
         if !session.is_active() {
@@ -800,6 +812,16 @@ impl Tty {
         }
         info!("using as the render node: {node_path}");
 
+        let (recovery_ping, recovery_source) = smithay::reexports::calloop::ping::make_ping()
+            .context("error creating Vulkan recovery wakeup")?;
+        let vulkan_recovery = VulkanRecoveryWorker::new(
+            recovery_ping,
+            crate::render_helpers::vulkan::native::PreparedNativeDevice::prepare,
+            |context| Arc::strong_count(context) == 1,
+        )
+        .context("error starting Vulkan recovery worker")?;
+        setup.register_vulkan_recovery(recovery_source)?;
+
         Ok(Self {
             config,
             session,
@@ -816,6 +838,11 @@ impl Tty {
             ipc_outputs: Arc::new(Mutex::new(HashMap::new())),
             native_renderer: None,
             requested_renderer,
+            vulkan_recovery,
+            vulkan_recovery_generation: None,
+            vulkan_recovery_attempt: 0,
+            vulkan_recovery_retry_after: Duration::ZERO,
+            vulkan_recovery_watchdog: None,
             tracy_output_names: HashMap::new(),
         })
     }
@@ -893,7 +920,7 @@ impl Tty {
         output: &Output,
         target_presentation_time: Duration,
     ) -> RenderResult {
-        let span = realand_tracy_span!("Tty::render");
+        let span = clarion_tracy_span!("Tty::render");
         let _latency = crate::utils::latency::Span::new(crate::utils::latency::Operation::Render);
 
         let mut rv = RenderResult::Skipped;
@@ -955,6 +982,43 @@ impl Tty {
 
             flags
         };
+
+        if surface.native_swapchain && self.vulkan_recovery_generation.is_some() {
+            // The failed renderer is detached, but KMS keeps its last committed buffer.
+            // Do not migrate swapchains or consume client leases during initialization.
+            port.retry_after_vblank(target_presentation_time);
+            return RenderResult::GpuDeferred;
+        }
+        if surface.native_swapchain && !self.vulkan_recovery_retry_after.is_zero() {
+            let now = get_monotonic_time();
+            if now >= self.vulkan_recovery_retry_after {
+                if let Some(native) = self.native_renderer.as_ref() {
+                    // Capacity refusal retained this failed renderer. Retry only
+                    // mailbox admission, never another draw on the lost device.
+                    match self
+                        .vulkan_recovery
+                        .request(self.primary_render_node, Some(native.device_anchor()))
+                    {
+                        Ok(generation) => {
+                            self.vulkan_recovery_generation = Some(generation);
+                            self.vulkan_recovery_attempt = 1;
+                            self.vulkan_recovery_retry_after = Duration::ZERO;
+                            self.native_renderer = None;
+                        }
+                        Err(_) => {
+                            self.vulkan_recovery_retry_after = now + Duration::from_millis(500);
+                        }
+                    }
+                } else {
+                    self.vulkan_recovery_retry_after = Duration::ZERO;
+                }
+            }
+            port.retry_after_vblank(
+                self.vulkan_recovery_retry_after
+                    .max(target_presentation_time),
+            );
+            return RenderResult::GpuDeferred;
+        }
 
         let use_native_renderer = self.native_renderer.is_some() && surface.native_swapchain;
 
@@ -1019,7 +1083,7 @@ impl Tty {
                             .wait_for_frame_completion_before_queueing;
                     if needs_sync {
                         if let PrimaryPlaneElement::Swapchain(ref element) = res.primary_element {
-                            let _span = realand_tracy_span!("wait for completion");
+                            let _span = clarion_tracy_span!("wait for completion");
                             if let Err(err) =
                                 crate::render_helpers::sync::wait_for_completion(&element.sync)
                             {
@@ -1081,21 +1145,24 @@ impl Tty {
                     let err_str = format!("{err:?}");
                     let is_device_lost = err_str.contains("DEVICE_LOST");
                     if is_device_lost {
-                        warn!("Vulkan device lost in KMS render_frame; attempting device recovery");
-                        self.native_renderer = port.recover_vulkan_renderer(
-                            self.primary_render_node,
-                            self.config.as_ref(),
-                        );
-                        if let Some(native) = self.native_renderer.as_mut() {
-                            if let Err(err) = native.prepare_output_format(drm_compositor.format())
-                            {
-                                warn!(
-                                    "error preparing recovered Vulkan animation pipelines: {err}"
-                                );
+                        warn!("Vulkan device lost; queuing bounded asynchronous device recovery");
+                        let anchor = native.device_anchor();
+                        match self
+                            .vulkan_recovery
+                            .request(self.primary_render_node, Some(anchor))
+                        {
+                            Ok(generation) => {
+                                self.vulkan_recovery_generation = Some(generation);
+                                self.vulkan_recovery_attempt = 1;
+                                // The worker owns an anchor before owner caches are detached.
+                                // Pending GPU work keeps its existing client-buffer leases.
+                                self.native_renderer = None;
                             }
-                            info!("Vulkan device successfully recovered!");
-                        } else {
-                            warn!("Vulkan device recovery failed, continuing with GLES fallback");
+                            Err(_) => {
+                                warn!("Vulkan recovery retirement capacity is busy; retaining failed device until capacity returns");
+                                self.vulkan_recovery_retry_after =
+                                    get_monotonic_time() + Duration::from_millis(500);
+                            }
                         }
                     }
                     drm_compositor.reset_buffer_ages();
@@ -1225,7 +1292,7 @@ impl Tty {
                             .wait_for_frame_completion_before_queueing;
                     if needs_sync {
                         if let PrimaryPlaneElement::Swapchain(ref element) = res.primary_element {
-                            let _span = realand_tracy_span!("wait for completion");
+                            let _span = clarion_tracy_span!("wait for completion");
                             if let Err(err) =
                                 crate::render_helpers::sync::wait_for_completion(&element.sync)
                             {
@@ -1571,7 +1638,7 @@ impl GammaProps {
         device: &DrmDevice,
         gamma: Option<&[u16]>,
     ) -> anyhow::Result<()> {
-        let _span = realand_tracy_span!("GammaProps::set_gamma");
+        let _span = clarion_tracy_span!("GammaProps::set_gamma");
 
         let blob = if let Some(gamma) = gamma {
             let gamma_size = self
@@ -1610,7 +1677,7 @@ impl GammaProps {
         };
 
         {
-            let _span = realand_tracy_span!("set_property");
+            let _span = clarion_tracy_span!("set_property");
 
             let blob = blob.map(NonZeroU64::get).unwrap_or(0);
             device
@@ -1640,7 +1707,7 @@ impl GammaProps {
     }
 
     pub(crate) fn restore_gamma(&self, device: &DrmDevice) -> anyhow::Result<()> {
-        let _span = realand_tracy_span!("GammaProps::restore_gamma");
+        let _span = clarion_tracy_span!("GammaProps::restore_gamma");
 
         let blob = self.previous_blob.map(NonZeroU64::get).unwrap_or(0);
         device
@@ -2149,7 +2216,7 @@ pub(crate) fn modeinfo_name_slice_from_string(mode_name: &str) -> [core::ffi::c_
 
 pub(crate) fn pick_mode(
     connector: &connector::Info,
-    target: Option<realand_config::output::Mode>,
+    target: Option<clarion_config::output::Mode>,
 ) -> Option<(control::Mode, bool)> {
     let mut mode = None;
     let mut fallback = false;
@@ -2440,7 +2507,7 @@ pub(crate) fn set_connector_properties(
     if hdr && !hdr_capable_bpc && max_bpc.is_none() {
         // HDR is useless below 10 bpc; try to raise the bit depth when the
         // user did not pin it explicitly.
-        match props.set_max_bpc(MaxBpc(realand_ipc::MaxBpc::_10)) {
+        match props.set_max_bpc(MaxBpc(clarion_ipc::MaxBpc::_10)) {
             Ok(_) => {
                 debug!("raised max bpc to 10 for HDR output");
                 hdr_capable_bpc = true;
@@ -2479,7 +2546,7 @@ pub fn set_gamma_for_crtc(
     crtc: crtc::Handle,
     ramp: Option<&[u16]>,
 ) -> anyhow::Result<()> {
-    let _span = realand_tracy_span!("set_gamma_for_crtc");
+    let _span = clarion_tracy_span!("set_gamma_for_crtc");
 
     let info = device.get_crtc(crtc).context("error getting crtc info")?;
     let gamma_length = info.gamma_length() as usize;
@@ -2491,7 +2558,7 @@ pub fn set_gamma_for_crtc(
         ensure!(ramp.len() == gamma_length * 3, "wrong gamma length");
         ramp
     } else {
-        let _span = realand_tracy_span!("generate linear gamma");
+        let _span = clarion_tracy_span!("generate linear gamma");
 
         // The legacy API provides no way to reset the gamma, so set a linear one manually.
         temp = vec![0u16; gamma_length * 3];
@@ -2591,9 +2658,9 @@ unsafe fn init_libinput_plugin_system(libinput: &Libinput) {
 mod tests {
     use std::time::Duration;
 
+    use clarion_config::output::Modeline;
+    use clarion_ipc::{HSyncPolarity, VSyncPolarity};
     use insta::assert_debug_snapshot;
-    use realand_config::output::Modeline;
-    use realand_ipc::{HSyncPolarity, VSyncPolarity};
     use smithay::backend::allocator::format::FormatSet;
     use smithay::backend::allocator::{Format, Fourcc, Modifier};
 

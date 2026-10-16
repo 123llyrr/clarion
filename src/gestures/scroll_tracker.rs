@@ -1,2 +1,2 @@
 //! Platform-facing export of the independent gesture policy.
-pub use realand_core::gestures::scroll_tracker::*;
+pub use clarion_core::gestures::scroll_tracker::*;

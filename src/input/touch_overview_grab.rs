@@ -128,7 +128,7 @@ impl TouchOverviewGrab {
 
         // The timer must not keep the grab or its device alive after teardown.
         let long_press = Arc::downgrade(&self.long_press);
-        match data.realand.event_loop.insert_source(
+        match data.clarion.event_loop.insert_source(
             Timer::from_deadline(self.long_press_deadline),
             move |_, _, state| {
                 if let Some(long_press) = long_press.upgrade() {
@@ -148,7 +148,7 @@ impl TouchOverviewGrab {
 
     fn arm_touch_long_press(&mut self, data: &mut State) {
         self.arm_long_press(data, move |state, ready| {
-            let Some(touch) = state.realand.seat.get_touch() else {
+            let Some(touch) = state.clarion.seat.get_touch() else {
                 return;
             };
             let current = touch
@@ -171,7 +171,7 @@ impl TouchOverviewGrab {
     ) {
         let descriptor = handle.descriptor().clone();
         self.arm_long_press(data, move |state, ready| {
-            let Some(tool) = state.realand.seat.tablet_seat().get_tool(&descriptor) else {
+            let Some(tool) = state.clarion.seat.tablet_seat().get_tool(&descriptor) else {
                 return;
             };
             let current = tool
@@ -192,18 +192,18 @@ impl TouchOverviewGrab {
     }
 
     fn on_frame(&mut self, data: &mut State) -> bool {
-        if !data.realand.layout.is_overview_open()
-            || data.realand.layout.overview_mode() != self.overview_mode
+        if !data.clarion.layout.is_overview_open()
+            || data.clarion.layout.overview_mode() != self.overview_mode
             || data
-                .realand
+                .clarion
                 .layout
                 .monitor_for_output(&self.output)
                 .is_none()
-            || data.realand.is_locked()
-            || data.realand.screenshot_ui.is_open()
-            || data.realand.exit_confirm_dialog.is_open()
-            || data.realand.window_mru_ui.is_open()
-            || data.realand.overview_mode_transition_active()
+            || data.clarion.is_locked()
+            || data.clarion.screenshot_ui.is_open()
+            || data.clarion.exit_confirm_dialog.is_open()
+            || data.clarion.window_mru_ui.is_open()
+            || data.clarion.overview_mode_transition_active()
             || self.window.as_ref().is_some_and(|window| !window.alive())
         {
             return false;
@@ -220,7 +220,7 @@ impl TouchOverviewGrab {
             return true;
         };
 
-        let layout = &mut data.realand.layout;
+        let layout = &mut data.clarion.layout;
 
         // Check if we should become interactive move.
         if matches!(self.gesture, GestureState::Recognizing) {
@@ -237,7 +237,7 @@ impl TouchOverviewGrab {
                     self.gesture = GestureState::InteractiveMove;
 
                     if !self.start_data.is_touch() {
-                        data.realand
+                        data.clarion
                             .cursor_manager
                             .set_cursor_image(CursorImageStatus::Named(CursorIcon::Grabbing));
                     }
@@ -261,7 +261,7 @@ impl TouchOverviewGrab {
                             self.gesture = GestureState::ViewOffset;
 
                             if !self.start_data.is_touch() {
-                                data.realand.cursor_manager.set_cursor_image(
+                                data.clarion.cursor_manager.set_cursor_image(
                                     CursorImageStatus::Named(CursorIcon::AllScroll),
                                 );
                             }
@@ -274,7 +274,7 @@ impl TouchOverviewGrab {
                     self.gesture = GestureState::WorkspaceSwitch;
 
                     if !self.start_data.is_touch() {
-                        data.realand
+                        data.clarion
                             .cursor_manager
                             .set_cursor_image(CursorImageStatus::Named(CursorIcon::AllScroll));
                     }
@@ -286,7 +286,7 @@ impl TouchOverviewGrab {
         if matches!(self.gesture, GestureState::Recognizing) {
             return true;
         }
-        self.cancel_long_press_timer(&data.realand.event_loop);
+        self.cancel_long_press_timer(&data.clarion.event_loop);
 
         let delta = self.new_location - self.last_location;
         self.last_location = self.new_location;
@@ -316,10 +316,10 @@ impl TouchOverviewGrab {
                     return false;
                 };
                 if let Some((output, pos_within_output)) =
-                    data.realand.output_under(self.new_location)
+                    data.clarion.output_under(self.new_location)
                 {
                     let output = output.clone();
-                    data.realand.layout.interactive_move_update(
+                    data.clarion.layout.interactive_move_update(
                         window,
                         delta,
                         output,
@@ -332,14 +332,14 @@ impl TouchOverviewGrab {
         };
 
         if ongoing {
-            data.realand.queue_redraw_all();
+            data.clarion.queue_redraw_all();
         }
 
         ongoing
     }
 
     fn on_ungrab(&mut self, state: &mut State) {
-        self.cancel_long_press_timer(&state.realand.event_loop);
+        self.cancel_long_press_timer(&state.clarion.event_loop);
         match self.gesture {
             GestureState::Recognizing if self.released => {
                 // Tap to activate.
@@ -347,10 +347,10 @@ impl TouchOverviewGrab {
                     output: self.output.clone(),
                     position: self.start_pos_within_output,
                 }) {
-                    state.realand.queue_redraw_all();
+                    state.clarion.queue_redraw_all();
                     return;
                 }
-                state.realand.layout.focus_output(&self.output);
+                state.clarion.layout.focus_output(&self.output);
 
                 // Activate the workspace if necessary.
                 if self.window.is_some() || self.workspace_matched_narrow {
@@ -367,7 +367,7 @@ impl TouchOverviewGrab {
                     };
 
                     let ws_idx = if let Some((Some(mon), ws_idx, _)) = state
-                        .realand
+                        .clarion
                         .layout
                         .workspaces()
                         .find(|(_, _, ws)| ws_matches(ws))
@@ -387,33 +387,33 @@ impl TouchOverviewGrab {
                 }
 
                 if let Some(window) = self.window.as_ref().filter(|window| window.alive()) {
-                    state.realand.layout.activate_window(window);
+                    state.clarion.layout.activate_window(window);
                 }
             }
             GestureState::Recognizing => {}
             GestureState::StagePreview => {
                 if !self.released {
                     if let Some(initial) = self.stage_initial_selection {
-                        state.realand.layout.stage_select(&self.output, initial);
+                        state.clarion.layout.stage_select(&self.output, initial);
                     }
                 }
             }
             GestureState::ViewOffset => {
                 if self.released {
-                    state.realand.layout.view_offset_gesture_end(Some(false));
+                    state.clarion.layout.view_offset_gesture_end(Some(false));
                 } else {
-                    state.realand.layout.view_offset_gesture_cancel(Some(false));
+                    state.clarion.layout.view_offset_gesture_cancel(Some(false));
                 }
             }
             GestureState::WorkspaceSwitch => {
                 if self.released {
                     state
-                        .realand
+                        .clarion
                         .layout
                         .workspace_switch_gesture_end(Some(false));
                 } else {
                     state
-                        .realand
+                        .clarion
                         .layout
                         .workspace_switch_gesture_cancel(Some(false));
                 }
@@ -421,9 +421,9 @@ impl TouchOverviewGrab {
             GestureState::InteractiveMove => {
                 if let Some(window) = self.window.as_ref() {
                     if self.released {
-                        state.realand.layout.interactive_move_end(window);
+                        state.clarion.layout.interactive_move_end(window);
                     } else {
-                        state.realand.layout.interactive_move_cancel(window);
+                        state.clarion.layout.interactive_move_cancel(window);
                     }
                 }
             }
@@ -431,12 +431,12 @@ impl TouchOverviewGrab {
 
         if !self.start_data.is_touch() {
             state
-                .realand
+                .clarion
                 .cursor_manager
                 .set_cursor_image(CursorImageStatus::default_named());
         }
 
-        state.realand.queue_redraw_all();
+        state.clarion.queue_redraw_all();
     }
 }
 
@@ -457,8 +457,8 @@ impl TouchGrab<State> for TouchOverviewGrab {
 
         if matches!(self.gesture, GestureState::InteractiveMove) {
             if let Some(window) = &self.window.as_ref() {
-                data.realand.layout.toggle_window_floating(Some(window));
-                data.realand.queue_redraw_all();
+                data.clarion.layout.toggle_window_floating(Some(window));
+                data.clarion.queue_redraw_all();
             }
         }
     }

@@ -1,7 +1,7 @@
 //! Compatibility renderer for the existing animation GLSL interface.
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use calloop::channel::Channel;
 
@@ -59,13 +59,12 @@ fn prepare_custom(source: &str, cancel: &AtomicBool) -> Result<PreparedShader, S
 }
 pub(super) fn compiler_endpoint(
 ) -> Result<(CompilerEndpoint, Channel<CompileCompletion<PreparedShader>>), String> {
-    static COMPILER: OnceLock<Result<provider::Compiler<PreparedShader>, String>> = OnceLock::new();
-    let compiler = COMPILER
-        .get_or_init(|| provider::Compiler::new(prepare_custom).map_err(|error| error.to_string()));
-    match compiler {
-        Ok(compiler) => Ok(compiler.endpoint()),
-        Err(error) => Err(error.clone()),
-    }
+    static COMPILER: super::lifecycle::ServiceCell<provider::Compiler<PreparedShader>> =
+        super::lifecycle::ServiceCell::new();
+    COMPILER
+        .get_or_try_init(|| provider::Compiler::new(prepare_custom))
+        .map(|compiler| compiler.endpoint())
+        .map_err(|error| error.to_string())
 }
 
 #[derive(Debug)]
@@ -79,7 +78,7 @@ pub struct Interface {
 
 pub fn translate(source: &str) -> anyhow::Result<Interface> {
     let mut out = String::from(
-        "#version 450\nlayout(location=0) in vec2 realand_v_coords;\nlayout(location=0) out vec4 realand_out;\n#define gl_FragColor realand_out\n#define texture2D texture\n",
+        "#version 450\nlayout(location=0) in vec2 clarion_v_coords;\nlayout(location=0) out vec4 clarion_out;\n#define gl_FragColor clarion_out\n#define texture2D texture\n",
     );
     let mut uniforms = HashMap::new();
     let mut samplers = Vec::new();
@@ -522,7 +521,7 @@ mod tests {
     #[test]
     fn custom_shader_places_uniform_block_after_extra_samplers() {
         let interface = translate(
-            "uniform sampler2D first;\nuniform sampler2D second;\nuniform sampler2D third;\nuniform float amount;\nvoid main() { gl_FragColor = texture2D(third, realand_v_coords) * amount; }",
+            "uniform sampler2D first;\nuniform sampler2D second;\nuniform sampler2D third;\nuniform float amount;\nvoid main() { gl_FragColor = texture2D(third, clarion_v_coords) * amount; }",
         )
         .unwrap();
         assert_eq!(interface.samplers, ["first", "second", "third"]);
@@ -533,7 +532,7 @@ mod tests {
             .contains("layout(set=0,binding=2) uniform sampler2D third"));
     }
 
-    const TEST_SHADER: &str = "uniform sampler2D color;\nuniform float amount;\nvoid main() { gl_FragColor = texture2D(color, realand_v_coords) * amount; }";
+    const TEST_SHADER: &str = "uniform sampler2D color;\nuniform float amount;\nvoid main() { gl_FragColor = texture2D(color, clarion_v_coords) * amount; }";
 
     /// Explicit fixture wait for the real CPU and GPU workers; production never calls it.
     fn prepared_test_program(ctx: Arc<VulkanContext>, source: &str) -> Arc<Program> {

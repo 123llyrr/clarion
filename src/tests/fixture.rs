@@ -5,12 +5,12 @@ use std::time::Duration;
 
 use calloop::generic::Generic;
 use calloop::{EventLoop, Interest, LoopHandle, Mode, PostAction};
-use realand_config::Config;
+use clarion_config::Config;
 use smithay::output::Output;
 
 use super::client::{Client, ClientId};
 use super::server::Server;
-use crate::compositor::{NewClient, Realand};
+use crate::compositor::{Clarion, NewClient};
 
 pub struct Fixture {
     pub event_loop: EventLoop<'static, State>,
@@ -60,33 +60,33 @@ impl Fixture {
             .unwrap();
     }
 
-    pub fn realand_state(&mut self) -> &mut crate::compositor::State {
+    pub fn clarion_state(&mut self) -> &mut crate::compositor::State {
         &mut self.state.server.state
     }
 
-    pub fn realand(&mut self) -> &mut Realand {
-        &mut self.realand_state().realand
+    pub fn clarion(&mut self) -> &mut Clarion {
+        &mut self.clarion_state().clarion
     }
 
-    pub fn realand_output(&self, n: u8) -> Output {
-        let realand = &self.state.server.state.realand;
+    pub fn clarion_output(&self, n: u8) -> Output {
+        let clarion = &self.state.server.state.clarion;
         let idx = usize::from(n - 1);
-        let output = realand.global_space.outputs().nth(idx).unwrap();
+        let output = clarion.global_space.outputs().nth(idx).unwrap();
         output.clone()
     }
 
-    pub fn realand_focus_output(&mut self, n: u8) {
-        let realand = &mut self.state.server.state.realand;
+    pub fn clarion_focus_output(&mut self, n: u8) {
+        let clarion = &mut self.state.server.state.clarion;
         let idx = usize::from(n - 1);
-        let output = realand.global_space.outputs().nth(idx).unwrap();
-        realand.layout.focus_output(output);
+        let output = clarion.global_space.outputs().nth(idx).unwrap();
+        clarion.layout.focus_output(output);
     }
 
-    pub fn realand_complete_animations(&mut self) {
-        let realand = self.realand();
-        realand.clock.set_complete_instantly(true);
-        realand.advance_animations();
-        realand.clock.set_complete_instantly(false);
+    pub fn clarion_complete_animations(&mut self) {
+        let clarion = self.clarion();
+        clarion.clock.set_complete_instantly(true);
+        clarion.advance_animations();
+        clarion.clock.set_complete_instantly(false);
     }
 
     /// Keep one display alive across concurrent GPU fixtures. Smithay's weak
@@ -99,7 +99,7 @@ impl Fixture {
 
         static DISPLAY: OnceLock<EGLDisplay> = OnceLock::new();
         DISPLAY.get_or_init(|| unsafe { EGLDisplay::new(EGLSurfacelessDisplay).unwrap() });
-        self.realand_state()
+        self.clarion_state()
             .backend
             .headless()
             .add_renderer()
@@ -107,10 +107,10 @@ impl Fixture {
     }
 
     pub fn add_output(&mut self, n: u8, size: (u16, u16)) {
-        let state = self.realand_state();
-        let realand = &mut state.realand;
+        let state = self.clarion_state();
+        let clarion = &mut state.clarion;
         state.backend.headless().add_output(
-            &mut crate::platform::device_bridge::DeviceCoordinator::new(realand),
+            &mut crate::platform::device_bridge::DeviceCoordinator::new(clarion),
             n,
             size,
         );
@@ -118,7 +118,7 @@ impl Fixture {
 
     pub fn add_client(&mut self) -> ClientId {
         let (sock1, sock2) = UnixStream::pair().unwrap();
-        self.realand().insert_client(NewClient {
+        self.clarion().insert_client(NewClient {
             client: sock1,
             restricted: false,
             credentials_unknown: false,
@@ -158,7 +158,7 @@ impl Fixture {
     /// For some reason, when running tests on many threads at once, a single roundtrip is
     /// sometimes not sufficient to get the configure events to the client.
     ///
-    /// I suspect that this is because these configure events are sent from the realand loop callback,
+    /// I suspect that this is because these configure events are sent from the clarion loop callback,
     /// so they arrive after the sync done event and don't get processed in that client dispatch
     /// cycle. I'm not sure why this would be dependent on multithreading. But if this is indeed
     /// the issue, then a double roundtrip fixes it.

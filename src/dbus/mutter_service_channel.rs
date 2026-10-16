@@ -6,7 +6,7 @@ use super::Start;
 use crate::compositor::NewClient;
 
 pub struct ServiceChannel {
-    to_realand: calloop::channel::Sender<NewClient>,
+    to_clarion: calloop::channel::Sender<NewClient>,
 }
 
 #[interface(name = "org.gnome.Mutter.ServiceChannel")]
@@ -31,8 +31,8 @@ impl ServiceChannel {
             // FIXME: maybe you can get the PID from D-Bus somehow?
             credentials_unknown: true,
         };
-        if let Err(err) = self.to_realand.send(client) {
-            warn!("error sending message to realand: {err:?}");
+        if let Err(err) = self.to_clarion.send(client) {
+            warn!("error sending message to clarion: {err:?}");
             return Err(fdo::Error::Failed("internal error".to_owned()));
         }
 
@@ -41,8 +41,8 @@ impl ServiceChannel {
 }
 
 impl ServiceChannel {
-    pub fn new(to_realand: calloop::channel::Sender<NewClient>) -> Self {
-        Self { to_realand }
+    pub fn new(to_clarion: calloop::channel::Sender<NewClient>) -> Self {
+        Self { to_clarion }
     }
 }
 

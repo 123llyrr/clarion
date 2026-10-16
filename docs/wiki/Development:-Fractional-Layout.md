@@ -1,4 +1,4 @@
-There are two main coordinate spaces in realand: physical (pixels of every individual output) and logical (shared among all outputs, takes into account the scale of every output).
+There are two main coordinate spaces in clarion: physical (pixels of every individual output) and logical (shared among all outputs, takes into account the scale of every output).
 Wayland clients mostly work in the logical space, and it's the most convenient space to do all the layout in, since it bakes in the output scaling factor.
 
 However, many things need to be sized or positioned at integer physical coordinates.
@@ -9,7 +9,7 @@ Integer physical coordinates do not necessarily correspond to integer logical co
 Even with an integer scale = 2, a physical pixel at (1, 1) will be at the logical position of (0.5, 0.5).
 This problem becomes much worse with fractional scale factors where most integer logical coordinates will fall on fractional physical coordinates.
 
-Thus, realand uses fractional logical coordinates for most of its layout.
+Thus, clarion uses fractional logical coordinates for most of its layout.
 However, one needs to be very careful to keep things aligned to the physical grid to avoid artifacts like:
 
 * Border width alternating 1 px thicker/thinner
@@ -18,7 +18,7 @@ However, one needs to be very careful to keep things aligned to the physical gri
 * Slightly blurry window contents during resizes
 * And so on...
 
-The way it's handled in realand is:
+The way it's handled in clarion is:
 
 1. All relevant sizes on a workspace are rounded to an integer physical coordinate according to the current output scale. Things like struts, gaps, border widths, working area location.
 

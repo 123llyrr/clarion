@@ -1,5 +1,5 @@
+use clarion_config::CornerRadius;
 use glam::{Mat3, Vec2};
-use realand_config::CornerRadius;
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles::{
@@ -11,7 +11,7 @@ use smithay::utils::user_data::UserDataMap;
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 
 use super::damage::ExtraDamage;
-use super::renderer::{AsGlesFrame as _, AsGlesRenderer, RealandRenderer};
+use super::renderer::{AsGlesFrame as _, AsGlesRenderer, ClarionRenderer};
 use super::shaders::{mat3_uniform, Shaders};
 use crate::backend::tty::{TtyFrame, TtyRenderer, TtyRendererError};
 
@@ -131,7 +131,7 @@ impl<R: ClipRenderer> ClippedSurfaceRenderElement<R> {
         let geo_size = (self.geometry.size.w as f32, self.geometry.size.h as f32);
 
         vec![
-            Uniform::new("realand_scale", self.scale),
+            Uniform::new("clarion_scale", self.scale),
             Uniform::new("geo_size", geo_size),
             Uniform::new("corner_radius", <[f32; 4]>::from(self.corner_radius)),
             mat3_uniform("input_to_geo", input_to_geo),
@@ -145,7 +145,7 @@ impl<R: ClipRenderer> ClippedSurfaceRenderElement<R> {
 
     pub fn shader(renderer: &mut R) -> Option<&GlesTexProgram>
     where
-        R: RealandRenderer,
+        R: ClarionRenderer,
     {
         renderer
             .as_gles_renderer()

@@ -1,6 +1,6 @@
-site_name: Realand
+site_name: 澄境 / Clarion
 docs_dir: wiki
-site_url: https://123llyrr.github.io/realand
+site_url: https://123llyrr.github.io/realand/
 repo_url: https://github.com/123llyrr/realand
 edit_uri: edit/main/docs/wiki/
 use_directory_urls: false
@@ -51,7 +51,7 @@ hooks:
   - hooks/shortcodes.py
   - hooks/remove-must-fail.py
 extra_css:
-  - _assets/stylesheets/realand.css
+  - _assets/stylesheets/clarion.css
 strict: true
 validation:
   nav:
@@ -71,7 +71,7 @@ not_in_nav: |
 nav:
   - Usage:
     - Getting Started: Getting-Started.md
-    - Realand Features: Realand-Features.md
+    - Clarion Features: Clarion-Features.md
     - Example systemd Setup: Example-systemd-Setup.md
     - Important Software: Important-Software.md
     - Workspaces: Workspaces.md
@@ -80,15 +80,15 @@ nav:
     - Overview: Overview.md
     - Screencasting: Screencasting.md
     - Layer‐Shell Components: Layer‐Shell-Components.md
-    - IPC, realand msg: IPC.md
+    - IPC, clarion msg: IPC.md
     - Application-Specific Issues: Application-Issues.md
     - Nvidia: Nvidia.md
     - Xwayland: Xwayland.md
     - Gestures: Gestures.md
     - Fullscreen and Maximize: Fullscreen-and-Maximize.md
     - Window Effects: Window-Effects.md
-    - Packaging realand: Packaging-realand.md
-    - Integrating realand: Integrating-realand.md
+    - Packaging clarion: Packaging-clarion.md
+    - Integrating clarion: Integrating-clarion.md
     - Security Model: Security-Model.md
     - Accessibility: Accessibility.md
     - Name and Logo: Name-and-Logo.md
@@ -111,9 +111,9 @@ nav:
     - Include: Configuration:-Include.md
   - Development:
     - Design Principles: Development:-Design-Principles.md
-    - Developing realand: Development:-Developing-realand.md
-    - Documenting realand: Development:-Documenting-realand.md
-    - Releasing realand: Development:-Releasing-realand.md
+    - Developing clarion: Development:-Developing-clarion.md
+    - Documenting clarion: Development:-Documenting-clarion.md
+    - Releasing clarion: Development:-Releasing-clarion.md
     - Fractional Layout: Development:-Fractional-Layout.md
     - Redraw Loop: Development:-Redraw-Loop.md
     - Animation Timing: Development:-Animation-Timing.md

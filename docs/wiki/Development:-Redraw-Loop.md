@@ -1,5 +1,5 @@
 On a TTY, only one frame can be submitted to an output at a time, and the compositor must wait until the output repaints (indicated by a VBlank) to be able to submit the next frame.
-In realand we keep track of this via the `RedrawState` enum that you can find in an `OutputState`.
+In clarion we keep track of this via the `RedrawState` enum that you can find in an `OutputState`.
 
 Here's a diagram of state transitions for the `RedrawState` state machine:
 
@@ -10,7 +10,7 @@ Here's a diagram of state transitions for the `RedrawState` state machine:
 
 `Idle` is the default state, when the output does not need to be repainted.
 Any operation that may cause the screen to update calls `queue_redraw()`, which moves the output to a `Queued` state.
-Then, at the end of an event loop dispatch, realand calls `redraw()` for every `Queued` output.
+Then, at the end of an event loop dispatch, clarion calls `redraw()` for every `Queued` output.
 
 If the redraw causes damage (i.e. something on the output changed), we move into the `WaitingForVBlank` state, since we cannot redraw until we receive a VBlank event.
 However, if there's no damage, we do not return to `Idle` right away.

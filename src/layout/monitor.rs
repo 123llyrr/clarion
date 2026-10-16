@@ -9,8 +9,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use super::core_adapter::{self, DesktopContext};
-use realand_config::{CornerRadius, LayoutPart};
-use realand_core::SpaceId;
+use clarion_config::{CornerRadius, LayoutPart};
+use clarion_core::SpaceId;
 use smithay::backend::renderer::element::utils::{
     CropRenderElement, Relocate, RelocateRenderElement, RescaleRenderElement,
 };
@@ -33,11 +33,11 @@ use super::{
     OverviewMode,
 };
 use crate::animation::{Animation, Clock};
+use crate::clarion_render_elements;
 use crate::layout::RenderLayer;
-use crate::realand_render_elements;
 use crate::render_helpers::mesh::MeshRenderElement;
 use crate::render_helpers::offscreen::{NativeOffscreenBuffer, OffscreenBuffer, OffscreenData};
-use crate::render_helpers::renderer::RealandRenderer;
+use crate::render_helpers::renderer::ClarionRenderer;
 use crate::render_helpers::shadow::ShadowRenderElement;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::vulkan::native::NativeRenderer;
@@ -161,7 +161,7 @@ pub struct Monitor<W: LayoutElement> {
     /// Configurable properties of the layout.
     pub(super) options: Rc<Options>,
     /// Layout config overrides for this monitor.
-    layout_config: Option<realand_config::LayoutPart>,
+    layout_config: Option<clarion_config::LayoutPart>,
 
     /// At most two neighboring workspace textures are cached for cube transitions.
     cube_buffers: [OffscreenBuffer; 2],
@@ -271,7 +271,7 @@ impl<'a, W: LayoutElement> Clone for MonitorAddWindowTarget<'a, W> {
     }
 }
 
-realand_render_elements! {
+clarion_render_elements! {
     MonitorInnerRenderElement<R> => {
         Workspace = CropRenderElement<WorkspaceRenderElement<R>>,
         InsertHint = CropRenderElement<InsertHintRenderElement>,
@@ -287,7 +287,7 @@ realand_render_elements! {
     }
 }
 
-realand_render_elements! {
+clarion_render_elements! {
     CubeFaceRenderElement<R> => {
         Workspace = CropRenderElement<WorkspaceRenderElement<R>>,
         SolidColor = SolidColorRenderElement,
@@ -307,7 +307,7 @@ impl WorkspaceSwitch {
 }
 
 impl WorkspaceSwitchGesture {
-    fn animate_from(&mut self, from: f64, clock: Clock, config: realand_config::Animation) {
+    fn animate_from(&mut self, from: f64, clock: Clock, config: clarion_config::Animation) {
         let current = self.animation.as_ref().map_or(0., Animation::value);
         let velocity = self.animation.as_ref().map_or(0., Animation::velocity);
         self.animation = Some(Animation::new(clock, from + current, 0., velocity, config));
@@ -613,7 +613,7 @@ impl<W: LayoutElement> Monitor<W> {
     pub fn activate_workspace_with_anim_config(
         &mut self,
         idx: usize,
-        config: Option<realand_config::Animation>,
+        config: Option<clarion_config::Animation>,
     ) {
         let current_idx = self.workspace_render_idx();
         let velocity = self.workspace_render_velocity();
@@ -634,7 +634,7 @@ impl<W: LayoutElement> Monitor<W> {
 
         if self.workspace_gesture_is_dnd() {
             let outcome = self.core.borrow_mut().workspace_switch_action(
-                realand_core::workspace_switch::WorkspaceSwitchAction::Activate {
+                clarion_core::workspace_switch::WorkspaceSwitchAction::Activate {
                     connector: self.output_name.clone(),
                     target: SpaceId(self.workspaces[idx].id().get()),
                 },
@@ -717,7 +717,7 @@ impl<W: LayoutElement> Monitor<W> {
         mut workspace_idx: usize,
         column: Column<W>,
         activate: bool,
-        anim: Option<realand_config::Animation>,
+        anim: Option<clarion_config::Animation>,
     ) {
         let workspace = &mut self.workspaces[workspace_idx];
 
@@ -750,7 +750,7 @@ impl<W: LayoutElement> Monitor<W> {
         width: ColumnWidth,
         is_full_width: bool,
         is_floating: bool,
-        anim: Option<realand_config::Animation>,
+        anim: Option<clarion_config::Animation>,
     ) {
         let (mut workspace_idx, target) = self.resolve_add_window_target(target);
 
@@ -1261,7 +1261,7 @@ impl<W: LayoutElement> Monitor<W> {
             }
             Some(WorkspaceSwitch::Gesture(gesture)) => {
                 self.core.borrow_mut().workspace_switch_action(
-                    realand_core::workspace_switch::WorkspaceSwitchAction::DndIdle {
+                    clarion_core::workspace_switch::WorkspaceSwitchAction::DndIdle {
                         connector: self.output_name.clone(),
                         timestamp: self.clock.now_unadjusted(),
                     },
@@ -1463,7 +1463,7 @@ impl<W: LayoutElement> Monitor<W> {
 
     pub fn update_layout_config(
         &mut self,
-        layout_config: Option<realand_config::LayoutPart>,
+        layout_config: Option<clarion_config::LayoutPart>,
     ) -> bool {
         if self.layout_config == layout_config {
             return false;
@@ -1473,6 +1473,28 @@ impl<W: LayoutElement> Monitor<W> {
         self.update_config(self.base_options.clone());
 
         true
+    }
+
+    pub(crate) fn clear_native_caches(&self) {
+        for buffer in &self.cube_native_buffers {
+            buffer.clear();
+        }
+        for elements in &self.cube_elements {
+            elements.borrow_mut().clear();
+        }
+        let mut header = self.spread_header.borrow_mut();
+        if header.as_ref().is_some_and(|(_, _, _, texture)| {
+            matches!(texture, crate::ui::mru::MruTexture::Vulkan(_))
+        }) {
+            *header = None;
+        }
+        for text in self.stage_rail_text.borrow_mut().iter_mut() {
+            if text.as_ref().is_some_and(|(_, _, _, texture)| {
+                matches!(texture, crate::ui::mru::MruTexture::Vulkan(_))
+            }) {
+                *text = None;
+            }
+        }
     }
 
     pub fn update_shaders(&mut self) {
@@ -2144,7 +2166,7 @@ impl<W: LayoutElement> Monitor<W> {
         ws.render_above_top_layer()
     }
 
-    pub fn render_insert_hint_between_workspaces<R: RealandRenderer>(
+    pub fn render_insert_hint_between_workspaces<R: ClarionRenderer>(
         &self,
         renderer: &mut R,
         push: &mut dyn FnMut(MonitorRenderElement<R>),
@@ -2529,13 +2551,13 @@ impl<W: LayoutElement> Monitor<W> {
         }
     }
 
-    pub fn render_workspaces<R: RealandRenderer>(
+    pub fn render_workspaces<R: ClarionRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         focus_ring: bool,
         push: &mut dyn FnMut(MonitorRenderElement<R>),
     ) {
-        let _span = realand_tracy_span!("Monitor::render_workspaces");
+        let _span = clarion_tracy_span!("Monitor::render_workspaces");
         if self.is_stage_visible() {
             self.update_cube_visible_workspaces([None, None]);
             self.render_stage(ctx, focus_ring, push);
@@ -2833,7 +2855,7 @@ impl<W: LayoutElement> Monitor<W> {
         }
     }
 
-    pub fn render_workspace_shadows<R: RealandRenderer>(
+    pub fn render_workspace_shadows<R: ClarionRenderer>(
         &self,
         renderer: &mut R,
         push: &mut dyn FnMut(MonitorRenderElement<R>),
@@ -2846,7 +2868,7 @@ impl<W: LayoutElement> Monitor<W> {
         };
         let alpha = progress.clamp(0., 1.) as f32;
 
-        let _span = realand_tracy_span!("Monitor::render_workspace_shadows");
+        let _span = clarion_tracy_span!("Monitor::render_workspace_shadows");
 
         let scale = self.scale.fractional_scale();
         let zoom = self.overview_zoom();
@@ -2905,7 +2927,7 @@ impl<W: LayoutElement> Monitor<W> {
 
     pub(super) fn clear_workspace_switch(&mut self) {
         self.core.borrow_mut().workspace_switch_action(
-            realand_core::workspace_switch::WorkspaceSwitchAction::Clear {
+            clarion_core::workspace_switch::WorkspaceSwitchAction::Clear {
                 connector: self.output_name.clone(),
             },
         );
@@ -2917,7 +2939,7 @@ impl<W: LayoutElement> Monitor<W> {
         let current = self.workspace_render_idx();
         let is_clamped = !self.is_overview_open();
         self.core.borrow_mut().workspace_switch_action(
-            realand_core::workspace_switch::WorkspaceSwitchAction::Begin {
+            clarion_core::workspace_switch::WorkspaceSwitchAction::Begin {
                 connector: self.output_name.clone(),
                 center,
                 current,
@@ -2938,7 +2960,7 @@ impl<W: LayoutElement> Monitor<W> {
         let center = SpaceId(self.active_workspace_ref().id().get());
         let current = self.workspace_render_idx();
         self.core.borrow_mut().workspace_switch_action(
-            realand_core::workspace_switch::WorkspaceSwitchAction::Begin {
+            clarion_core::workspace_switch::WorkspaceSwitchAction::Begin {
                 connector: self.output_name.clone(),
                 center,
                 current,
@@ -2971,7 +2993,7 @@ impl<W: LayoutElement> Monitor<W> {
             self.core
                 .borrow_mut()
                 .workspace_switch_action(
-                    realand_core::workspace_switch::WorkspaceSwitchAction::Update {
+                    clarion_core::workspace_switch::WorkspaceSwitchAction::Update {
                         connector: self.output_name.clone(),
                         delta_y,
                         timestamp,
@@ -2985,7 +3007,7 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn dnd_scroll_gesture_scroll(&mut self, pos: Point<f64, Logical>, speed: f64) -> bool {
-        use realand_core::workspace_switch::{DndGeometry, WorkspaceSwitchAction};
+        use clarion_core::workspace_switch::{DndGeometry, WorkspaceSwitchAction};
         if !self.workspace_gesture_is_dnd() {
             return false;
         }
@@ -3012,7 +3034,7 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     fn finish_workspace_gesture(&mut self, is_touchpad: Option<bool>, cancelled: bool) -> bool {
-        use realand_core::workspace_switch::WorkspaceSwitchAction;
+        use clarion_core::workspace_switch::WorkspaceSwitchAction;
         let Some(WorkspaceSwitch::Gesture(gesture)) = &self.workspace_switch else {
             return false;
         };
@@ -3087,7 +3109,7 @@ impl<W: LayoutElement> Monitor<W> {
         self.working_area
     }
 
-    pub fn layout_config(&self) -> Option<&realand_config::LayoutPart> {
+    pub fn layout_config(&self) -> Option<&clarion_config::LayoutPart> {
         self.layout_config.as_ref()
     }
 

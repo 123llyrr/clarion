@@ -1,31 +1,31 @@
 ## Using xwayland-satellite
 
-<sup>Since: 25.08</sup> Realand integrates with [xwayland-satellite](https://github.com/Supreeeme/xwayland-satellite) out of the box.
+<sup>Since: 25.08</sup> Clarion integrates with [xwayland-satellite](https://github.com/Supreeeme/xwayland-satellite) out of the box.
 Ensure xwayland-satellite >= 0.7 is installed and available in `$PATH`.
-With no further configuration, realand will create X11 sockets on disk, export `$DISPLAY`, and spawn xwayland-satellite on-demand when an X11 client connects.
-If xwayland-satellite dies, realand will automatically restart it.
+With no further configuration, clarion will create X11 sockets on disk, export `$DISPLAY`, and spawn xwayland-satellite on-demand when an X11 client connects.
+If xwayland-satellite dies, clarion will automatically restart it.
 
 If you had a custom config which manually started `xwayland-satellite` and set `$DISPLAY`, you should remove those customizations for the automatic integration to work.
 
-To check that the integration works, verify that the realand output says something like `listening on X11 socket: :0`:
+To check that the integration works, verify that the clarion output says something like `listening on X11 socket: :0`:
 
 ```sh
-$ journalctl --user-unit=realand -b
-systemd[2338]: Starting realand.service - A scrollable-tiling Wayland compositor...
-realand[2474]: 2025-08-29T04:07:40.043402Z  INFO realand: starting version 25.05.1 (0.0.git.2345.d9833fc1)
+$ journalctl --user-unit=clarion -b
+systemd[2338]: Starting clarion.service - A scrollable-tiling Wayland compositor...
+clarion[2474]: 2025-08-29T04:07:40.043402Z  INFO clarion: starting version 25.05.1 (0.0.git.2345.d9833fc1)
 (...)
-realand[2474]: 2025-08-29T04:07:40.690512Z  INFO realand: listening on Wayland socket: wayland-1
-realand[2474]: 2025-08-29T04:07:40.690520Z  INFO realand: IPC listening on: $XDG_RUNTIME_DIR/realand.wayland-1.2474.sock
-realand[2474]: 2025-08-29T04:07:40.700137Z  INFO realand: listening on X11 socket: :0
-systemd[2338]: Started realand.service - A scrollable-tiling Wayland compositor.
+clarion[2474]: 2025-08-29T04:07:40.690512Z  INFO clarion: listening on Wayland socket: wayland-1
+clarion[2474]: 2025-08-29T04:07:40.690520Z  INFO clarion: IPC listening on: $XDG_RUNTIME_DIR/clarion.wayland-1.2474.sock
+clarion[2474]: 2025-08-29T04:07:40.700137Z  INFO clarion: listening on X11 socket: :0
+systemd[2338]: Started clarion.service - A scrollable-tiling Wayland compositor.
 $ echo $DISPLAY
 :0
 ```
 
 ![xwayland-satellite running Steam and Half-Life.](https://github.com/user-attachments/assets/57db8f96-40d4-4621-a389-373c169349a4)
 
-We're using xwayland-satellite rather than Xwayland directly because [X11 is very cursed](./FAQ.md#why-doesnt-realand-integrate-xwayland-like-other-compositors).
-xwayland-satellite takes on the bulk of the work dealing with the X11 peculiarities from us, giving realand normal Wayland windows to manage.
+We're using xwayland-satellite rather than Xwayland directly because [X11 is very cursed](./FAQ.md#why-doesnt-clarion-integrate-xwayland-like-other-compositors).
+xwayland-satellite takes on the bulk of the work dealing with the X11 peculiarities from us, giving clarion normal Wayland windows to manage.
 
 xwayland-satellite works well with most applications: Steam, games, Discord, even more exotic things like Ardour with wine Windows VST plugins.
 However, X11 apps that want to position windows or bars at specific screen coordinates won't behave correctly and will need a nested compositor to run.
@@ -37,7 +37,7 @@ See sections below for how to do that.
 You can run it as a window, then run X11 apps inside.
 
 1. Install labwc from your distribution packages.
-1. Run it inside realand with the `labwc` command.
+1. Run it inside clarion with the `labwc` command.
 It will open as a new window.
 1. Run an X11 application on the X11 DISPLAY that it provides, e.g. `env DISPLAY=:0 glxgears`
 
@@ -65,8 +65,8 @@ With fullscreen game inside a fullscreen Xwayland you get pretty much a normal g
 One caveat is that currently rootful Xwayland doesn't seem to share clipboard with the compositor.
 For textual data you can do it manually using [wl-clipboard](https://github.com/bugaevc/wl-clipboard), for example:
 
-- `env DISPLAY=:0 xsel -ob | wl-copy` to copy from Xwayland to realand clipboard
-- `wl-paste -n | env DISPLAY=:0 xsel -ib` to copy from realand to Xwayland clipboard
+- `env DISPLAY=:0 xsel -ob | wl-copy` to copy from Xwayland to clarion clipboard
+- `wl-paste -n | env DISPLAY=:0 xsel -ib` to copy from clarion to Xwayland clipboard
 
 You can also bind these to hotkeys if you want:
 
@@ -104,7 +104,7 @@ Compared to the Xwayland rootful method, this does not require running an extra 
 To use Cage you need to:
 
 1. Install `cage`, it should be in most repositories.
-2. Run `cage -- /path/to/application` and enjoy your X11 program on realand.
+2. Run `cage -- /path/to/application` and enjoy your X11 program on clarion.
 
 Optionally one can also modify the desktop entry for the application and add the `cage --` prefix to the `Exec` property. The Spotify Flatpak for example would look something like this:
 

@@ -16,15 +16,15 @@
 
 ## 服务顺序验证
 
-协调方案只改变 shell ordering：`After=realand.service graphical-session.target`，`Before=xdg-desktop-autostart.target`。保留 WantedBy=graphical-session.target 与 DefaultDependencies=yes；显式顺序会抑制 target 自动添加反向 After。
+协调方案只改变 shell ordering：`After=clarion.service graphical-session.target`，`Before=xdg-desktop-autostart.target`。保留 WantedBy=graphical-session.target 与 DefaultDependencies=yes；显式顺序会抑制 target 自动添加反向 After。
 
-使用实际安装单位的临时复制件，包括 realand、shell、hotcorner、graphical/pre、xdg-autostart 与三个 portal 单位，执行 `systemd-analyze --user --generators=no verify`，退出 0。该工具创建离线 manager，不启动、重载或修改实际服务。
+使用实际安装单位的临时复制件，包括 clarion、shell、hotcorner、graphical/pre、xdg-autostart 与三个 portal 单位，执行 `systemd-analyze --user --generators=no verify`，退出 0。该工具创建离线 manager，不启动、重载或修改实际服务。
 
 真实推导的 debug unit dump（`systemd-verify-new.log`）及解析结果（`systemd-ordering-graph.json`）确认：
 
-`graphical-session-pre → realand → graphical-session → shell / portal / hotcorner → xdg-autostart`
+`graphical-session-pre → clarion → graphical-session → shell / portal / hotcorner → xdg-autostart`
 
-graphical target 的 Before 包含 shell，After 不包含 shell；shell After 包含 graphical target 与 realand，Before 包含 xdg-autostart。图没有 ordering cycle。已有 hotcorner 的 WantedBy+After 写法也提供实际运行对照。portal 激活可在 target 完成后与 shell 并行，不再等待 shell 发 READY。
+graphical target 的 Before 包含 shell，After 不包含 shell；shell After 包含 graphical target 与 clarion，Before 包含 xdg-autostart。图没有 ordering cycle。已有 hotcorner 的 WantedBy+After 写法也提供实际运行对照。portal 激活可在 target 完成后与 shell 并行，不再等待 shell 发 READY。
 
 ## 隔离冷启动回归
 
@@ -43,6 +43,6 @@ graphical target 的 Before 包含 shell，After 不包含 shell；shell After �
 
 ## 原生时间戳
 
-新增 opt-in `REALAND_SHELL_STARTUP_TRACE=1`，默认不打印。runner 记录 native-entry、gtk-register-begin/end、native-activate、flutter-view-create-begin/end、main-first-frame、dock-first-frame 的 monotonic_us 与 elapsed_ms，便于和 Dart 准备、私有 NOTIFY_SOCKET 的 READY 对齐。
+新增 opt-in `CLARION_SHELL_STARTUP_TRACE=1`，默认不打印。runner 记录 native-entry、gtk-register-begin/end、native-activate、flutter-view-create-begin/end、main-first-frame、dock-first-frame 的 monotonic_us 与 elapsed_ms，便于和 Dart 准备、私有 NOTIFY_SOCKET 的 READY 对齐。
 
 改动仅为 `linux/runner/startup_trace.h`、main.cc、shell_application.cc，以及 window_controller.cc 中 DockFirstFrame 的观测一行。无 GTK/portal/appmenu 禁用逻辑。GTK 探针以 `-Wall -Wextra -Werror` 编译通过；最终 Flutter bundle 编译、首帧与 READY 测量由根代理统一执行。

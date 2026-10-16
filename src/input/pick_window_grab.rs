@@ -21,15 +21,15 @@ impl PickWindowGrab {
     }
 
     fn on_ungrab(&mut self, state: &mut State) {
-        if let Some(tx) = state.realand.pick_window.take() {
+        if let Some(tx) = state.clarion.pick_window.take() {
             let _ = tx.send_blocking(None);
         }
         state
-            .realand
+            .clarion
             .cursor_manager
             .set_cursor_image(CursorImageStatus::default_named());
         // Redraw to update the cursor.
-        state.realand.queue_redraw_all();
+        state.clarion.queue_redraw_all();
     }
 }
 
@@ -65,11 +65,11 @@ impl PointerGrab<State> for PickWindowGrab {
         }
 
         // We're handling this press, don't send the release to the window.
-        data.realand.suppressed_buttons.insert(event.button);
+        data.clarion.suppressed_buttons.insert(event.button);
 
-        if let Some(tx) = data.realand.pick_window.take() {
+        if let Some(tx) = data.clarion.pick_window.take() {
             let _ = tx.send_blocking(
-                data.realand
+                data.clarion
                     .window_under(handle.current_location())
                     .map(Mapped::id),
             );

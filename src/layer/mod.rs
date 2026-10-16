@@ -1,6 +1,6 @@
-use realand_config::layer_rule::{LayerRule, Match};
-use realand_config::utils::MergeWith as _;
-use realand_config::{
+use clarion_config::layer_rule::{LayerRule, Match};
+use clarion_config::utils::MergeWith as _;
+use clarion_config::{
     BackgroundEffect, BlockOutFrom, CornerRadius, ResolvedPopupsRules, ShadowRule,
 };
 use smithay::desktop::LayerSurface;
@@ -39,7 +39,7 @@ pub struct ResolvedLayerRules {
 
 impl ResolvedLayerRules {
     pub fn compute(rules: &[LayerRule], surface: &LayerSurface, is_at_startup: bool) -> Self {
-        let _span = realand_tracy_span!("ResolvedLayerRules::compute");
+        let _span = clarion_tracy_span!("ResolvedLayerRules::compute");
 
         let mut resolved = ResolvedLayerRules::default();
 
@@ -47,7 +47,7 @@ impl ResolvedLayerRules {
         // user config predates liquid glass. Only surfaces with a nonempty
         // protocol blur mask render it; Material and Launchpad stay unchanged.
         // User layer rules below can override this with liquid-glass false.
-        if matches!(surface.namespace(), "realand-shell" | "realand-shell-dock") {
+        if matches!(surface.namespace(), "clarion-shell" | "clarion-shell-dock") {
             resolved.background_effect.liquid_glass = Some(true);
         }
 
@@ -101,17 +101,17 @@ impl ResolvedLayerRules {
 
 fn surface_matches(surface: &LayerSurface, m: &Match) -> bool {
     if let Some(namespace_re) = &m.namespace {
-        if !namespace_re.0.is_match(surface.namespace()) {
+        if !clarion_config::identity::matches_shell_identity(namespace_re, surface.namespace()) {
             return false;
         }
     }
 
     if let Some(layer) = m.layer {
         let surface_layer = match surface.layer() {
-            Layer::Background => realand_ipc::Layer::Background,
-            Layer::Bottom => realand_ipc::Layer::Bottom,
-            Layer::Top => realand_ipc::Layer::Top,
-            Layer::Overlay => realand_ipc::Layer::Overlay,
+            Layer::Background => clarion_ipc::Layer::Background,
+            Layer::Bottom => clarion_ipc::Layer::Bottom,
+            Layer::Top => clarion_ipc::Layer::Top,
+            Layer::Overlay => clarion_ipc::Layer::Overlay,
         };
         if layer != surface_layer {
             return false;

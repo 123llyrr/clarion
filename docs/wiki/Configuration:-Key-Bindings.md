@@ -27,8 +27,8 @@ Valid modifiers are:
 - `ISO_Level5_Shift`: can be used with an xkb lv5 option like `lv5:caps_switch`;
 - `Mod`.
 
-`Mod` is a special modifier that is equal to `Super` when running realand on a TTY, and to `Alt` when running realand as a nested winit window.
-This way, you can test realand in a window without causing too many conflicts with the host compositor's key bindings.
+`Mod` is a special modifier that is equal to `Super` when running clarion on a TTY, and to `Alt` when running clarion as a nested winit window.
+This way, you can test clarion in a window without causing too many conflicts with the host compositor's key bindings.
 For this reason, most of the default keys use the `Mod` modifier.
 
 <sup>Since: 25.05</sup> You can customize the `Mod` key [in the `input` section of the config](./Configuration:-Input.md#mod-key-mod-key-nested).
@@ -59,7 +59,7 @@ For this reason, most of the default keys use the `Mod` modifier.
 > As another example, if you've configured the French [BÉPO](https://en.wikipedia.org/wiki/B%C3%89PO) XKB layout, your <kbd>&lt;</kbd> is on <kbd>AltGr</kbd> + <kbd>«</kbd>.
 > <kbd>AltGr</kbd> is `ISO_Level3_Shift`, or equivalently `Mod5`, so to bind it, you spell out something like `Mod+Mod5+guillemotleft`.
 >
-> When resolving latin keys, realand will search for the *first* configured XKB layout that has the latin key.
+> When resolving latin keys, clarion will search for the *first* configured XKB layout that has the latin key.
 > So for example with US QWERTY and RU layouts configured, US QWERTY will be used for latin binds.
 
 <sup>Since: 0.1.8</sup> Binds will repeat by default (i.e. holding down a bind will make it trigger repeatedly).
@@ -98,7 +98,7 @@ binds {
 Similarly, you can bind touchpad scroll "ticks".
 Touchpad scrolling is continuous, so for these binds it is split into discrete intervals based on distance travelled.
 
-These binds are also affected by touchpad's `natural-scroll`, so these example binds are "inverted", since realand has `natural-scroll` enabled for touchpads by default.
+These binds are also affected by touchpad's `natural-scroll`, so these example binds are "inverted", since clarion has `natural-scroll` enabled for touchpads by default.
 
 ```kdl
 binds {
@@ -108,7 +108,7 @@ binds {
 ```
 
 Both mouse wheel and touchpad scroll binds will prevent applications from receiving any scroll events when their modifiers are held down.
-For example, if you have a `Mod+WheelScrollDown` bind, then while holding `Mod`, all mouse wheel scrolling will be consumed by realand.
+For example, if you have a `Mod+WheelScrollDown` bind, then while holding `Mod`, all mouse wheel scrolling will be consumed by clarion.
 
 ### Mouse Click Bindings
 
@@ -156,9 +156,9 @@ binds {
 
 > [!TIP]
 > When multiple key combinations are bound to the same action:
-> - If any of the binds has a custom hotkey overlay title, realand will show that bind.
-> - Otherwise, if any of the binds has a null title, realand will hide the bind.
-> - Otherwise, realand will show the first key combination.
+> - If any of the binds has a custom hotkey overlay title, clarion will show that bind.
+> - Otherwise, if any of the binds has a null title, clarion will hide the bind.
+> - Otherwise, clarion will show the first key combination.
 
 Custom titles support [Pango markup](https://docs.gtk.org/Pango/pango_markup.html):
 
@@ -172,15 +172,15 @@ binds {
 
 ### Actions
 
-Every action that you can bind is also available for programmatic invocation via `realand msg action`.
-Run `realand msg action` to get a full list of actions along with their short descriptions.
+Every action that you can bind is also available for programmatic invocation via `clarion msg action`.
+Run `clarion msg action` to get a full list of actions along with their short descriptions.
 
 Here are a few actions that benefit from more explanation.
 
 #### Runtime visual-effect toggles
 
 `toggle-window-wobble`, `toggle-workspace-cube`, and `toggle-window-glide` can be used in binds or
-with `realand msg action`. They change only the running session. Reloading the configuration restores
+with `clarion msg action`. They change only the running session. Reloading the configuration restores
 the values from `config.kdl`.
 
 ```kdl
@@ -221,7 +221,7 @@ binds {
 > }
 > ```
 
-For `spawn`, realand *does not* use a shell to run commands, which means that you need to manually separate arguments.
+For `spawn`, clarion *does not* use a shell to run commands, which means that you need to manually separate arguments.
 See [`spawn-sh`](#spawn-sh) below for an action that uses a shell.
 
 ```kdl
@@ -256,7 +256,7 @@ binds {
 }
 ```
 
-As a special case, realand will expand `~` to the home directory *only* at the beginning of the program name.
+As a special case, clarion will expand `~` to the home directory *only* at the beginning of the program name.
 
 ```kdl
 binds {
@@ -298,7 +298,7 @@ If you want a different shell, write it out using `spawn`, e.g. `spawn "fish" "-
 
 #### `quit`
 
-Exit realand after showing a confirmation dialog to avoid accidentally triggering it.
+Exit clarion after showing a confirmation dialog to avoid accidentally triggering it.
 
 ```kdl
 binds {
@@ -332,7 +332,7 @@ It makes transitions like this, where windows change their style one by one, loo
 For example, using the GNOME color scheme setting:
 
 ```shell
-realand msg action do-screen-transition
+clarion msg action do-screen-transition
 dconf write /org/gnome/desktop/interface/color-scheme "\"prefer-dark\""
 ```
 
@@ -348,7 +348,7 @@ binds {
 Or, in scripts:
 
 ```shell
-realand msg action do-screen-transition --delay-ms 100
+clarion msg action do-screen-transition --delay-ms 100
 ```
 
 #### `toggle-window-rule-opacity`
@@ -412,7 +412,7 @@ binds {
 
 <sup>Since: 25.02</sup>
 
-Applications such as remote-desktop clients and software KVM switches may request that realand stops processing its keyboard shortcuts so that they may, for example, forward the key presses as-is to a remote machine.
+Applications such as remote-desktop clients and software KVM switches may request that clarion stops processing its keyboard shortcuts so that they may, for example, forward the key presses as-is to a remote machine.
 `toggle-keyboard-shortcuts-inhibit` is an escape hatch that toggles the inhibitor.
 It's a good idea to bind it, so a buggy application can't hold your session hostage.
 
@@ -423,7 +423,7 @@ binds {
 ```
 
 You can also make certain binds ignore inhibiting with the `allow-inhibiting=false` property.
-They will always be handled by realand and never passed to the window.
+They will always be handled by clarion and never passed to the window.
 
 ```kdl
 binds {

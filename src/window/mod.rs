@@ -1,12 +1,12 @@
 use std::cmp::{max, min};
 
-use realand_config::utils::MergeWith as _;
-use realand_config::window_rule::{ContentType, Match, OnXdgActivate, WindowRule};
-use realand_config::{
+use clarion_config::utils::MergeWith as _;
+use clarion_config::window_rule::{ContentType, Match, OnXdgActivate, WindowRule};
+use clarion_config::{
     BackgroundEffect, BlockOutFrom, BorderRule, CornerRadius, FloatingPosition, PresetSize,
     ResolvedPopupsRules, ShadowRule, TabIndicatorRule,
 };
-use realand_ipc::ColumnDisplay;
+use clarion_ipc::ColumnDisplay;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::utils::{Logical, Size};
 use smithay::wayland::compositor::with_states;
@@ -191,7 +191,7 @@ impl<'a> WindowRef<'a> {
 
 impl ResolvedWindowRules {
     pub fn compute(rules: &[WindowRule], window: WindowRef, is_at_startup: bool) -> Self {
-        let _span = realand_tracy_span!("ResolvedWindowRules::compute");
+        let _span = clarion_tracy_span!("ResolvedWindowRules::compute");
 
         let mut resolved = ResolvedWindowRules::default();
         // Read the surface cache before with_toplevel_role takes the surface-state lock.
@@ -446,7 +446,7 @@ fn window_matches(
         let Some(app_id) = &role.app_id else {
             return false;
         };
-        if !app_id_re.0.is_match(app_id) {
+        if !clarion_config::identity::matches_shell_identity(app_id_re, app_id) {
             return false;
         }
     }

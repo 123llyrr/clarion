@@ -7,7 +7,7 @@ use std::sync::mpsc;
 use std::time::{Duration, SystemTime};
 use std::{io, thread};
 
-use realand_config::{Config, ConfigParseResult, ConfigPath};
+use clarion_config::{Config, ConfigParseResult, ConfigPath};
 use smithay::reexports::calloop::channel::SyncSender;
 
 use crate::compositor::State;
@@ -145,7 +145,12 @@ impl Props {
             ConfigPath::Regular {
                 user_path,
                 system_path,
-            } => Self::from_path(user_path).or_else(|_| Self::from_path(system_path)),
+            } => match std::fs::symlink_metadata(user_path) {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    Self::from_path(system_path)
+                }
+                _ => Self::from_path(user_path),
+            },
         }
     }
 }
@@ -211,7 +216,7 @@ pub fn setup(state: &mut State, config_path: &ConfigPath, includes: Vec<PathBuf>
 
     let (tx, rx) = calloop::channel::sync_channel(1);
     state
-        .realand
+        .clarion
         .event_loop
         .insert_source(
             rx,
@@ -227,7 +232,7 @@ pub fn setup(state: &mut State, config_path: &ConfigPath, includes: Vec<PathBuf>
         .unwrap();
 
     let watcher = Watcher::new(config_path.clone(), includes, process, tx);
-    state.realand.config_file_watcher = Some(watcher);
+    state.clarion.config_file_watcher = Some(watcher);
 }
 
 #[cfg(test)]
@@ -241,6 +246,26 @@ mod tests {
     use super::*;
 
     type Result<T = (), E = Box<dyn Error>> = std::result::Result<T, E>;
+
+    #[test]
+    fn broken_user_config_does_not_watch_a_different_system_config() {
+        let sh = Shell::new().unwrap();
+        let dir = sh.create_temp_dir().unwrap();
+        let user_path = dir.path().join("clarion.kdl");
+        let system_path = dir.path().join("system.kdl");
+        fs::write(&system_path, "").unwrap();
+        std::os::unix::fs::symlink(dir.path().join("missing.kdl"), &user_path).unwrap();
+        let config = ConfigPath::Regular {
+            user_path: user_path.clone(),
+            system_path: system_path.clone(),
+        };
+        assert!(Props::from_config_path(&config).is_err());
+        fs::remove_file(user_path).unwrap();
+        assert_eq!(
+            Props::from_config_path(&config).unwrap().canonical,
+            system_path.canonicalize().unwrap()
+        );
+    }
 
     fn canon(config_path: &ConfigPath) -> &PathBuf {
         match config_path {
@@ -423,11 +448,11 @@ mod tests {
 
     #[test]
     fn change_file() -> Result {
-        TestPath::Explicit("realand/config.kdl")
-            .setup(|sh| sh.write_file("realand/config.kdl", "a"))
+        TestPath::Explicit("clarion/config.kdl")
+            .setup(|sh| sh.write_file("clarion/config.kdl", "a"))
             .assert_initial("a")
             .run(|sh, test| {
-                sh.write_file("realand/config.kdl", "b")?;
+                sh.write_file("clarion/config.kdl", "b")?;
                 test.assert_changed_to("b");
 
                 Ok(())
@@ -436,11 +461,11 @@ mod tests {
 
     #[test]
     fn overwrite_but_dont_change_file() -> Result {
-        TestPath::Explicit("realand/config.kdl")
-            .setup(|sh| sh.write_file("realand/config.kdl", "a"))
+        TestPath::Explicit("clarion/config.kdl")
+            .setup(|sh| sh.write_file("clarion/config.kdl", "a"))
             .assert_initial("a")
             .run(|sh, test| {
-                sh.write_file("realand/config.kdl", "a")?;
+                sh.write_file("clarion/config.kdl", "a")?;
                 test.assert_changed_to("a");
 
                 Ok(())
@@ -449,11 +474,11 @@ mod tests {
 
     #[test]
     fn touch_file() -> Result {
-        TestPath::Explicit("realand/config.kdl")
-            .setup(|sh| sh.write_file("realand/config.kdl", "a"))
+        TestPath::Explicit("clarion/config.kdl")
+            .setup(|sh| sh.write_file("clarion/config.kdl", "a"))
             .assert_initial("a")
             .run(|sh, test| {
-                cmd!(sh, "touch realand/config.kdl").run()?;
+                cmd!(sh, "touch clarion/config.kdl").run()?;
                 test.assert_changed_to("a");
 
                 Ok(())
@@ -462,11 +487,11 @@ mod tests {
 
     #[test]
     fn create_file() -> Result {
-        TestPath::Explicit("realand/config.kdl")
-            .setup(|sh| sh.create_dir("realand"))
+        TestPath::Explicit("clarion/config.kdl")
+            .setup(|sh| sh.create_dir("clarion"))
             .assert_initial_not_exists()
             .run(|sh, test| {
-                sh.write_file("realand/config.kdl", "a")?;
+                sh.write_file("clarion/config.kdl", "a")?;
                 test.assert_changed_to("a");
 
                 Ok(())
@@ -475,10 +500,10 @@ mod tests {
 
     #[test]
     fn create_dir_and_file() -> Result {
-        TestPath::Explicit("realand/config.kdl")
+        TestPath::Explicit("clarion/config.kdl")
             .without_setup()
             .run(|sh, test| {
-                sh.write_file("realand/config.kdl", "a")?;
+                sh.write_file("clarion/config.kdl", "a")?;
                 test.assert_changed_to("a");
 
                 Ok(())
@@ -487,14 +512,14 @@ mod tests {
 
     #[test]
     fn change_linked_file() -> Result {
-        TestPath::Explicit("realand/config.kdl")
+        TestPath::Explicit("clarion/config.kdl")
             .setup(|sh| {
-                sh.write_file("realand/config2.kdl", "a")?;
-                cmd!(sh, "ln -sf config2.kdl realand/config.kdl").run()
+                sh.write_file("clarion/config2.kdl", "a")?;
+                cmd!(sh, "ln -sf config2.kdl clarion/config.kdl").run()
             })
             .assert_initial("a")
             .run(|sh, test| {
-                sh.write_file("realand/config2.kdl", "b")?;
+                sh.write_file("clarion/config2.kdl", "b")?;
                 test.assert_changed_to("b");
 
                 Ok(())
@@ -503,10 +528,10 @@ mod tests {
 
     #[test]
     fn change_file_in_linked_dir() -> Result {
-        TestPath::Explicit("realand/config.kdl")
+        TestPath::Explicit("clarion/config.kdl")
             .setup(|sh| {
                 sh.write_file("cfg2/config.kdl", "a")?;
-                cmd!(sh, "ln -s cfg2 realand").run()
+                cmd!(sh, "ln -s cfg2 clarion").run()
             })
             .assert_initial("a")
             .run(|sh, test| {
@@ -519,11 +544,11 @@ mod tests {
 
     #[test]
     fn remove_file() -> Result {
-        TestPath::Explicit("realand/config.kdl")
-            .setup(|sh| sh.write_file("realand/config.kdl", "a"))
+        TestPath::Explicit("clarion/config.kdl")
+            .setup(|sh| sh.write_file("clarion/config.kdl", "a"))
             .assert_initial("a")
             .run(|sh, test| {
-                sh.remove_path("realand/config.kdl")?;
+                sh.remove_path("clarion/config.kdl")?;
                 test.assert_unchanged();
 
                 Ok(())
@@ -532,11 +557,11 @@ mod tests {
 
     #[test]
     fn remove_dir() -> Result {
-        TestPath::Explicit("realand/config.kdl")
-            .setup(|sh| sh.write_file("realand/config.kdl", "a"))
+        TestPath::Explicit("clarion/config.kdl")
+            .setup(|sh| sh.write_file("clarion/config.kdl", "a"))
             .assert_initial("a")
             .run(|sh, test| {
-                sh.remove_path("realand")?;
+                sh.remove_path("clarion")?;
                 test.assert_unchanged();
 
                 Ok(())
@@ -545,12 +570,12 @@ mod tests {
 
     #[test]
     fn recreate_file() -> Result {
-        TestPath::Explicit("realand/config.kdl")
-            .setup(|sh| sh.write_file("realand/config.kdl", "a"))
+        TestPath::Explicit("clarion/config.kdl")
+            .setup(|sh| sh.write_file("clarion/config.kdl", "a"))
             .assert_initial("a")
             .run(|sh, test| {
-                sh.remove_path("realand/config.kdl")?;
-                sh.write_file("realand/config.kdl", "b")?;
+                sh.remove_path("clarion/config.kdl")?;
+                sh.write_file("clarion/config.kdl", "b")?;
                 test.assert_changed_to("b");
 
                 Ok(())
@@ -559,15 +584,15 @@ mod tests {
 
     #[test]
     fn recreate_dir() -> Result {
-        TestPath::Explicit("realand/config.kdl")
+        TestPath::Explicit("clarion/config.kdl")
             .setup(|sh| {
-                sh.write_file("realand/config.kdl", "a")?;
+                sh.write_file("clarion/config.kdl", "a")?;
                 Ok(())
             })
             .assert_initial("a")
             .run(|sh, test| {
-                sh.remove_path("realand")?;
-                sh.write_file("realand/config.kdl", "b")?;
+                sh.remove_path("clarion")?;
+                sh.write_file("clarion/config.kdl", "b")?;
                 test.assert_changed_to("b");
 
                 Ok(())
@@ -576,13 +601,13 @@ mod tests {
 
     #[test]
     fn swap_dir() -> Result {
-        TestPath::Explicit("realand/config.kdl")
-            .setup(|sh| sh.write_file("realand/config.kdl", "a"))
+        TestPath::Explicit("clarion/config.kdl")
+            .setup(|sh| sh.write_file("clarion/config.kdl", "a"))
             .assert_initial("a")
             .run(|sh, test| {
                 sh.write_file("cfg2/config.kdl", "b")?;
-                sh.remove_path("realand")?;
-                cmd!(sh, "mv cfg2 realand").run()?;
+                sh.remove_path("clarion")?;
+                cmd!(sh, "mv cfg2 clarion").run()?;
                 test.assert_changed_to("b");
 
                 Ok(())
@@ -591,16 +616,16 @@ mod tests {
 
     #[test]
     fn swap_dir_link() -> Result {
-        TestPath::Explicit("realand/config.kdl")
+        TestPath::Explicit("clarion/config.kdl")
             .setup(|sh| {
                 sh.write_file("cfg2/config.kdl", "a")?;
-                cmd!(sh, "ln -s cfg2 realand").run()
+                cmd!(sh, "ln -s cfg2 clarion").run()
             })
             .assert_initial("a")
             .run(|sh, test| {
                 sh.write_file("cfg3/config.kdl", "b")?;
-                sh.remove_path("realand")?;
-                cmd!(sh, "ln -s cfg3 realand").run()?;
+                sh.remove_path("clarion")?;
+                cmd!(sh, "ln -s cfg3 clarion").run()?;
                 test.assert_changed_to("b");
 
                 Ok(())
@@ -609,14 +634,14 @@ mod tests {
 
     #[test]
     fn change_included_file() -> Result {
-        TestPath::Explicit("realand/config.kdl")
+        TestPath::Explicit("clarion/config.kdl")
             .setup(|sh| {
-                sh.write_file("realand/config.kdl", "include \"colors.kdl\"")?;
-                sh.write_file("realand/colors.kdl", "// Colors")
+                sh.write_file("clarion/config.kdl", "include \"colors.kdl\"")?;
+                sh.write_file("clarion/colors.kdl", "// Colors")
             })
             .assert_initial("include \"colors.kdl\"")
             .run(|sh, test| {
-                sh.write_file("realand/colors.kdl", "// Updated colors")?;
+                sh.write_file("clarion/colors.kdl", "// Updated colors")?;
                 test.assert_changed_to("include \"colors.kdl\"");
 
                 Ok(())
@@ -625,14 +650,14 @@ mod tests {
 
     #[test]
     fn remove_included_file() -> Result {
-        TestPath::Explicit("realand/config.kdl")
+        TestPath::Explicit("clarion/config.kdl")
             .setup(|sh| {
-                sh.write_file("realand/config.kdl", "include \"colors.kdl\"")?;
-                sh.write_file("realand/colors.kdl", "// Colors")
+                sh.write_file("clarion/config.kdl", "include \"colors.kdl\"")?;
+                sh.write_file("clarion/colors.kdl", "// Colors")
             })
             .assert_initial("include \"colors.kdl\"")
             .run(|sh, test| {
-                sh.remove_path("realand/colors.kdl")?;
+                sh.remove_path("clarion/colors.kdl")?;
                 test.assert_changed_to("include \"colors.kdl\"");
 
                 Ok(())
@@ -641,15 +666,15 @@ mod tests {
 
     #[test]
     fn nested_includes() -> Result {
-        TestPath::Explicit("realand/config.kdl")
+        TestPath::Explicit("clarion/config.kdl")
             .setup(|sh| {
-                sh.write_file("realand/config.kdl", "include \"a.kdl\"")?;
-                sh.write_file("realand/a.kdl", "include \"b.kdl\"")?;
-                sh.write_file("realand/b.kdl", "// b content")
+                sh.write_file("clarion/config.kdl", "include \"a.kdl\"")?;
+                sh.write_file("clarion/a.kdl", "include \"b.kdl\"")?;
+                sh.write_file("clarion/b.kdl", "// b content")
             })
             .assert_initial("include \"a.kdl\"")
             .run(|sh, test| {
-                sh.write_file("realand/b.kdl", "// updated b")?;
+                sh.write_file("clarion/b.kdl", "// updated b")?;
                 test.assert_changed_to("include \"a.kdl\"");
 
                 Ok(())
@@ -658,14 +683,14 @@ mod tests {
 
     #[test]
     fn broken_include_still_gets_watched() -> Result {
-        TestPath::Explicit("realand/config.kdl")
+        TestPath::Explicit("clarion/config.kdl")
             .setup(|sh| {
-                sh.write_file("realand/config.kdl", "include \"colors.kdl\"")?;
-                sh.write_file("realand/colors.kdl", "broken")
+                sh.write_file("clarion/config.kdl", "include \"colors.kdl\"")?;
+                sh.write_file("clarion/colors.kdl", "broken")
             })
             .assert_initial("include \"colors.kdl\"")
             .run(|sh, test| {
-                sh.write_file("realand/colors.kdl", "// Fixed")?;
+                sh.write_file("clarion/colors.kdl", "// Fixed")?;
                 test.assert_changed_to("include \"colors.kdl\"");
 
                 Ok(())
@@ -753,22 +778,22 @@ mod tests {
 
     #[test]
     fn swap_just_link() -> Result {
-        TestPath::Explicit("realand/config.kdl")
+        TestPath::Explicit("clarion/config.kdl")
             .setup_any(|sh| {
-                let dir = sh.current_dir().join("realand");
+                let dir = sh.current_dir().join("clarion");
 
                 sh.create_dir(&dir)?;
 
                 create_epoch(dir.join("config2.kdl"), "a")?;
                 create_epoch(dir.join("config3.kdl"), "b")?;
 
-                cmd!(sh, "ln -s config2.kdl realand/config.kdl").run()?;
+                cmd!(sh, "ln -s config2.kdl clarion/config.kdl").run()?;
 
                 Ok(())
             })
             .assert_initial("a")
             .run(|sh, test| {
-                cmd!(sh, "ln -sf config3.kdl realand/config.kdl").run()?;
+                cmd!(sh, "ln -sf config3.kdl clarion/config.kdl").run()?;
                 test.assert_changed_to("b");
 
                 Ok(())
@@ -778,31 +803,31 @@ mod tests {
     #[test]
     fn swap_many_regular() -> Result {
         TestPath::Regular {
-            user_path: "user-realand/config.kdl",
-            system_path: "system-realand/config.kdl",
+            user_path: "user-clarion/config.kdl",
+            system_path: "system-clarion/config.kdl",
         }
-        .setup(|sh| sh.write_file("system-realand/config.kdl", "system config"))
+        .setup(|sh| sh.write_file("system-clarion/config.kdl", "system config"))
         .assert_initial("system config")
         .run(|sh, test| {
-            sh.write_file("user-realand/config.kdl", "user config")?;
+            sh.write_file("user-clarion/config.kdl", "user config")?;
             test.assert_changed_to("user config");
 
-            cmd!(sh, "touch system-realand/config.kdl").run()?;
+            cmd!(sh, "touch system-clarion/config.kdl").run()?;
             test.assert_unchanged();
 
-            sh.remove_path("system-realand")?;
+            sh.remove_path("system-clarion")?;
             test.assert_unchanged();
 
-            sh.write_file("system-realand/config.kdl", "new system config")?;
+            sh.write_file("system-clarion/config.kdl", "new system config")?;
             test.assert_unchanged();
 
-            sh.remove_path("user-realand")?;
+            sh.remove_path("user-clarion")?;
             test.assert_changed_to("new system config");
 
-            sh.write_file("system-realand/config.kdl", "updated system config")?;
+            sh.write_file("system-clarion/config.kdl", "updated system config")?;
             test.assert_changed_to("updated system config");
 
-            sh.write_file("user-realand/config.kdl", "new user config")?;
+            sh.write_file("user-clarion/config.kdl", "new user config")?;
             test.assert_changed_to("new user config");
 
             Ok(())
@@ -812,8 +837,8 @@ mod tests {
     #[test]
     fn swap_many_links_regular_like_nix() -> Result {
         TestPath::Regular {
-            user_path: "user-realand/config.kdl",
-            system_path: "system-realand/config.kdl",
+            user_path: "user-clarion/config.kdl",
+            system_path: "system-clarion/config.kdl",
         }
         .setup_any(|sh| {
             let store = sh.current_dir().join("store");
@@ -824,8 +849,8 @@ mod tests {
             create_epoch(store.join("gen2"), "gen 2")?;
             create_epoch(store.join("gen3"), "gen 3")?;
 
-            sh.create_dir("user-realand")?;
-            sh.create_dir("system-realand")?;
+            sh.create_dir("user-clarion")?;
+            sh.create_dir("system-clarion")?;
 
             Ok(())
         })
@@ -834,28 +859,28 @@ mod tests {
             let store = sh.current_dir().join("store");
             test.assert_unchanged();
 
-            cmd!(sh, "ln -s {store}/gen1 user-realand/config.kdl").run()?;
+            cmd!(sh, "ln -s {store}/gen1 user-clarion/config.kdl").run()?;
             test.assert_changed_to("gen 1");
 
-            cmd!(sh, "ln -s {store}/gen2 system-realand/config.kdl").run()?;
+            cmd!(sh, "ln -s {store}/gen2 system-clarion/config.kdl").run()?;
             test.assert_unchanged();
 
-            cmd!(sh, "unlink user-realand/config.kdl").run()?;
+            cmd!(sh, "unlink user-clarion/config.kdl").run()?;
             test.assert_changed_to("gen 2");
 
-            cmd!(sh, "ln -s {store}/gen3 user-realand/config.kdl").run()?;
+            cmd!(sh, "ln -s {store}/gen3 user-clarion/config.kdl").run()?;
             test.assert_changed_to("gen 3");
 
-            cmd!(sh, "ln -sf {store}/gen1 system-realand/config.kdl").run()?;
+            cmd!(sh, "ln -sf {store}/gen1 system-clarion/config.kdl").run()?;
             test.assert_unchanged();
 
-            cmd!(sh, "unlink system-realand/config.kdl").run()?;
+            cmd!(sh, "unlink system-clarion/config.kdl").run()?;
             test.assert_unchanged();
 
-            cmd!(sh, "ln -s {store}/gen1 system-realand/config.kdl").run()?;
+            cmd!(sh, "ln -s {store}/gen1 system-clarion/config.kdl").run()?;
             test.assert_unchanged();
 
-            cmd!(sh, "unlink user-realand/config.kdl").run()?;
+            cmd!(sh, "unlink user-clarion/config.kdl").run()?;
             test.assert_changed_to("gen 1");
 
             Ok(())

@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""Send one panel command to the selected Clarion Shell without launching a second shell."""
+import argparse
+import os
+from pathlib import Path
+import socket
+import sys
+
+
+COMMANDS = (
+    "spotlight", "launcher", "close", "spaces", "mission-control", "control-center",
+    "quick-settings", "notifications", "overview",
+)
+
+
+def socket_path(environment, present=os.path.lexists):
+    explicit = environment.get("CLARION_SHELL_SOCKET") or environment.get("REALAND_SHELL_SOCKET")
+    if explicit:
+        return Path(explicit)
+    runtime = environment.get("XDG_RUNTIME_DIR", "")
+    if not runtime.startswith("/"):
+        raise ValueError("an absolute XDG_RUNTIME_DIR is required")
+    canonical = Path(runtime) / "clarion-shell.sock"
+    legacy = Path(runtime) / "realand-shell.sock"
+    return legacy if not present(canonical) and present(legacy) else canonical
+
+
+def send_command(path, command):
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stream:
+        stream.settimeout(1)
+        stream.connect(str(path))
+        stream.sendall((command + "\n").encode("utf-8"))
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", choices=COMMANDS, default="spotlight", nargs="?")
+    args = parser.parse_args(argv)
+    try:
+        send_command(socket_path(os.environ), args.command)
+    except (OSError, ValueError) as error:
+        print(f"Clarion Shell IPC: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

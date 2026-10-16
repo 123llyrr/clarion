@@ -100,11 +100,11 @@ impl ForeignToplevelManagerState {
 }
 
 pub fn refresh(state: &mut State) {
-    let _span = realand_tracy_span!("foreign_toplevel::refresh");
+    let _span = clarion_tracy_span!("foreign_toplevel::refresh");
 
-    let protocol_state = &mut state.realand.foreign_toplevel_state;
+    let protocol_state = &mut state.clarion.foreign_toplevel_state;
 
-    remove_closed_toplevels(protocol_state, &state.realand.layout);
+    remove_closed_toplevels(protocol_state, &state.clarion.layout);
 
     // Handle new and existing windows.
     //
@@ -112,7 +112,7 @@ pub fn refresh(state: &mut State) {
     // the previous window and only then activate the newly focused window.
     let mut focused = None;
     state
-        .realand
+        .clarion
         .layout
         .with_windows_and_outputs(|mapped, output| {
             let toplevel = mapped.toplevel();
@@ -123,7 +123,7 @@ pub fn refresh(state: &mut State) {
                     return;
                 };
 
-                if state.realand.keyboard_focus.surface() == Some(wl_surface) {
+                if state.clarion.keyboard_focus.surface() == Some(wl_surface) {
                     focused = Some((mapped.id(), mapped.window.clone(), output.cloned()));
                 } else {
                     refresh_toplevel(
@@ -205,13 +205,13 @@ fn remove_closed_toplevels(
 }
 
 pub fn on_output_bound(state: &mut State, output: &Output, wl_output: &WlOutput) {
-    let _span = realand_tracy_span!("foreign_toplevel::on_output_bound");
+    let _span = clarion_tracy_span!("foreign_toplevel::on_output_bound");
 
     let Some(client) = wl_output.client() else {
         return;
     };
 
-    let protocol_state = &mut state.realand.foreign_toplevel_state;
+    let protocol_state = &mut state.clarion.foreign_toplevel_state;
     for data in protocol_state.toplevels.values_mut() {
         if data.output.as_ref() != Some(output) {
             continue;

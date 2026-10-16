@@ -193,7 +193,7 @@ window-rule {
 }
 ```
 
-You can find the title and the app ID of a window by running `realand msg pick-window` and clicking on the window in question.
+You can find the title and the app ID of a window by running `clarion msg pick-window` and clicking on the window in question.
 
 > [!TIP]
 > Another way to find the window title and app ID is to configure the `wlr/taskbar` module in [Waybar](https://github.com/Alexays/Waybar) to include them in the tooltip:
@@ -326,12 +326,12 @@ window-rule {
 <sup>Since: 0.1.6</sup>
 
 Can be `true` or `false`.
-Matches during the first 60 seconds after starting realand.
+Matches during the first 60 seconds after starting clarion.
 
-This is useful for properties like `open-on-output` which you may want to apply only right after starting realand.
+This is useful for properties like `open-on-output` which you may want to apply only right after starting clarion.
 
 ```kdl
-// Open windows on the HDMI-A-1 monitor at realand startup, but not afterwards.
+// Open windows on the HDMI-A-1 monitor at clarion startup, but not afterwards.
 window-rule {
     match at-startup=true
     open-on-output "HDMI-A-1"
@@ -342,7 +342,7 @@ window-rule {
 
 These properties apply once, when a window first opens.
 
-To be precise, they apply at the point when realand sends the initial configure request to the window.
+To be precise, they apply at the point when clarion sends the initial configure request to the window.
 
 #### `default-column-width`
 
@@ -599,7 +599,7 @@ window-rule {
 
 <sup>Since: next release</sup>
 
-Set what realand does when a window requests activation through [xdg-activation](https://wayland.app/protocols/xdg-activation-v1).
+Set what clarion does when a window requests activation through [xdg-activation](https://wayland.app/protocols/xdg-activation-v1).
 
 Values:
 
@@ -924,7 +924,7 @@ Informs the window that it is tiled.
 Usually, windows will react by becoming rectangular and hiding their client-side shadows.
 Windows that snap their size to a grid (e.g. terminals like [foot](https://codeberg.org/dnkl/foot)) will usually disable this snapping when they are tiled.
 
-By default, realand will set the tiled state to `true` together with [`prefer-no-csd`](./Configuration:-Miscellaneous.md#prefer-no-csd) in order to improve behavior for apps that don't support server-side decorations.
+By default, clarion will set the tiled state to `true` together with [`prefer-no-csd`](./Configuration:-Miscellaneous.md#prefer-no-csd) in order to improve behavior for apps that don't support server-side decorations.
 You can use this window rule to override this, for example to get rectangular windows with CSD.
 
 ```kdl
@@ -1007,7 +1007,7 @@ Other properties apply independently.
 >
 > - Uses a wl-subsurface instead of an xdg-popup.
 > Common in older apps using GTK 3, notably Firefox still uses these for some menus.
-> Subsurfaces are an indivisible part of a surface and they aren't usually pop-ups, so it wouldn't make sense for realand to apply these rules to them.
+> Subsurfaces are an indivisible part of a surface and they aren't usually pop-ups, so it wouldn't make sense for clarion to apply these rules to them.
 >
 > These emulated pop-ups come with other downsides: they cannot reliably extend outside their window, and if the app tries to do that, they will be clipped by rules such as `clip-to-geometry`.
 > So most modern apps will correctly use xdg-popup, which is the intended way to show pop-ups on Wayland.
@@ -1052,13 +1052,13 @@ These pop-ups with custom shapes will need the app to implement the [ext-backgro
 You can amend the window's minimum and maximum size in logical pixels.
 
 Keep in mind that the window itself always has a final say in its size.
-These values instruct realand to never ask the window to be smaller than the minimum you set, or to be bigger than the maximum you set.
+These values instruct clarion to never ask the window to be smaller than the minimum you set, or to be bigger than the maximum you set.
 
 > [!NOTE]
 > `max-height` will only apply to automatically-sized windows if it is equal to `min-height`.
 > Either set it equal to `min-height`, or change the window height manually after opening it with `set-window-height`.
 >
-> This is a limitation of realand's window height distribution algorithm.
+> This is a limitation of clarion's window height distribution algorithm.
 
 ```kdl
 window-rule {

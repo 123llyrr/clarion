@@ -7,7 +7,7 @@
 
 use std::rc::Rc;
 
-use realand_ipc::{DockEdge, MinimizeEffect};
+use clarion_ipc::{DockEdge, MinimizeEffect};
 
 use smithay::backend::renderer::element::Id;
 use smithay::backend::renderer::utils::CommitCounter;
@@ -26,7 +26,7 @@ fn duration_ms(effect: MinimizeEffect) -> u64 {
     }
 }
 #[cfg(test)]
-use realand_core::deformation::{COLUMNS, ROWS};
+use clarion_core::deformation::{COLUMNS, ROWS};
 
 #[derive(Debug)]
 pub struct Genie {
@@ -215,7 +215,7 @@ impl Genie {
     }
 }
 
-use realand_core::deformation::smoothstep;
+use clarion_core::deformation::smoothstep;
 
 /// Dock-facing rows finish narrowing first; the remaining body follows.
 /// Keep the trajectory continuous through the phase boundary. These splines
@@ -227,9 +227,9 @@ pub fn minimize_vertices(
     edge: DockEdge,
     effect: MinimizeEffect,
 ) -> (Rectangle<f64, Logical>, Vec<MeshVertex>) {
-    use realand_core::deformation::{Edge, Effect};
+    use clarion_core::deformation::{Edge, Effect};
     let convert = |rect: Rectangle<f64, Logical>| {
-        realand_core::Rect::new(rect.loc.x, rect.loc.y, rect.size.w, rect.size.h)
+        clarion_core::Rect::new(rect.loc.x, rect.loc.y, rect.size.w, rect.size.h)
     };
     let edge = match edge {
         DockEdge::Top => Edge::Top,
@@ -241,7 +241,7 @@ pub fn minimize_vertices(
         MinimizeEffect::Genie => Effect::Genie,
         MinimizeEffect::Scale => Effect::Scale,
     };
-    let (area, vertices) = realand_core::deformation::minimize_vertices(
+    let (area, vertices) = clarion_core::deformation::minimize_vertices(
         convert(source),
         convert(target),
         progress,

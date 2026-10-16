@@ -838,6 +838,160 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
+name = "clarion"
+version = "0.1.0"
+dependencies = [
+ "accesskit",
+ "accesskit_unix",
+ "anyhow",
+ "approx",
+ "arrayvec",
+ "ash",
+ "async-channel",
+ "async-io",
+ "atomic",
+ "bitflags 2.13.1",
+ "bytemuck",
+ "calloop 0.14.4",
+ "calloop-wayland-source 0.4.1",
+ "clap",
+ "clap_complete",
+ "clap_complete_nushell",
+ "clarion-config",
+ "clarion-core",
+ "clarion-ipc",
+ "clarion-motion",
+ "clarion-scene",
+ "clarion-timing",
+ "directories",
+ "drm-ffi",
+ "fastrand",
+ "futures-util",
+ "git-version",
+ "glam",
+ "input",
+ "insta",
+ "keyframe",
+ "libc",
+ "libdisplay-info",
+ "log",
+ "ordered-float",
+ "pango",
+ "pangocairo",
+ "pipewire",
+ "pkg-config",
+ "png",
+ "portable-atomic",
+ "profiling",
+ "proptest",
+ "proptest-derive",
+ "rayon",
+ "sd-notify",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "smithay",
+ "smithay-drm-extras",
+ "tracing",
+ "tracing-subscriber",
+ "tracy-client",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols-plasma",
+ "wayland-scanner",
+ "wayland-server",
+ "xcursor",
+ "xshell",
+ "zbus",
+]
+
+[[package]]
+name = "clarion-config"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.13.1",
+ "clarion-ipc",
+ "csscolorparser",
+ "diff",
+ "insta",
+ "knuffel",
+ "miette",
+ "pretty_assertions",
+ "quote",
+ "regex",
+ "smithay",
+ "syn 2.0.119",
+ "tempfile",
+ "tracing",
+ "tracy-client",
+]
+
+[[package]]
+name = "clarion-core"
+version = "0.1.0"
+dependencies = [
+ "clarion-motion",
+ "smallvec",
+]
+
+[[package]]
+name = "clarion-ipc"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "clarion-motion"
+version = "0.1.0"
+
+[[package]]
+name = "clarion-scene"
+version = "0.1.0"
+
+[[package]]
+name = "clarion-settings"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "clarion-config",
+ "clarion-ipc",
+ "directories",
+ "eframe",
+ "egui",
+ "image",
+ "knuffel",
+ "libc",
+ "regex",
+ "serde",
+ "serde_json",
+ "socket2",
+ "tempfile",
+]
+
+[[package]]
+name = "clarion-timing"
+version = "0.1.0"
+
+[[package]]
+name = "clarion-visual-tests"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clarion",
+ "clarion-config",
+ "gtk4",
+ "libadwaita",
+ "smithay",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "clipboard-win"
 version = "5.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3896,144 +4050,6 @@ checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
-]
-
-[[package]]
-name = "realand"
-version = "0.1.0"
-dependencies = [
- "accesskit",
- "accesskit_unix",
- "anyhow",
- "approx",
- "arrayvec",
- "ash",
- "async-channel",
- "async-io",
- "atomic",
- "bitflags 2.13.1",
- "bytemuck",
- "calloop 0.14.4",
- "calloop-wayland-source 0.4.1",
- "clap",
- "clap_complete",
- "clap_complete_nushell",
- "directories",
- "drm-ffi",
- "fastrand",
- "futures-util",
- "git-version",
- "glam",
- "input",
- "insta",
- "keyframe",
- "libc",
- "libdisplay-info",
- "log",
- "ordered-float",
- "pango",
- "pangocairo",
- "pipewire",
- "pkg-config",
- "png",
- "portable-atomic",
- "profiling",
- "proptest",
- "proptest-derive",
- "rayon",
- "realand-config",
- "realand-core",
- "realand-ipc",
- "sd-notify",
- "serde",
- "serde_json",
- "smallvec",
- "smithay",
- "smithay-drm-extras",
- "tracing",
- "tracing-subscriber",
- "tracy-client",
- "wayland-backend",
- "wayland-client",
- "wayland-protocols-plasma",
- "wayland-scanner",
- "wayland-server",
- "xcursor",
- "xshell",
- "zbus",
-]
-
-[[package]]
-name = "realand-config"
-version = "0.1.0"
-dependencies = [
- "bitflags 2.13.1",
- "csscolorparser",
- "diff",
- "insta",
- "knuffel",
- "miette",
- "pretty_assertions",
- "quote",
- "realand-ipc",
- "regex",
- "smithay",
- "syn 2.0.119",
- "tempfile",
- "tracing",
- "tracy-client",
-]
-
-[[package]]
-name = "realand-core"
-version = "0.1.0"
-dependencies = [
- "smallvec",
-]
-
-[[package]]
-name = "realand-ipc"
-version = "0.1.0"
-dependencies = [
- "clap",
- "schemars",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "realand-settings"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "directories",
- "eframe",
- "egui",
- "image",
- "knuffel",
- "libc",
- "realand-config",
- "realand-ipc",
- "regex",
- "serde",
- "serde_json",
- "socket2",
- "tempfile",
-]
-
-[[package]]
-name = "realand-visual-tests"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "gtk4",
- "libadwaita",
- "realand",
- "realand-config",
- "smithay",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

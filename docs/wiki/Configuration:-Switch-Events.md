@@ -25,7 +25,7 @@ Currently, only the [`spawn` action](./Configuration:-Key-Bindings.md#spawn) are
 
 These events correspond to closing and opening of the laptop lid.
 
-Note that realand will already automatically turn the internal laptop monitor on and off in accordance with the laptop lid.
+Note that clarion will already automatically turn the internal laptop monitor on and off in accordance with the laptop lid.
 
 ```kdl
 switch-events {

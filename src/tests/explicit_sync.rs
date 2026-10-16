@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use calloop::EventLoop;
-use realand_config::Config;
+use clarion_config::Config;
 use smithay::backend::allocator::dmabuf::AsDmabuf;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
 use smithay::backend::allocator::{Allocator, Buffer, Fourcc, Modifier};
@@ -69,7 +69,7 @@ mod implicit {
         surface.commit();
         fixture.double_roundtrip(id);
         let server = fixture
-            .realand()
+            .clarion()
             .root_surface
             .keys()
             .find(|s| s.id().protocol_id() == surface.id().protocol_id())
@@ -118,7 +118,7 @@ mod implicit {
         // Register the exact same FD, not a dup. The production insert_source
         // below must hit a real epoll EEXIST failure for the unsignaled source.
         let occupied = fixture
-            .realand()
+            .clarion()
             .event_loop
             .insert_source(
                 Generic::new(reader, Interest::READ, Mode::Level),
@@ -135,7 +135,7 @@ mod implicit {
             "unwatched producer must not let a commit reach compositor state"
         );
 
-        fixture.realand().event_loop.remove(occupied);
+        fixture.clarion().event_loop.remove(occupied);
         producer.write_all(&[1]).unwrap();
         surface.set_buffer_scale(3);
         surface.commit();
@@ -217,7 +217,7 @@ struct RenderNode {
 
 impl RenderNode {
     fn open() -> Self {
-        let path = std::env::var("REALAND_VULKAN_TEST_NODE")
+        let path = std::env::var("CLARION_VULKAN_TEST_NODE")
             .unwrap_or_else(|_| "/dev/dri/renderD128".to_owned());
         let file = std::fs::OpenOptions::new()
             .read(true)
@@ -306,22 +306,22 @@ impl HardwareFixture {
             })
             .expect("Wayland sync fixture renderer is initialized");
         let node = RenderNode::open();
-        server.state.realand.enable_drm_syncobj(node.device.clone());
+        server.state.clarion.enable_drm_syncobj(node.device.clone());
         assert!(
-            server.state.realand.drm_syncobj_state.is_some(),
+            server.state.clarion.drm_syncobj_state.is_some(),
             "render node does not support syncobj eventfd"
         );
         {
-            let State { backend, realand } = &mut server.state;
+            let State { backend, clarion } = &mut server.state;
             backend.headless().add_output(
-                &mut crate::platform::device_bridge::DeviceCoordinator::new(realand),
+                &mut crate::platform::device_bridge::DeviceCoordinator::new(clarion),
                 1,
                 (64, 64),
             );
         }
 
         let (server_socket, client_socket) = UnixStream::pair().unwrap();
-        server.state.realand.insert_client(NewClient {
+        server.state.clarion.insert_client(NewClient {
             client: server_socket,
             restricted: false,
             credentials_unknown: false,
@@ -356,7 +356,7 @@ impl HardwareFixture {
                 .unwrap();
             self.server
                 .state
-                .realand
+                .clarion
                 .display_handle
                 .flush_clients()
                 .unwrap();
@@ -483,7 +483,7 @@ fn wayland_client_acquire_and_release_follow_gpu_use() {
     surface.commit();
     fixture.roundtrip();
     assert_eq!(
-        fixture.server.state.realand.layout.windows().count(),
+        fixture.server.state.clarion.layout.windows().count(),
         0,
         "unsignaled client acquire point allowed the Wayland commit to map"
     );
@@ -491,7 +491,7 @@ fn wayland_client_acquire_and_release_follow_gpu_use() {
 
     acquire.signal(1);
     fixture.until("acquire blocker and mapped Vulkan frame", |fixture| {
-        fixture.server.state.realand.layout.windows().count() == 1
+        fixture.server.state.clarion.layout.windows().count() == 1
     });
     assert_eq!(release.value(), 0, "client still owns an attached buffer");
 
@@ -508,16 +508,16 @@ fn wayland_client_acquire_and_release_follow_gpu_use() {
     let output = fixture
         .server
         .state
-        .realand
+        .clarion
         .global_space
         .outputs()
         .next()
         .unwrap()
         .clone();
     {
-        let State { backend, realand } = &mut fixture.server.state;
-        realand.queue_redraw(&output);
-        let mut coordinator = crate::frame_pipeline::FrameCoordinator::new(realand, &output);
+        let State { backend, clarion } = &mut fixture.server.state;
+        clarion.queue_redraw(&output);
+        let mut coordinator = crate::frame_pipeline::FrameCoordinator::new(clarion, &output);
         assert!(
             matches!(
                 backend.headless().render(&mut coordinator, &output),
@@ -598,7 +598,7 @@ fn idle_gpu_completion_releases_replaced_and_detached_wayland_buffers() {
             fixture
                 .server
                 .state
-                .realand
+                .clarion
                 .root_surface
                 .keys()
                 .find(|server| server.id().protocol_id() == surface.id().protocol_id())
@@ -720,7 +720,7 @@ fn idle_gpu_completion_releases_replaced_and_detached_wayland_buffers() {
         fixture
             .server
             .state
-            .realand
+            .clarion
             .display_handle
             .flush_clients()
             .unwrap();

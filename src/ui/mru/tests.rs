@@ -12,7 +12,7 @@ fn create_thumbnail() -> Thumbnail {
         app_id: None,
         size: Size::new(100, 100),
         clock: Clock::with_time(Duration::ZERO),
-        config: realand_config::MruPreviews::default(),
+        config: clarion_config::MruPreviews::default(),
         open_animation: None,
         move_animation: None,
         title_texture: Default::default(),
@@ -235,7 +235,7 @@ fn thumbnail_retarget_preserves_position_and_velocity() {
             clock.set_rate(rate);
             let mut thumbnail = create_thumbnail();
             thumbnail.clock = clock.clone();
-            let config = realand_config::animations::WindowMovementAnim::default().0;
+            let config = clarion_config::animations::WindowMovementAnim::default().0;
             thumbnail.animate_move_from_with_config(200., config);
             clock.set_unadjusted(Duration::from_millis(80));
             let before = thumbnail.render_offset();
@@ -266,7 +266,7 @@ fn thumbnail_retarget_preserves_position_and_velocity() {
 #[test]
 fn unchanged_thumbnail_layout_stays_idle() {
     let mut thumbnail = create_thumbnail();
-    let config = realand_config::animations::WindowOpenAnim::default().anim;
+    let config = clarion_config::animations::WindowOpenAnim::default().anim;
     thumbnail.animate_move_from_with_config(0., config);
     assert!(!thumbnail.are_animations_ongoing());
 }
@@ -276,7 +276,7 @@ fn unchanged_thumbnail_layout_keeps_current_animation_deadline() {
     let mut clock = Clock::with_time(Duration::ZERO);
     let mut thumbnail = create_thumbnail();
     thumbnail.clock = clock.clone();
-    let config = realand_config::animations::WindowOpenAnim::default().anim;
+    let config = clarion_config::animations::WindowOpenAnim::default().anim;
     thumbnail.animate_move_from_with_config(200., config);
     let end = thumbnail.move_animation.as_ref().unwrap().anim.end_time();
     clock.set_unadjusted(Duration::from_millis(80));
@@ -287,10 +287,10 @@ fn unchanged_thumbnail_layout_keeps_current_animation_deadline() {
     assert_eq!(thumbnail.render_offset(), offset);
 }
 
-fn bouncy_fade_config() -> realand_config::Animation {
-    realand_config::Animation {
+fn bouncy_fade_config() -> clarion_config::Animation {
+    clarion_config::Animation {
         off: false,
-        kind: realand_config::animations::Kind::Spring(realand_config::animations::SpringParams {
+        kind: clarion_config::animations::Kind::Spring(clarion_config::animations::SpringParams {
             damping_ratio: 0.5,
             stiffness: 200,
             epsilon: 0.0001,

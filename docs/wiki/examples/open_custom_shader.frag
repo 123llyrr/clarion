@@ -1,9 +1,9 @@
 // Your shader must contain one function (see the bottom of this file).
 //
-// It should not contain any uniform definitions or anything else, as realand
+// It should not contain any uniform definitions or anything else, as clarion
 // provides them for you.
 //
-// All symbols defined by realand will have a realand_ prefix, so don't use it for
+// All symbols defined by clarion will have a clarion_ prefix, so don't use it for
 // your own variables and functions.
 
 // The function that you must define looks like this:
@@ -32,38 +32,38 @@ vec4 open_color(vec3 coords_geo, vec3 size_geo) {
 // It is homogeneous (the Z component is equal to 1).
 //
 // The function must return the color of the pixel (with premultiplied alpha).
-// The pixel color will be further processed by realand (for example, to apply the
+// The pixel color will be further processed by clarion (for example, to apply the
 // final opacity from window rules).
 
-// Now let's go over the uniforms that realand defines.
+// Now let's go over the uniforms that clarion defines.
 //
 // You should only rely on the uniforms documented here. Any other uniforms can
 // change or be removed without notice.
 
 // The window texture.
-uniform sampler2D realand_tex;
+uniform sampler2D clarion_tex;
 
 // Matrix that converts geometry coordinates into the window texture
 // coordinates.
 //
 // The window texture can and will go outside the geometry (for client-side
 // decoration shadows for example), which is why this matrix is necessary.
-uniform mat3 realand_geo_to_tex;
+uniform mat3 clarion_geo_to_tex;
 
 
 // Unclamped progress of the animation.
 //
 // Goes from 0 to 1 but may overshoot and oscillate.
-uniform float realand_progress;
+uniform float clarion_progress;
 
 // Clamped progress of the animation.
 //
 // Goes from 0 to 1, but will stop at 1 as soon as it first reaches 1. Will not
 // overshoot or oscillate.
-uniform float realand_clamped_progress;
+uniform float clarion_clamped_progress;
 
 // Random float in [0; 1), consistent for the duration of the animation.
-uniform float realand_random_seed;
+uniform float clarion_random_seed;
 
 // Now let's look at some examples. You can copy everything below this line
 // into your custom-shader to experiment.
@@ -83,7 +83,7 @@ vec4 solid_gradient(vec3 coords_geo, vec3 size_geo) {
     }
 
     // Make it opaque.
-    color *= realand_clamped_progress;
+    color *= clarion_clamped_progress;
 
     return color;
 }
@@ -92,15 +92,15 @@ vec4 solid_gradient(vec3 coords_geo, vec3 size_geo) {
 // opening animation.
 vec4 default_open(vec3 coords_geo, vec3 size_geo) {
     // Scale up the window.
-    float scale = max(0.0, (realand_progress / 2.0 + 0.5));
+    float scale = max(0.0, (clarion_progress / 2.0 + 0.5));
     coords_geo = vec3((coords_geo.xy - vec2(0.5)) / scale + vec2(0.5), 1.0);
 
     // Get color from the window texture.
-    vec3 coords_tex = realand_geo_to_tex * coords_geo;
-    vec4 color = texture2D(realand_tex, coords_tex.st);
+    vec3 coords_tex = clarion_geo_to_tex * coords_geo;
+    vec4 color = texture2D(clarion_tex, coords_tex.st);
 
     // Make the window opaque.
-    color *= realand_clamped_progress;
+    color *= clarion_clamped_progress;
 
     return color;
 }
@@ -108,12 +108,12 @@ vec4 default_open(vec3 coords_geo, vec3 size_geo) {
 // Example: show the window as an expanding circle.
 // Recommended setting: duration-ms 250
 vec4 expanding_circle(vec3 coords_geo, vec3 size_geo) {
-    vec3 coords_tex = realand_geo_to_tex * coords_geo;
-    vec4 color = texture2D(realand_tex, coords_tex.st);
+    vec3 coords_tex = clarion_geo_to_tex * coords_geo;
+    vec4 color = texture2D(clarion_tex, coords_tex.st);
 
     vec2 coords = (coords_geo.xy - vec2(0.5, 0.5)) * size_geo.xy * 2.0;
     coords = coords / length(size_geo.xy);
-    float p = realand_clamped_progress;
+    float p = clarion_clamped_progress;
     if (p * p <= dot(coords, coords))
         color = vec4(0.0);
 

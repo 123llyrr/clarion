@@ -1,4 +1,4 @@
-use realand_config::CornerRadius;
+use clarion_config::CornerRadius;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
 use super::focus_ring::{FocusRing, FocusRingRenderElement};
@@ -12,9 +12,9 @@ pub struct InsertHintElement {
 pub type InsertHintRenderElement = FocusRingRenderElement;
 
 impl InsertHintElement {
-    pub fn new(config: realand_config::InsertHint) -> Self {
+    pub fn new(config: clarion_config::InsertHint) -> Self {
         Self {
-            inner: FocusRing::new(realand_config::FocusRing {
+            inner: FocusRing::new(clarion_config::FocusRing {
                 off: config.off,
                 width: 0.,
                 active_color: config.color,
@@ -27,8 +27,8 @@ impl InsertHintElement {
         }
     }
 
-    pub fn update_config(&mut self, config: realand_config::InsertHint) {
-        self.inner.update_config(realand_config::FocusRing {
+    pub fn update_config(&mut self, config: clarion_config::InsertHint) {
+        self.inner.update_config(clarion_config::FocusRing {
             off: config.off,
             width: 0.,
             active_color: config.color,

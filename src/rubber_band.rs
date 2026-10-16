@@ -1,2 +1,2 @@
 //! Platform-facing export of the independent overscroll policy.
-pub use realand_core::rubber_band::RubberBand;
+pub use clarion_motion::rubber_band::RubberBand;

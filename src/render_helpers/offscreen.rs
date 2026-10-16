@@ -115,7 +115,7 @@ impl NativeOffscreenBuffer {
     ) -> anyhow::Result<NativeOffscreenRender> {
         let _latency =
             crate::utils::latency::Span::new(crate::utils::latency::Operation::NativeOffscreen);
-        let _span = realand_tracy_span!("NativeOffscreenBuffer::render");
+        let _span = clarion_tracy_span!("NativeOffscreenBuffer::render");
 
         let geo = encompassing_geo(scale, elements.iter());
         let elements = elements
@@ -283,7 +283,7 @@ impl OffscreenBuffer {
         scale: Scale<f64>,
         elements: &[impl RenderElement<GlesRenderer>],
     ) -> anyhow::Result<(OffscreenRenderElement, SyncPoint, OffscreenData)> {
-        let _span = realand_tracy_span!("OffscreenBuffer::render");
+        let _span = clarion_tracy_span!("OffscreenBuffer::render");
 
         let geo = encompassing_geo(scale, elements.iter());
         let elements = Vec::from_iter(elements.iter().map(|ele| {
@@ -336,7 +336,7 @@ impl OffscreenBuffer {
             inner
         } else {
             trace!("creating new texture: {reason}");
-            let span = realand_tracy_span!("creating offscreen buffer");
+            let span = clarion_tracy_span!("creating offscreen buffer");
             span.emit_text(reason);
 
             let texture: GlesTexture = renderer

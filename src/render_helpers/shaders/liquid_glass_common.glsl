@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Rounded-distance and SDF-gradient refraction adapted from zaroutt/Niri-glass,
 // commit 72ee16331994b43a9460b713b828a218a023a857 (clipped_surface.frag),
-// which credits 4v3ngR/kwin-effects-glass. Realand changes: logical-pixel bounded
+// which credits 4v3ngR/kwin-effects-glass. Clarion changes: logical-pixel bounded
 // displacement, one texture sample, no animated noise or dispersion loop.
 // See resources/licenses/niri-glass-GPL-3.0.txt and liquid-glass-sources.txt.
-float realand_glass_distance(vec2 p, vec2 half_size, vec4 radii) {
+float clarion_glass_distance(vec2 p, vec2 half_size, vec4 radii) {
     float r = p.x > 0.0
         ? (p.y > 0.0 ? radii.z : radii.y)
         : (p.y > 0.0 ? radii.w : radii.x);
@@ -13,17 +13,17 @@ float realand_glass_distance(vec2 p, vec2 half_size, vec4 radii) {
 }
 
 // xy: inward displacement in logical pixels; z: stationary edge illumination.
-vec3 realand_glass_lens(vec2 coords, vec2 size, vec4 radii, float strength) {
+vec3 clarion_glass_lens(vec2 coords, vec2 size, vec4 radii, float strength) {
     vec2 half_size = size * 0.5;
     vec2 p = coords * size - half_size;
-    float dist = realand_glass_distance(p, half_size, radii);
+    float dist = clarion_glass_distance(p, half_size, radii);
     float band = min(12.0, max(2.0, min(size.x, size.y) * 0.2));
     if (dist > 0.0 || dist < -band) return vec3(0.0);
     vec2 gradient = vec2(
-        realand_glass_distance(p + vec2(0.5, 0.0), half_size, radii)
-            - realand_glass_distance(p - vec2(0.5, 0.0), half_size, radii),
-        realand_glass_distance(p + vec2(0.0, 0.5), half_size, radii)
-            - realand_glass_distance(p - vec2(0.0, 0.5), half_size, radii));
+        clarion_glass_distance(p + vec2(0.5, 0.0), half_size, radii)
+            - clarion_glass_distance(p - vec2(0.5, 0.0), half_size, radii),
+        clarion_glass_distance(p + vec2(0.0, 0.5), half_size, radii)
+            - clarion_glass_distance(p - vec2(0.0, 0.5), half_size, radii));
     vec2 normal = -gradient / max(length(gradient), 0.0001);
     float bevel = clamp(1.0 + dist / band, 0.0, 1.0);
     vec2 offset = normal * min(strength, min(size.x, size.y) * 0.15)
@@ -35,7 +35,7 @@ vec3 realand_glass_lens(vec2 coords, vec2 size, vec4 radii, float strength) {
 }
 
 // Invert only the affine 2x2 linear part (also handles output rotation/flip).
-vec2 realand_glass_uv_offset(vec2 offset, vec2 size, mat3 input_to_geo) {
+vec2 clarion_glass_uv_offset(vec2 offset, vec2 size, mat3 input_to_geo) {
     vec2 delta = offset / max(size, vec2(0.0001));
     float a = input_to_geo[0].x, b = input_to_geo[1].x;
     float c = input_to_geo[0].y, d = input_to_geo[1].y;

@@ -5,8 +5,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
+use clarion_config::OutputName;
 use libc::dev_t;
-use realand_config::OutputName;
 use smithay::backend::allocator::format::FormatSet;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
 use smithay::backend::drm::compositor::DrmCompositor;
@@ -31,7 +31,7 @@ use smithay_drm_extras::drm_scanner::{DrmScanEvent, DrmScanner};
 use wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
 
 use crate::backend::OutputId;
-use crate::compositor::{Realand, State};
+use crate::compositor::{Clarion, State};
 use crate::render_helpers::renderer::AsGlesRenderer;
 use crate::utils::{
     get_monotonic_time, is_laptop_panel, logical_output, next_presentation_seq, PanelOrientation,
@@ -43,11 +43,11 @@ use crate::backend::tty::renderer_init::initialize_device_renderer;
 use crate::backend::tty::*;
 
 impl Tty {
-    fn platform_init(&mut self, realand: &mut Realand) {
+    fn platform_init(&mut self, clarion: &mut Clarion) {
         // If the session is inactive, skip initialization because we won't be able to do much with
         // the devices anyway. We'll get ActivateSession and add the devices there instead.
         //
-        // This can happen when starting realand while having a different TTY active (e.g. via tmux).
+        // This can happen when starting clarion while having a different TTY active (e.g. via tmux).
         if !self.session.is_active() {
             return;
         }
@@ -65,7 +65,7 @@ impl Tty {
             .find(|&(device_id, _)| device_id == self.primary_node.dev_id())
         {
             if let Err(err) =
-                self.platform_device_added(primary_device_id, primary_device_path, realand)
+                self.platform_device_added(primary_device_id, primary_device_path, clarion)
             {
                 warn!(
                     "error adding primary node device, display-only devices may not work: {err:?}"
@@ -80,14 +80,14 @@ impl Tty {
                 continue;
             }
 
-            if let Err(err) = self.platform_device_added(device_id, path, realand) {
+            if let Err(err) = self.platform_device_added(device_id, path, clarion) {
                 warn!("error adding device: {err:?}");
             }
         }
     }
 
-    fn platform_on_udev_event(&mut self, realand: &mut Realand, event: UdevEvent) {
-        let _span = realand_tracy_span!("Tty::on_udev_event");
+    fn platform_on_udev_event(&mut self, clarion: &mut Clarion, event: UdevEvent) {
+        let _span = clarion_tracy_span!("Tty::on_udev_event");
 
         match event {
             UdevEvent::Added { device_id, path } => {
@@ -100,7 +100,7 @@ impl Tty {
                 // new underlying device IDs.
                 self.ignored_nodes = self.compute_ignored_nodes();
 
-                if let Err(err) = self.platform_device_added(device_id, &path, realand) {
+                if let Err(err) = self.platform_device_added(device_id, &path, clarion) {
                     warn!("error adding device: {err:?}");
                 }
             }
@@ -110,7 +110,7 @@ impl Tty {
                     return;
                 }
 
-                self.platform_device_changed(device_id, realand, false)
+                self.platform_device_changed(device_id, clarion, false)
             }
             UdevEvent::Removed { device_id } => {
                 if !self.session.is_active() {
@@ -118,13 +118,13 @@ impl Tty {
                     return;
                 }
 
-                self.platform_device_removed(device_id, realand)
+                self.platform_device_removed(device_id, clarion)
             }
         }
     }
 
-    fn platform_on_session_event(&mut self, realand: &mut Realand, event: SessionEvent) {
-        let _span = realand_tracy_span!("Tty::on_session_event");
+    fn platform_on_session_event(&mut self, clarion: &mut Clarion, event: SessionEvent) {
+        let _span = clarion_tracy_span!("Tty::on_session_event");
 
         match event {
             SessionEvent::PauseSession => {
@@ -182,7 +182,7 @@ impl Tty {
                 // Remove removed devices.
                 for node in removed_devices {
                     device_list.remove(&node.dev_id());
-                    self.platform_device_removed(node.dev_id(), realand);
+                    self.platform_device_removed(node.dev_id(), clarion);
                 }
 
                 // Update remained devices.
@@ -207,7 +207,7 @@ impl Tty {
                     }
 
                     // Refresh the connectors.
-                    self.platform_device_changed(node.dev_id(), realand, true);
+                    self.platform_device_changed(node.dev_id(), clarion, true);
 
                     // Apply pending gamma changes and restore our existing gamma.
                     let device = self.devices.get_mut(&node).unwrap();
@@ -253,22 +253,22 @@ impl Tty {
                 let primary = primary_device_path.map(|path| (primary_device_id, path));
 
                 for (device_id, path) in primary.into_iter().chain(device_list) {
-                    if let Err(err) = self.platform_device_added(device_id, &path, realand) {
+                    if let Err(err) = self.platform_device_added(device_id, &path, clarion) {
                         warn!("error adding device: {err:?}");
                     }
                 }
 
                 if self.update_output_config_on_resume {
-                    self.platform_on_output_config_changed(realand);
+                    self.platform_on_output_config_changed(clarion);
                 }
 
-                self.platform_refresh_ipc_outputs(realand);
+                self.platform_refresh_ipc_outputs(clarion);
 
-                realand.notify_activity();
-                realand.monitors_active = true;
+                clarion.notify_activity();
+                clarion.monitors_active = true;
                 self.set_monitors_active(true);
-                reset_kms_submission_backoff(realand);
-                realand.queue_redraw_all();
+                reset_kms_submission_backoff(clarion);
+                clarion.queue_redraw_all();
             }
         }
     }
@@ -277,7 +277,7 @@ impl Tty {
         &mut self,
         device_id: dev_t,
         path: &Path,
-        realand: &mut Realand,
+        clarion: &mut Clarion,
     ) -> anyhow::Result<()> {
         debug!("adding device: {device_id} {path:?}");
 
@@ -299,22 +299,22 @@ impl Tty {
             return Ok(());
         }
 
-        let _span = realand_tracy_span!("Tty::device_added");
+        let _span = clarion_tracy_span!("Tty::device_added");
 
         let open_flags = OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK;
         let fd = {
-            let _span = realand_tracy_span!("LibSeatSession::open");
+            let _span = clarion_tracy_span!("LibSeatSession::open");
             self.session.open(path, open_flags)
         }?;
         let device_fd = DrmDeviceFd::new(DeviceFd::from(fd));
 
         let (drm, drm_notifier) = {
-            let _span = realand_tracy_span!("DrmDevice::new");
+            let _span = clarion_tracy_span!("DrmDevice::new");
             DrmDevice::new(device_fd.clone(), false)
         }?;
         let syncobj_fd = device_fd.clone();
         let gbm = {
-            let _span = realand_tracy_span!("GbmDevice::new");
+            let _span = clarion_tracy_span!("GbmDevice::new");
             GbmDevice::new(device_fd)
         }?;
 
@@ -323,7 +323,7 @@ impl Tty {
             self.native_renderer = super::native_renderer_with_wakeup(
                 self.primary_render_node,
                 self.config.as_ref(),
-                &realand.event_loop,
+                &clarion.event_loop,
             );
         }
 
@@ -367,7 +367,7 @@ impl Tty {
                     .single_renderer(&render_node)
                     .context("error creating renderer")?;
 
-                if let Err(err) = renderer.bind_wl_display(&realand.display_handle) {
+                if let Err(err) = renderer.bind_wl_display(&clarion.display_handle) {
                     // wl_drm is on its way out so this is expected on most modern distros.
                     trace!("error binding legacy EGL to wl_display: {err}");
                 } else {
@@ -385,22 +385,22 @@ impl Tty {
             };
 
             if let Some(primary_formats) = primary_formats {
-                realand.update_shaders();
+                clarion.update_shaders();
 
                 // Create the dmabuf global.
                 let default_feedback =
                     DmabufFeedbackBuilder::new(vulkan_node.dev_id(), primary_formats.clone())
                         .build()
                         .context("error building default dmabuf feedback")?;
-                let dmabuf_global = realand
+                let dmabuf_global = clarion
                     .dmabuf_state
                     .create_global_with_default_feedback::<State>(
-                        &realand.display_handle,
+                        &clarion.display_handle,
                         &default_feedback,
                     );
                 assert!(self.dmabuf_global.replace(dmabuf_global).is_none());
                 if self.native_renderer.is_some() {
-                    realand.enable_drm_syncobj(syncobj_fd);
+                    clarion.enable_drm_syncobj(syncobj_fd);
                 }
 
                 // Update the dmabuf feedbacks for all surfaces.
@@ -436,21 +436,21 @@ impl Tty {
         let gbm_flags = GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT;
         let allocator = GbmAllocator::new(allocator_gbm, gbm_flags);
 
-        let token = realand
+        let token = clarion
             .event_loop
             .insert_source(drm_notifier, move |event, meta, state| {
                 let tty = state.backend.tty();
                 match event {
                     DrmEvent::VBlank(crtc) => {
                         let meta = meta.expect("VBlank events must have metadata");
-                        tty.platform_on_vblank(&mut state.realand, node, crtc, meta);
+                        tty.platform_on_vblank(&mut state.clarion, node, crtc, meta);
                     }
                     DrmEvent::Error(error) => warn!("DRM error: {error}"),
                 };
             })
             .unwrap();
 
-        let drm_lease_state = DrmLeaseState::new::<State>(&realand.display_handle, &node)
+        let drm_lease_state = DrmLeaseState::new::<State>(&clarion.display_handle, &node)
             .map_err(|err| warn!("error initializing DRM leasing for {node}: {err:?}"))
             .ok();
 
@@ -471,12 +471,12 @@ impl Tty {
         };
         assert!(self.devices.insert(node, device).is_none());
 
-        self.platform_device_changed(device_id, realand, true);
+        self.platform_device_changed(device_id, clarion, true);
 
         Ok(())
     }
 
-    fn platform_device_changed(&mut self, device_id: dev_t, realand: &mut Realand, cleanup: bool) {
+    fn platform_device_changed(&mut self, device_id: dev_t, clarion: &mut Clarion, cleanup: bool) {
         debug!("device changed: {device_id}");
 
         let Ok(node) = DrmNode::from_dev_id(device_id) else {
@@ -498,7 +498,7 @@ impl Tty {
             if let Some(path) = node.dev_path() {
                 warn!("unknown device; trying to add");
 
-                if let Err(err) = self.platform_device_added(device_id, &path, realand) {
+                if let Err(err) = self.platform_device_added(device_id, &path, clarion) {
                     warn!("error adding device: {err:?}");
                 }
             } else {
@@ -573,7 +573,7 @@ impl Tty {
         }
 
         for crtc in &removed {
-            self.platform_connector_disconnected(realand, node, *crtc);
+            self.platform_connector_disconnected(clarion, node, *crtc);
         }
 
         let Some(device) = self.devices.get_mut(&node) else {
@@ -624,7 +624,7 @@ impl Tty {
             let device = self.devices.get(&node).unwrap();
 
             // Follow the logic in on_output_config_changed().
-            let disable_laptop_panels = self.should_disable_laptop_panels(realand.is_lid_closed);
+            let disable_laptop_panels = self.should_disable_laptop_panels(clarion.is_lid_closed);
             let should_disable = |conn: &str| disable_laptop_panels && is_laptop_panel(conn);
 
             let config = self.config.as_ref();
@@ -663,10 +663,10 @@ impl Tty {
         //
         // It will also call refresh_ipc_outputs(), which will catch the disconnected connectors
         // above.
-        self.platform_on_output_config_changed(realand);
+        self.platform_on_output_config_changed(clarion);
     }
 
-    fn platform_device_removed(&mut self, device_id: dev_t, realand: &mut Realand) {
+    fn platform_device_removed(&mut self, device_id: dev_t, clarion: &mut Clarion) {
         debug!("removing device: {device_id}");
 
         let Ok(node) = DrmNode::from_dev_id(device_id) else {
@@ -691,7 +691,7 @@ impl Tty {
             .collect();
 
         for crtc in crtcs {
-            self.platform_connector_disconnected(realand, node, crtc);
+            self.platform_connector_disconnected(clarion, node, crtc);
         }
 
         let mut device = self.devices.remove(&node).unwrap();
@@ -712,6 +712,15 @@ impl Tty {
             .copied()
             .any(|node| is_primary_gpu_node(node, self.primary_node, self.primary_render_node));
         if removed_primary && !primary_remains {
+            // A removed/re-added node can have the same dev_t. Its old worker
+            // generation must never be installed into the replacement device.
+            self.vulkan_recovery.invalidate();
+            self.vulkan_recovery_generation = None;
+            self.vulkan_recovery_attempt = 0;
+            self.vulkan_recovery_retry_after = Duration::ZERO;
+            if let Some(timer) = self.vulkan_recovery_watchdog.take() {
+                clarion.event_loop.remove(timer);
+            }
             debug!("destroying the primary renderer");
 
             if let Some(_native) = self.native_renderer.take() {
@@ -727,19 +736,19 @@ impl Tty {
 
             // Disable and destroy the dmabuf global.
             if let Some(global) = self.dmabuf_global.take() {
-                realand.disable_drm_syncobj();
-                realand
+                clarion.disable_drm_syncobj();
+                clarion
                     .dmabuf_state
-                    .disable_global::<State>(&realand.display_handle, &global);
-                realand
+                    .disable_global::<State>(&clarion.display_handle, &global);
+                clarion
                     .event_loop
                     .insert_source(
                         Timer::from_duration(Duration::from_secs(10)),
                         move |_, _, state| {
                             state
-                                .realand
+                                .clarion
                                 .dmabuf_state
-                                .destroy_global::<State>(&state.realand.display_handle, global);
+                                .destroy_global::<State>(&state.clarion.display_handle, global);
                             TimeoutAction::Drop
                         },
                     )
@@ -770,9 +779,9 @@ impl Tty {
             }
         }
 
-        realand.event_loop.remove(device.token);
+        clarion.event_loop.remove(device.token);
 
-        self.platform_refresh_ipc_outputs(realand);
+        self.platform_refresh_ipc_outputs(clarion);
 
         drop(device);
 
@@ -790,7 +799,7 @@ impl Tty {
 
     fn platform_connector_connected(
         &mut self,
-        realand: &mut Realand,
+        clarion: &mut Clarion,
         node: DrmNode,
         connector: connector::Info,
         crtc: crtc::Handle,
@@ -1142,7 +1151,7 @@ impl Tty {
 
         // Some buggy monitors replug upon powering off, so powering on here would prevent such
         // monitors from powering off. Therefore, we avoid unconditionally powering on.
-        if !realand.monitors_active {
+        if !clarion.monitors_active {
             if let Err(err) = compositor.clear() {
                 warn!("error clearing drm surface: {err:?}");
             }
@@ -1188,19 +1197,19 @@ impl Tty {
         let res = device.surfaces.insert(crtc, surface);
         assert!(res.is_none(), "crtc must not have already existed");
 
-        realand.add_output(
+        clarion.add_output(
             output.clone(),
             Some(refresh_interval(mode)),
             vrr_enabled,
             true,
         );
 
-        if realand.monitors_active {
+        if clarion.monitors_active {
             // Redraw the new monitor.
-            realand.event_loop.insert_idle(move |state| {
+            clarion.event_loop.insert_idle(move |state| {
                 // Guard against output disconnecting before the idle has a chance to run.
-                if state.realand.output_state.contains_key(&output) {
-                    state.realand.queue_redraw(&output);
+                if state.clarion.output_state.contains_key(&output) {
+                    state.clarion.queue_redraw(&output);
                 }
             });
         }
@@ -1210,7 +1219,7 @@ impl Tty {
 
     fn platform_connector_disconnected(
         &mut self,
-        realand: &mut Realand,
+        clarion: &mut Clarion,
         node: DrmNode,
         crtc: crtc::Handle,
     ) {
@@ -1245,7 +1254,7 @@ impl Tty {
 
         debug!("disconnecting connector: {:?}", surface.name.connector);
 
-        let output = realand
+        let output = clarion
             .global_space
             .outputs()
             .find(|output| {
@@ -1254,7 +1263,7 @@ impl Tty {
             })
             .cloned();
         if let Some(output) = output {
-            realand.remove_output(&output);
+            clarion.remove_output(&output);
         } else {
             error!("missing output for crtc {crtc:?}");
         };
@@ -1262,12 +1271,12 @@ impl Tty {
 
     fn platform_on_vblank(
         &mut self,
-        realand: &mut Realand,
+        clarion: &mut Clarion,
         node: DrmNode,
         crtc: crtc::Handle,
         meta: DrmEventMetadata,
     ) {
-        let span = realand_tracy_span!("Tty::on_vblank");
+        let span = clarion_tracy_span!("Tty::on_vblank");
 
         let now = get_monotonic_time();
 
@@ -1298,7 +1307,7 @@ impl Tty {
                 Duration::ZERO
             }
         };
-        let presentation_time = if realand.config.borrow().debug.emulate_zero_presentation_time {
+        let presentation_time = if clarion.config.borrow().debug.emulate_zero_presentation_time {
             Duration::ZERO
         } else {
             presentation_time
@@ -1325,7 +1334,7 @@ impl Tty {
             .unwrap()
             .message(&message, 0);
 
-        let Some(output) = realand
+        let Some(output) = clarion
             .global_space
             .outputs()
             .find(|output| {
@@ -1338,7 +1347,7 @@ impl Tty {
             return;
         };
 
-        let Some(output_state) = realand.output_state.get_mut(&output) else {
+        let Some(output_state) = clarion.output_state.get_mut(&output) else {
             error!("missing output state for {name}");
             return;
         };
@@ -1360,7 +1369,7 @@ impl Tty {
                 };
 
                 let tty = state.backend.tty();
-                tty.platform_on_vblank(&mut state.realand, node, crtc, meta);
+                tty.platform_on_vblank(&mut state.clarion, node, crtc, meta);
             })
         {
             // Throttled.
@@ -1369,7 +1378,7 @@ impl Tty {
 
         let redraw_needed = output_state
             .schedule
-            .hardware_vblank(&realand.event_loop, name);
+            .hardware_vblank(&clarion.event_loop, name);
 
         // Mark the last frame as submitted.
         let mut submitted_target = None;
@@ -1434,33 +1443,33 @@ impl Tty {
                 .non_continuous_frame(surface.vblank_frame_name);
             surface.vblank_frame = Some(vblank_frame);
 
-            realand.queue_redraw(&output);
+            clarion.queue_redraw(&output);
         } else {
-            realand.send_frame_callbacks(&output);
+            clarion.send_frame_callbacks(&output);
         }
     }
 
-    fn platform_on_estimated_vblank_timer(realand: &mut Realand, output: Output) {
-        realand.release_fifo_after_estimated_vblank(&output);
-        let span = realand_tracy_span!("Tty::on_estimated_vblank_timer");
+    fn platform_on_estimated_vblank_timer(clarion: &mut Clarion, output: Output) {
+        clarion.release_fifo_after_estimated_vblank(&output);
+        let span = clarion_tracy_span!("Tty::on_estimated_vblank_timer");
 
         let name = output.name();
         span.emit_text(&name);
 
-        let Some(output_state) = realand.output_state.get_mut(&output) else {
+        let Some(output_state) = clarion.output_state.get_mut(&output) else {
             error!("missing output state for {name}");
             return;
         };
 
         match output_state.schedule.estimated_vblank() {
-            EstimatedVblankAction::SendCallbacks => realand.send_frame_callbacks(&output),
-            EstimatedVblankAction::QueueRedraw => realand.queue_redraw(&output),
+            EstimatedVblankAction::SendCallbacks => clarion.send_frame_callbacks(&output),
+            EstimatedVblankAction::QueueRedraw => clarion.queue_redraw(&output),
             EstimatedVblankAction::RedrawAlreadyQueued => (),
         }
     }
 
-    fn platform_refresh_ipc_outputs(&self, realand: &mut Realand) {
-        let _span = realand_tracy_span!("Tty::refresh_ipc_outputs");
+    fn platform_refresh_ipc_outputs(&self, clarion: &mut Clarion) {
+        let _span = clarion_tracy_span!("Tty::refresh_ipc_outputs");
 
         let mut ipc_outputs = HashMap::new();
         let disable_monitor_names = self.config.as_ref().debug.disable_monitor_names;
@@ -1476,7 +1485,7 @@ impl Tty {
                 let mut current_mode = None;
                 let mut is_custom_mode = false;
 
-                let mut modes: Vec<realand_ipc::Mode> = connector
+                let mut modes: Vec<clarion_ipc::Mode> = connector
                     .modes()
                     .iter()
                     .filter(|m| !m.flags().contains(ModeFlags::INTERLACE))
@@ -1486,7 +1495,7 @@ impl Tty {
                             current_mode = Some(idx);
                         }
 
-                        realand_ipc::Mode {
+                        clarion_ipc::Mode {
                             width: m.size().0,
                             height: m.size().1,
                             refresh_rate: Mode::from(*m).refresh as u32,
@@ -1500,7 +1509,7 @@ impl Tty {
                     if crtc_mode.mode_type().contains(ModeTypeFlags::USERDEF) {
                         modes.insert(
                             0,
-                            realand_ipc::Mode {
+                            clarion_ipc::Mode {
                                 width: crtc_mode.size().0,
                                 height: crtc_mode.size().1,
                                 refresh_rate: Mode::from(crtc_mode).refresh as u32,
@@ -1532,7 +1541,7 @@ impl Tty {
                     });
                 let vrr_enabled = surface.is_some_and(|surface| surface.compositor.vrr_enabled());
 
-                let logical = realand
+                let logical = clarion
                     .global_space
                     .outputs()
                     .find(|output| {
@@ -1560,7 +1569,7 @@ impl Tty {
                     .and_then(|p| p.find(c"HDR_OUTPUT_METADATA").ok())
                     .is_some_and(|(_, value)| *value != 0);
 
-                let ipc_output = realand_ipc::Output {
+                let ipc_output = clarion_ipc::Output {
                     name: connector_name,
                     make: output_name.make.unwrap_or_else(|| "Unknown".into()),
                     model: output_name.model.unwrap_or_else(|| "Unknown".into()),
@@ -1582,19 +1591,19 @@ impl Tty {
 
         let mut guard = self.ipc_outputs.lock().unwrap();
         *guard = ipc_outputs;
-        realand.ipc_outputs_changed = true;
+        clarion.ipc_outputs_changed = true;
     }
 
     fn platform_set_output_on_demand_vrr(
         &mut self,
-        realand: &mut Realand,
+        clarion: &mut Clarion,
         output: &Output,
         enable_vrr: bool,
     ) {
-        let _span = realand_tracy_span!("Tty::set_output_on_demand_vrr");
+        let _span = clarion_tracy_span!("Tty::set_output_on_demand_vrr");
 
         let current_vrr = {
-            let output_state = realand.output_state.get_mut(output).unwrap();
+            let output_state = clarion.output_state.get_mut(output).unwrap();
             output_state.on_demand_vrr_enabled = enable_vrr;
             output_state.schedule.clock().vrr()
         };
@@ -1613,23 +1622,23 @@ impl Tty {
                         );
                     }
                     // A pending latch timer was calculated using the previous VRR state.
-                    realand.cancel_latch_wait(output);
-                    realand
+                    clarion.cancel_latch_wait(output);
+                    clarion
                         .output_state
                         .get_mut(output)
                         .unwrap()
                         .schedule
                         .set_vrr(surface.compositor.vrr_enabled());
 
-                    self.platform_refresh_ipc_outputs(realand);
+                    self.platform_refresh_ipc_outputs(clarion);
                     return;
                 }
             }
         }
     }
 
-    fn platform_update_ignored_nodes_config(&mut self, realand: &mut Realand) {
-        let _span = realand_tracy_span!("Tty::update_ignored_nodes_config");
+    fn platform_update_ignored_nodes_config(&mut self, clarion: &mut Clarion) {
+        let _span = clarion_tracy_span!("Tty::update_ignored_nodes_config");
 
         // If we're inactive, we can't do anything, but we'll recompute in ActivateSession.
         if !self.session.is_active() {
@@ -1661,7 +1670,7 @@ impl Tty {
 
         for node in removed_devices {
             device_list.remove(&node.dev_id());
-            self.platform_device_removed(node.dev_id(), realand);
+            self.platform_device_removed(node.dev_id(), clarion);
         }
 
         for node in self.devices.keys() {
@@ -1669,14 +1678,14 @@ impl Tty {
         }
 
         for (device_id, path) in device_list {
-            if let Err(err) = self.platform_device_added(device_id, &path, realand) {
+            if let Err(err) = self.platform_device_added(device_id, &path, clarion) {
                 warn!("error adding device {path:?}: {err:?}");
             }
         }
     }
 
-    fn platform_on_output_config_changed(&mut self, realand: &mut Realand) {
-        let _span = realand_tracy_span!("Tty::on_output_config_changed");
+    fn platform_on_output_config_changed(&mut self, clarion: &mut Clarion) {
+        let _span = clarion_tracy_span!("Tty::on_output_config_changed");
 
         // If we're inactive, we can't do anything, so just set a flag for later.
         if !self.session.is_active() {
@@ -1686,7 +1695,7 @@ impl Tty {
         self.update_output_config_on_resume = false;
 
         // Figure out if we should disable laptop panels.
-        let disable_laptop_panels = self.should_disable_laptop_panels(realand.is_lid_closed);
+        let disable_laptop_panels = self.should_disable_laptop_panels(clarion.is_lid_closed);
         let should_disable = |connector: &str| disable_laptop_panels && is_laptop_panel(connector);
 
         let mut to_disconnect = vec![];
@@ -1765,7 +1774,7 @@ impl Tty {
                     continue;
                 }
 
-                let output = realand
+                let output = clarion
                     .global_space
                     .outputs()
                     .find(|output| {
@@ -1777,7 +1786,7 @@ impl Tty {
                     error!("missing output for crtc: {crtc:?}");
                     continue;
                 };
-                let Some(on_demand_vrr_enabled) = realand
+                let Some(on_demand_vrr_enabled) = clarion
                     .output_state
                     .get(&output)
                     .map(|state| state.on_demand_vrr_enabled)
@@ -1791,10 +1800,10 @@ impl Tty {
                 if change_mode || change_vrr {
                     // Both changes invalidate a deadline calculated from the previous refresh
                     // interval or VRR state. Keep the damage queued for immediate rescheduling.
-                    realand.cancel_latch_wait(&output);
+                    clarion.cancel_latch_wait(&output);
                 }
 
-                let output_state = realand.output_state.get_mut(&output).unwrap();
+                let output_state = clarion.output_state.get_mut(&output).unwrap();
                 if change_vrr {
                     let vrr = !vrr_enabled;
                     let word = if vrr { "enabling" } else { "disabling" };
@@ -1842,7 +1851,7 @@ impl Tty {
                         Some(refresh_interval(mode)),
                         surface.compositor.vrr_enabled(),
                     );
-                    realand.output_resized(&output);
+                    clarion.output_resized(&output);
                 }
             }
 
@@ -1879,7 +1888,7 @@ impl Tty {
         }
 
         for (node, crtc) in to_disconnect {
-            self.platform_connector_disconnected(realand, node, crtc);
+            self.platform_connector_disconnected(clarion, node, crtc);
         }
 
         // Sort by output name to get more predictable first focused output at initial compositor
@@ -1887,39 +1896,39 @@ impl Tty {
         to_connect.sort_unstable_by(|a, b| a.3.compare(&b.3));
 
         for (node, connector, crtc, _name) in to_connect {
-            if let Err(err) = self.platform_connector_connected(realand, node, connector, crtc) {
+            if let Err(err) = self.platform_connector_connected(clarion, node, connector, crtc) {
                 warn!("error connecting connector: {err:?}");
             }
         }
 
-        self.platform_refresh_ipc_outputs(realand);
+        self.platform_refresh_ipc_outputs(clarion);
     }
 }
 
-pub(super) fn initialize(device: &mut Tty, realand: &mut Realand) {
-    device.platform_init(realand);
+pub(super) fn initialize(device: &mut Tty, clarion: &mut Clarion) {
+    device.platform_init(clarion);
 }
-pub(super) fn set_vrr(device: &mut Tty, realand: &mut Realand, output: &Output, enabled: bool) {
-    device.platform_set_output_on_demand_vrr(realand, output, enabled);
+pub(super) fn set_vrr(device: &mut Tty, clarion: &mut Clarion, output: &Output, enabled: bool) {
+    device.platform_set_output_on_demand_vrr(clarion, output, enabled);
 }
-pub(super) fn update_ignored_nodes(device: &mut Tty, realand: &mut Realand) {
-    device.platform_update_ignored_nodes_config(realand);
+pub(super) fn update_ignored_nodes(device: &mut Tty, clarion: &mut Clarion) {
+    device.platform_update_ignored_nodes_config(clarion);
 }
-pub(super) fn configure_outputs(device: &mut Tty, realand: &mut Realand) {
-    device.platform_on_output_config_changed(realand);
+pub(super) fn configure_outputs(device: &mut Tty, clarion: &mut Clarion) {
+    device.platform_on_output_config_changed(clarion);
 }
-pub(super) fn estimated_vblank(realand: &mut Realand, output: Output) {
-    Tty::platform_on_estimated_vblank_timer(realand, output);
+pub(super) fn estimated_vblank(clarion: &mut Clarion, output: Output) {
+    Tty::platform_on_estimated_vblank_timer(clarion, output);
 }
 pub(super) fn on_udev(state: &mut State, event: UdevEvent) {
     state
         .backend
         .tty()
-        .platform_on_udev_event(&mut state.realand, event);
+        .platform_on_udev_event(&mut state.clarion, event);
 }
 pub(super) fn on_session(state: &mut State, event: SessionEvent) {
     state
         .backend
         .tty()
-        .platform_on_session_event(&mut state.realand, event);
+        .platform_on_session_event(&mut state.clarion, event);
 }

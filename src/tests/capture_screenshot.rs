@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use realand_config::{Action, Config};
+use clarion_config::{Action, Config};
 use smithay::utils::Transform;
 
 use super::*;
@@ -17,7 +17,7 @@ struct Files(PathBuf);
 impl Files {
     fn new() -> Self {
         let path = std::env::temp_dir().join(format!(
-            "realand-capture-test-{}-{}",
+            "clarion-capture-test-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
@@ -37,20 +37,20 @@ impl Drop for Files {
 fn fixture(native: bool) -> Fixture {
     let config = Config {
         renderer: Some(if native {
-            realand_config::RendererBackendConfig::Vulkan
+            clarion_config::RendererBackendConfig::Vulkan
         } else {
-            realand_config::RendererBackendConfig::Gles
+            clarion_config::RendererBackendConfig::Gles
         }),
-        animations: realand_config::Animations {
+        animations: clarion_config::Animations {
             off: true,
             ..Default::default()
         },
-        hotkey_overlay: realand_config::HotkeyOverlay {
+        hotkey_overlay: clarion_config::HotkeyOverlay {
             skip_at_startup: true,
             ..Default::default()
         },
-        layout: realand_config::Layout {
-            background_color: realand_config::appearance::Color::from_rgba8_unpremul(
+        layout: clarion_config::Layout {
+            background_color: clarion_config::appearance::Color::from_rgba8_unpremul(
                 34, 68, 102, 255,
             ),
             ..Default::default()
@@ -62,32 +62,32 @@ fn fixture(native: bool) -> Fixture {
         use crate::backend::headless::HeadlessRenderer;
         use crate::render_helpers::vulkan::{native::NativeRenderer, VulkanRenderer};
         let path =
-            std::env::var_os("REALAND_VULKAN_TEST_NODE").expect("set REALAND_VULKAN_TEST_NODE");
+            std::env::var_os("CLARION_VULKAN_TEST_NODE").expect("set CLARION_VULKAN_TEST_NODE");
         let node = smithay::backend::drm::DrmNode::from_path(&path).unwrap();
         let mut vk = VulkanRenderer::new();
         vk.init_from_drm_node(Some(&node)).unwrap();
         let mut renderer = NativeRenderer::new(vk).unwrap();
         crate::render_helpers::shaders::init_native(
             &mut renderer,
-            &f.realand().config.borrow().animations,
+            &f.clarion().config.borrow().animations,
         );
         renderer
             .prepare_output_format_for_test(Fourcc::Xrgb8888)
             .unwrap();
         let mut headless = crate::backend::Headless::new(
-            f.realand().config.clone(),
+            f.clarion().config.clone(),
             crate::backend::RendererBackendType::Vulkan,
         );
         headless.renderer = Some(HeadlessRenderer::Native(Box::new(renderer)));
         headless.init(&mut crate::platform::device_bridge::DeviceCoordinator::new(
-            f.realand(),
+            f.clarion(),
         ));
-        f.realand_state().backend = crate::backend::Backend::Headless(headless);
+        f.clarion_state().backend = crate::backend::Backend::Headless(headless);
     } else {
         f.init_gles_renderer();
     }
     f.add_output(1, (320, 240));
-    f.realand_state()
+    f.clarion_state()
         .backend
         .with_renderer(|renderer| match renderer {
             crate::render_helpers::renderer::AnyRenderer::Native(renderer) if native => {
@@ -131,16 +131,16 @@ fn output_selection_window_pipeline(native: bool) {
         (1, Transform::_90, 1.25),
         (2, Transform::Flipped, 2.),
     ] {
-        let output = f.realand_output(1);
+        let output = f.clarion_output(1);
         output.change_current_state(
             None,
             Some(transform),
             Some(smithay::output::Scale::Fractional(scale)),
             None,
         );
-        f.realand().output_resized(&output);
+        f.clarion().output_resized(&output);
         let path = files.path(&format!("output-{index}.png"));
-        f.realand_state().do_action(
+        f.clarion_state().do_action(
             Action::ScreenshotScreen(true, false, Some(path.to_string_lossy().into_owned())),
             false,
         );
@@ -157,14 +157,14 @@ fn output_selection_window_pipeline(native: bool) {
         );
 
         let path = files.path(&format!("selection-{index}.png"));
-        f.realand_state().do_action(
+        f.clarion_state().do_action(
             Action::Screenshot(false, Some(path.to_string_lossy().into_owned())),
             false,
         );
         let ScreenshotUi::Open {
             selection: (_, a, b),
             ..
-        } = &f.realand().screenshot_ui
+        } = &f.clarion().screenshot_ui
         else {
             panic!("selection failed to open");
         };
@@ -172,9 +172,9 @@ fn output_selection_window_pipeline(native: bool) {
             (a.x - b.x).unsigned_abs() + 1,
             (a.y - b.y).unsigned_abs() + 1,
         );
-        f.realand_state().confirm_screenshot(true);
+        f.clarion_state().confirm_screenshot(true);
         assert!(
-            !f.realand().screenshot_ui.is_open(),
+            !f.clarion().screenshot_ui.is_open(),
             "accepted transfer must close selection immediately"
         );
         let (w, h, bytes) = wait_png(&mut f, &path);
@@ -204,7 +204,7 @@ fn output_selection_window_pipeline(native: bool) {
     window.ack_last_and_commit();
     f.double_roundtrip(client);
     let path = files.path("window.png");
-    f.realand_state().do_action(
+    f.clarion_state().do_action(
         Action::ScreenshotWindow(true, false, Some(path.to_string_lossy().into_owned())),
         false,
     );
@@ -220,18 +220,18 @@ fn privacy_epoch_cancels_transfer(native: bool) {
     let files = Files::new();
     let mut f = fixture(native);
     let path = files.path("cancelled.png");
-    f.realand_state().do_action(
+    f.clarion_state().do_action(
         Action::ScreenshotScreen(true, false, Some(path.to_string_lossy().into_owned())),
         false,
     );
     // A lock transition invalidates snapshots even if it ends again before the
     // worker returns. The queued callback must release its permit without save.
-    f.realand().capture_scene_epoch.invalidate();
+    f.clarion().capture_scene_epoch.invalidate();
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         f.state.server.dispatch();
         f.dispatch();
-        let slots = &f.realand().screenshot_tasks;
+        let slots = &f.clarion().screenshot_tasks;
         let first = slots.acquire().unwrap();
         if let Ok(second) = slots.acquire() {
             drop(second);
@@ -249,7 +249,7 @@ fn color_pipeline(native: bool) {
     let (tx, rx) = async_channel::bounded(1);
     crate::input::pick_color_grab::PickColorGrab::pick_color_at_point(
         (16., 16.).into(),
-        f.realand_state(),
+        f.clarion_state(),
         tx,
     )
     .unwrap();
@@ -275,13 +275,13 @@ fn portal_pipeline(native: bool) {
     let mut f = fixture(native);
     let path = files.path("new-screenshot-directory/portal.png");
     assert!(!path.parent().unwrap().exists());
-    f.realand().config.borrow_mut().screenshot_path.0 = Some(path.to_string_lossy().into_owned());
+    f.clarion().config.borrow_mut().screenshot_path.0 = Some(path.to_string_lossy().into_owned());
     let (tx, rx) = async_channel::bounded(1);
-    f.realand_state().handle_take_screenshot(&tx, false);
+    f.clarion_state().handle_take_screenshot(&tx, false);
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         f.state.server.dispatch();
-        if let Ok(RealandToScreenshot::ScreenshotResult(result)) = rx.try_recv() {
+        if let Ok(ClarionToScreenshot::ScreenshotResult(result)) = rx.try_recv() {
             assert_eq!(result, Some(path.clone()));
             break;
         }
@@ -297,14 +297,14 @@ fn portal_pipeline(native: bool) {
         .all(|pixel| *pixel == [34, 68, 102, 255]));
     assert!(rx.try_recv().is_err());
     let cancelled = files.path("cancelled-portal.png");
-    f.realand().config.borrow_mut().screenshot_path.0 =
+    f.clarion().config.borrow_mut().screenshot_path.0 =
         Some(cancelled.to_string_lossy().into_owned());
-    f.realand_state().handle_take_screenshot(&tx, false);
-    f.realand().capture_scene_epoch.invalidate();
+    f.clarion_state().handle_take_screenshot(&tx, false);
+    f.clarion().capture_scene_epoch.invalidate();
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         f.state.server.dispatch();
-        if let Ok(RealandToScreenshot::ScreenshotResult(result)) = rx.try_recv() {
+        if let Ok(ClarionToScreenshot::ScreenshotResult(result)) = rx.try_recv() {
             assert_eq!(result, None);
             break;
         }

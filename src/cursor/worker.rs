@@ -403,7 +403,7 @@ mod tests {
     }
     #[test]
     fn theme_inheritance_token_matches_existing_search_semantics() {
-        let dir = std::env::temp_dir().join(format!("realand-cursor-theme-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("clarion-cursor-theme-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("index.theme");
         std::fs::write(&path, " Inherits=ignored\nInherits = ; , first;second\n").unwrap();
@@ -414,7 +414,7 @@ mod tests {
     fn regular_reader_rejects_special_and_oversize_payloads() {
         assert!(read_regular(Path::new("/dev/zero"), 32).is_err());
         let path =
-            std::env::temp_dir().join(format!("realand-cursor-bounded-{}", std::process::id()));
+            std::env::temp_dir().join(format!("clarion-cursor-bounded-{}", std::process::id()));
         std::fs::write(&path, [0u8; 33]).unwrap();
         assert!(read_regular(&path, 32).is_err());
         std::fs::remove_file(path).unwrap();

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use realand_ipc::PickedColor;
+use clarion_ipc::PickedColor;
 use zbus::fdo::{self, RequestNameFlags};
 use zbus::zvariant::OwnedValue;
 use zbus::{interface, zvariant};
@@ -9,18 +9,18 @@ use zbus::{interface, zvariant};
 use super::Start;
 
 pub struct Screenshot {
-    to_realand: calloop::channel::Sender<ScreenshotToRealand>,
+    to_clarion: calloop::channel::Sender<ScreenshotToClarion>,
 }
 
-pub enum ScreenshotToRealand {
+pub enum ScreenshotToClarion {
     TakeScreenshot {
         include_cursor: bool,
-        reply: async_channel::Sender<RealandToScreenshot>,
+        reply: async_channel::Sender<ClarionToScreenshot>,
     },
     PickColor(async_channel::Sender<Option<PickedColor>>),
 }
 
-pub enum RealandToScreenshot {
+pub enum ClarionToScreenshot {
     ScreenshotResult(Option<PathBuf>),
 }
 
@@ -33,21 +33,21 @@ impl Screenshot {
         _filename: PathBuf,
     ) -> fdo::Result<(bool, PathBuf)> {
         let (reply, result) = async_channel::bounded(1);
-        if let Err(err) = self.to_realand.send(ScreenshotToRealand::TakeScreenshot {
+        if let Err(err) = self.to_clarion.send(ScreenshotToClarion::TakeScreenshot {
             include_cursor,
             reply,
         }) {
-            warn!("error sending message to realand: {err:?}");
+            warn!("error sending message to clarion: {err:?}");
             return Err(fdo::Error::Failed("internal error".to_owned()));
         }
 
         let filename = match result.recv().await {
-            Ok(RealandToScreenshot::ScreenshotResult(Some(filename))) => filename,
-            Ok(RealandToScreenshot::ScreenshotResult(None)) => {
+            Ok(ClarionToScreenshot::ScreenshotResult(Some(filename))) => filename,
+            Ok(ClarionToScreenshot::ScreenshotResult(None)) => {
                 return Err(fdo::Error::Failed("internal error".to_owned()));
             }
             Err(err) => {
-                warn!("error receiving message from realand: {err:?}");
+                warn!("error receiving message from clarion: {err:?}");
                 return Err(fdo::Error::Failed("internal error".to_owned()));
             }
         };
@@ -57,8 +57,8 @@ impl Screenshot {
 
     async fn pick_color(&self) -> fdo::Result<HashMap<String, OwnedValue>> {
         let (tx, rx) = async_channel::bounded(1);
-        if let Err(err) = self.to_realand.send(ScreenshotToRealand::PickColor(tx)) {
-            warn!("error sending pick color message to realand: {err:?}");
+        if let Err(err) = self.to_clarion.send(ScreenshotToClarion::PickColor(tx)) {
+            warn!("error sending pick color message to clarion: {err:?}");
             return Err(fdo::Error::Failed("internal error".to_owned()));
         }
 
@@ -68,7 +68,7 @@ impl Screenshot {
                 return Err(fdo::Error::Failed("no color picked".to_owned()));
             }
             Err(err) => {
-                warn!("error receiving message from realand: {err:?}");
+                warn!("error receiving message from clarion: {err:?}");
                 return Err(fdo::Error::Failed("internal error".to_owned()));
             }
         };
@@ -85,8 +85,8 @@ impl Screenshot {
 }
 
 impl Screenshot {
-    pub fn new(to_realand: calloop::channel::Sender<ScreenshotToRealand>) -> Self {
-        Self { to_realand }
+    pub fn new(to_clarion: calloop::channel::Sender<ScreenshotToClarion>) -> Self {
+        Self { to_clarion }
     }
 }
 
@@ -113,7 +113,7 @@ mod tests {
     use std::task::{Context, Poll};
     use std::time::{Duration, Instant};
 
-    fn request(rx: &calloop::channel::Channel<ScreenshotToRealand>) -> ScreenshotToRealand {
+    fn request(rx: &calloop::channel::Channel<ScreenshotToClarion>) -> ScreenshotToClarion {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             if let Ok(request) = rx.try_recv() {
@@ -139,7 +139,7 @@ mod tests {
         });
         let requests = [request(&rx), request(&rx)];
         for request in requests.into_iter().rev() {
-            let ScreenshotToRealand::TakeScreenshot {
+            let ScreenshotToClarion::TakeScreenshot {
                 include_cursor,
                 reply,
             } = request
@@ -152,7 +152,7 @@ mod tests {
                 "screen.png"
             });
             reply
-                .try_send(RealandToScreenshot::ScreenshotResult(Some(path)))
+                .try_send(ClarionToScreenshot::ScreenshotResult(Some(path)))
                 .unwrap();
         }
         let (first, second) = worker.join().unwrap();
@@ -167,23 +167,23 @@ mod tests {
         let mut first = Box::pin(screenshot.screenshot(false, false, PathBuf::new()));
         let mut cx = Context::from_waker(futures_util::task::noop_waker_ref());
         assert!(matches!(first.as_mut().poll(&mut cx), Poll::Pending));
-        let ScreenshotToRealand::TakeScreenshot { reply: stale, .. } = request(&rx) else {
+        let ScreenshotToClarion::TakeScreenshot { reply: stale, .. } = request(&rx) else {
             panic!();
         };
         drop(first);
         let worker = std::thread::spawn(move || {
             async_io::block_on(screenshot.screenshot(false, false, PathBuf::new()))
         });
-        let ScreenshotToRealand::TakeScreenshot { reply: current, .. } = request(&rx) else {
+        let ScreenshotToClarion::TakeScreenshot { reply: current, .. } = request(&rx) else {
             panic!();
         };
         assert!(stale
-            .try_send(RealandToScreenshot::ScreenshotResult(Some(PathBuf::from(
+            .try_send(ClarionToScreenshot::ScreenshotResult(Some(PathBuf::from(
                 "stale.png"
             ))))
             .is_err());
         current
-            .try_send(RealandToScreenshot::ScreenshotResult(Some(PathBuf::from(
+            .try_send(ClarionToScreenshot::ScreenshotResult(Some(PathBuf::from(
                 "current.png",
             ))))
             .unwrap();

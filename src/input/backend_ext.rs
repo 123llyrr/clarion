@@ -6,31 +6,31 @@ use smithay::output::Output;
 use crate::compositor::State;
 use crate::protocols::virtual_pointer::VirtualPointer;
 
-pub trait RealandInputBackend: input::InputBackend<Device = Self::RealandDevice> {
-    type RealandDevice: RealandInputDevice;
+pub trait ClarionInputBackend: input::InputBackend<Device = Self::ClarionDevice> {
+    type ClarionDevice: ClarionInputDevice;
 }
-impl<T: input::InputBackend> RealandInputBackend for T
+impl<T: input::InputBackend> ClarionInputBackend for T
 where
-    Self::Device: RealandInputDevice,
+    Self::Device: ClarionInputDevice,
 {
-    type RealandDevice = Self::Device;
+    type ClarionDevice = Self::Device;
 }
 
-pub trait RealandInputDevice: input::Device {
+pub trait ClarionInputDevice: input::Device {
     // FIXME: this should maybe be per-event, not per-device,
     // but it's not clear that this matters in practice?
     // it might be more obvious once we implement it for libinput
     fn output(&self, state: &State) -> Option<Output>;
 }
 
-impl RealandInputDevice for libinput::Device {
+impl ClarionInputDevice for libinput::Device {
     fn output(&self, _state: &State) -> Option<Output> {
         // FIXME: Allow specifying the output per-device?
         None
     }
 }
 
-impl RealandInputDevice for WinitVirtualDevice {
+impl ClarionInputDevice for WinitVirtualDevice {
     fn output(&self, _state: &State) -> Option<Output> {
         // FIXME: we should be returning the single output that the winit backend creates,
         // but for now, that will cause issues because the output is normally upside down,
@@ -44,7 +44,7 @@ impl RealandInputDevice for WinitVirtualDevice {
     }
 }
 
-impl RealandInputDevice for VirtualPointer {
+impl ClarionInputDevice for VirtualPointer {
     fn output(&self, _: &State) -> Option<Output> {
         self.output().cloned()
     }

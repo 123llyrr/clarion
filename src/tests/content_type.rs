@@ -1,5 +1,5 @@
 use crate::layout::LayoutElement as _;
-use realand_config::Config;
+use clarion_config::Config;
 use smithay::reexports::wayland_protocols::wp::content_type::v1::client::wp_content_type_v1::{
     Type, WpContentTypeV1,
 };
@@ -35,7 +35,7 @@ fn map(f: &mut Fixture, id: ClientId, surface: &WlSurface) {
 }
 
 fn rules(f: &mut Fixture) -> ResolvedWindowRules {
-    f.realand()
+    f.clarion()
         .layout
         .windows()
         .next()
@@ -102,8 +102,8 @@ fn content_hint_applies_to_initial_configure_and_exclusions() {
     );
     hint.set_content_type(Type::Photo);
     map(&mut f, id, &surface);
-    let realand = f.realand();
-    let mapped = realand.layout.windows().next().unwrap().1;
+    let clarion = f.clarion();
+    let mapped = clarion.layout.windows().next().unwrap().1;
     assert!(mapped.is_floating());
     assert_eq!(mapped.rules().opacity, None);
 }

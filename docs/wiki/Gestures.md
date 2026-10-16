@@ -1,6 +1,6 @@
 ### Overview
 
-There are several gestures in realand.
+There are several gestures in clarion.
 
 Also see the [gestures configuration](./Configuration:-Gestures.md) wiki page.
 
@@ -28,7 +28,7 @@ You can resize windows by holding <kbd>Mod</kbd> and the right mouse button.
 
 If you double-click on a top or bottom tiled window resize edge, the window height will reset to automatic.
 
-This works with both window-initiated resizes (when using client-side decorations), and realand-initiated <kbd>Mod</kbd> + right click resizes.
+This works with both window-initiated resizes (when using client-side decorations), and clarion-initiated <kbd>Mod</kbd> + right click resizes.
 
 #### Toggle Full Width
 
@@ -36,7 +36,7 @@ This works with both window-initiated resizes (when using client-side decoration
 
 If you double-click on a left or right tiled window resize edge, the column will expand to the full workspace width.
 
-This works with both window-initiated resizes (when using client-side decorations), and realand-initiated <kbd>Mod</kbd> + right click resizes.
+This works with both window-initiated resizes (when using client-side decorations), and clarion-initiated <kbd>Mod</kbd> + right click resizes.
 
 #### Horizontal View Movement
 

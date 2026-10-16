@@ -9,7 +9,7 @@ assignees: ''
 
 <!-- Please describe the issue here at the top, then fill in the system information below. -->
 
-<!-- Attaching your full realand config can help diagnose the problem. -->
+<!-- Attaching your full clarion config can help diagnose the problem. -->
 <details><summary>Config</summary>
 
 ```kdl
@@ -23,17 +23,17 @@ If you have a problem with a specific app, please verify that it is running on W
 
 You can also check what process the window PID belongs to:
 
-$ readlink /proc/$(realand msg --json pick-window | jq .pid)/exe
+$ readlink /proc/$(clarion msg --json pick-window | jq .pid)/exe
 
 If this points to xwayland-satellite, then it's an X11 window.
 
-Please report issues with X11 apps to xwayland-satellite instead of realand: https://github.com/Supreeeme/xwayland-satellite/issues
+Please report issues with X11 apps to xwayland-satellite instead of clarion: https://github.com/Supreeeme/xwayland-satellite/issues
 -->
 
 ### System Information
 
-<!-- Paste the output of `realand -V`, e.g. realand 25.02 (b94a5db) -->
-* realand version:
+<!-- Paste the output of `clarion -V`, e.g. clarion 25.02 (b94a5db) -->
+* clarion version:
 
 <!-- Write your distribution, e.g. Fedora 40 Silverblue -->
 * Distro: 

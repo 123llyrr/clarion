@@ -39,7 +39,7 @@ impl TaskPool {
         for index in 0..WORKERS {
             let receiver = receiver.clone();
             std::thread::Builder::new()
-                .name(format!("realand-owned-task-{index}"))
+                .name(format!("clarion-owned-task-{index}"))
                 .spawn(move || {
                     while let Ok(job) = receiver.recv_blocking() {
                         job();

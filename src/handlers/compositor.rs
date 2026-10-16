@@ -1,6 +1,6 @@
 use std::collections::hash_map::Entry;
 
-use realand_ipc::PositionChange;
+use clarion_ipc::PositionChange;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::renderer::utils::on_commit_buffer_handler;
 use smithay::input::pointer::{CursorImageStatus, CursorImageSurfaceData};
@@ -30,7 +30,7 @@ use crate::window::{InitialConfigureState, Mapped, ResolvedWindowRules, Unmapped
 
 impl CompositorHandler for State {
     fn compositor_state(&mut self) -> &mut CompositorState {
-        &mut self.realand.compositor_state
+        &mut self.clarion.compositor_state
     }
 
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
@@ -45,8 +45,8 @@ impl CompositorHandler for State {
 
         // The root of a subsurface tree can itself be an xdg or input-method popup. Such a root
         // is not in the main layout, so resolve its parent output through the popup manager.
-        let output = self.realand.output_for_root(&root).or_else(|| {
-            self.realand
+        let output = self.clarion.output_for_root(&root).or_else(|| {
+            self.clarion
                 .popups
                 .find_popup(&root)
                 .and_then(|popup| self.output_for_popup(&popup))
@@ -72,19 +72,19 @@ impl CompositorHandler for State {
                     .and_then(|timing| timing.borrow().timestamp)
             });
             if let Some(timestamp) = timestamp {
-                state.realand.schedule_commit_timing(surface, timestamp);
+                state.clarion.schedule_commit_timing(surface, timestamp);
             }
         });
         add_post_commit_hook::<Self, _>(surface, |state, _, surface| {
             state
-                .realand
+                .clarion
                 .fifo
                 .committed(surface, crate::utils::get_monotonic_time());
         });
     }
 
     fn commit(&mut self, surface: &WlSurface) {
-        let _span = realand_tracy_span!("CompositorHandler::commit");
+        let _span = clarion_tracy_span!("CompositorHandler::commit");
         let _span = trace_span!("commit", surface = %surface.id()).entered();
         trace!("commit");
 
@@ -93,7 +93,7 @@ impl CompositorHandler for State {
         // consuming the animation serial only for the commit being applied.
         // A pre-commit snapshot can be overwritten by another blocked commit,
         // and cannot see the content of commits still waiting ahead of it.
-        if let Some((mapped, output)) = self.realand.layout.find_window_and_output_mut(surface) {
+        if let Some((mapped, output)) = self.clarion.layout.find_window_and_output_mut(surface) {
             if mapped.toplevel().wl_surface() == surface {
                 let serial = with_states(surface, |states| {
                     states
@@ -131,7 +131,7 @@ impl CompositorHandler for State {
         }
 
         // Update the cached root surface.
-        self.realand
+        self.clarion
             .root_surface
             .insert(surface.clone(), root_surface.clone());
 
@@ -141,7 +141,7 @@ impl CompositorHandler for State {
 
         if surface == &root_surface {
             // This is a root surface commit. It might have mapped a previously-unmapped toplevel.
-            if let Entry::Occupied(entry) = self.realand.unmapped_windows.entry(surface.clone()) {
+            if let Entry::Occupied(entry) = self.clarion.unmapped_windows.entry(surface.clone()) {
                 if is_mapped(surface) {
                     // The toplevel got mapped.
                     let Unmapped {
@@ -176,12 +176,12 @@ impl CompositorHandler for State {
                     {
                         // Check that the output is still connected.
                         let output =
-                            output.filter(|o| self.realand.layout.monitor_for_output(o).is_some());
+                            output.filter(|o| self.clarion.layout.monitor_for_output(o).is_some());
 
                         // Check that the workspace still exists.
                         let workspace_id = workspace_name
                             .as_deref()
-                            .and_then(|n| self.realand.layout.find_workspace_by_name(n))
+                            .and_then(|n| self.clarion.layout.find_workspace_by_name(n))
                             .map(|(_, ws)| ws.id());
 
                         (
@@ -230,7 +230,7 @@ impl CompositorHandler for State {
                         if token.is_some() {
                             ActivateWindow::Yes
                         } else {
-                            let config = self.realand.config.borrow();
+                            let config = self.clarion.config.borrow();
                             if config.debug.strict_new_window_focus_policy {
                                 ActivateWindow::No
                             } else {
@@ -241,7 +241,7 @@ impl CompositorHandler for State {
 
                     let parent = toplevel
                         .parent()
-                        .and_then(|parent| self.realand.layout.find_window_and_output(&parent))
+                        .and_then(|parent| self.clarion.layout.find_window_and_output(&parent))
                         // Only consider the parent if we configured the window for the same
                         // output.
                         //
@@ -259,7 +259,7 @@ impl CompositorHandler for State {
                     self.remove_default_dmabuf_pre_commit_hook(surface);
                     let hook = add_mapped_toplevel_pre_commit_hook(toplevel);
                     let mapped = {
-                        let config = self.realand.config.borrow();
+                        let config = self.clarion.config.borrow();
                         Mapped::new(window, rules, hook, &config)
                     };
                     let window = mapped.window.clone();
@@ -274,7 +274,7 @@ impl CompositorHandler for State {
                     } else {
                         AddWindowTarget::Auto
                     };
-                    let output = self.realand.layout.add_window(
+                    let output = self.clarion.layout.add_window(
                         mapped,
                         target,
                         width,
@@ -289,25 +289,25 @@ impl CompositorHandler for State {
                     // if the window ended up fullscreen, then we only know that it is also
                     // maximized from the is_pending_maximized variable. Tell the layout about it
                     // here so that unfullscreening the window makes it maximized.
-                    if let Some((mapped, _)) = self.realand.layout.find_window_and_output(surface) {
+                    if let Some((mapped, _)) = self.clarion.layout.find_window_and_output(surface) {
                         if mapped.pending_sizing_mode().is_fullscreen() && is_pending_maximized {
-                            self.realand.layout.set_maximized(&window, true);
+                            self.clarion.layout.set_maximized(&window, true);
                         }
                     } else {
                         error!("layout is missing the window that we just added");
                     }
 
                     if let Some(output) = output {
-                        self.realand.layout.start_open_animation_for_window(&window);
+                        self.clarion.layout.start_open_animation_for_window(&window);
 
-                        let new_focus = self.realand.layout.focus().map(|m| &m.window);
+                        let new_focus = self.clarion.layout.focus().map(|m| &m.window);
                         if new_focus == Some(&window) {
                             // We activated the newly opened window.
                             self.maybe_warp_cursor_to_focus();
-                            self.realand.layer_shell_on_demand_focus = None;
+                            self.clarion.layer_shell_on_demand_focus = None;
                         }
 
-                        self.realand.queue_redraw(&output);
+                        self.clarion.queue_redraw(&output);
                     }
                     return;
                 }
@@ -323,7 +323,7 @@ impl CompositorHandler for State {
             }
 
             // This is a commit of a previously-mapped root or a non-toplevel root.
-            if let Some((mapped, output)) = self.realand.layout.find_window_and_output(surface) {
+            if let Some((mapped, output)) = self.clarion.layout.find_window_and_output(surface) {
                 let window = mapped.window.clone();
                 let output = output.cloned();
 
@@ -341,12 +341,12 @@ impl CompositorHandler for State {
                         output.as_ref(),
                         |renderer| match renderer {
                             crate::render_helpers::renderer::AnyRenderer::Gles(gles) => {
-                                self.realand
+                                self.clarion
                                     .layout
                                     .start_close_animation_for_window(gles, &window, blocker);
                             }
                             crate::render_helpers::renderer::AnyRenderer::Native(native) => {
-                                self.realand.layout.start_close_animation_for_window_native(
+                                self.clarion.layout.start_close_animation_for_window_native(
                                     native, &window, blocker,
                                 );
                             }
@@ -354,7 +354,7 @@ impl CompositorHandler for State {
                     );
                 }
 
-                self.realand
+                self.clarion
                     .layout
                     .find_window_and_output(surface)
                     .unwrap()
@@ -367,14 +367,14 @@ impl CompositorHandler for State {
                     // Test client: wleird-unmap.
                     trace!("toplevel got unmapped");
 
-                    let active_window = self.realand.layout.focus().map(|m| &m.window);
+                    let active_window = self.clarion.layout.focus().map(|m| &m.window);
                     let was_active = active_window == Some(&window);
 
-                    self.realand
+                    self.clarion
                         .stop_casts_for_target(CastTarget::Window { id: id.get() });
 
-                    self.realand.window_mru_ui.remove_window(id);
-                    self.realand
+                    self.clarion.window_mru_ui.remove_window(id);
+                    self.clarion
                         .layout
                         .remove_window(&window, transaction.clone());
                     self.add_default_dmabuf_pre_commit_hook(surface);
@@ -382,7 +382,7 @@ impl CompositorHandler for State {
                     // If this is the only instance, then this transaction will complete
                     // immediately, so no need to set the timer.
                     if !transaction.is_last() {
-                        transaction.register_deadline_timer(&self.realand.event_loop);
+                        transaction.register_deadline_timer(&self.clarion.event_loop);
                     }
 
                     if was_active {
@@ -392,13 +392,13 @@ impl CompositorHandler for State {
                     // Newly-unmapped toplevels must perform the initial commit-configure sequence
                     // afresh.
                     let unmapped = Unmapped::new(window);
-                    self.realand
+                    self.clarion
                         .unmapped_windows
                         .insert(surface.clone(), unmapped);
 
                     if let Some(output) = output {
-                        self.realand.queue_redraw(&output);
-                        self.realand.queue_redraw_mru_output();
+                        self.clarion.queue_redraw(&output);
+                        self.clarion.queue_redraw_mru_output();
                     }
                     return;
                 }
@@ -425,24 +425,24 @@ impl CompositorHandler for State {
                 }
 
                 // The toplevel remains mapped.
-                self.realand
+                self.clarion
                     .window_mru_ui
-                    .update_window(&self.realand.layout, id);
+                    .update_window(&self.clarion.layout, id);
                 if has_animation_snapshot {
                     self.backend
                         .with_renderer_for_output(output.as_ref(), |renderer| {
-                            self.realand
+                            self.clarion
                                 .layout
                                 .prepare_resize_retarget(renderer, &window);
                         });
                 }
-                self.realand.layout.update_window(&window, serial);
+                self.clarion.layout.update_window(&window, serial);
 
                 // Move the toplevel according to the attach offset.
                 if let Some(delta) = buffer_delta {
                     if delta.x != 0 || delta.y != 0 {
                         let (x, y) = delta.to_f64().into();
-                        self.realand.layout.move_floating_window(
+                        self.clarion.layout.move_floating_window(
                             Some(&window),
                             PositionChange::AdjustFixed(x),
                             PositionChange::AdjustFixed(y),
@@ -455,8 +455,8 @@ impl CompositorHandler for State {
                 self.update_reactive_popups(&window);
 
                 if let Some(output) = output {
-                    self.realand.queue_redraw(&output);
-                    self.realand.queue_redraw_mru_output();
+                    self.clarion.queue_redraw(&output);
+                    self.clarion.queue_redraw_mru_output();
                 }
                 return;
             }
@@ -468,26 +468,26 @@ impl CompositorHandler for State {
         }
 
         // This is a commit of a non-root or a non-toplevel root.
-        let root_window_output = self.realand.layout.find_window_and_output(&root_surface);
+        let root_window_output = self.clarion.layout.find_window_and_output(&root_surface);
         if let Some((mapped, output)) = root_window_output {
             let window = mapped.window.clone();
             let output = output.cloned();
             mapped.on_surface_commit();
-            self.realand
+            self.clarion
                 .window_mru_ui
-                .update_window(&self.realand.layout, mapped.id());
-            self.realand.layout.update_window(&window, None);
+                .update_window(&self.clarion.layout, mapped.id());
+            self.clarion.layout.update_window(&window, None);
             if let Some(output) = output {
-                self.realand.queue_redraw(&output);
-                self.realand.queue_redraw_mru_output();
+                self.clarion.queue_redraw(&output);
+                self.clarion.queue_redraw_mru_output();
             }
             return;
         }
 
         // This might be a popup unsync subsurface.
-        if let Some(popup) = self.realand.popups.find_popup(&root_surface) {
+        if let Some(popup) = self.clarion.popups.find_popup(&root_surface) {
             if let Some(output) = self.output_for_popup(&popup) {
-                self.realand.queue_redraw(&output.clone());
+                self.clarion.queue_redraw(&output.clone());
             }
             return;
         }
@@ -499,7 +499,7 @@ impl CompositorHandler for State {
 
         // This might be a cursor surface.
         if matches!(
-            &self.realand.cursor_manager.cursor_image(),
+            &self.clarion.cursor_manager.cursor_image(),
             CursorImageStatus::Surface(s) if s == &root_surface
         ) {
             // In case the cursor surface has been committed handle the role specific
@@ -525,13 +525,13 @@ impl CompositorHandler for State {
             }
 
             // FIXME: granular redraws for cursors.
-            self.realand.queue_redraw_all();
+            self.clarion.queue_redraw_all();
             return;
         }
 
         // This might be a DnD icon surface.
-        if matches!(&self.realand.dnd_icon, Some(icon) if icon.surface == root_surface) {
-            let dnd_icon = self.realand.dnd_icon.as_mut().unwrap();
+        if matches!(&self.clarion.dnd_icon, Some(icon) if icon.surface == root_surface) {
+            let dnd_icon = self.clarion.dnd_icon.as_mut().unwrap();
 
             // In case the dnd surface has been committed handle the role specific
             // buffer offset by applying the offset on the dnd icon offset
@@ -549,21 +549,21 @@ impl CompositorHandler for State {
             }
 
             // FIXME: granular redraws for cursors.
-            self.realand.queue_redraw_all();
+            self.clarion.queue_redraw_all();
             return;
         }
 
         // This might be a lock surface.
-        for (output, state) in &self.realand.output_state {
+        for (output, state) in &self.clarion.output_state {
             if let Some(lock_surface) = &state.lock_surface {
                 if lock_surface.wl_surface() == &root_surface {
                     if matches!(
-                        self.realand.lock_state,
+                        self.clarion.lock_state,
                         LockState::WaitingForSurfaces { .. }
                     ) {
-                        self.realand.maybe_continue_to_locking();
+                        self.clarion.maybe_continue_to_locking();
                     } else {
-                        self.realand.queue_redraw(&output.clone());
+                        self.clarion.queue_redraw(&output.clone());
                     }
 
                     return;
@@ -578,9 +578,9 @@ impl CompositorHandler for State {
 
     fn destroyed(&mut self, surface: &WlSurface) {
         crate::render_helpers::vulkan::native::clear_surface_buffer_owner(surface);
-        self.realand.destroy_commit_timing(surface);
-        self.realand.destroy_fifo_surface(surface);
-        self.realand.stop_signal.wakeup();
+        self.clarion.destroy_commit_timing(surface);
+        self.clarion.destroy_fifo_surface(surface);
+        self.clarion.stop_signal.wakeup();
         // Clients may destroy their subsurfaces before the main surface. Ensure we have a snapshot
         // when that happens, so that the closing animation includes all these subsurfaces.
         //
@@ -590,15 +590,15 @@ impl CompositorHandler for State {
         // This is still not perfect, as this function is called already after the (first)
         // subsurface is destroyed; in the case of alacritty, this is the top CSD shadow. But, it
         // gets most of the job done.
-        if let Some(root) = self.realand.root_surface.get(surface) {
-            if let Some((mapped, output)) = self.realand.layout.find_window_and_output(root) {
+        if let Some(root) = self.clarion.root_surface.get(surface) {
+            if let Some((mapped, output)) = self.clarion.layout.find_window_and_output(root) {
                 let window = mapped.window.clone();
                 let output = output.cloned();
                 self.store_unmap_snapshot(&window, output.as_ref());
             }
         }
 
-        self.realand
+        self.clarion
             .root_surface
             .retain(|k, v| k != surface && v != surface);
 
@@ -609,7 +609,7 @@ impl CompositorHandler for State {
         //
         // So, this may come out empty, and then the toplevel pre-commit hook will be removed in the
         // subsequent toplevel_destroyed() call.
-        if let Some(hook) = self.realand.dmabuf_pre_commit_hook.remove(surface) {
+        if let Some(hook) = self.clarion.dmabuf_pre_commit_hook.remove(surface) {
             remove_pre_commit_hook(surface, &hook);
         }
     }
@@ -621,7 +621,7 @@ impl BufferHandler for State {
 
 impl ShmHandler for State {
     fn shm_state(&self) -> &ShmState {
-        &self.realand.shm_state
+        &self.clarion.shm_state
     }
 }
 
@@ -660,10 +660,10 @@ impl State {
                     match acquire_point.generate_blocker() {
                         Ok((blocker, source)) => {
                             if let Some(client) = surface.client() {
-                                let res = state.realand.event_loop.insert_source(
+                                let res = state.clarion.event_loop.insert_source(
                                     source,
                                     move |_, _, state| {
-                                        let display_handle = state.realand.display_handle.clone();
+                                        let display_handle = state.clarion.display_handle.clone();
                                         state
                                             .client_compositor_state(&client)
                                             .blocker_cleared(state, &display_handle);
@@ -694,7 +694,7 @@ impl State {
         });
 
         let s = surface.clone();
-        if let Some(prev) = self.realand.dmabuf_pre_commit_hook.insert(s, hook) {
+        if let Some(prev) = self.clarion.dmabuf_pre_commit_hook.insert(s, hook) {
             error!("tried to add dmabuf pre-commit hook when there was already one");
             remove_pre_commit_hook(surface, &prev);
         }
@@ -706,10 +706,10 @@ impl State {
         if let Ok((blocker, source)) = dmabuf.generate_blocker(Interest::READ) {
             if let Some(client) = surface.client() {
                 let res = self
-                    .realand
+                    .clarion
                     .event_loop
                     .insert_source(source, move |_, _, state| {
-                        let display_handle = state.realand.display_handle.clone();
+                        let display_handle = state.clarion.display_handle.clone();
                         state
                             .client_compositor_state(&client)
                             .blocker_cleared(state, &display_handle);
@@ -727,7 +727,7 @@ impl State {
     }
 
     pub fn remove_default_dmabuf_pre_commit_hook(&mut self, surface: &WlSurface) {
-        if let Some(hook) = self.realand.dmabuf_pre_commit_hook.remove(surface) {
+        if let Some(hook) = self.clarion.dmabuf_pre_commit_hook.remove(surface) {
             remove_pre_commit_hook(surface, &hook);
         } else {
             error!("tried to remove dmabuf pre-commit hook but there was none");

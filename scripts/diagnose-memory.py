@@ -58,7 +58,7 @@ def sample(pid, group):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--pid", type=int, help="Compositor PID; default: realand.service MainPID")
+    parser.add_argument("--pid", type=int, help="Compositor PID; default: clarion.service MainPID")
     parser.add_argument("--seconds", type=int, default=60, help="Sampling duration (1–3600 seconds)")
     parser.add_argument("--interval", type=float, default=5, help="Sampling interval in seconds")
     parser.add_argument("--output", type=Path, required=True, help="New JSON report path")
@@ -71,11 +71,11 @@ def main():
     pid = args.pid
     if pid is None:
         pid = int(subprocess.check_output(
-            ["systemctl", "--user", "show", "realand.service", "-p", "MainPID", "--value"],
+            ["systemctl", "--user", "show", "clarion.service", "-p", "MainPID", "--value"],
             text=True, timeout=3,
         ).strip())
     if pid <= 0:
-        parser.error("Realand is not running; specify --pid")
+        parser.error("Clarion is not running; specify --pid")
 
     group = cgroup_dir(pid)
     start = time.monotonic()

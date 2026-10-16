@@ -2,8 +2,8 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::mem;
 
-use realand_config::{FloatOrInt, OutputName, Vrr};
-use realand_ipc::Transform;
+use clarion_config::{FloatOrInt, OutputName, Vrr};
+use clarion_ipc::Transform;
 use smithay::reexports::wayland_protocols_wlr::output_management::v1::server::{
     zwlr_output_configuration_head_v1, zwlr_output_configuration_v1, zwlr_output_head_v1,
     zwlr_output_manager_v1, zwlr_output_mode_v1,
@@ -38,8 +38,8 @@ pub struct OutputManagementManagerState {
     display: DisplayHandle,
     serial: u32,
     clients: HashMap<ClientId, ClientData>,
-    current_state: HashMap<OutputId, realand_ipc::Output>,
-    current_config: realand_config::Outputs,
+    current_state: HashMap<OutputId, clarion_ipc::Output>,
+    current_config: clarion_config::Outputs,
 }
 
 pub struct OutputManagementManagerGlobalData {
@@ -48,7 +48,7 @@ pub struct OutputManagementManagerGlobalData {
 
 pub trait OutputManagementHandler {
     fn output_management_state(&mut self) -> &mut OutputManagementManagerState;
-    fn apply_output_config(&mut self, config: realand_config::Outputs);
+    fn apply_output_config(&mut self, config: clarion_config::Outputs);
 }
 
 struct OutputConfigurationData {
@@ -57,7 +57,7 @@ struct OutputConfigurationData {
 
 #[derive(Debug)]
 enum OutputConfigurationState {
-    Ongoing(HashMap<OutputId, realand_config::Output>),
+    Ongoing(HashMap<OutputId, clarion_config::Output>),
     Finished,
 }
 
@@ -88,11 +88,11 @@ impl OutputManagementManagerState {
         }
     }
 
-    pub fn on_config_changed(&mut self, new_config: realand_config::Outputs) {
+    pub fn on_config_changed(&mut self, new_config: clarion_config::Outputs) {
         self.current_config = new_config;
     }
 
-    pub fn notify_changes(&mut self, new_state: HashMap<OutputId, realand_ipc::Output>) {
+    pub fn notify_changes(&mut self, new_state: HashMap<OutputId, clarion_ipc::Output>) {
         let mut changed = false; /* most likely to end up true */
         for (output, conf) in new_state.iter() {
             if let Some(old) = self.current_state.get(output) {
@@ -405,7 +405,7 @@ where
                             .current_config
                             .find(&name)
                             .cloned()
-                            .unwrap_or_else(|| realand_config::Output {
+                            .unwrap_or_else(|| clarion_config::Output {
                                 name: name.format_make_model_serial_or_connector(),
                                 ..Default::default()
                             });
@@ -455,7 +455,7 @@ where
                             .current_config
                             .find(&name)
                             .cloned()
-                            .unwrap_or_else(|| realand_config::Output {
+                            .unwrap_or_else(|| clarion_config::Output {
                                 name: name.format_make_model_serial_or_connector(),
                                 ..Default::default()
                             });
@@ -610,9 +610,9 @@ where
                     return;
                 };
 
-                new_config.mode = Some(realand_config::output::Mode {
+                new_config.mode = Some(clarion_config::output::Mode {
                     custom: false,
-                    mode: realand_ipc::ConfiguredMode {
+                    mode: clarion_ipc::ConfiguredMode {
                         width: mode.width,
                         height: mode.height,
                         refresh: Some(mode.refresh_rate as f64 / 1000.),
@@ -646,9 +646,9 @@ where
                     Some(f64::from(refresh) / 1000.)
                 };
 
-                new_config.mode = Some(realand_config::output::Mode {
+                new_config.mode = Some(clarion_config::output::Mode {
                     custom: true,
-                    mode: realand_ipc::ConfiguredMode {
+                    mode: clarion_ipc::ConfiguredMode {
                         width,
                         height,
                         refresh,
@@ -657,7 +657,7 @@ where
                 new_config.modeline = None;
             }
             zwlr_output_configuration_head_v1::Request::SetPosition { x, y } => {
-                new_config.position = Some(realand_config::Position { x, y });
+                new_config.position = Some(clarion_config::Position { x, y });
             }
             zwlr_output_configuration_head_v1::Request::SetTransform { transform } => {
                 let transform = match transform {
@@ -769,7 +769,7 @@ fn notify_removed_head(clients: &mut HashMap<ClientId, ClientData>, head: &Outpu
 fn notify_new_head(
     state: &mut OutputManagementManagerState,
     output: &OutputId,
-    conf: &realand_ipc::Output,
+    conf: &clarion_ipc::Output,
 ) {
     let display = &state.display;
     let clients = &mut state.clients;
@@ -785,7 +785,7 @@ fn send_new_head<D>(
     client: &Client,
     client_data: &mut ClientData,
     output: OutputId,
-    conf: &realand_ipc::Output,
+    conf: &clarion_ipc::Output,
 ) where
     D: Dispatch<ZwlrOutputModeV1, EmptyData>,
     D: Dispatch<ZwlrOutputHeadV1, OutputId>,

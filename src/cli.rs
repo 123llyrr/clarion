@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
-use realand_ipc::{Action, OutputAction};
+use clarion_ipc::{Action, OutputAction};
 
 use crate::utils::version;
 
@@ -13,10 +13,11 @@ use crate::utils::version;
 #[command(subcommand_value_name = "SUBCOMMAND")]
 #[command(subcommand_help_heading = "Subcommands")]
 pub struct Cli {
-    /// Path to config file (default: `$XDG_CONFIG_HOME/realand/config.kdl`).
+    /// Path to config file (default: `$XDG_CONFIG_HOME/clarion/config.kdl`).
     ///
-    /// This can also be set with the `REALAND_CONFIG` environment variable. If both are set, the
-    /// command line argument takes precedence.
+    /// This can also be set with the `CLARION_CONFIG` environment variable. If both are set, the
+    /// command line argument takes precedence. Existing `REALAND_CONFIG` and
+    /// `$XDG_CONFIG_HOME/realand/config.kdl` are used when the Clarion equivalent is absent.
     #[arg(short, long)]
     pub config: Option<PathBuf>,
     /// Import environment globally to systemd and D-Bus, run D-Bus services.
@@ -28,7 +29,7 @@ pub struct Cli {
     pub session: bool,
     /// Graphics renderer backend ("vulkan" or "gles").
     ///
-    /// Overrides the `renderer` setting in config.kdl and `REALAND_RENDERER` environment variable.
+    /// Overrides the `renderer` setting in config.kdl and `CLARION_RENDERER` environment variable.
     #[arg(long, value_parser = crate::backend::RendererBackendType::parse)]
     pub renderer: Option<crate::backend::RendererBackendType>,
     /// Command to run upon compositor startup.
@@ -41,7 +42,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Sub {
-    /// Communicate with the running realand instance.
+    /// Communicate with the running clarion instance.
     Msg {
         #[command(subcommand)]
         msg: Msg,
@@ -51,10 +52,11 @@ pub enum Sub {
     },
     /// Validate the config file.
     Validate {
-        /// Path to config file (default: `$XDG_CONFIG_HOME/realand/config.kdl`).
+        /// Path to config file (default: `$XDG_CONFIG_HOME/clarion/config.kdl`).
         ///
-        /// This can also be set with the `REALAND_CONFIG` environment variable. If both are set, the
-        /// command line argument takes precedence.
+        /// This can also be set with the `CLARION_CONFIG` environment variable. If both are set, the
+        /// command line argument takes precedence. Existing `REALAND_CONFIG` and
+        /// `$XDG_CONFIG_HOME/realand/config.kdl` are used when the Clarion equivalent is absent.
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
@@ -99,7 +101,7 @@ pub enum Msg {
     Output {
         /// Output name.
         ///
-        /// Run `realand msg outputs` to see the output names.
+        /// Run `clarion msg outputs` to see the output names.
         #[arg()]
         output: String,
         /// Configuration to apply.
@@ -108,9 +110,9 @@ pub enum Msg {
     },
     /// Start continuously receiving events from the compositor.
     EventStream,
-    /// Print the version of the running realand instance.
+    /// Print the version of the running clarion instance.
     Version,
-    /// Request an error from the running realand instance.
+    /// Request an error from the running clarion instance.
     RequestError,
     /// Print the overview state.
     OverviewState,

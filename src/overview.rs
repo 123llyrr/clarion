@@ -48,7 +48,7 @@ impl State {
     pub(crate) fn overview_command(&mut self, command: OverviewCommand) -> bool {
         let target = match command {
             OverviewCommand::Toggle | OverviewCommand::Open => {
-                Some(self.realand.layout.default_overview_mode())
+                Some(self.clarion.layout.default_overview_mode())
             }
             OverviewCommand::ToggleExpo => Some(OverviewMode::Expo),
             OverviewCommand::ToggleSpread => Some(OverviewMode::Windows),
@@ -64,56 +64,56 @@ impl State {
         // that same grab. Only mode-entry commands perform the teardown above.
         let (handled, redraw) = match command {
             OverviewCommand::Toggle => {
-                self.realand.layout.toggle_overview();
+                self.clarion.layout.toggle_overview();
                 (true, true)
             }
             OverviewCommand::Open => {
-                let changed = self.realand.layout.open_overview();
+                let changed = self.clarion.layout.open_overview();
                 (changed, changed)
             }
             OverviewCommand::Close => {
-                let changed = self.realand.layout.close_overview();
+                let changed = self.clarion.layout.close_overview();
                 (changed, changed)
             }
             OverviewCommand::ToggleExpo => {
-                self.realand.layout.toggle_expo();
+                self.clarion.layout.toggle_expo();
                 (true, true)
             }
             OverviewCommand::CancelExpo => {
-                self.realand.layout.cancel_expo();
+                self.clarion.layout.cancel_expo();
                 (true, true)
             }
             OverviewCommand::ConfirmExpo => {
-                self.realand.layout.confirm_expo();
+                self.clarion.layout.confirm_expo();
                 (true, true)
             }
             OverviewCommand::ToggleSpread => {
-                self.realand.layout.toggle_window_spread();
+                self.clarion.layout.toggle_window_spread();
                 (true, true)
             }
             OverviewCommand::StageKey(key) => {
-                let handled = self.realand.layout.stage_key(key);
+                let handled = self.clarion.layout.stage_key(key);
                 (handled, handled)
             }
             OverviewCommand::SpreadKey(key) => {
-                let handled = self.realand.layout.spread_key(key);
+                let handled = self.clarion.layout.spread_key(key);
                 (handled, handled)
             }
             OverviewCommand::StageSelect { output, position } => {
-                let handled = self.realand.layout.stage_select_at(&output, position);
+                let handled = self.clarion.layout.stage_select_at(&output, position);
                 (handled, handled)
             }
             OverviewCommand::EnterWorkspace { output, index } => {
-                self.realand.layout.focus_output(&output);
-                self.realand.layout.toggle_overview_to_workspace(index);
+                self.clarion.layout.focus_output(&output);
+                self.clarion.layout.toggle_overview_to_workspace(index);
                 (true, true)
             }
             OverviewCommand::GestureBegin => {
-                self.realand.layout.overview_gesture_begin();
+                self.clarion.layout.overview_gesture_begin();
                 (true, true)
             }
             OverviewCommand::GestureUpdate { delta, timestamp } => match self
-                .realand
+                .clarion
                 .layout
                 .overview_gesture_update(delta, timestamp)
             {
@@ -122,15 +122,15 @@ impl State {
             },
             OverviewCommand::GestureEnd { cancelled } => {
                 let changed = if cancelled {
-                    self.realand.layout.overview_gesture_cancel()
+                    self.clarion.layout.overview_gesture_cancel()
                 } else {
-                    self.realand.layout.overview_gesture_end()
+                    self.clarion.layout.overview_gesture_end()
                 };
                 (changed, changed)
             }
         };
         if redraw {
-            self.realand.queue_redraw_all();
+            self.clarion.queue_redraw_all();
         }
         handled
     }
@@ -138,44 +138,44 @@ impl State {
     /// Capture the composed frame before changing overview geometry. Each privacy
     /// target gets its own snapshot, including any crossfade already on screen.
     fn prepare_overview_mode_transition(&mut self, target: OverviewMode) {
-        if !self.realand.layout.is_overview_visible()
-            || self.realand.layout.overview_mode() == target
+        if !self.clarion.layout.is_overview_visible()
+            || self.clarion.layout.overview_mode() == target
         {
             return;
         }
-        self.realand.gesture_swipe_3f_cumulative = None;
-        self.realand.overview_scroll_swipe_gesture.reset();
-        self.realand.horizontal_wheel_tracker.reset();
-        self.realand.vertical_wheel_tracker.reset();
+        self.clarion.gesture_swipe_3f_cumulative = None;
+        self.clarion.overview_scroll_swipe_gesture.reset();
+        self.clarion.horizontal_wheel_tracker.reset();
+        self.clarion.vertical_wheel_tracker.reset();
         let animations_disabled = {
-            let config = self.realand.config.borrow();
+            let config = self.clarion.config.borrow();
             config.animations.off || config.animations.overview_open_close.0.off
         };
         if animations_disabled
-            || self.realand.clock.should_complete_instantly()
-            || !matches!(self.realand.lock_state, LockState::Unlocked)
-            || self.realand.screenshot_ui.is_open()
-            || self.realand.window_mru_ui.is_open()
-            || self.realand.exit_confirm_dialog.is_open()
+            || self.clarion.clock.should_complete_instantly()
+            || !matches!(self.clarion.lock_state, LockState::Unlocked)
+            || self.clarion.screenshot_ui.is_open()
+            || self.clarion.window_mru_ui.is_open()
+            || self.clarion.exit_confirm_dialog.is_open()
         {
-            self.realand.clear_overview_mode_transitions();
+            self.clarion.clear_overview_mode_transitions();
             return;
         }
-        let outputs: Vec<_> = self.realand.output_state.keys().cloned().collect();
+        let outputs: Vec<_> = self.clarion.output_state.keys().cloned().collect();
         for output in outputs {
-            let realand = &mut self.realand;
+            let clarion = &mut self.clarion;
             let captured = self
                 .backend
                 .with_renderer_for_output(Some(&output), |renderer| match renderer {
                     crate::render_helpers::renderer::AnyRenderer::Gles(renderer) => {
-                        realand.do_overview_mode_transition(renderer, &output)
+                        clarion.do_overview_mode_transition(renderer, &output)
                     }
                     crate::render_helpers::renderer::AnyRenderer::Native(renderer) => {
-                        realand.do_overview_mode_transition(renderer, &output)
+                        clarion.do_overview_mode_transition(renderer, &output)
                     }
                 });
             if captured.is_none() {
-                self.realand
+                self.clarion
                     .output_state
                     .get_mut(&output)
                     .unwrap()

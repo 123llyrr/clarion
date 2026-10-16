@@ -342,6 +342,70 @@ impl From<vk::Result> for NativeError {
     }
 }
 
+/// Recovery transfer data. In particular, the white texture has no Wayland
+/// attachment lease: only its Send GPU allocation crosses the worker boundary.
+pub(crate) struct PreparedNativeDevice {
+    device: super::PreparedVulkanDevice,
+    resources: NativeDeviceResources,
+}
+
+struct NativeDeviceResources {
+    completions: super::completion::CompletionQueue,
+    white: Arc<super::TextureGpu>,
+    sample_formats: FormatSet,
+    target_formats: FormatSet,
+    gpu_timings: Option<Arc<super::timing::GpuTimings>>,
+}
+
+impl NativeDeviceResources {
+    fn prepare(renderer: &VulkanRenderer) -> Result<Self, NativeError> {
+        let white = renderer.create_solid_texture([255; 4])?.inner;
+        let sample_formats = dma_formats(renderer, true);
+        let target_formats = dma_formats(renderer, false);
+        let gpu_timings = match super::timing::GpuTimings::new(
+            renderer.ctx.as_ref().expect("initialized renderer").clone(),
+        ) {
+            Ok(timings) => timings,
+            Err(error) => {
+                warn!(
+                    ?error,
+                    "Vulkan timestamp diagnostics unavailable; continuing without GPU-work samples"
+                );
+                None
+            }
+        };
+        let completions = super::completion::CompletionQueue::new()
+            .map_err(|error| NativeError::Other(error.to_string()))?;
+        Ok(Self {
+            completions,
+            white,
+            sample_formats,
+            target_formats,
+            gpu_timings,
+        })
+    }
+}
+
+impl PreparedNativeDevice {
+    pub(crate) fn device_anchor(&self) -> Arc<super::VulkanContext> {
+        self.device.ctx.clone()
+    }
+
+    /// This method is called only on the bounded recovery worker.
+    pub(crate) fn prepare(node: smithay::backend::drm::DrmNode) -> Result<Self, String> {
+        let mut renderer = VulkanRenderer::new();
+        renderer
+            .init_from_drm_node(Some(&node))
+            .map_err(|error| error.to_string())?;
+        let resources =
+            NativeDeviceResources::prepare(&renderer).map_err(|error| error.to_string())?;
+        Ok(Self {
+            device: renderer.prepared_device(),
+            resources,
+        })
+    }
+}
+
 #[derive(Debug)]
 pub struct NativeRenderer {
     renderer: VulkanRenderer,
@@ -466,7 +530,10 @@ impl NativeRenderer {
         if self.completion_wakeup.is_none() {
             let (ping, source) = smithay::reexports::calloop::ping::make_ping()
                 .map_err(|err| NativeError::Other(err.to_string()))?;
-            let timings = self.gpu_timings.clone();
+            // An idle/stopped loop may outlive the renderer. Keep only completed
+            // CPU samples: retaining GpuTimings here would pin its query pool and
+            // device. Pending GPU leases can still publish their final sample.
+            let timings = self.gpu_timings.as_ref().map(|timings| timings.delivery());
             event_loop
                 .insert_source(source, move |(), &mut (), data| {
                     if let Some(timings) = &timings {
@@ -1422,21 +1489,44 @@ impl NativeRenderer {
                 "Vulkan renderer initialization is incomplete".into(),
             ));
         }
-        let white = renderer.create_solid_texture([255; 4])?;
-        let sample_formats = dma_formats(&renderer, true);
-        let target_formats = dma_formats(&renderer, false);
-        let gpu_timings =
-            match super::timing::GpuTimings::new(renderer.ctx.as_ref().unwrap().clone()) {
-                Ok(timings) => timings,
-                Err(error) => {
-                    warn!(
-                    ?error,
-                    "Vulkan timestamp diagnostics unavailable; continuing without GPU-work samples"
-                );
-                    None
-                }
-            };
-        Ok(Self {
+        let resources = NativeDeviceResources::prepare(&renderer)?;
+        Ok(Self::assemble(renderer, resources))
+    }
+
+    /// No device creation, image allocation, format query, shader compile or GPU
+    /// wait is performed here. Only single-owner caches and CPU endpoints are made.
+    pub(crate) fn from_prepared(prepared: PreparedNativeDevice) -> Self {
+        let mut renderer = VulkanRenderer::new();
+        renderer.init_prepared_device(prepared.device);
+        Self::assemble(renderer, prepared.resources)
+    }
+
+    pub(crate) fn device_anchor(&self) -> Arc<super::VulkanContext> {
+        self.renderer
+            .ctx
+            .as_ref()
+            .expect("initialized renderer")
+            .clone()
+    }
+
+    fn assemble(renderer: VulkanRenderer, resources: NativeDeviceResources) -> Self {
+        let NativeDeviceResources {
+            completions,
+            white,
+            sample_formats,
+            target_formats,
+            gpu_timings,
+        } = resources;
+        let white = VulkanTexture {
+            width: 1,
+            height: 1,
+            format: vk::Format::R8G8B8A8_UNORM.as_raw() as u32,
+            has_alpha: false,
+            y_inverted: false,
+            inner: white,
+            client_buffer: None,
+        };
+        Self {
             backpressured: false,
             scene_deferred: false,
             pending: Vec::new(),
@@ -1444,8 +1534,7 @@ impl NativeRenderer {
             output_timing: None,
             completion_export_required: true,
             completion_wakeup: None,
-            completions: super::completion::CompletionQueue::new()
-                .map_err(|err| NativeError::Other(err.to_string()))?,
+            completions,
             pending_uploads: Vec::new(),
             sample_formats,
             target_formats,
@@ -1464,7 +1553,7 @@ impl NativeRenderer {
             shader_compiles: ShaderCompileOwner::new(),
             prepared_output_formats: Default::default(),
             hdr_output: false,
-        })
+        }
     }
     /// Retain scratch images for later reuse, without ever overwriting a live snapshot.
     /// Limit both count and pixel storage (64 MiB of 32-bit pixels, excluding driver overhead).
@@ -3007,6 +3096,12 @@ mod readback_tests {
     fn pending_job_is_send_without_moving_the_renderer() {
         fn assert_send<T: Send>() {}
         assert_send::<PendingNativeReadback>();
+    }
+
+    #[test]
+    fn recovery_device_bundle_is_send_without_moving_the_renderer() {
+        fn assert_send<T: Send>() {}
+        assert_send::<PreparedNativeDevice>();
     }
 
     #[test]

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use realand_config::{Config, ModKey};
+use clarion_config::{Config, ModKey};
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::output::Output;
@@ -50,7 +50,7 @@ impl RenderResult {
     }
 }
 
-pub type IpcOutputMap = HashMap<OutputId, realand_ipc::Output>;
+pub type IpcOutputMap = HashMap<OutputId, clarion_ipc::Output>;
 
 static OUTPUT_ID_COUNTER: IdCounter = IdCounter::new();
 
@@ -71,8 +71,8 @@ impl OutputId {
 /// Snapshots are replaced explicitly at lifecycle/config transitions.
 #[derive(Debug, Clone)]
 pub(crate) struct DeviceSettings {
-    pub(crate) outputs: realand_config::Outputs,
-    pub(crate) animations: realand_config::Animations,
+    pub(crate) outputs: clarion_config::Outputs,
+    pub(crate) animations: clarion_config::Animations,
     pub(crate) debug: DeviceDebug,
 }
 
@@ -132,7 +132,7 @@ impl Backend {
     }
 
     pub(crate) fn init(&mut self, port: &mut impl DevicePort) {
-        let _span = realand_tracy_span!("Backend::init");
+        let _span = clarion_tracy_span!("Backend::init");
         match self {
             Backend::Tty(tty) => tty.init(port),
             Backend::Winit(winit) => winit.init(port),

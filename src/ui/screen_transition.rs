@@ -57,7 +57,7 @@ impl ScreenTransition {
     pub fn new_overview(
         from_texture: [TransitionTexture; 3],
         clock: Clock,
-        config: realand_config::Animation,
+        config: clarion_config::Animation,
     ) -> Self {
         let animation = Animation::new(clock.clone(), 1., 0., 0., config);
         Self {

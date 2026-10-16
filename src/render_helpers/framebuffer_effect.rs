@@ -1,14 +1,14 @@
 use std::cell::RefCell;
 
+use clarion_config::CornerRadius;
 use glam::{Mat3, Vec2};
-use realand_config::CornerRadius;
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::element::{Element, Id, RenderElement};
 use smithay::backend::renderer::gles::{
     ffi, GlesError, GlesFrame, GlesRenderer, GlesTexture, Uniform,
 };
 use smithay::backend::renderer::utils::CommitCounter;
-use smithay::backend::renderer::{Frame as _, FrameContext, Offscreen, Texture as _};
+use smithay::backend::renderer::{ContextId, Frame as _, FrameContext, Offscreen, Texture as _};
 use smithay::gpu_span_location;
 use smithay::utils::user_data::UserDataMap;
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
@@ -188,7 +188,7 @@ impl FramebufferEffectElement {
         let clip_geo_size = (self.clip_geo.size.w as f32, self.clip_geo.size.h as f32);
 
         [
-            Uniform::new("realand_scale", self.scale),
+            Uniform::new("clarion_scale", self.scale),
             Uniform::new("geo_size", clip_geo_size),
             Uniform::new("corner_radius", <[f32; 4]>::from(self.corner_radius)),
             mat3_uniform("input_to_geo", input_to_clip_geo),
@@ -292,7 +292,7 @@ impl RenderElement<GlesRenderer> for FramebufferEffectElement {
         dst: Rectangle<i32, Physical>,
         cache: &UserDataMap,
     ) -> Result<(), GlesError> {
-        let _span = realand_tracy_span!("FramebufferEffectElement::capture_framebuffer");
+        let _span = clarion_tracy_span!("FramebufferEffectElement::capture_framebuffer");
         let location = gpu_span_location!("FramebufferEffectElement::capture_framebuffer");
         frame.with_gpu_span(location, |frame| {
             let output_rect = Rectangle::from_size(frame.output_size());
@@ -587,12 +587,29 @@ impl Inner {
 
 #[derive(Default)]
 pub(crate) struct NativeInner {
+    renderer_context: Option<ContextId<VulkanTexture>>,
     pub(crate) framebuffer: Option<VulkanTexture>,
     pub(crate) blur: Option<NativeBlur>,
     pub(crate) intermediate: Option<VulkanTexture>,
     pub(crate) subregion_damage: Vec<Rectangle<i32, Physical>>,
     #[cfg(test)]
     pub(crate) blur_pixels: usize,
+}
+
+impl NativeInner {
+    /// Damage trackers retain effect caches across renderer replacement. Size and element ID
+    /// cannot establish image ownership, so every capture and draw validates the device epoch.
+    /// Submitted frames hold independent Arc leases to any images released by this cache.
+    fn select_context(&mut self, context: ContextId<VulkanTexture>) -> bool {
+        if self.renderer_context.as_ref() == Some(&context) {
+            return true;
+        }
+        *self = Self {
+            renderer_context: Some(context),
+            ..Self::default()
+        };
+        false
+    }
 }
 
 impl RenderElement<NativeRenderer> for FramebufferEffectElement {
@@ -603,7 +620,7 @@ impl RenderElement<NativeRenderer> for FramebufferEffectElement {
         dst: Rectangle<i32, Physical>,
         cache: &UserDataMap,
     ) -> Result<(), NativeError> {
-        let _span = realand_tracy_span!("FramebufferEffectElement::capture_framebuffer [Vulkan]");
+        let _span = clarion_tracy_span!("FramebufferEffectElement::capture_framebuffer [Vulkan]");
         let output_rect = Rectangle::from_size(frame.output_size());
         let transform = frame.transformation();
 
@@ -611,6 +628,7 @@ impl RenderElement<NativeRenderer> for FramebufferEffectElement {
             cache.get_or_insert::<RefCell<NativeInner>, _>(|| RefCell::new(NativeInner::default()));
         let mut inner = inner.borrow_mut();
         let inner = &mut *inner;
+        inner.select_context(frame.context_id());
 
         let clamped_dst = match dst.intersection(output_rect) {
             Some(clamped) => clamped,
@@ -737,6 +755,11 @@ impl RenderElement<NativeRenderer> for FramebufferEffectElement {
         };
         let mut inner = inner.borrow_mut();
         let inner = &mut *inner;
+        if !inner.select_context(frame.context_id()) {
+            // A direct draw can arrive before capture when a persistent damage tracker has
+            // no new capture for this element. Never sample an old device's cached pixels.
+            return Ok(());
+        }
 
         let Some(texture) = &inner.intermediate else {
             return Ok(());
@@ -812,5 +835,270 @@ impl RenderElement<NativeRenderer> for FramebufferEffectElement {
         _renderer: &mut NativeRenderer,
     ) -> Option<smithay::backend::renderer::element::UnderlyingStorage<'_>> {
         None
+    }
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::{FramebufferEffect, FramebufferEffectElement, NativeInner};
+    use crate::render_helpers::{
+        background_effect::RenderParams,
+        blur::BlurOptions,
+        solid_color::{SolidColorBuffer, SolidColorRenderElement},
+        vulkan::{hardware_tests::setup, native::NativeRenderer, VulkanTexture},
+    };
+    use smithay::backend::allocator::Fourcc;
+    use smithay::backend::renderer::damage::OutputDamageTracker;
+    use smithay::backend::renderer::element::{Element, Kind, RenderElement};
+    use smithay::backend::renderer::{
+        Bind, Color32F, ExportMem, Frame, Offscreen, Renderer, Texture,
+    };
+    use smithay::utils::{user_data::UserDataMap, Physical, Rectangle, Scale, Size, Transform};
+    use std::{cell::RefCell, sync::Arc};
+
+    crate::clarion_render_elements! {
+        RecoveryElement => {
+            Effect = FramebufferEffectElement,
+            Solid = SolidColorRenderElement,
+        }
+    }
+
+    fn element(effect: &FramebufferEffect) -> FramebufferEffectElement {
+        effect.render(
+            None,
+            RenderParams {
+                geometry: Rectangle::from_size((64., 48.).into()),
+                subregion: None,
+                clip: None,
+                scale: 1.,
+            },
+            Some(BlurOptions {
+                passes: 2,
+                offset: 1.25,
+            }),
+            0.,
+            1.,
+        )
+    }
+
+    fn pixels(renderer: &mut NativeRenderer, target: &VulkanTexture) -> Vec<u8> {
+        let mapping = renderer
+            .copy_texture(
+                target,
+                Rectangle::from_size(target.size()),
+                Fourcc::Abgr8888,
+            )
+            .unwrap();
+        renderer.map_texture(&mapping).unwrap().to_vec()
+    }
+
+    fn render_tracker(
+        renderer: &mut NativeRenderer,
+        tracker: &mut OutputDamageTracker,
+        effect: &FramebufferEffect,
+        color: [f32; 4],
+    ) -> Vec<u8> {
+        let mut target: VulkanTexture = renderer
+            .create_buffer(Fourcc::Abgr8888, (64, 48).into())
+            .unwrap();
+        let background = SolidColorBuffer::new((64., 48.), color);
+        let elements = [
+            RecoveryElement::Effect(element(effect)),
+            RecoveryElement::Solid(SolidColorRenderElement::from_buffer(
+                &background,
+                (0., 0.),
+                1.,
+                Kind::Unspecified,
+            )),
+        ];
+        {
+            let mut framebuffer = renderer.bind(&mut target).unwrap();
+            let result = tracker
+                .render_output(renderer, &mut framebuffer, 0, &elements, Color32F::BLACK)
+                .unwrap();
+            assert!(
+                result.damage.is_some(),
+                "recovery must actually redraw the target"
+            );
+            result.sync.wait().unwrap();
+        }
+        pixels(renderer, &target)
+    }
+
+    fn render_direct(
+        renderer: &mut NativeRenderer,
+        effect: &FramebufferEffectElement,
+        cache: &UserDataMap,
+        capture: bool,
+        color: [f32; 4],
+    ) -> Vec<u8> {
+        let mut target: VulkanTexture = renderer
+            .create_buffer(Fourcc::Abgr8888, (64, 48).into())
+            .unwrap();
+        let full = Rectangle::from_size((64, 48).into());
+        {
+            let mut framebuffer = renderer.bind(&mut target).unwrap();
+            let mut frame = renderer
+                .render(&mut framebuffer, (64, 48).into(), Transform::Normal)
+                .unwrap();
+            frame.clear(color.into(), &[full]).unwrap();
+            if capture {
+                <FramebufferEffectElement as RenderElement<NativeRenderer>>::capture_framebuffer(
+                    effect,
+                    &mut frame,
+                    effect.src(),
+                    full,
+                    cache,
+                )
+                .unwrap();
+            }
+            <FramebufferEffectElement as RenderElement<NativeRenderer>>::draw(
+                effect,
+                &mut frame,
+                effect.src(),
+                full,
+                &[full],
+                &[],
+                Some(cache),
+            )
+            .unwrap();
+            frame.finish().unwrap().wait().unwrap();
+        }
+        pixels(renderer, &target)
+    }
+
+    fn assert_color(pixels: &[u8], expected: [u8; 4]) {
+        assert!(
+            pixels.as_chunks::<4>().0.iter().all(|pixel| {
+                pixel
+                    .iter()
+                    .zip(expected)
+                    .all(|(actual, expected)| actual.abs_diff(expected) <= 1)
+            }),
+            "cached effect must contain this renderer's new pixels"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a real DRM render node and two native Vulkan contexts"]
+    fn native_framebuffer_effect_recovery_reuses_tracker_without_foreign_context() {
+        let (vk, reference, allocator) = setup();
+        drop(reference);
+        drop(allocator);
+        let mut previous = NativeRenderer::new(vk).unwrap();
+        previous
+            .prepare_output_format_for_test(Fourcc::Abgr8888)
+            .unwrap();
+        let old_context = previous.context_id();
+        let old_device = Arc::downgrade(&previous.device_anchor());
+        let effect = FramebufferEffect::new();
+        let mut tracker = OutputDamageTracker::new(
+            Size::<i32, Physical>::from((64, 48)),
+            Scale::from(1.),
+            Transform::Normal,
+        );
+        assert_color(
+            &render_tracker(&mut previous, &mut tracker, &effect, [1., 0., 0., 1.]),
+            [255, 0, 0, 255],
+        );
+        let direct_cache = UserDataMap::new();
+        let direct_element = element(&effect);
+        assert_color(
+            &render_direct(
+                &mut previous,
+                &direct_element,
+                &direct_cache,
+                true,
+                [1., 0., 0., 1.],
+            ),
+            [255, 0, 0, 255],
+        );
+        drop(previous);
+        assert!(
+            old_device.upgrade().is_some(),
+            "the regression must retain real old-context effect caches"
+        );
+
+        let (vk, reference, allocator) = setup();
+        drop(reference);
+        drop(allocator);
+        let mut replacement = NativeRenderer::new(vk).unwrap();
+        replacement
+            .prepare_output_format_for_test(Fourcc::Abgr8888)
+            .unwrap();
+        assert_ne!(old_context, replacement.context_id());
+        // The draw entry must be safe even when capture has not run for this epoch.
+        assert_color(
+            &render_direct(
+                &mut replacement,
+                &direct_element,
+                &direct_cache,
+                false,
+                [0., 1., 0., 1.],
+            ),
+            [0, 255, 0, 255],
+        );
+        {
+            let inner = direct_cache.get::<RefCell<NativeInner>>().unwrap().borrow();
+            assert!(
+                inner.framebuffer.is_none() && inner.intermediate.is_none() && inner.blur.is_none()
+            );
+        }
+        // Same effect ID, same size, same damage tracker: size-only cache validation fails here.
+        assert_color(
+            &render_tracker(&mut replacement, &mut tracker, &effect, [0., 1., 0., 1.]),
+            [0, 255, 0, 255],
+        );
+        // A healthy completion worker may still own its final Arc after the signaled fence.
+        // Await actual retirement without using that scheduling detail as a correctness failure.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while old_device.upgrade().is_some() && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert!(
+            old_device.upgrade().is_none(),
+            "idle old device must not remain pinned by tracker caches"
+        );
+
+        assert_color(
+            &render_direct(
+                &mut replacement,
+                &direct_element,
+                &direct_cache,
+                true,
+                [0., 1., 0., 1.],
+            ),
+            [0, 255, 0, 255],
+        );
+        let image = direct_cache
+            .get::<RefCell<NativeInner>>()
+            .unwrap()
+            .borrow()
+            .framebuffer
+            .as_ref()
+            .unwrap()
+            .image();
+        assert_color(
+            &render_direct(
+                &mut replacement,
+                &direct_element,
+                &direct_cache,
+                true,
+                [0., 0., 1., 1.],
+            ),
+            [0, 0, 255, 255],
+        );
+        assert_eq!(
+            image,
+            direct_cache
+                .get::<RefCell<NativeInner>>()
+                .unwrap()
+                .borrow()
+                .framebuffer
+                .as_ref()
+                .unwrap()
+                .image(),
+            "unchanged device must reuse its cache instead of reallocating every frame"
+        );
     }
 }

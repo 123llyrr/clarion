@@ -3,11 +3,11 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use realand_core::scheduling::PresentationSequence;
-use realand_ipc::diagnostics::{
+use clarion_ipc::diagnostics::{
     CpuFrameSample, GpuFrameSample, LongPresentationInterval, MainThreadCpuSample,
     OutputFrameTimings, TimingDistribution,
 };
+use clarion_timing::scheduling::PresentationSequence;
 
 use crate::backend::RenderResult;
 use crate::frame_clock::FrameClock;
@@ -936,9 +936,9 @@ mod tests {
                 stats.rendered(Duration::from_micros(123), &RenderResult::Submitted);
             }
             let snapshot = stats.snapshot("DP-1".into(), &clock, false);
-            let response = realand_ipc::Response::FrameTimings(vec![snapshot.clone()]);
+            let response = clarion_ipc::Response::FrameTimings(vec![snapshot.clone()]);
             let json = serde_json::to_string(&response).unwrap();
-            let realand_ipc::Response::FrameTimings(parsed) = serde_json::from_str(&json).unwrap()
+            let clarion_ipc::Response::FrameTimings(parsed) = serde_json::from_str(&json).unwrap()
             else {
                 panic!("unexpected response");
             };

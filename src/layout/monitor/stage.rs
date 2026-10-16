@@ -1,4 +1,4 @@
-//! Live workspace cards for Realand's spatial overview.
+//! Live workspace cards for Clarion's spatial overview.
 //!
 //! The indexed geometry is the single source of truth for rendering, input, and
 //! window dragging. Workspace IDs keep selection and captured poses stable when
@@ -153,7 +153,7 @@ impl<W: LayoutElement> Monitor<W> {
             .borrow_mut()
             .overview_action(OverviewAction::StageReset {
                 connector: self.output_name.clone(),
-                space: realand_core::SpaceId(id.get()),
+                space: clarion_core::SpaceId(id.get()),
             });
         self.stage.selection = None;
         self.stage.transition = None;
@@ -212,7 +212,7 @@ impl<W: LayoutElement> Monitor<W> {
             .borrow_mut()
             .overview_action(OverviewAction::StageCloseAnchor {
                 connector: self.output_name.clone(),
-                space: Some(realand_core::SpaceId(id.get())),
+                space: Some(clarion_core::SpaceId(id.get())),
             });
         self.invalidate_stage_geometry();
     }
@@ -239,7 +239,7 @@ impl<W: LayoutElement> Monitor<W> {
             .borrow_mut()
             .overview_action(OverviewAction::StageSelect {
                 connector: self.output_name.clone(),
-                space: realand_core::SpaceId(id.get()),
+                space: clarion_core::SpaceId(id.get()),
             });
         self.stage.selection = Some(SelectionTransition {
             animation: Animation::new(
@@ -261,7 +261,7 @@ impl<W: LayoutElement> Monitor<W> {
 
     fn stage_capture_momentum(&self) -> Option<StageMomentum> {
         let config = self.options.animations.overview_open_close.0;
-        if config.off || !matches!(config.kind, realand_config::animations::Kind::Spring(_)) {
+        if config.off || !matches!(config.kind, clarion_config::animations::Kind::Spring(_)) {
             return None;
         }
         let overview_moving = matches!(self.overview_progress.as_ref(), Some(OverviewProgress::Animation(a)) if !a.is_clamped_done());
@@ -1027,7 +1027,7 @@ impl<W: LayoutElement> Monitor<W> {
             .max(0.01)
     }
 
-    pub(super) fn render_stage<R: RealandRenderer>(
+    pub(super) fn render_stage<R: ClarionRenderer>(
         &self,
         ctx: RenderCtx<R>,
         focus_ring: bool,
@@ -1039,7 +1039,7 @@ impl<W: LayoutElement> Monitor<W> {
     /// Compose each complete card before proceeding to the card behind it.
     /// Bottom/background layer-shell content uses the card's exact transform and
     /// the same privacy render target as its windows.
-    pub fn render_stage_with_layers<R: RealandRenderer>(
+    pub fn render_stage_with_layers<R: ClarionRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         focus_ring: bool,
@@ -1133,7 +1133,7 @@ impl<W: LayoutElement> Monitor<W> {
         }
     }
 
-    fn render_stage_border<R: RealandRenderer>(
+    fn render_stage_border<R: ClarionRenderer>(
         &self,
         id: WorkspaceId,
         geo: Rectangle<f64, Logical>,
@@ -1192,7 +1192,7 @@ impl<W: LayoutElement> Monitor<W> {
         }
     }
 
-    fn render_stage_rail<R: RealandRenderer>(
+    fn render_stage_rail<R: ClarionRenderer>(
         &self,
         ctx: RenderCtx<R>,
         push: &mut dyn FnMut(MonitorRenderElement<R>),

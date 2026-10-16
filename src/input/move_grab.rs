@@ -58,7 +58,7 @@ impl MoveGrab {
         move_icon: Option<CursorIcon>,
     ) -> Option<Self> {
         let location = start_data.location();
-        let (output, pos_within_output) = state.realand.output_under(location)?;
+        let (output, pos_within_output) = state.clarion.output_under(location)?;
 
         Some(Self {
             last_location: location,
@@ -75,10 +75,10 @@ impl MoveGrab {
             relative_delta: None,
             released: false,
             overview_mode: state
-                .realand
+                .clarion
                 .layout
                 .is_overview_visible()
-                .then(|| state.realand.layout.overview_mode()),
+                .then(|| state.clarion.layout.overview_mode()),
         })
     }
 
@@ -97,9 +97,9 @@ impl MoveGrab {
                 // Activate the window on release. This is most prominent in the overview where
                 // windows are not activated on click. In the overview, we also try to do a nice
                 // synchronized workspace animation.
-                if self.released && same_mode && data.realand.layout.is_overview_open() {
+                if self.released && same_mode && data.clarion.layout.is_overview_open() {
                     let res = data
-                        .realand
+                        .clarion
                         .layout
                         .workspaces()
                         .find_map(|(mon, ws_idx, ws)| {
@@ -116,37 +116,37 @@ impl MoveGrab {
                 }
 
                 if self.released && same_mode {
-                    data.realand.layout.activate_window(&self.window);
+                    data.clarion.layout.activate_window(&self.window);
                 }
             }
             GestureState::Move => {
                 if self.released && same_mode {
-                    data.realand.layout.interactive_move_end(&self.window);
+                    data.clarion.layout.interactive_move_end(&self.window);
                 } else {
-                    data.realand.layout.interactive_move_cancel(&self.window);
+                    data.clarion.layout.interactive_move_cancel(&self.window);
                 }
             }
             GestureState::ViewOffset => {
                 if self.released && same_mode {
-                    data.realand.layout.view_offset_gesture_end(Some(false));
+                    data.clarion.layout.view_offset_gesture_end(Some(false));
                 } else {
-                    data.realand.layout.view_offset_gesture_cancel(Some(false));
+                    data.clarion.layout.view_offset_gesture_cancel(Some(false));
                 }
             }
         }
 
         if !self.start_data.is_touch() {
-            data.realand
+            data.clarion
                 .cursor_manager
                 .set_cursor_image(CursorImageStatus::default_named());
         }
 
         // FIXME: only redraw the window output.
-        data.realand.queue_redraw_all();
+        data.clarion.queue_redraw_all();
     }
 
     fn begin_move(&mut self, data: &mut State) -> bool {
-        if !data.realand.layout.interactive_move_begin(
+        if !data.clarion.layout.interactive_move_begin(
             self.window.clone(),
             &self.start_output,
             self.start_pos_within_output,
@@ -158,7 +158,7 @@ impl MoveGrab {
         self.gesture = GestureState::Move;
 
         if !self.start_data.is_touch() {
-            data.realand
+            data.clarion
                 .cursor_manager
                 .set_cursor_image(CursorImageStatus::Named(self.move_icon));
         }
@@ -167,7 +167,7 @@ impl MoveGrab {
     }
 
     fn begin_view_offset(&mut self, data: &mut State) -> bool {
-        let layout = &mut data.realand.layout;
+        let layout = &mut data.clarion.layout;
         let Some(ws_idx) = layout.workspaces().find_map(|(mon, ws_idx, ws)| {
             let ws_idx = ws
                 .windows()
@@ -191,7 +191,7 @@ impl MoveGrab {
         self.gesture = GestureState::ViewOffset;
 
         if !self.start_data.is_touch() {
-            data.realand
+            data.clarion
                 .cursor_manager
                 .set_cursor_image(CursorImageStatus::Named(CursorIcon::AllScroll));
         }
@@ -200,17 +200,17 @@ impl MoveGrab {
     }
 
     fn can_operate(&self, data: &State) -> bool {
-        let layout = &data.realand.layout;
+        let layout = &data.clarion.layout;
         self.overview_mode == layout.is_overview_visible().then(|| layout.overview_mode())
             && (self.overview_mode.is_none() || layout.is_overview_open())
             && matches!(
-                data.realand.lock_state,
+                data.clarion.lock_state,
                 crate::compositor::LockState::Unlocked
             )
-            && !data.realand.screenshot_ui.is_open()
-            && !data.realand.window_mru_ui.is_open()
-            && !data.realand.exit_confirm_dialog.is_open()
-            && !data.realand.overview_mode_transition_active()
+            && !data.clarion.screenshot_ui.is_open()
+            && !data.clarion.window_mru_ui.is_open()
+            && !data.clarion.exit_confirm_dialog.is_open()
+            && !data.clarion.overview_mode_transition_active()
     }
 
     fn on_frame(&mut self, data: &mut State) -> bool {
@@ -236,7 +236,7 @@ impl MoveGrab {
             let c = self.new_location - self.start_data.location();
             if c.x * c.x + c.y * c.y >= 8. * 8. {
                 let is_floating = data
-                    .realand
+                    .clarion
                     .layout
                     .workspaces()
                     .find_map(|(_, _, ws)| {
@@ -268,7 +268,7 @@ impl MoveGrab {
             GestureState::Recognizing => return true,
             GestureState::Move => {
                 let Some((output, pos_within_output)) =
-                    data.realand.output_under(self.last_location)
+                    data.clarion.output_under(self.last_location)
                 else {
                     return true;
                 };
@@ -276,7 +276,7 @@ impl MoveGrab {
 
                 // Interactive move always uses absolute delta since the window must remain pinned
                 // to the cursor even when it's clamped to monitor bounds.
-                let ongoing = data.realand.layout.queue_interactive_move_update(
+                let ongoing = data.clarion.layout.queue_interactive_move_update(
                     &self.window,
                     delta,
                     output,
@@ -284,19 +284,19 @@ impl MoveGrab {
                 );
                 if ongoing {
                     // FIXME: only redraw the previous and the new output.
-                    data.realand.queue_redraw_all();
+                    data.clarion.queue_redraw_all();
                     return true;
                 }
             }
             GestureState::ViewOffset => {
-                let res = data.realand.layout.view_offset_gesture_update(
+                let res = data.clarion.layout.view_offset_gesture_update(
                     -relative_delta.x,
                     timestamp,
                     false,
                 );
                 if let Some(output) = res {
                     if let Some(output) = output {
-                        data.realand.queue_redraw(&output);
+                        data.clarion.queue_redraw(&output);
                     }
                     return true;
                 }
@@ -316,7 +316,7 @@ impl MoveGrab {
 
         // Start move if still recognizing.
         if self.gesture == GestureState::Recognizing {
-            let Some((output, pos_within_output)) = data.realand.output_under(self.last_location)
+            let Some((output, pos_within_output)) = data.clarion.output_under(self.last_location)
             else {
                 return false;
             };
@@ -327,7 +327,7 @@ impl MoveGrab {
             }
 
             // Apply the delta accumulated during recognizing.
-            let ongoing = data.realand.layout.interactive_move_update(
+            let ongoing = data.clarion.layout.interactive_move_update(
                 &self.window,
                 self.last_location - self.start_data.location(),
                 output,
@@ -338,10 +338,10 @@ impl MoveGrab {
             }
         }
 
-        data.realand
+        data.clarion
             .layout
             .toggle_window_floating(Some(&self.window));
-        data.realand.queue_redraw_all();
+        data.clarion.queue_redraw_all();
 
         true
     }

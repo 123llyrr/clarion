@@ -1,39 +1,39 @@
 precision highp float;
 
 #if defined(DEBUG_FLAGS)
-uniform float realand_tint;
+uniform float clarion_tint;
 #endif
 
-varying vec2 realand_v_coords;
-uniform vec2 realand_size;
+varying vec2 clarion_v_coords;
+uniform vec2 clarion_size;
 
-uniform mat3 realand_input_to_geo;
-uniform vec2 realand_geo_size;
+uniform mat3 clarion_input_to_geo;
+uniform vec2 clarion_geo_size;
 
-uniform sampler2D realand_tex;
-uniform mat3 realand_geo_to_tex;
+uniform sampler2D clarion_tex;
+uniform mat3 clarion_geo_to_tex;
 
-uniform float realand_progress;
-uniform float realand_clamped_progress;
-uniform float realand_random_seed;
+uniform float clarion_progress;
+uniform float clarion_clamped_progress;
+uniform float clarion_random_seed;
 
-uniform float realand_glide_enabled;
-uniform float realand_glide_tilt;
-uniform float realand_glide_depth;
-uniform float realand_popin_ratio;
+uniform float clarion_glide_enabled;
+uniform float clarion_glide_tilt;
+uniform float clarion_glide_depth;
+uniform float clarion_popin_ratio;
 
-uniform float realand_alpha;
-uniform float realand_scale;
+uniform float clarion_alpha;
+uniform float clarion_scale;
 
-vec2 realand_inverse_glide(vec2 output_uv, float amount) {
-    if (realand_glide_enabled < 0.5 || amount <= 0.0) {
+vec2 clarion_inverse_glide(vec2 output_uv, float amount) {
+    if (clarion_glide_enabled < 0.5 || amount <= 0.0) {
         return output_uv;
     }
 
-    float angle = realand_glide_tilt * amount;
+    float angle = clarion_glide_tilt * amount;
     float sine = sin(angle);
     float cosine = max(0.05, cos(angle));
-    float depth = realand_glide_depth * amount;
+    float depth = clarion_glide_depth * amount;
     float screen_y = output_uv.y - 0.5;
     float divisor = cosine - screen_y * sine;
     if (abs(divisor) < 0.02) {

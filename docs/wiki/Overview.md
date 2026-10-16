@@ -109,7 +109,7 @@ You can also combine this with a transparent background color if you don't like 
 // Make the wallpaper stationary, rather than moving with workspaces.
 layer-rule {
     // This is for swaybg; change for other wallpaper tools.
-    // Find the right namespace by running realand msg layers.
+    // Find the right namespace by running clarion msg layers.
     match namespace="^wallpaper$"
     place-within-backdrop true
 }

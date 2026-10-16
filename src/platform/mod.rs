@@ -2,6 +2,8 @@
 
 pub(crate) mod capture;
 pub(crate) mod device_bridge;
+pub(crate) mod event_sources;
 pub(crate) mod gles_readback;
 pub(crate) mod pixel_readback;
 pub(crate) mod sync_delivery;
+pub(crate) mod wayland_shutdown;

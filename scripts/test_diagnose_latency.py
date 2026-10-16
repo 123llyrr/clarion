@@ -25,7 +25,7 @@ class LatencyReportTests(unittest.TestCase):
         fields[0] = 'S'
         for index, value in {7: 8, 9: 2, 11: 12, 12: 3, 19: 700, 21: 10}.items():
             fields[index] = str(value)
-        (process / 'stat').write_text('123 (realand (compositor)) ' + ' '.join(fields))
+        (process / 'stat').write_text('123 (clarion (compositor)) ' + ' '.join(fields))
         (process / 'status').write_text(
             'VmRSS:\t40 kB\nVmSwap:\t20 kB\nRssAnon:\t30 kB\n'
             'voluntary_ctxt_switches:\t100\nnonvoluntary_ctxt_switches:\t2\n')

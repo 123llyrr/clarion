@@ -53,7 +53,7 @@ fn stationary_hover_activates_actual_window_only_at_the_core_deadline() {
     tick(&mut layout, 0);
     assert_eq!(
         layout.core.borrow().dnd_hold().target(),
-        Some(&realand_core::dnd_hold::DndTarget::Window(1))
+        Some(&clarion_core::dnd_hold::DndTarget::Window(1))
     );
     tick(&mut layout, 749);
     assert_eq!(layout.focus().map(LayoutElement::id), Some(&2));

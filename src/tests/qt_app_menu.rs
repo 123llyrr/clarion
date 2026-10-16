@@ -1,7 +1,7 @@
 //! Real KDE appmenu wire requests update actual mapped-window IPC state.
 
-use realand_config::{Action, Config};
-use realand_ipc::AppMenu;
+use clarion_config::{Action, Config};
+use clarion_ipc::AppMenu;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface as ServerSurface;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::Proxy as _;
@@ -48,12 +48,12 @@ fn map(f: &mut Fixture, client: ClientId, surface: &WlSurface) -> (ServerSurface
     window.set_size(160, 100);
     window.ack_last_and_commit();
     f.double_roundtrip(client);
-    let mapped = f.realand().layout.active_window().unwrap();
+    let mapped = f.clarion().layout.active_window().unwrap();
     (mapped.toplevel().wl_surface().clone(), mapped.id().get())
 }
 
 fn ipc_menu(f: &mut Fixture, id: u64) -> Option<AppMenu> {
-    let windows = f.realand().ipc_server.as_ref().unwrap().test_windows();
+    let windows = f.clarion().ipc_server.as_ref().unwrap().test_windows();
     windows
         .into_iter()
         .find(|w| w.id == id)
@@ -71,7 +71,7 @@ fn canonical_menu_is_owned_by_its_real_surface_and_updates_ipc_without_focus() {
     let second = f.add_client();
     let second_surface = f.client(second).create_window().surface.clone();
     let (second_server, second_id) = map(&mut f, second, &second_surface);
-    let focused = f.realand().keyboard_focus.clone();
+    let focused = f.clarion().keyboard_focus.clone();
     let manager = bind(&mut f, first, 2);
     let c = f.client(first);
     let menu = manager.create(&first_surface, &c.qh, ());
@@ -85,8 +85,8 @@ fn canonical_menu_is_owned_by_its_real_surface_and_updates_ipc_without_focus() {
     assert_eq!(ipc_menu(&mut f, first_id), Some(expected));
     assert_eq!(surface_menu(&second_server), None);
     assert_eq!(ipc_menu(&mut f, second_id), None);
-    assert_eq!(f.realand().keyboard_focus, focused);
-    let windows = f.realand().ipc_server.as_ref().unwrap().test_windows();
+    assert_eq!(f.clarion().keyboard_focus, focused);
+    let windows = f.clarion().ipc_server.as_ref().unwrap().test_windows();
     let window = windows.iter().find(|w| w.id == first_id).unwrap();
     let json = serde_json::to_value(window).unwrap();
     assert_eq!(json["app_menu"]["bus_name"], ":1.42");
@@ -99,7 +99,7 @@ fn canonical_menu_is_owned_by_its_real_surface_and_updates_ipc_without_focus() {
     menu.set_address("org.example.App".into(), "/MenuBar/2".into());
     f.double_roundtrip(first);
     assert_eq!(ipc_menu(&mut f, first_id).unwrap().menu_path, "/MenuBar/2");
-    assert_eq!(f.realand().keyboard_focus, focused);
+    assert_eq!(f.clarion().keyboard_focus, focused);
     for (bus, path) in [
         (String::new(), "/MenuBar".into()),
         (":1.42".into(), "/Menu-Bar".into()),
@@ -118,7 +118,7 @@ fn canonical_menu_is_owned_by_its_real_surface_and_updates_ipc_without_focus() {
     f.double_roundtrip(first);
     assert_eq!(surface_menu(&first_server), None);
     assert_eq!(ipc_menu(&mut f, first_id), None);
-    assert_eq!(f.realand().keyboard_focus, focused);
+    assert_eq!(f.clarion().keyboard_focus, focused);
 }
 
 #[test]
@@ -133,7 +133,7 @@ fn unmapped_export_recreated_objects_and_surface_destruction_keep_correct_identi
         old.set_address(":1.10".into(), "/MenuBar/10".into());
         f.double_roundtrip(client);
         assert!(f
-            .realand()
+            .clarion()
             .ipc_server
             .as_ref()
             .unwrap()
@@ -149,7 +149,7 @@ fn unmapped_export_recreated_objects_and_surface_destruction_keep_correct_identi
         f.double_roundtrip(client);
         assert_eq!(surface_menu(&server).unwrap().menu_path, "/MenuBar/11");
         assert_eq!(ipc_menu(&mut f, id).unwrap().menu_path, "/MenuBar/11");
-        f.realand_state().do_action(Action::FocusWindow(id), false);
+        f.clarion_state().do_action(Action::FocusWindow(id), false);
         let window = f.client(client).window(&surface);
         window.xdg_toplevel.destroy();
         window.xdg_surface.destroy();
@@ -158,7 +158,7 @@ fn unmapped_export_recreated_objects_and_surface_destruction_keep_correct_identi
         f.double_roundtrip(client);
         assert_eq!(surface_menu(&server), None);
         assert!(f
-            .realand()
+            .clarion()
             .ipc_server
             .as_ref()
             .unwrap()
@@ -172,6 +172,6 @@ fn unmapped_export_recreated_objects_and_surface_destruction_keep_correct_identi
             manager.release();
         }
         f.double_roundtrip(client);
-        f.realand().layout.verify_invariants();
+        f.clarion().layout.verify_invariants();
     }
 }
