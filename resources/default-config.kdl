@@ -783,11 +783,12 @@ gestures {
 }
 
 // Graphics rendering backend.
-// Supported backends: "gles" (OpenGL ES, default) or "vulkan" (Vulkan 1.3 with DMA-BUF & Dynamic Rendering).
+// Supported backends: "vulkan" (default, Vulkan 1.3 with DMA-BUF & Dynamic Rendering) or
+// "gles" (OpenGL ES compatibility fallback).
 // Can also be configured in debug { renderer "vulkan"; }, via CLARION_RENDERER env var, or --renderer CLI flag.
-// The default leaves both the backend and DRM device unset so Clarion can choose
-// a portable renderer and probe the available hardware. Uncomment these examples
-// only when explicitly selecting a backend or a specific render node:
+// The default leaves both the backend and DRM device unset so Clarion probes the
+// available hardware and falls back to GLES when Vulkan is unavailable. Uncomment
+// these examples only when explicitly selecting a backend or a specific render node:
 // renderer "vulkan"
 // debug {
 //     render-drm-device "/dev/dri/renderD128" // replace with a path on your machine

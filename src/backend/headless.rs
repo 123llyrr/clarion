@@ -74,6 +74,14 @@ impl Headless {
         port.add_headless_output(self, number, size);
     }
 
+    /// Retarget the renderer before the first `add_renderer` call. Used by the
+    /// caller to retry on GLES when the requested Vulkan device is unavailable.
+    pub(crate) fn set_requested_renderer(&mut self, backend: RendererBackendType) {
+        if self.renderer.is_none() {
+            self.requested_renderer = backend;
+        }
+    }
+
     pub fn add_renderer(&mut self) -> anyhow::Result<()> {
         if self.renderer.is_some() {
             error!("add_renderer: renderer must not already exist");

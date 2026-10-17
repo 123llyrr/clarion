@@ -765,9 +765,13 @@ impl State {
         let mut backend = if headless {
             let mut headless = Headless::new(config.clone(), requested_renderer);
             if requested_renderer.is_vulkan() {
-                headless
-                    .add_renderer()
-                    .context("error initializing the headless Vulkan backend")?;
+                if let Err(err) = headless.add_renderer() {
+                    warn!("headless Vulkan backend unavailable ({err:#}); falling back to GLES");
+                    headless.set_requested_renderer(RendererBackendType::Gles);
+                    headless
+                        .add_renderer()
+                        .context("error initializing the headless GLES backend")?;
+                }
             }
             Backend::Headless(headless)
         } else if has_display {

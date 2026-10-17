@@ -155,44 +155,64 @@ impl Winit {
         let _span = clarion_tracy_span!("Winit::new");
         let config = Rc::new(super::DeviceSettings::from(&*config.borrow()));
 
-        let builder = WindowAttributes::default()
-            .with_surface_size(LogicalSize::new(1280.0, 800.0))
-            // .with_resizable(false)
-            .with_title("clarion")
-            .with_platform_attributes(Box::new(
-                WindowAttributesWayland::default().with_name("clarion", ""),
-            ));
+        // Built on demand so a failed native attempt can be retried on the GLES path
+        // with a fresh window; `WindowAttributes` owns its platform attributes and is
+        // not cloned across the two backends.
+        let window_attributes = || {
+            WindowAttributes::default()
+                .with_surface_size(LogicalSize::new(1280.0, 800.0))
+                // .with_resizable(false)
+                .with_title("clarion")
+                .with_platform_attributes(Box::new(
+                    WindowAttributesWayland::default().with_name("clarion", ""),
+                ))
+        };
         let (backend, gles_events, native_events) = if requested_renderer.is_vulkan() {
-            let (window, native_events) = NativeWindowLoop::create(builder)?;
-            let handle = native_surface_handle(window.as_ref())?;
-            let ctx = VulkanContext::init_for_surface(handle)?;
-            let mut renderer = VulkanRenderer::new();
-            renderer.init_with_context(ctx.clone())?;
-            let mut renderer = Box::new(NativeRenderer::new(renderer)?);
-            setup.install_completion_wakeup(&mut renderer)?;
-            let size = window.surface_size();
-            let wsi = VulkanWsi::new(ctx, handle, size.width, size.height)?;
-            if let Some(format) = wsi.format() {
-                renderer.prepare_output_format(format)?;
+            let native =
+                (|| -> Result<(NativeWinit, NativeWindowLoop), Box<dyn std::error::Error>> {
+                    let (window, native_events) = NativeWindowLoop::create(window_attributes())?;
+                    let handle = native_surface_handle(window.as_ref())?;
+                    let ctx = VulkanContext::init_for_surface(handle)?;
+                    let mut renderer = VulkanRenderer::new();
+                    renderer.init_with_context(ctx.clone())?;
+                    let mut renderer = Box::new(NativeRenderer::new(renderer)?);
+                    setup.install_completion_wakeup(&mut renderer)?;
+                    let size = window.surface_size();
+                    let wsi = VulkanWsi::new(ctx, handle, size.width, size.height)?;
+                    if let Some(format) = wsi.format() {
+                        renderer.prepare_output_format(format)?;
+                    }
+                    let native = NativeWinit {
+                        wsi,
+                        window,
+                        renderer,
+                        target: None,
+                        target_size: (0, 0).into(),
+                        target_valid: false,
+                        pending: None,
+                        presented_feedback: None,
+                    };
+                    Ok((native, native_events))
+                })();
+            match native {
+                Ok((native, native_events)) => {
+                    info!("nested native Vulkan WSI renderer initialized");
+                    (
+                        WinitBackend::Native(Box::new(native)),
+                        None,
+                        Some(native_events),
+                    )
+                }
+                Err(err) => {
+                    warn!(
+                        "nested native Vulkan surface unavailable ({err:#}); falling back to GLES"
+                    );
+                    let (backend, events) = winit::init_from_attributes(window_attributes())?;
+                    (WinitBackend::Gles(Box::new(backend)), Some(events), None)
+                }
             }
-            let native = NativeWinit {
-                wsi,
-                window,
-                renderer,
-                target: None,
-                target_size: (0, 0).into(),
-                target_valid: false,
-                pending: None,
-                presented_feedback: None,
-            };
-            info!("nested native Vulkan WSI renderer initialized");
-            (
-                WinitBackend::Native(Box::new(native)),
-                None,
-                Some(native_events),
-            )
         } else {
-            let (backend, events) = winit::init_from_attributes(builder)?;
+            let (backend, events) = winit::init_from_attributes(window_attributes())?;
             (WinitBackend::Gles(Box::new(backend)), Some(events), None)
         };
 

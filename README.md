@@ -26,7 +26,7 @@ clarion --renderer vulkan
 renderer "vulkan"
 ```
 
-渲染器选择在合成器启动时生效。默认配置仍使用 GLES；Vulkan 的可用性取决于驱动、设备及输出能力，部分兼容和多 GPU 路径保留 GLES。请以启动日志中的实际后端为准。
+渲染器选择在合成器启动时生效。默认使用 Vulkan；驱动、设备或输出不满足要求时自动回退到 GLES，部分兼容与多 GPU 路径也由 GLES 承担。请以启动日志中的实际后端为准。
 
 [Vulkan 验证说明](docs/vulkan-validation.md) · [性能诊断](docs/latency-diagnostics.md)
 

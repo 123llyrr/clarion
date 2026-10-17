@@ -1232,6 +1232,7 @@ impl<W: LayoutElement> Tile<W> {
     ) -> Option<crate::scene::window_resources::NativeCloseSource> {
         crate::scene::window_snapshot::take_native_close_source(&self.window, &self.resources)
     }
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn create_closing_window(
         &self,
         renderer: &mut AnyRenderer<'_>,

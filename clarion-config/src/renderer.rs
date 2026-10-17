@@ -3,8 +3,8 @@ use miette::miette;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RendererBackendConfig {
-    #[default]
     Gles,
+    #[default]
     Vulkan,
 }
 

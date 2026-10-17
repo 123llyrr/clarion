@@ -8,10 +8,11 @@ cargo build --release -p clarion -p clarion-settings
 ```
 
 This nested window is enough to try it inside an existing session.
-The current default renderer is GLES. To try native Vulkan instead, run:
+The default renderer is Vulkan; Clarion falls back to GLES when the device or
+driver cannot provide it. To force the compatibility path, run:
 
 ```sh
-./target/release/clarion --renderer vulkan
+./target/release/clarion --renderer gles
 ```
 
 For a desktop session, add the following at the top level of

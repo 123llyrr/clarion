@@ -128,8 +128,8 @@ impl<'frame, 'buffer> AsGlesFrame<'frame, 'buffer> for TtyFrame<'_, 'frame, 'buf
 /// Indicator of which graphics rendering backend is configured/active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RendererBackendType {
-    #[default]
     Gles,
+    #[default]
     Vulkan,
 }
 
@@ -138,7 +138,7 @@ impl RendererBackendType {
     /// 1. Explicit CLI argument (`--renderer <vulkan|gles>`)
     /// 2. Config file (`renderer "vulkan"` or `debug { renderer "vulkan" }`)
     /// 3. Environment variable `CLARION_RENDERER`
-    /// 4. Default (`Gles`)
+    /// 4. Default (`Vulkan`, with a runtime GLES fallback when the device cannot provide it)
     pub fn resolve(cli_renderer: Option<Self>, config: &clarion_config::Config) -> Self {
         if let Some(cli) = cli_renderer {
             return cli;
@@ -182,11 +182,11 @@ impl RendererBackendType {
             Ok(val) => match Self::parse(&val) {
                 Ok(backend) => backend,
                 Err(err) => {
-                    warn!("{err}; using gles");
-                    Self::Gles
+                    warn!("{err}; using the default renderer");
+                    Self::default()
                 }
             },
-            Err(_) => Self::Gles,
+            Err(_) => Self::default(),
         }
     }
 
