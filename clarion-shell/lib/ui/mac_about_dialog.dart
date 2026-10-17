@@ -428,23 +428,148 @@ class _MacAboutDialogState extends State<MacAboutDialog> {
     SystemInformation info,
     bool dark,
     bool isSmallScreen,
-  ) => _buildUnavailableTab(
-    icon: Icons.monitor_rounded,
-    message: '尚未读取显示器信息',
-    button: '显示器偏好设置…',
-    dark: dark,
-  );
+  ) {
+    if (info.displays.isEmpty) {
+      return _buildUnavailableTab(
+        icon: Icons.monitor_rounded,
+        message: '尚未读取显示器信息',
+        button: '显示器偏好设置…',
+        dark: dark,
+      );
+    }
+    return Column(
+      children: [
+        const SizedBox(height: 16),
+        for (final display in info.displays) ...[
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  Icons.monitor_rounded,
+                  size: 28,
+                  color: const Color(0xff007aff),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        display.name,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w600,
+                          color: dark ? Colors.white : Colors.black87,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        [
+                          if (display.resolution.isNotEmpty)
+                            display.resolution,
+                          if (display.refresh.isNotEmpty) display.refresh,
+                          if (display.physical.isNotEmpty) display.physical,
+                        ].join(' · '),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: dark ? Colors.white70 : Colors.black54,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        [
+                          '缩放 ${display.scale == display.scale.roundToDouble() ? display.scale.round() : display.scale.toStringAsFixed(1)}x',
+                          if (display.vrr) '可变刷新率',
+                          if (display.hdr) 'HDR',
+                        ].join(' · '),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: dark ? Colors.white60 : Colors.black54,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
+      ],
+    );
+  }
 
   Widget _buildStorageTab(
     SystemInformation info,
     bool dark,
     bool isSmallScreen,
-  ) => _buildUnavailableTab(
-    icon: Icons.storage_rounded,
-    message: '尚未读取存储信息',
-    button: '管理…',
-    dark: dark,
-  );
+  ) {
+    final total = info.storageTotalGb;
+    if (total <= 0) {
+      return _buildUnavailableTab(
+        icon: Icons.storage_rounded,
+        message: '尚未读取存储信息',
+        button: '管理…',
+        dark: dark,
+      );
+    }
+    final free = info.storageFreeGb.clamp(0.0, total);
+    final used = total - free;
+    final fraction = (used / total).clamp(0.0, 1.0);
+    return Column(
+      children: [
+        const SizedBox(height: 20),
+        Icon(Icons.storage_rounded, size: 44, color: const Color(0xff007aff)),
+        const SizedBox(height: 10),
+        Text(
+          info.startupDisk,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: dark ? Colors.white : Colors.black87,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '已使用 ${used.toStringAsFixed(1)} GB · 可用 ${free.toStringAsFixed(1)} GB'
+          '（共 ${total.toStringAsFixed(1)} GB）',
+          style: TextStyle(
+            fontSize: 11.5,
+            color: dark ? Colors.white70 : Colors.black54,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 48),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(3),
+            child: SizedBox(
+              height: 6,
+              child: Stack(
+                children: [
+                  ColoredBox(
+                    color: dark
+                        ? Colors.white.withValues(alpha: .12)
+                        : Colors.black.withValues(alpha: .10),
+                    child: const SizedBox.expand(),
+                  ),
+                  FractionallySizedBox(
+                    widthFactor: fraction,
+                    child: const ColoredBox(
+                      color: Color(0xff007aff),
+                      child: SizedBox.expand(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 
   Widget _buildUnavailableTab({
     required IconData icon,

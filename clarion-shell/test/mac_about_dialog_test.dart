@@ -15,8 +15,29 @@ void main() {
     graphics: 'Intel Iris Xe Graphics / NVIDIA GeForce RTX 2050',
     serialNumber: 'C02XYZ123ABC',
     startupDisk: 'Macintosh HD',
-    storageTotalGb: 512,
-    storageFreeGb: 320,
+    storageTotalGb: 0,
+    storageFreeGb: 0,
+  );
+
+  final populatedInfo = SystemInformation(
+    compositorVersion: '0.1.0-test',
+    operatingSystem: 'Ubuntu 24.04 LTS (x86_64)',
+    processor: '12th Gen Intel Core i7-12700H × 20',
+    memory: '31.1 GB',
+    startupDisk: 'Clarion HD',
+    storageTotalGb: 512.1,
+    storageFreeGb: 320.4,
+    displays: const [
+      DisplayInfo(
+        connector: 'eDP-1',
+        name: 'Samsung Display Corp. 0x4173',
+        resolution: '3840 × 2400',
+        refresh: '60 Hz',
+        scale: 2,
+        physical: '340 × 220 mm',
+        vrr: false,
+      ),
+    ],
   );
 
   Widget buildDialog({SystemInformation? info}) {
@@ -26,6 +47,35 @@ void main() {
       ),
     );
   }
+
+  testWidgets('renders the connected display with its real mode', (
+    tester,
+  ) async {
+    await tester.pumpWidget(buildDialog(info: populatedInfo));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('显示器'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Samsung Display Corp. 0x4173'), findsOneWidget);
+    expect(find.text('3840 × 2400 · 60 Hz · 340 × 220 mm'), findsOneWidget);
+    expect(find.textContaining('缩放 2x'), findsOneWidget);
+    expect(find.textContaining('HDR'), findsNothing);
+  });
+
+  testWidgets('renders startup disk usage with a fill bar', (tester) async {
+    await tester.pumpWidget(buildDialog(info: populatedInfo));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('储存空间'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Clarion HD'), findsOneWidget);
+    expect(find.textContaining('已使用 191.7 GB'), findsOneWidget);
+    expect(find.textContaining('可用 320.4 GB'), findsOneWidget);
+    expect(find.textContaining('共 512.1 GB'), findsOneWidget);
+    expect(find.byType(FractionallySizedBox), findsOneWidget);
+  });
 
   testWidgets('renders Clarion overview with specs', (tester) async {
     await tester.pumpWidget(buildDialog());
