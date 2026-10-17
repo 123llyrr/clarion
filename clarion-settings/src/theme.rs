@@ -43,32 +43,76 @@ pub mod metrics {
     pub const ICON_SIZE: f32 = 14.;
 }
 
-/// Reuse the fonts extracted for the shell. Static bytes need neither per-start
-/// filesystem discovery nor a second copy of the assets in this package.
-/// Latin uses SF; Chinese falls through to PingFang. Keep egui's default fonts
-/// after them for symbols/emoji and its monospaced face for configuration code.
+/// Resolve a face through fontconfig.
+///
+/// Clarion ships no font binaries: SF and PingFang are Apple assets that cannot
+/// be redistributed under GPL-3.0-or-later. A locally installed SF/PingFang is
+/// still preferred when present, so the appearance is unchanged for users who
+/// own them; otherwise the configured system sans faces are used and egui keeps
+/// its bundled defaults as the final fallback.
+fn system_font(pattern: &str) -> Option<egui::FontData> {
+    let output = std::process::Command::new("fc-match")
+        .arg("-f")
+        .arg("%{file}\u{1f}%{index}")
+        .arg(pattern)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let listing = String::from_utf8(output.stdout).ok()?;
+    let mut fields = listing.trim().split('\u{1f}');
+    let path = fields.next()?.trim();
+    let index = fields
+        .next()
+        .and_then(|field| field.trim().parse::<u32>().ok())
+        .unwrap_or(0);
+    let bytes = std::fs::read(path).ok()?;
+    // Only accept TrueType/OpenType faces: a stale fontconfig entry pointing at
+    // an unrelated file must not panic egui's font parser on the first frame.
+    const MAGIC: [[u8; 4]; 4] = [[0, 1, 0, 0], *b"true", *b"ttcf", *b"OTTO"];
+    let magic: [u8; 4] = bytes.get(..4)?.try_into().ok()?;
+    if !MAGIC.contains(&magic) {
+        return None;
+    }
+    Some(egui::FontData {
+        index,
+        ..egui::FontData::from_owned(bytes)
+    })
+}
+
+/// Prefer a locally installed SF/PingFang, then the system sans faces, then
+/// egui's defaults. Nothing is compiled into the binary.
 pub fn font_definitions() -> egui::FontDefinitions {
     let mut fonts = egui::FontDefinitions::default();
-    fonts.font_data.insert(
-        "macOS-SF".into(),
-        egui::FontData::from_static(include_bytes!("../../clarion-shell/assets/macos/SFNS.ttf")),
-    );
-    fonts.font_data.insert(
-        "macOS-PingFang-SC".into(),
-        egui::FontData::from_static(include_bytes!(
-            "../../clarion-shell/assets/macos/PingFangSC-Regular.otf"
-        )),
-    );
-    fonts
-        .families
-        .entry(egui::FontFamily::Proportional)
-        .or_default()
-        .splice(0..0, ["macOS-SF".into(), "macOS-PingFang-SC".into()]);
-    fonts
-        .families
-        .entry(egui::FontFamily::Monospace)
-        .or_default()
-        .push("macOS-PingFang-SC".into());
+    let mut proportional_prefix: Vec<String> = Vec::new();
+    if let Some(font) = system_font("SF Pro Text")
+        .or_else(|| system_font("Inter"))
+        .or_else(|| system_font("sans-serif"))
+    {
+        fonts.font_data.insert("clarion-ui-latin".into(), font);
+        proportional_prefix.push("clarion-ui-latin".into());
+    }
+    if let Some(font) = system_font("PingFang SC")
+        .or_else(|| system_font("Noto Sans CJK SC"))
+        .or_else(|| system_font("Source Han Sans SC"))
+        .or_else(|| system_font("sans-serif:lang=zh-cn"))
+    {
+        fonts.font_data.insert("clarion-ui-cjk".into(), font);
+        proportional_prefix.push("clarion-ui-cjk".into());
+        fonts
+            .families
+            .entry(egui::FontFamily::Monospace)
+            .or_default()
+            .push("clarion-ui-cjk".into());
+    }
+    if !proportional_prefix.is_empty() {
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .splice(0..0, proportional_prefix);
+    }
     fonts
 }
 
@@ -241,21 +285,27 @@ mod tests {
     }
 
     #[test]
-    fn bundled_sf_and_pingfang_parse_and_rasterize_latin_and_chinese() {
+    fn system_font_resolution_rasterizes_without_bundled_apple_assets() {
+        // Clarion ships no font binaries. Whatever fontconfig returns must still
+        // produce real Latin coverage at every supported DPI, and Chinese text
+        // must be covered whenever a CJK face was resolved.
         let context = egui::Context::default();
-        let mut fonts = font_definitions();
-        // Isolate each bundled face: fallback tofu or an installed Noto font
-        // must not accidentally make this compatibility check pass.
-        let latin = egui::FontFamily::Name("test-sf-only".into());
-        let chinese = egui::FontFamily::Name("test-pingfang-only".into());
-        fonts
-            .families
-            .insert(latin.clone(), vec!["macOS-SF".into()]);
-        fonts
-            .families
-            .insert(chinese.clone(), vec!["macOS-PingFang-SC".into()]);
+        let fonts = font_definitions();
+        let has_cjk = fonts.font_data.contains_key("clarion-ui-cjk");
+        assert!(
+            fonts
+                .families
+                .get(&egui::FontFamily::Proportional)
+                .is_some_and(|list| !list.is_empty()),
+            "proportional family must always resolve"
+        );
         context.set_fonts(fonts);
         apply_style(&context);
+        let latin = FontId::new(metrics::BODY_SIZE, egui::FontFamily::Proportional);
+        let mut samples = vec!["Clarion Settings 0123456789 Save & Apply"];
+        if has_cjk {
+            samples.push("系统偏好设置显示器键盘鼠标窗口布局通用搜索，。");
+        }
         for scale in [1., 1.25, 2.] {
             let mut input = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -271,14 +321,8 @@ mod tests {
                 .native_pixels_per_point = Some(scale);
             let output = context.run(input, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    for (family, sample) in [
-                        (latin.clone(), "Clarion Settings 0123456789 Save & Apply"),
-                        (
-                            chinese.clone(),
-                            "系统偏好设置显示器键盘鼠标窗口布局通用搜索，。",
-                        ),
-                    ] {
-                        let font_id = FontId::new(metrics::BODY_SIZE, family);
+                    for sample in &samples {
+                        let font_id = latin.clone();
                         ctx.fonts(|fonts| {
                             assert!(fonts.has_glyphs(&font_id, sample));
                             for ch in sample.chars() {
@@ -286,7 +330,7 @@ mod tests {
                                 assert!(width.is_finite() && width > 0., "{ch}");
                             }
                         });
-                        let response = ui.label(egui::RichText::new(sample).font(font_id));
+                        let response = ui.label(egui::RichText::new(*sample).font(font_id));
                         assert!(response.rect.is_finite());
                         assert!(response.rect.width() > 100.);
                     }
@@ -297,7 +341,7 @@ mod tests {
                     matches!(&delta.image, egui::ImageData::Font(image)
                     if image.pixels.iter().any(|coverage| *coverage > 0.))
                 }),
-                "the bundled glyphs must produce real raster coverage at {scale}"
+                "resolved glyphs must produce real raster coverage at {scale}"
             );
             assert!(!context
                 .tessellate(output.shapes, output.pixels_per_point)

@@ -1307,20 +1307,11 @@ class _MacMenuBar extends StatelessWidget {
                         width: appleButtonWidth,
                         onPressed: () =>
                             controller.selectPanel(ShellPanel.systemMenu),
-                        child: Image.asset(
-                          dark
-                              ? 'assets/macos/apple-logo-white-tight.png'
-                              : 'assets/macos/apple-logo-black-tight.png',
+                        child: ClarionMark(
                           key: const ValueKey('mac-apple-logo'),
                           width: 13,
-                          height: 16,
-                          filterQuality: FilterQuality.high,
-                          excludeFromSemantics: true,
-                          errorBuilder: (_, _, _) => ClarionMark(
-                            width: 13,
-                            size: 16,
-                            color: dark ? Colors.white : Colors.black87,
-                          ),
+                          size: 16,
+                          color: dark ? Colors.white : Colors.black87,
                         ),
                       ),
                       _MacAppMenuButton(

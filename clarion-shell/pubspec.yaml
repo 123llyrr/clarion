@@ -20,15 +20,20 @@ dev_dependencies:
   flutter_lints: ^6.0.0
 flutter:
   uses-material-design: true
-  assets:
-    - assets/macos/
-  fonts:
-    - family: macOSSystem
-      fonts:
-        - asset: assets/macos/SFNS.ttf
-    - family: macOSChinese
-      fonts:
-        - asset: assets/macos/PingFangSC-Regular.otf
-          weight: 400
-        - asset: assets/macos/PingFangSC-Semibold.otf
-          weight: 600
+  # No Apple artwork or fonts are bundled: they cannot be redistributed under
+  # GPL-3.0-or-later. Run scripts/import-macos-assets.sh to restore them from an
+  # image you own; it replaces the block between the markers below.
+  # BEGIN macOS assets
+  # assets:
+  #   - assets/macos/
+  # fonts:
+  #   - family: macOSSystem
+  #     fonts:
+  #       - asset: assets/macos/SFNS.ttf
+  #   - family: macOSChinese
+  #     fonts:
+  #       - asset: assets/macos/PingFangSC-Regular.otf
+  #         weight: 400
+  #       - asset: assets/macos/PingFangSC-Semibold.otf
+  #         weight: 600
+  # END macOS assets

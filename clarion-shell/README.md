@@ -125,25 +125,28 @@ Dock 透明绘制厚度按配置图标尺寸、最大放大倍率与反馈空间
 Dock 未能产生首帧时恢复 Material 并
 显示失败原因；偏好等待原生样式与 Dock 首帧确认后再保存。
 
-macOS 模式使用用户镜像中的原始 Apple 标识、系统图标，以及 SFNS / PingFang 字体。
-完整 Core.pkg 的 Finder、废纸篓、下载、文件夹、Terminal、Safari、TextEdit、Calendar、
-Preview 与 Font Book 图标已恢复为真正的 1024×1024 PNG；Launchpad、Mission Control 也使用
-1024×1024 原图。Calculator、Screenshot、Activity Monitor 使用各自原始 ICNS 最大的
-256×256 PNG，不伪造更高分辨率。资源均保留原始 PNG 字节，并核对所在 bundle 的
-CodeResources SHA-1 与 SHA-256；这些校验不等于 Apple 证书链或整个缺尾镜像校验。
+macOS 模式**不再随仓库分发任何 Apple 素材**。此前的 Apple 标识、系统图标与
+SFNS / PingFang 字体全部移出：Clarion 以 GPL-3.0-or-later 分发，而 Apple 的许可
+不允许再分发，GPL 也无法授予这项权利。移除清单与逐文件 SHA-256 见
+[`resources/licenses/removed-apple-assets.sha256`](../resources/licenses/removed-apple-assets.sha256)。
+
+在你自己拥有 macOS 镜像的机器上，可用
+[`scripts/import-macos-assets.sh`](../scripts/import-macos-assets.sh) 从本地提取结果
+恢复同一套素材（脚本逐文件校验哈希并重新启用 pubspec 声明；导入文件被 git 忽略）。
+仓库里保留的只有提取记录 `provenance.json`——它是审计元数据，不是再分发授权。
 
 Dock、启动器的应用格子、搜索结果、文件夹缩略图和拖动反馈共用 `MacAppIcon` 与
 `MacAppIcons`。按稳定 desktop ID／图标名识别文件管理器、终端、编辑器、计算器、日历、
-图片／文档查看器、截图、字体查看器和系统监视器，使用对应的镜像原图。
-名称与启动动作保留真实 Linux 应用，Firefox、Chrome、微信、QQ 等第三方品牌使用自己的图标。
-设置应用原图所在尾段无法恢复，因此继续使用其原生图标；Calendar 原图是固定 JUL/17，
-不代表已经实现 macOS 的动态日期图标。
+图片／文档查看器、截图、字体查看器和系统监视器，导入素材后使用对应的镜像原图；
+未导入时回退到内置矢量／Material 图标。名称与启动动作保留真实 Linux 应用，
+Firefox、Chrome、微信、QQ 等第三方品牌使用自己的图标。
 
 “控制中心 → 外观 → macOS → 应用使用 macOS 系统图标”可切回应用原生图标。
 旧配置默认启用这项外观选择，无需手工改写个人配置；Material 的图标保持独立。
 图标按屏幕 DPR 和 Dock 最大放大尺寸选择、解码，悬停复用纹理；缺失或损坏的应用图标
-在 macOS 模式下使用镜像的通用应用图标。资源来源、原始路径与逐项校验值保存在
-[assets/macos/provenance.json](assets/macos/provenance.json)。没有执行 macOS 应用。
+回退到内置矢量图标。移除前的资源来源、原始路径与逐项校验值保留在
+[assets/macos/provenance.json](assets/macos/provenance.json)，作为审计记录。
+没有执行 macOS 应用。
 Dock 和菜单动效按公开行为实现，尚未用 Catalina 实机录像完成逐帧一致性验收。
 
 ## Linux 窗口接口

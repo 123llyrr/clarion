@@ -70,7 +70,7 @@ class ClarionMark extends StatelessWidget {
     height: size,
     child: FittedBox(
       child: Text(
-        'R',
+        'C',
         style: TextStyle(
           fontFamily: 'sans-serif',
           fontSize: size,

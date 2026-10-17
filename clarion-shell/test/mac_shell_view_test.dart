@@ -439,16 +439,18 @@ void main() {
   );
 
   testWidgets(
-    'Apple menu uses original asset and functional Finder and Trash',
+    'System menu uses the Clarion mark, not Apple artwork',
     (tester) async {
       final (controller, _, _) = await _fixture(tester);
       await _mount(tester, controller);
-      final logo = tester.widget<Image>(
-        find.byKey(const ValueKey('mac-apple-logo')),
-      );
+      // Clarion ships no Apple assets; the slot draws the project mark instead.
+      expect(find.byKey(const ValueKey('mac-apple-logo')), findsOneWidget);
       expect(
-        (logo.image as AssetImage).assetName,
-        'assets/macos/apple-logo-black-tight.png',
+        find.descendant(
+          of: find.byKey(const ValueKey('mac-apple-logo')),
+          matching: find.byType(Image),
+        ),
+        findsNothing,
       );
       expect(
         tester

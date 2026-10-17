@@ -59,30 +59,19 @@ impl PreferenceIcon {
         }
     }
 
+    /// Apple preference-pane artwork cannot be redistributed under
+    /// GPL-3.0-or-later, so every pane draws its vector fallback. Keeping the
+    /// hook lets a local import restore bitmaps without touching this file.
     fn asset(self) -> Option<(&'static str, &'static [u8])> {
         match self {
-            Self::General => Some((
-                "macos-preference-general",
-                include_bytes!("../assets/macos/general.png"),
-            )),
-            Self::MissionControl => Some((
-                "macos-preference-mission-control",
-                include_bytes!("../assets/macos/mission-control.png"),
-            )),
-            Self::Keyboard => Some((
-                "macos-preference-keyboard",
-                include_bytes!("../assets/macos/keyboard.png"),
-            )),
-            Self::Trackpad => Some((
-                "macos-preference-trackpad",
-                include_bytes!("../assets/macos/trackpad.png"),
-            )),
-            Self::Displays => Some((
-                "macos-preference-displays",
-                include_bytes!("../assets/macos/displays.png"),
-            )),
-            // These are Clarion categories, not additional macOS preference panes.
-            Self::Advanced | Self::Code | Self::WindowLayout => None,
+            Self::General
+            | Self::MissionControl
+            | Self::Keyboard
+            | Self::Trackpad
+            | Self::Displays
+            | Self::Advanced
+            | Self::Code
+            | Self::WindowLayout => None,
         }
     }
 }
@@ -428,23 +417,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn preference_assets_decode_with_visible_pixels_and_transparency() {
-        let mut original_assets = 0;
+    fn every_preference_pane_has_an_original_vector_fallback() {
+        // No Apple bitmap is compiled in; each pane must still render something
+        // distinguishable and stay within the icon box at any DPI.
         for icon in PreferenceIcon::ALL {
-            if let Some((name, bytes)) = icon.asset() {
-                original_assets += 1;
-                let rgba = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
-                    .unwrap_or_else(|error| panic!("{name}: {error}"))
-                    .into_rgba8();
-                assert!(rgba.width() > 0 && rgba.height() > 0);
-                assert!(rgba.width() <= 1024 && rgba.height() <= 1024);
-                assert!(rgba.pixels().any(|pixel| pixel[3] > 0), "{name}");
-                assert!(rgba.pixels().any(|pixel| pixel[3] == 0), "{name}");
-            }
+            assert!(
+                icon.asset().is_none(),
+                "{}: Apple artwork must not be bundled",
+                icon.label()
+            );
         }
-        assert_eq!(original_assets, 5);
-        assert!(PreferenceIcon::Code.asset().is_none());
-        assert!(PreferenceIcon::WindowLayout.asset().is_none());
+        assert_ne!(
+            PreferenceIcon::General.vector_fallback(),
+            PreferenceIcon::Displays.vector_fallback()
+        );
+        assert_ne!(
+            PreferenceIcon::MissionControl.vector_fallback(),
+            PreferenceIcon::WindowLayout.vector_fallback()
+        );
     }
 
     #[test]

@@ -1,0 +1,78 @@
+# Apple-derived assets removed from this repository on 2026-10-17.
+#
+# Clarion is distributed under GPL-3.0-or-later. The files below were
+# extracted from a user-supplied macOS Catalina image: Apple system
+# artwork, Apple logos and the SF / PingFang fonts. Apple's licence does
+# not permit redistribution, and GPL-3.0-or-later cannot override it.
+#
+# They are kept out of the tree, not deprecated. scripts/import-macos-assets.sh
+# restores an identical local copy from an image the user owns and verifies
+# every hash below before writing anything.
+#
+# path                                                   sha256
+1cbb890c22275a3d2b6a10ef6fc46cfdc517777626bc1c4ef129b6a3732f52d0  clarion-settings/assets/macos/displays.png
+420b812f7982d4bd6eaadd5ec04b7d365e9f3ca7bc5fe4e883b8705ad95af22a  clarion-settings/assets/macos/general.png
+e120945e9c070f4250a1e59d354cc03a9cadd8a641d65ea1c7660840ddb1e8db  clarion-settings/assets/macos/keyboard.png
+fdc541fb75c23e365241377db58a0fead94da3a83e8ff18f3030082bf4f8d7c9  clarion-settings/assets/macos/mission-control.png
+9a2fe66af7ae62ee2354066ca5fe6b20b6ca0644a083e6cc9151b5c500d91f3b  clarion-settings/assets/macos/trackpad.png
+711a56d70637698e5a7af51e8b7ac4dd856ea1abbe58779daf2d7adbd6706783  clarion-shell/assets/macos/activity-monitor.png
+fc578a435e5d5b81bb8ef773039aa2e38fb71da69d75540833cc7c7fcbb1223f  clarion-shell/assets/macos/alias-badge.png
+72eecbeef57ca0453a763fcf87ea6a43288ba51ad0c99ef0aaa925deca2b743a  clarion-shell/assets/macos/apple-logo-black.png
+5376e299cc50a16405bc365069c4c4008f03f221bb79ec4ec669aff5f7490185  clarion-shell/assets/macos/apple-logo-black.svg
+efa9730c38c813b3745351a1bbfcf34ab2ba9b17131ce8caa567746e7b27e879  clarion-shell/assets/macos/apple-logo-black-tight.png
+c75f50cab2e962ed5f4086172d9f3845f1bb7008b7b648ea3c26d4403c031196  clarion-shell/assets/macos/apple-logo-white.png
+2f443c2dcdaf3d9ad2f114e6d3fb4b4d0fddf40c780d0642bdae103c984ff1bf  clarion-shell/assets/macos/apple-logo-white.svg
+4787b57904df08d521ce011c81ba01c304b3691f3c859f06a9a891bed29f82ca  clarion-shell/assets/macos/apple-logo-white-tight.png
+6756643652d13070b826d7176d0b3fe54343468ed5f67a53f4939e738b58f4e1  clarion-shell/assets/macos/applications.png
+8ef370a25ae3687bc4ba118ca561d9230a21db8fe6563df58d0bd243f80a799a  clarion-shell/assets/macos/calculator.png
+789e9964c005135ec60315bc56a6fbc82b4d5ef4b10588827b7cc152115dc295  clarion-shell/assets/macos/calendar.png
+c8cdf4d4a81a2263f05ff2487ab8080994f1622cf944ea1bc225f979f00a53ec  clarion-shell/assets/macos/catalina-badge-1024.png
+185f146ba6b217036f94318038c2d5c95fec982d595a40bfc0ace38a6967ad8b  clarion-shell/assets/macos/catalina-badge-512.png
+8f42269b25620a35199f8f6c1511de8b699e0043ac929001aef51fc0d17fb2be  clarion-shell/assets/macos/catalina-badge-round.png
+1ea2b810c6936c38cde0731adc7e13f511d0f011324d4fab2e74c6c12de4cc8f  clarion-shell/assets/macos/desktop-folder.png
+a071f705d033e904600d7a7973e974bf67be2f907a5f04ab91c409104277a933  clarion-shell/assets/macos/dockbackground@2x.png
+dd6ecf51817a0a19c13b9daf7f32f990d7f306dabf51b9977bbde725a391c338  clarion-shell/assets/macos/dockbackgroundax@2x.png
+d2857374bf6946794a8685eb3f0ad2873bd20818f3d2a05674b14f7c40a76bff  clarion-shell/assets/macos/dockbackgroundax.png
+575ba3bb01b920a5291a1ef9315c01873ee95787346290789cbbaba515d8a7c5  clarion-shell/assets/macos/dockbackgrounddark@2x.png
+dd6ecf51817a0a19c13b9daf7f32f990d7f306dabf51b9977bbde725a391c338  clarion-shell/assets/macos/dockbackgrounddarkax@2x.png
+d2857374bf6946794a8685eb3f0ad2873bd20818f3d2a05674b14f7c40a76bff  clarion-shell/assets/macos/dockbackgrounddarkax.png
+7607afba2d0aa6d865bc313e2faa4f00ad6901f46ec8eb937eb6f8c8e1322b41  clarion-shell/assets/macos/dockbackgrounddark.png
+3fd81ce8fbc0c75314c7d9ebfb28568cf0b6a0d3642cf7af4f65c71177590e2d  clarion-shell/assets/macos/dockbackground.png
+81f0fc857d8ed19bf1c57b2295069955c7592f6ae15806c8bd41f5d6120faedb  clarion-shell/assets/macos/downloads.png
+7816a0ea82a412fad0de92774603a534ea660098fab94e7e321a894ed925e7b5  clarion-shell/assets/macos/ecsb_closebox@2x.png
+cc2a56621c65d52044b9f15454f1268b20eabd714a0f984b467feb9d043d5ded  clarion-shell/assets/macos/ecsb_closebox.png
+80a26df10bcc05c267a4ae7ffedaded63e72acfa075a486deec087d3fffc2fc8  clarion-shell/assets/macos/ecsb_closebox_pressed@2x.png
+731fcd6078430bcaf7825d1d6b89f51f9c08183fbe25395d94d03e5b418135a2  clarion-shell/assets/macos/ecsb_closebox_pressed.png
+a7bb30d1abd181f6f9edd86f42747e4bbd5dc39b7dc29c734251928988c4399b  clarion-shell/assets/macos/ectl_search_background@2x.png
+a916a73152a85ff0df699d025fe519b2e65e47243040fb9623c0564ea7e358c4  clarion-shell/assets/macos/ectl_search_background.png
+c1be97e8564114e6a58b6ac1e9fe5ce7ea4739b85c538e50735d0c44033a7c06  clarion-shell/assets/macos/ectl_search_cancel.png
+a14b329108211b4ef388fd38c0d646950196b21dfc79ab386e66784f6c7bf8ef  clarion-shell/assets/macos/ectl_search_cancel_pressed.png
+a4a09baae7a52adefb7938b804a40b1c22c4bafedf306cf4644b8a6b4c1fc175  clarion-shell/assets/macos/ectl_search_close@2x.png
+5b048ed42a86d3764ea2697f966f34e95e3079140a57ec7af3dc5d09430d1c66  clarion-shell/assets/macos/ectl_search_close.png
+dba7c017b55d04d738ab73c4143cd58b8099fc4551070daa75cfc0fac3129e96  clarion-shell/assets/macos/ectl_search_loupe@2x.png
+278b49e202ee0633eac925fff95f6bd3272f336ff34c631c95a9f906b4a326ee  clarion-shell/assets/macos/ectl_search_loupe.png
+1da031ba8842558223332d34b0938d5e546be6580f2eaee03c3cf0c2920945ac  clarion-shell/assets/macos/ectl_search_loupe_rtl@2x.png
+92ff638963025bfea6fc1b06169725f9526c3d4b5b9a7339b65897a0dae46543  clarion-shell/assets/macos/ectl_search_loupe_rtl.png
+ca65cfc8e29d48f6e02a74b982335c227d65a3f828fab8b05d0ee503895b1923  clarion-shell/assets/macos/ectl_search_magnify.png
+7d94b7d096a5d1881d4b5fb5a6171d36fbac7d755bd62733a7494817c6b6c107  clarion-shell/assets/macos/finder.png
+45cf72896b122af014c901eff4039aa841fb0473da0ecb1719129cab488739c2  clarion-shell/assets/macos/font-book.png
+b47fe37b7687019612920d04963775b572021aefc6c90360b51b21aee017ddda  clarion-shell/assets/macos/generic-application.png
+121ab0caea7d8f58c1b1cbff7c733acd7b96105dfa08a09edc00a94aae172c6e  clarion-shell/assets/macos/generic-document.png
+3ce72c6af67e07242b32fa4e760105c2d6ababcb6f72a6beb54617db9d48dd68  clarion-shell/assets/macos/generic-folder.png
+e3d0db5ea2d42f7aea0055b4f933b8e0dcda80a06fbbe02e3de649d5184261ec  clarion-shell/assets/macos/launchpad.png
+59bf9d62db706b2cd8ebec324132d8b65fba026a0e57329009c0f1b9b136407f  clarion-shell/assets/macos/mission-control.png
+62c7b3ad93180cbd07b4f0686b22fbb9cb0c77076fd11c679bca519a4218a2d0  clarion-shell/assets/macos/PingFangSC-Regular.otf
+7c1f31e40731e1897a6c9f32bb00cb5409abc50f6cb493921343755759e67c4e  clarion-shell/assets/macos/PingFangSC-Semibold.otf
+b763bd44d2afb4c9e9104ea8f1d9680d9d58337bee5ba0e281dca7084edb1499  clarion-shell/assets/macos/preview.png
+9646ddbe380bd31ae938f1fcb4aaadf20e472bccc075423b65773402b6c8c623  clarion-shell/assets/macos/ProductPageIcon_256x256.tiff
+60fb82a7e4052b0901f9be1acdf7881a87178ca8183000a421a19aafdbd96bd2  clarion-shell/assets/macos/ProductPageIcon_512x512.tiff
+19279e18ae6c8e86c202b361e5bec982d83ef9c2749698e3203df82c268e3bd9  clarion-shell/assets/macos/ProductPageIcon.icns
+78504000e7907c99553cdf491b9092925ce4c3951375004f871b917825dfabee  clarion-shell/assets/macos/safari.png
+07a25b1296c9fbc895514add0aeacbe00a5e418b9d28967522ab61ce66755593  clarion-shell/assets/macos/screenshot.png
+ff4ce11bb9c93f347d194884d1a8b04922f10ab1c19305190279eac2bad0248f  clarion-shell/assets/macos/SFNS.ttf
+0616280daf5032b5dc91bdc7a45c80bfedd89deca49a829e2b7962766be51011  clarion-shell/assets/macos/sources/AKAppleLogoBlack.pdf
+2acab8b3355f00044a48523eb90544f7188e871d19818c31074b01c889896b17  clarion-shell/assets/macos/sources/AKAppleLogoWhite.pdf
+93f97d1d8d0b1f72e15c58bae2a2749e92ad64dcb9f65bf67857673c4547a5c1  clarion-shell/assets/macos/terminal.png
+633658fc6f5ab1931388b544046577d4090e1b58f50b2f6048f4094b3d2b0e1f  clarion-shell/assets/macos/textedit.png
+e5d0788059a471c42de8d35fbdc3051763fa6165e273047790710a6fb397973a  clarion-shell/assets/macos/trash-empty.png
+b1d8456b4ac69d3bbef065b521d657a5cbc5e32278b8c66c418d8148326f7ab7  clarion-shell/assets/macos/trash-full.png
