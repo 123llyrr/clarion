@@ -105,6 +105,8 @@ class _MacLauncherPanelState extends State<MacLauncherPanel>
   Map<String, DesktopApp> _appIndex = const {};
   List<MacLaunchpadEntry>? _rootEntries;
   List<MacLaunchpadEntry>? _visibleEntries;
+  Widget? _gridCache;
+  Object? _gridCacheKey;
   String? _entriesQuery;
   String? _entriesFolder;
   List<DesktopApp>? _entriesCatalogue;
@@ -1224,6 +1226,37 @@ class _MacLauncherPanelState extends State<MacLauncherPanel>
     ),
   );
 
+  /// Page turns only change the indicator and the selection ring. Handing back
+  /// the identical grid widget lets Flutter skip rebuilding both page grids,
+  /// which otherwise reconstructs every tile (and its drag machinery) on each
+  /// swipe frame.
+  Widget _cachedGrid(
+    List<MacLaunchpadEntry> entries,
+    double cellWidth,
+    double cellHeight,
+    double iconSize,
+  ) {
+    final key = (
+      entries,
+      _pageCount,
+      _columns,
+      _capacity,
+      cellWidth,
+      cellHeight,
+      iconSize,
+      _searching,
+      _draggingId,
+      _selected,
+      _jiggleMode,
+      _folder,
+      _reduced,
+      widget.controller.macPreferences,
+    );
+    if (_gridCacheKey == key && _gridCache != null) return _gridCache!;
+    _gridCacheKey = key;
+    return _gridCache = _grid(entries, cellWidth, cellHeight, iconSize);
+  }
+
   Widget _grid(
     List<MacLaunchpadEntry> entries,
     double cellWidth,
@@ -1467,7 +1500,7 @@ class _MacLauncherPanelState extends State<MacLauncherPanel>
                             _folderTitle(folder, width, titleHeight),
                           const SizedBox(height: 14),
                           Expanded(
-                            child: _grid(
+                            child: _cachedGrid(
                               entries,
                               cellWidth,
                               cellHeight,
