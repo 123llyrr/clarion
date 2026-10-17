@@ -11,6 +11,10 @@ DesktopApp _app(String id, {String name = '本地化应用名称', String? iconN
       iconName: iconName,
     );
 
+/// Role names ending in `.png` are the librsvg-rasterized icons.
+String _asset(String role) =>
+    role.contains('.') ? 'assets/icons/$role' : 'assets/icons/$role.svg';
+
 void main() {
   test('exact desktop identities share original Catalina role icons', () {
     const aliases = <String, List<String>>{
@@ -40,10 +44,10 @@ void main() {
       ],
       'calculator': ['org.gnome.Calculator', 'org.kde.kcalc'],
       'calendar': ['org.gnome.Calendar', 'com.apple.iCal'],
-      'preview': ['org.kde.gwenview', 'org.gnome.Evince', 'org.kde.okular'],
-      'screenshot': ['org.kde.spectacle', 'org.flameshot.Flameshot'],
+      'preview.png': ['org.kde.gwenview', 'org.gnome.Evince', 'org.kde.okular'],
+      'screenshot.png': ['org.kde.spectacle', 'org.flameshot.Flameshot'],
       'font-book': ['org.gnome.font-viewer', 'gfontview', 'kfontview'],
-      'activity-monitor': [
+      'activity-monitor.png': [
         'org.gnome.SystemMonitor',
         'ksysguard',
         'org.kde.plasma-systemmonitor',
@@ -54,7 +58,7 @@ void main() {
       for (final alias in entry.value) {
         expect(
           MacAppIcons.assetFor(_app('$alias.desktop')),
-          'assets/icons/${entry.key}.svg',
+          _asset(entry.key),
           reason: alias,
         );
       }
@@ -101,8 +105,8 @@ void main() {
       'accessories-text-editor': 'textedit',
       'accessories-calculator': 'calculator',
       'x-office-calendar': 'calendar',
-      'accessories-screenshot': 'screenshot',
-      'utilities-system-monitor': 'activity-monitor',
+      'accessories-screenshot': 'screenshot.png',
+      'utilities-system-monitor': 'activity-monitor.png',
       'web-browser': 'safari',
       'ORG.KDE.DOLPHIN': 'home',
     };
@@ -111,7 +115,7 @@ void main() {
         MacAppIcons.assetFor(
           _app('unregistered-role.desktop', iconName: entry.key),
         ),
-        'assets/icons/${entry.value}.svg',
+        _asset(entry.value),
       );
     }
     for (final icon in ['my-web-browser', 'terminal-notebook', 'dolphin.svg']) {

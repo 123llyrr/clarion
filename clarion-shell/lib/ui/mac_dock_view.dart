@@ -746,10 +746,10 @@ class _MacDockViewState extends State<MacDockView> {
     },
     asset: switch (name) {
       'finder' => 'assets/icons/home.svg',
-      'launchpad' => 'assets/icons/launchpad.svg',
+      'launchpad' => 'assets/icons/launchpad.png',
       'mission-control' => 'assets/icons/mission-control.svg',
-      'trash-full' => 'assets/icons/trash-full.svg',
-      _ => 'assets/icons/trash-empty.svg',
+      'trash-full' => 'assets/icons/trash-full.png',
+      _ => 'assets/icons/trash-empty.png',
     },
     fallback: switch (name) {
       'finder' => Icons.folder_rounded,

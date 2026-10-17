@@ -405,6 +405,9 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.altLeft);
     await tester.pump();
     expect(tester.element(icon), same(original));
+    // Entering edit mode also starts a one-shot ticker that ends on the next
+    // frame; the mode's steady state is the single shared jiggle clock.
+    await tester.pump(const Duration(milliseconds: 16));
     expect(tester.binding.transientCallbackCount, 1);
 
     controller.setReduceMotion(true);
