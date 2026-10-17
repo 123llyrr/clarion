@@ -12,6 +12,7 @@ import '../mac_shell_preferences.dart';
 import '../mac_app_icons.dart';
 import '../models.dart';
 import '../state/shell_controller.dart';
+import 'drag_feedback.dart';
 import 'mac_app_icon.dart';
 import 'dock_motion.dart';
 import 'controller_selector.dart';
@@ -1720,24 +1721,28 @@ class _DockItemState extends State<_DockItem>
     );
     if (widget.onReorder != null) {
       final dragChild = icon;
-      final feedbackWidget = Material(
-        color: Colors.transparent,
-        child: Transform.scale(
-          scale: 1.15,
-          child: Container(
-            decoration: const BoxDecoration(
-              boxShadow: [
-                BoxShadow(
-                  color: Color(0x55000000),
-                  blurRadius: 18,
-                  spreadRadius: 2,
-                  offset: Offset(0, 8),
-                ),
-              ],
-            ),
-            child: SizedBox.square(
-              dimension: widget.iconSize,
-              child: widget.child,
+      // Pointer motion rebuilds every item each frame; the duplicated icon
+      // tree is only needed once a drag actually starts.
+      final feedbackWidget = DragFeedbackBuilder(
+        builder: (context) => Material(
+          color: Colors.transparent,
+          child: Transform.scale(
+            scale: 1.15,
+            child: Container(
+              decoration: const BoxDecoration(
+                boxShadow: [
+                  BoxShadow(
+                    color: Color(0x55000000),
+                    blurRadius: 18,
+                    spreadRadius: 2,
+                    offset: Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: SizedBox.square(
+                dimension: widget.iconSize,
+                child: widget.child,
+              ),
             ),
           ),
         ),

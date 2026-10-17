@@ -14,6 +14,7 @@ import '../mac_launchpad_layout.dart';
 import '../mac_shell_preferences.dart';
 import '../models.dart';
 import '../state/shell_controller.dart';
+import 'drag_feedback.dart';
 import 'mac_app_icon.dart';
 import 'shell_geometry.dart';
 
@@ -612,6 +613,9 @@ class _MacLauncherPanelState extends State<MacLauncherPanel>
     _draggingId = id;
     _dragOriginFolder = _folder;
     _dragCancelled = false;
+    // Reorder strips mount only for the drag's lifetime, so the panel must
+    // rebuild once the drag becomes active.
+    if (mounted) setState(() {});
   }
 
   void _endDrag() {
@@ -619,6 +623,7 @@ class _MacLauncherPanelState extends State<MacLauncherPanel>
     _draggingId = null;
     _dragOriginFolder = null;
     _dragCancelled = false;
+    if (mounted) setState(() {});
   }
 
   void _scheduleDragPage(int direction) {
@@ -809,9 +814,11 @@ class _MacLauncherPanelState extends State<MacLauncherPanel>
       ),
     );
     if (!interactive || _searching) return child;
-    final feedback = Material(
-      color: Colors.transparent,
-      child: _icon(entry, iconSize),
+    final feedback = DragFeedbackBuilder(
+      builder: (context) => Material(
+        color: Colors.transparent,
+        child: _icon(entry, iconSize),
+      ),
     );
     Widget draggable(Widget tile) => _MouseLaunchpadDraggable(
       data: entry.id,
@@ -1267,28 +1274,32 @@ class _MacLauncherPanelState extends State<MacLauncherPanel>
                   ),
                   itemBuilder: (context, index) {
                     final entry = entries[page * _capacity + index];
+                    final tile = _tile(entry, iconSize);
+                    // Reorder strips exist only while a drag is active. Their
+                    // ColoredBox is hit-test opaque, so a permanently mounted
+                    // strip would also swallow taps on the tile edge.
+                    if (_draggingId == null || _searching) return tile;
                     return Stack(
                       children: [
-                        Positioned.fill(child: _tile(entry, iconSize)),
-                        if (!_searching)
-                          Positioned(
-                            left: 0,
-                            top: 0,
-                            bottom: 0,
-                            width: 12,
-                            child: DragTarget<String>(
-                              onWillAcceptWithDetails: (details) =>
-                                  _canDrop && details.data != entry.id,
-                              onAcceptWithDetails: (details) =>
-                                  _moveBefore(details.data, entry.id),
-                              builder: (context, candidates, rejected) =>
-                                  ColoredBox(
-                                    color: candidates.isEmpty
-                                        ? Colors.transparent
-                                        : Colors.white.withValues(alpha: .35),
-                                  ),
-                            ),
+                        Positioned.fill(child: tile),
+                        Positioned(
+                          left: 0,
+                          top: 0,
+                          bottom: 0,
+                          width: 12,
+                          child: DragTarget<String>(
+                            onWillAcceptWithDetails: (details) =>
+                                _canDrop && details.data != entry.id,
+                            onAcceptWithDetails: (details) =>
+                                _moveBefore(details.data, entry.id),
+                            builder: (context, candidates, rejected) =>
+                                ColoredBox(
+                                  color: candidates.isEmpty
+                                      ? Colors.transparent
+                                      : Colors.white.withValues(alpha: .35),
+                                ),
                           ),
+                        ),
                       ],
                     );
                   },

@@ -109,9 +109,28 @@ class DesktopApp {
   final String? iconName;
   final String? iconPath;
   final List<String> keywords;
+  // Search scans run once per keystroke across every app; compiling a RegExp
+  // per app per keystroke dominates that cost. Instances are immutable, so
+  // the lowercased haystack can be memoized without keeping them alive.
+  static final RegExp _whitespace = RegExp(r'\s+');
+  static final Expando<String> _searchTexts = Expando<String>();
+  static (String, List<String>)? _preparedQuery;
+
+  String get _searchText {
+    var text = _searchTexts[this];
+    if (text == null) {
+      text = '$name $description ${keywords.join(' ')}'.toLowerCase();
+      _searchTexts[this] = text;
+    }
+    return text;
+  }
+
   bool matches(String query) {
-    final text = '$name $description ${keywords.join(' ')}'.toLowerCase();
-    return query.toLowerCase().split(RegExp(r'\s+')).every(text.contains);
+    final lowered = query.toLowerCase();
+    if (_preparedQuery?.$1 != lowered) {
+      _preparedQuery = (lowered, lowered.split(_whitespace));
+    }
+    return _preparedQuery!.$2.every(_searchText.contains);
   }
 }
 
