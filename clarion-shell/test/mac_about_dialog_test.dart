@@ -91,6 +91,10 @@ void main() {
 
     expect(find.text('Clarion'), findsOneWidget);
     expect(find.text('版本  0.1.0-test'), findsOneWidget);
+    expect(
+      _sectionAsset('assets/icons/clarion-overview.png'),
+      findsOneWidget,
+    );
     expect(find.text('Xiaomi Book Pro 16 2022'), findsOneWidget);
     expect(find.text('12th Gen Intel Core i7-12700H × 20'), findsOneWidget);
     expect(find.text('31.1 GB'), findsOneWidget);
