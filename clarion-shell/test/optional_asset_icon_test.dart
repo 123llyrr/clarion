@@ -151,13 +151,21 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  test('bundled font declarations point to shipped font files', () {
+  test('font declarations only reference files that exist', () {
     final pubspec = File('pubspec.yaml').readAsStringSync();
+    final declared = RegExp(
+      r'- asset: (assets/shell/[^\n]+)',
+    ).allMatches(pubspec).toList();
+    if (declared.isEmpty) {
+      // A fresh checkout ships no fonts: the imported families stay commented
+      // out and the shell falls back to system families.
+      expect(pubspec, isNot(contains('\n  fonts:')));
+      return;
+    }
     expect(pubspec, contains('family: ClarionSystem'));
     expect(pubspec, contains('family: ClarionChinese'));
-    final fonts = RegExp(r'- asset: (assets/shell/[^\n]+)').allMatches(pubspec);
-    expect(fonts.length, 3);
-    for (final font in fonts) {
+    expect(declared.length, 3);
+    for (final font in declared) {
       expect(File(font.group(1)!).lengthSync(), greaterThan(0));
     }
   });

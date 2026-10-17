@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../theme/font_fallback.dart';
 
 import '../models.dart';
 import '../services/session_service.dart';
@@ -444,8 +445,8 @@ class _MenuRowState extends State<_MenuRow> {
                     borderRadius: BorderRadius.circular(4),
                   ),
                   textStyle: const TextStyle(
-                    fontFamily: 'ClarionSystem',
-                    fontFamilyFallback: ['ClarionChinese'],
+                    fontFamily: shellFontFamily,
+                    fontFamilyFallback: shellFontFallback,
                     fontSize: 13,
                     fontWeight: FontWeight.w400,
                     height: 1.1,

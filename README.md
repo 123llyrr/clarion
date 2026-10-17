@@ -99,6 +99,29 @@ systemctl --user daemon-reload
 
 保存工作后，在下次登录时选择 **Clarion**。安装入口不会自动重启当前桌面。
 
+### 运行时依赖（字体与图标主题）
+
+仓库不分发字体：界面文字按 `ClarionSystem` / `ClarionChinese` 优先、随后回退到系统上常见的
+开源字体族（Noto Sans CJK、Source Han Sans、文泉驿、Sarasa、Inter、DejaVu 等）。**系统若没有任何
+中文字体，中文会显示成方块**，请安装其一：
+
+```sh
+# Arch
+sudo pacman -S noto-fonts-cjk ttf-dejavu
+# Debian/Ubuntu
+sudo apt install fonts-noto-cjk fonts-dejavu-core
+```
+
+`scripts/import-shell-assets.sh` 导入的苹果字体只影响字形风格，不是必需项（SF 与 PingFang 为
+苹果专有，不能随仓库分发）。
+
+Dock 与启动器优先使用仓库自带的图标集；你自己的应用图标由合成器按系统图标主题解析，因此
+无图标主题的最小系统会显示通用占位图标：
+
+```sh
+sudo pacman -S hicolor-icon-theme adwaita-icon-theme   # 或 papirus-icon-theme
+```
+
 已有 Realand 配置、Shell 偏好和旧命令通过兼容入口继续使用，迁移规则见 [名称与配置迁移](docs/clarion-migration.md)。
 依赖、嵌套运行和登录管理器说明见 [Getting Started](docs/wiki/Getting-Started.md)。
 从合成器到完整桌面的能力现状与缺口见 [桌面就绪度清单](docs/desktop-readiness-roadmap.md)。

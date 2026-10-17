@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import 'package:flutter/material.dart';
+import 'font_fallback.dart';
 
 import 'shell_theme.dart';
 
@@ -31,8 +32,8 @@ ThemeData buildMacShellTheme(Brightness brightness) {
     outlineVariant: dark ? const Color(0xff4c4c50) : const Color(0xffd6d6db),
   );
   final text = base.textTheme.apply(
-    fontFamily: 'ClarionSystem',
-    fontFamilyFallback: const ['ClarionChinese', 'Noto Sans CJK SC'],
+    fontFamily: shellFontFamily,
+    fontFamilyFallback: shellFontFallback,
     bodyColor: colors.onSurface,
     displayColor: colors.onSurface,
   );
@@ -95,8 +96,8 @@ ThemeData buildMacShellTheme(Brightness brightness) {
       labelSmall: text.labelSmall?.copyWith(fontSize: 11),
     ),
     primaryTextTheme: base.primaryTextTheme.apply(
-      fontFamily: 'ClarionSystem',
-      fontFamilyFallback: const ['ClarionChinese', 'Noto Sans CJK SC'],
+      fontFamily: shellFontFamily,
+      fontFamilyFallback: shellFontFallback,
     ),
     cardTheme: CardThemeData(
       color: colors.surfaceContainerLow,

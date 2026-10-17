@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../theme/font_fallback.dart';
 
 import 'desktop_entry.dart';
 import 'desktop_file_details.dart';
@@ -413,7 +414,7 @@ class _DesktopInspectorState extends State<_DesktopInspector> {
                         : line,
                     style: const TextStyle(
                       fontFamily: 'monospace',
-                      fontFamilyFallback: ['ClarionChinese', 'Noto Sans CJK SC'],
+                      fontFamilyFallback: shellFontFallback,
                       fontSize: 12,
                       height: 1.4,
                     ),
