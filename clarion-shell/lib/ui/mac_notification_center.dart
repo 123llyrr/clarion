@@ -162,8 +162,8 @@ class _MacNotificationCenterState extends State<MacNotificationCenter> {
                                       borderRadius: BorderRadius.circular(4),
                                     ),
                                     textStyle: const TextStyle(
-                                      fontFamily: 'macOSSystem',
-                                      fontFamilyFallback: ['macOSChinese'],
+                                      fontFamily: 'ClarionSystem',
+                                      fontFamilyFallback: ['ClarionChinese'],
                                       fontSize: 13,
                                     ),
                                   ),

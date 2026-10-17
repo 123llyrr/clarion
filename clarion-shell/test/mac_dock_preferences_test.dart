@@ -307,7 +307,7 @@ void main() {
             if (call.method == 'outputName') return 'QA-1';
             if (call.method != 'appIcon') return null;
             requests.add(Map<Object?, Object?>.from(call.arguments as Map));
-            return File('assets/macos/generic-application.png').absolute.path;
+            return File('assets/shell/generic-application.png').absolute.path;
           });
       final f = await _fixture(
         tester,

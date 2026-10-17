@@ -131,7 +131,7 @@ SFNS / PingFang 字体全部移出：Clarion 以 GPL-3.0-or-later 分发，而 A
 [`resources/licenses/removed-apple-assets.sha256`](../resources/licenses/removed-apple-assets.sha256)。
 
 在你自己拥有 macOS 镜像的机器上，可用
-[`scripts/import-macos-assets.sh`](../scripts/import-macos-assets.sh) 从本地提取结果
+[`scripts/import-shell-assets.sh`](../scripts/import-shell-assets.sh) 从本地提取结果
 恢复同一套素材（脚本逐文件校验哈希并重新启用 pubspec 声明；导入文件被 git 忽略）。
 仓库里保留的只有提取记录 `provenance.json`——它是审计元数据，不是再分发授权。
 
@@ -145,7 +145,7 @@ Firefox、Chrome、微信、QQ 等第三方品牌使用自己的图标。
 旧配置默认启用这项外观选择，无需手工改写个人配置；Material 的图标保持独立。
 图标按屏幕 DPR 和 Dock 最大放大尺寸选择、解码，悬停复用纹理；缺失或损坏的应用图标
 回退到内置矢量图标。移除前的资源来源、原始路径与逐项校验值保留在
-[assets/macos/provenance.json](assets/macos/provenance.json)，作为审计记录。
+[assets/shell/provenance.json](assets/shell/provenance.json)，作为审计记录。
 没有执行 macOS 应用。
 Dock 和菜单动效按公开行为实现，尚未用 Catalina 实机录像完成逐帧一致性验收。
 

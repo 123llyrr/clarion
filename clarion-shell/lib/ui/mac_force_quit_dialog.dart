@@ -243,7 +243,7 @@ class _MacForceQuitDialogState extends State<MacForceQuitDialog> {
                                               MacAppIcons.isFileManager(
                                                 item.app,
                                               ))
-                                          ? 'assets/macos/finder.png'
+                                          ? 'assets/shell/finder.png'
                                           : null,
                                     ),
                                   ),

@@ -21,19 +21,19 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   # No Apple artwork or fonts are bundled: they cannot be redistributed under
-  # GPL-3.0-or-later. Run scripts/import-macos-assets.sh to restore them from an
+  # GPL-3.0-or-later. Run scripts/import-shell-assets.sh to restore them from an
   # image you own; it replaces the block between the markers below.
-  # BEGIN macOS assets
+  # BEGIN shell assets
   # assets:
-  #   - assets/macos/
+  #   - assets/shell/
   # fonts:
-  #   - family: macOSSystem
+  #   - family: ClarionSystem
   #     fonts:
-  #       - asset: assets/macos/SFNS.ttf
-  #   - family: macOSChinese
+  #       - asset: assets/shell/ui-text.ttf
+  #   - family: ClarionChinese
   #     fonts:
-  #       - asset: assets/macos/PingFangSC-Regular.otf
+  #       - asset: assets/shell/cjk-regular.otf
   #         weight: 400
-  #       - asset: assets/macos/PingFangSC-Semibold.otf
+  #       - asset: assets/shell/cjk-semibold.otf
   #         weight: 600
-  # END macOS assets
+  # END shell assets

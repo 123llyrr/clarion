@@ -195,8 +195,8 @@ class _MenuRowState extends State<_MenuRow> {
                     borderRadius: BorderRadius.circular(4),
                   ),
                   textStyle: const TextStyle(
-                    fontFamily: 'macOSSystem',
-                    fontFamilyFallback: ['macOSChinese'],
+                    fontFamily: 'ClarionSystem',
+                    fontFamilyFallback: ['ClarionChinese'],
                     fontSize: 13,
                     fontWeight: FontWeight.w400,
                     height: 1.1,

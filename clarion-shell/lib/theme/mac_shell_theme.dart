@@ -31,8 +31,8 @@ ThemeData buildMacShellTheme(Brightness brightness) {
     outlineVariant: dark ? const Color(0xff4c4c50) : const Color(0xffd6d6db),
   );
   final text = base.textTheme.apply(
-    fontFamily: 'macOSSystem',
-    fontFamilyFallback: const ['macOSChinese', 'Noto Sans CJK SC'],
+    fontFamily: 'ClarionSystem',
+    fontFamilyFallback: const ['ClarionChinese', 'Noto Sans CJK SC'],
     bodyColor: colors.onSurface,
     displayColor: colors.onSurface,
   );
@@ -95,8 +95,8 @@ ThemeData buildMacShellTheme(Brightness brightness) {
       labelSmall: text.labelSmall?.copyWith(fontSize: 11),
     ),
     primaryTextTheme: base.primaryTextTheme.apply(
-      fontFamily: 'macOSSystem',
-      fontFamilyFallback: const ['macOSChinese', 'Noto Sans CJK SC'],
+      fontFamily: 'ClarionSystem',
+      fontFamilyFallback: const ['ClarionChinese', 'Noto Sans CJK SC'],
     ),
     cardTheme: CardThemeData(
       color: colors.surfaceContainerLow,

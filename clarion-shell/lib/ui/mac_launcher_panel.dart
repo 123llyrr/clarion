@@ -1039,7 +1039,7 @@ class _MacLauncherPanelState extends State<MacLauncherPanel>
           prefixIcon: Padding(
             padding: const EdgeInsets.only(left: 7, right: 5),
             child: OptionalAssetIcon(
-              asset: 'assets/macos/ectl_search_loupe@2x.png',
+              asset: 'assets/shell/search-loupe@2x.png',
               fallback: Icons.search_rounded,
               fallbackColor: Colors.white,
               width: 12,
@@ -1064,7 +1064,7 @@ class _MacLauncherPanelState extends State<MacLauncherPanel>
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 5),
                     child: OptionalAssetIcon(
-                      asset: 'assets/macos/ectl_search_close@2x.png',
+                      asset: 'assets/shell/search-close@2x.png',
                       fallback: Icons.cancel_rounded,
                       fallbackColor: Colors.white,
                       width: 13,
@@ -1635,8 +1635,8 @@ class _LaunchpadCloseBoxState extends State<_LaunchpadCloseBox> {
         fallback: Icons.cancel_rounded,
         fallbackColor: Colors.white,
         asset: _pressed
-            ? 'assets/macos/ecsb_closebox_pressed@2x.png'
-            : 'assets/macos/ecsb_closebox@2x.png',
+            ? 'assets/shell/closebox-pressed@2x.png'
+            : 'assets/shell/closebox@2x.png',
         key: const ValueKey('mac-launchpad-delete-badge'),
         width: 20,
         height: 20,

@@ -9,10 +9,10 @@
 # clarion-shell/pubspec.yaml. Imported assets are git-ignored.
 #
 # Usage:
-#   scripts/import-macos-assets.sh --source <dir> [--dry-run]
+#   scripts/import-shell-assets.sh --source <dir> [--dry-run]
 #
 # The source directory may either mirror repository paths
-# (<dir>/clarion-shell/assets/macos/finder.png) or hold a flat set of extracted
+# (<dir>/clarion-shell/assets/shell/finder.png) or hold a flat set of extracted
 # files, as long as every file name in the manifest is unique.
 set -euo pipefail
 
@@ -131,28 +131,28 @@ import sys
 
 path = pathlib.Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
-begin = "  # BEGIN macOS assets\n"
-end = "  # END macOS assets\n"
+begin = "  # BEGIN shell assets\n"
+end = "  # END shell assets\n"
 start = text.find(begin)
 stop = text.find(end)
 if start == -1 or stop == -1 or stop < start:
     print("pubspec.yaml: macOS asset markers not found; add the declarations manually", file=sys.stderr)
     raise SystemExit(1)
 block = """  assets:
-    - assets/macos/
+    - assets/shell/
   fonts:
-    - family: macOSSystem
+    - family: ClarionSystem
       fonts:
-        - asset: assets/macos/SFNS.ttf
-    - family: macOSChinese
+        - asset: assets/shell/ui-text.ttf
+    - family: ClarionChinese
       fonts:
-        - asset: assets/macos/PingFangSC-Regular.otf
+        - asset: assets/shell/cjk-regular.otf
           weight: 400
-        - asset: assets/macos/PingFangSC-Semibold.otf
+        - asset: assets/shell/cjk-semibold.otf
           weight: 600
 """
 path.write_text(text[:start] + begin + block + text[stop:], encoding="utf-8")
-print("pubspec.yaml: assets/macos/ and both font families re-enabled")
+print("pubspec.yaml: assets/shell/ and both font families re-enabled")
 PY
 
 cat <<'NOTE'

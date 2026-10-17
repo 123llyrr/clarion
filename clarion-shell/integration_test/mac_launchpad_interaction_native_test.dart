@@ -467,7 +467,7 @@ void main() {
         await Directory('$root/fixture-downloads').create(recursive: true);
         final assets = ['calendar', 'textedit', 'finder', 'preview'];
         for (var i = 0; i < assets.length; i++) {
-          final bytes = await rootBundle.load('assets/macos/${assets[i]}.png');
+          final bytes = await rootBundle.load('assets/shell/${assets[i]}.png');
           await File('$root/fixture-icon-$i.png').writeAsBytes(
             bytes.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes),
           );

@@ -749,7 +749,7 @@ Future<Map<String, dynamic>> _locateFinder(
     await capture.readAsBytes(),
   );
   final screenshot = (await screenshotCodec.getNextFrame()).image;
-  final sourceBytes = await rootBundle.load('assets/macos/finder.png');
+  final sourceBytes = await rootBundle.load('assets/shell/finder.png');
   final sourceCodec = await ui.instantiateImageCodec(
     sourceBytes.buffer.asUint8List(
       sourceBytes.offsetInBytes,
@@ -1254,7 +1254,7 @@ void main() {
             .listAssets()
             .where(
               (path) =>
-                  path.startsWith('assets/macos/') && path.endsWith('.png'),
+                  path.startsWith('assets/shell/') && path.endsWith('.png'),
             )
             .toList();
         expect(assets, isNotEmpty);

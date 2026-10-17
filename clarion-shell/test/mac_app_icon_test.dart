@@ -96,7 +96,7 @@ void main() {
       final provider = _assetProvider(tester);
       expect(
         (provider.imageProvider as AssetImage).assetName,
-        'assets/macos/finder.png',
+        'assets/shell/finder.png',
       );
       expect(provider.width, (48 * ratio).ceil());
       expect(provider.height, (48 * ratio).ceil());

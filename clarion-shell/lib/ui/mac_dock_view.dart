@@ -736,7 +736,7 @@ class _MacDockViewState extends State<MacDockView> {
   }
 
   Widget _asset(String name, int pixelSize) => OptionalAssetIcon(
-    asset: 'assets/macos/$name.png',
+    asset: 'assets/shell/$name.png',
     fallback: switch (name) {
       'finder' => Icons.folder_rounded,
       'launchpad' => Icons.apps_rounded,

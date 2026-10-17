@@ -384,8 +384,8 @@ void main() {
     if (destination == null) return;
     await tester.runAsync(() async {
       for (final entry in {
-        'macOSSystem': 'assets/macos/SFNS.ttf',
-        'macOSChinese': 'assets/macos/PingFangSC-Regular.otf',
+        'ClarionSystem': 'assets/shell/ui-text.ttf',
+        'ClarionChinese': 'assets/shell/cjk-regular.otf',
         'MaterialIcons':
             'build/unit_test_assets/fonts/MaterialIcons-Regular.otf',
       }.entries) {

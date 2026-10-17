@@ -343,8 +343,8 @@ class _SpaceCardState extends State<_SpaceCard> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontFamily: 'macOSSystem',
-                        fontFamilyFallback: const ['macOSChinese'],
+                        fontFamily: 'ClarionSystem',
+                        fontFamilyFallback: const ['ClarionChinese'],
                         fontSize: 11,
                         fontWeight: FontWeight.w500,
                         color: widget.isActive
@@ -490,8 +490,8 @@ class _SpaceCardState extends State<_SpaceCard> {
                                   fallback: Icons.cancel_rounded,
                                   fallbackColor: Colors.white,
                                   asset: _closePressed
-                                      ? 'assets/macos/ecsb_closebox_pressed@2x.png'
-                                      : 'assets/macos/ecsb_closebox@2x.png',
+                                      ? 'assets/shell/closebox-pressed@2x.png'
+                                      : 'assets/shell/closebox@2x.png',
                                   width: 18,
                                   height: 18,
                                 ),
@@ -717,7 +717,7 @@ class _WindowSpreadArea extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               OptionalAssetIcon(
-                asset: 'assets/macos/mission-control.png',
+                asset: 'assets/shell/mission-control.png',
                 fallback: Icons.dashboard_rounded,
                 width: 52,
                 height: 52,
@@ -726,8 +726,8 @@ class _WindowSpreadArea extends StatelessWidget {
               Text(
                 '调度中心',
                 style: TextStyle(
-                  fontFamily: 'macOSSystem',
-                  fontFamilyFallback: const ['macOSChinese'],
+                  fontFamily: 'ClarionSystem',
+                  fontFamilyFallback: const ['ClarionChinese'],
                   fontSize: 15,
                   fontWeight: FontWeight.w600,
                   color: dark ? Colors.white : Colors.black87,
@@ -737,8 +737,8 @@ class _WindowSpreadArea extends StatelessWidget {
               Text(
                 '此桌面无打开的窗口',
                 style: TextStyle(
-                  fontFamily: 'macOSSystem',
-                  fontFamilyFallback: const ['macOSChinese'],
+                  fontFamily: 'ClarionSystem',
+                  fontFamilyFallback: const ['ClarionChinese'],
                   fontSize: 12,
                   color: dark ? Colors.white60 : Colors.black54,
                 ),
@@ -933,8 +933,8 @@ class _SpreadWindowCardState extends State<_SpreadWindowCard> {
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                      fontFamily: 'macOSSystem',
-                      fontFamilyFallback: const ['macOSChinese'],
+                      fontFamily: 'ClarionSystem',
+                      fontFamilyFallback: const ['ClarionChinese'],
                       fontSize: 11,
                       fontWeight: FontWeight.w500,
                       color: widget.dark ? Colors.white70 : Colors.black87,
@@ -1068,8 +1068,8 @@ class _SpreadWindowCardState extends State<_SpreadWindowCard> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontFamily: 'macOSSystem',
-                        fontFamilyFallback: const ['macOSChinese'],
+                        fontFamily: 'ClarionSystem',
+                        fontFamilyFallback: const ['ClarionChinese'],
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
                         color: widget.dark ? Colors.white : Colors.black87,
@@ -1162,8 +1162,8 @@ class _SpreadWindowCardState extends State<_SpreadWindowCard> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      fontFamily: 'macOSSystem',
-                      fontFamilyFallback: const ['macOSChinese'],
+                      fontFamily: 'ClarionSystem',
+                      fontFamilyFallback: const ['ClarionChinese'],
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
                       color: widget.dark ? Colors.white : Colors.black87,
@@ -1179,8 +1179,8 @@ class _SpreadWindowCardState extends State<_SpreadWindowCard> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontFamily: 'macOSSystem',
-                        fontFamilyFallback: const ['macOSChinese'],
+                        fontFamily: 'ClarionSystem',
+                        fontFamilyFallback: const ['ClarionChinese'],
                         fontSize: 11,
                         color: widget.dark ? Colors.white60 : Colors.black54,
                       ),

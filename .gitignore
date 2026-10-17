@@ -30,17 +30,17 @@ __pycache__/
 .vscode/
 
 # Locally imported macOS reference assets (Apple property, never commit).
-# scripts/import-macos-assets.sh writes these; the removal record lives in
+# scripts/import-shell-assets.sh writes these; the removal record lives in
 # resources/licenses/removed-apple-assets.sha256.
-/clarion-shell/assets/macos/*.png
-/clarion-shell/assets/macos/*.pdf
-/clarion-shell/assets/macos/*.svg
-/clarion-shell/assets/macos/*.tiff
-/clarion-shell/assets/macos/*.icns
-/clarion-shell/assets/macos/*.ttf
-/clarion-shell/assets/macos/*.otf
-/clarion-shell/assets/macos/sources/
-/clarion-settings/assets/macos/*.png
+/clarion-shell/assets/shell/*.png
+/clarion-shell/assets/shell/*.pdf
+/clarion-shell/assets/shell/*.svg
+/clarion-shell/assets/shell/*.tiff
+/clarion-shell/assets/shell/*.icns
+/clarion-shell/assets/shell/*.ttf
+/clarion-shell/assets/shell/*.otf
+/clarion-shell/assets/shell/sources/
+/clarion-settings/assets/shell/*.png
 
 # Local Shell debug symbols
 /clarion-shell/debug_info/

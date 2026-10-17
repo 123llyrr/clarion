@@ -413,7 +413,7 @@ class _DesktopInspectorState extends State<_DesktopInspector> {
                         : line,
                     style: const TextStyle(
                       fontFamily: 'monospace',
-                      fontFamilyFallback: ['macOSChinese', 'Noto Sans CJK SC'],
+                      fontFamilyFallback: ['ClarionChinese', 'Noto Sans CJK SC'],
                       fontSize: 12,
                       height: 1.4,
                     ),

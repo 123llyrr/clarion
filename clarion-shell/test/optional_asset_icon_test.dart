@@ -11,7 +11,7 @@ import 'package:clarion_shell/ui/mac_app_icon.dart';
 import 'package:clarion_shell/ui/optional_asset_icon.dart';
 
 const _channel = MethodChannel('clarion.shell/window');
-const _missingAsset = 'assets/macos/public-test-unbundled.png';
+const _missingAsset = 'assets/shell/public-test-unbundled.png';
 
 class _OwnedImageBundle extends CachingAssetBundle {
   @override
@@ -31,7 +31,7 @@ class _OwnedImageBundle extends CachingAssetBundle {
 class _MissingAppearanceBundle extends CachingAssetBundle {
   @override
   Future<ByteData> load(String key) {
-    if (key.startsWith('assets/macos/') && key.endsWith('.png')) {
+    if (key.startsWith('assets/shell/') && key.endsWith('.png')) {
       return Future.error(
         FlutterError('Unable to load optional test asset: $key'),
       );
@@ -152,9 +152,9 @@ void main() {
 
   test('bundled font declarations point to shipped font files', () {
     final pubspec = File('pubspec.yaml').readAsStringSync();
-    expect(pubspec, contains('family: macOSSystem'));
-    expect(pubspec, contains('family: macOSChinese'));
-    final fonts = RegExp(r'- asset: (assets/macos/[^\n]+)').allMatches(pubspec);
+    expect(pubspec, contains('family: ClarionSystem'));
+    expect(pubspec, contains('family: ClarionChinese'));
+    final fonts = RegExp(r'- asset: (assets/shell/[^\n]+)').allMatches(pubspec);
     expect(fonts.length, 3);
     for (final font in fonts) {
       expect(File(font.group(1)!).lengthSync(), greaterThan(0));

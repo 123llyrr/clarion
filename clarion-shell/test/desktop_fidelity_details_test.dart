@@ -377,8 +377,8 @@ void main() {
     if (destination == null) return;
     await tester.runAsync(() async {
       for (final font in {
-        'macOSSystem': 'assets/macos/SFNS.ttf',
-        'macOSChinese': 'assets/macos/PingFangSC-Regular.otf',
+        'ClarionSystem': 'assets/shell/ui-text.ttf',
+        'ClarionChinese': 'assets/shell/cjk-regular.otf',
         'MaterialIcons':
             'build/unit_test_assets/fonts/MaterialIcons-Regular.otf',
       }.entries) {
@@ -400,8 +400,8 @@ void main() {
         rootBundle,
       )).listAssets();
       for (final asset in [
-        'assets/macos/generic-folder.png',
-        'assets/macos/generic-document.png',
+        'assets/shell/generic-folder.png',
+        'assets/shell/generic-document.png',
       ]) {
         if (assets.contains(asset)) {
           await precacheImage(AssetImage(asset), desktopContext);

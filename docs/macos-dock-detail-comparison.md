@@ -12,7 +12,7 @@
 | `Dock.app/Contents/Resources/zh_CN.lproj/DockMenus.strings` | 原中文菜单名：神奇/缩放、Folder/Stack、Fan/Grid/List/Automatic、排序、登录打开等 | SHA-256 `647a5ab0d83c034682b06ab0c8d6850a55e651986de8d8f7e96584d156eece5a` |
 | `Dock.prefPane/Contents/Resources/Base.lproj/PrefPane.nib` | `self.size`、`magnificationSize`、`showRecents`、`minimizeIntoApp`、`minimizeEffect` 等独立绑定 | SHA-256 `a8ce59fe7da4b9497b76efaa7f5643d3bb9dd77b5562f3778974f1e1980eab5e` |
 | `Dock.app/Contents/Resources/default.plist`、`com.apple.dockfixup.plist` | 有序应用模板、独立 Downloads directory tile、Mission Control 的真实应用身份；不是登录用户偏好 | 原值、哈希见本轮镜像清单 |
-| Core.pkg 的 CoreTypes / 应用 ICNS | Realand 使用的 Finder、Downloads、空/满 Trash、Launchpad 等原图来源；第三方 Linux 应用保持自身图标 | 资产来源与转换记录（本地记录：`$HOME/realand/clarion-shell/assets/macos/provenance.json`）、运行资产哈希（本地记录：`$HOME/realand/clarion-shell/assets/macos/SHA256SUMS`） |
+| Core.pkg 的 CoreTypes / 应用 ICNS | Realand 使用的 Finder、Downloads、空/满 Trash、Launchpad 等原图来源；第三方 Linux 应用保持自身图标 | 资产来源与转换记录（本地记录：`$HOME/realand/clarion-shell/assets/shell/provenance.json`）、运行资产哈希（本地记录：`$HOME/realand/clarion-shell/assets/shell/SHA256SUMS`） |
 
 完整绝对路径、115 个选定文件的哈希、菜单 flags、44 条 NIB 绑定和 PNG 尺寸保存在镜像核对清单（本地记录：`$HOME/Documents/Codex/2026-10-06/jia/work/dock-detail-completion-20261009/image-evidence.json`）与原始比较报告（本地记录：`$HOME/Documents/Codex/2026-10-06/jia/work/dock-detail-completion-20261009/mirror-comparison.md`）。Dock bundle 的 256px 图与运行资产中从 CoreTypes ICNS 恢复的 1024px 图是不同来源，不应混写为同一文件。
 

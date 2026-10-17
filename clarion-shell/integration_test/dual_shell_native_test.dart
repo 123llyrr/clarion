@@ -493,7 +493,7 @@ void main() {
             .listAssets()
             .where(
               (path) =>
-                  path.startsWith('assets/macos/') && path.endsWith('.png'),
+                  path.startsWith('assets/shell/') && path.endsWith('.png'),
             )
             .toList();
         expect(assets, isNotEmpty);

@@ -54,7 +54,7 @@ void main() {
       for (final alias in entry.value) {
         expect(
           MacAppIcons.assetFor(_app('$alias.desktop')),
-          'assets/macos/${entry.key}.png',
+          'assets/shell/${entry.key}.png',
           reason: alias,
         );
       }
@@ -64,7 +64,7 @@ void main() {
   test('only a desktop suffix is removed and matching ignores letter case', () {
     expect(
       MacAppIcons.assetFor(_app('  ORG.KDE.DOLPHIN.DESKTOP  ')),
-      'assets/macos/finder.png',
+      'assets/shell/finder.png',
     );
     for (final id in [
       'org.kde.dolphin.desktop.bak',
@@ -111,7 +111,7 @@ void main() {
         MacAppIcons.assetFor(
           _app('unregistered-role.desktop', iconName: entry.key),
         ),
-        'assets/macos/${entry.value}.png',
+        'assets/shell/${entry.value}.png',
       );
     }
     for (final icon in ['my-web-browser', 'terminal-notebook', 'dolphin.svg']) {
@@ -127,7 +127,7 @@ void main() {
       MacAppIcons.assetFor(
         _app('org.kde.kate.desktop', iconName: 'utilities-terminal'),
       ),
-      'assets/macos/textedit.png',
+      'assets/shell/textedit.png',
     );
   });
 
@@ -213,7 +213,7 @@ void main() {
   test('the generic fallback identifies a real bundled application asset', () {
     expect(
       MacAppIcons.genericApplication,
-      'assets/macos/generic-application.png',
+      'assets/shell/generic-application.png',
     );
   });
 }

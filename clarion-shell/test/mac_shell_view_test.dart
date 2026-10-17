@@ -460,7 +460,7 @@ void main() {
       );
       expect(
         buildMacShellTheme(Brightness.light).textTheme.bodyMedium?.fontFamily,
-        'macOSSystem',
+        'ClarionSystem',
       );
       await tester.tap(find.byKey(const ValueKey('dock-finder')));
       await tester.pumpAndSettle();
@@ -704,8 +704,8 @@ void main() {
             : provider;
         return (source as AssetImage).assetName;
       }).toSet();
-      expect(assets, contains('assets/macos/launchpad.png'));
-      expect(assets, contains('assets/macos/mission-control.png'));
+      expect(assets, contains('assets/shell/launchpad.png'));
+      expect(assets, contains('assets/shell/mission-control.png'));
       expect(tester.takeException(), isNull);
     },
   );
@@ -982,8 +982,8 @@ void main() {
     if (destination == null) return;
     await tester.runAsync(() async {
       for (final font in {
-        'macOSSystem': 'assets/macos/SFNS.ttf',
-        'macOSChinese': 'assets/macos/PingFangSC-Regular.otf',
+        'ClarionSystem': 'assets/shell/ui-text.ttf',
+        'ClarionChinese': 'assets/shell/cjk-regular.otf',
         'MaterialIcons':
             'build/unit_test_assets/fonts/MaterialIcons-Regular.otf',
       }.entries) {

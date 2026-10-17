@@ -12,7 +12,7 @@ This index accompanies those records; it does not replace source headers or depe
 | Canvas-related adaptations | [MIT notice](resources/licenses/nourish-MIT.txt), [adaptation notes](docs/nourish-port.md) |
 | Glass rendering sources | [Source and license record](resources/licenses/liquid-glass-sources.txt), [GPL text](resources/licenses/niri-glass-GPL-3.0.txt) |
 | GTK-related interfaces | [LGPL text](resources/licenses/gtk-COPYING.txt), source-file notices |
-| Removed Apple-derived assets | [Removal manifest](resources/licenses/removed-apple-assets.sha256), [policy and restore path](clarion-shell/assets/macos/README.txt) |
+| Removed Apple-derived assets | [Removal manifest](resources/licenses/removed-apple-assets.sha256), [policy and restore path](clarion-shell/assets/shell/README.txt) |
 
 Other Rust, Flutter and system-library dependencies are identified by their manifests, lockfiles and retained source notices.
 
@@ -24,8 +24,8 @@ tree on 2026-10-17: Apple's license does not permit redistribution, and
 GPL-3.0-or-later cannot grant that right.
 
 `resources/licenses/removed-apple-assets.sha256` records every removed file with
-its SHA-256. `scripts/import-macos-assets.sh` restores an identical copy on a
+its SHA-256. `scripts/import-shell-assets.sh` restores an identical copy on a
 machine whose owner supplies the source files; imported files are git-ignored.
-The extraction records in `clarion-shell/assets/macos/provenance.json` and
-`clarion-settings/assets/macos/provenance.json` are audit metadata, not a
+The extraction records in `clarion-shell/assets/shell/provenance.json` and
+`clarion-settings/assets/shell/provenance.json` are audit metadata, not a
 redistribution grant.

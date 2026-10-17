@@ -232,7 +232,7 @@ largest 256px PNG chunks. Launchpad/Mission Control remain 1024px originals.
 Selected ICNS files match their embedded CodeResources SHA-1 and SHA-256 entries;
 this checks resource integrity, not the incomplete image or Apple certificate trust.
 Sources and SHA-256 checksums are recorded in
-`clarion-shell/assets/macos/provenance.json`; macOS applications are never run.
+`clarion-shell/assets/shell/provenance.json`; macOS applications are never run.
 
 `MacAppIcons` resolves exact desktop IDs or semantic icon names, and `MacAppIcon`
 applies that same result to Dock, Launchpad/search, folder previews and drag feedback.

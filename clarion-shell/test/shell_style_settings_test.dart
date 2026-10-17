@@ -33,10 +33,10 @@ void main() {
       if (width < 320) {
         await tester.tap(style);
         await tester.pumpAndSettle();
-        await tester.tap(find.text('macOS').last);
+        await tester.tap(find.text('Clarion').last);
       } else {
         await tester.tap(
-          find.descendant(of: style, matching: find.text('macOS')),
+          find.descendant(of: style, matching: find.text('Clarion')),
         );
       }
       await tester.pumpAndSettle();

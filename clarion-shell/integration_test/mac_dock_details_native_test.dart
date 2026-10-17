@@ -326,7 +326,7 @@ Future<Map<String, Object>> _folderPixels(
     await capture.readAsBytes(),
   );
   final screenshot = (await screenshotCodec.getNextFrame()).image;
-  final bytes = await rootBundle.load('assets/macos/downloads.png');
+  final bytes = await rootBundle.load('assets/shell/downloads.png');
   final sourceCodec = await ui.instantiateImageCodec(
     bytes.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes),
   );
@@ -645,7 +645,7 @@ void main() {
         await tester.runAsync(() async {
           final errors = <Object>[];
           await precacheImage(
-            const AssetImage('assets/macos/downloads.png'),
+            const AssetImage('assets/shell/downloads.png'),
             tester.element(dock),
             onError: (e, s) => errors.add(e),
           );

@@ -9,7 +9,7 @@ import 'models.dart';
 class MacAppIcons {
   MacAppIcons._();
 
-  static const genericApplication = 'assets/macos/generic-application.png';
+  static const genericApplication = 'assets/shell/generic-application.png';
 
   static const _desktopIds = <String, String>{
     'files': 'finder',
@@ -154,14 +154,14 @@ class MacAppIcons {
   static String? assetFor(DesktopApp app) {
     final id = _desktopId(app.id);
     final desktopIcon = _desktopIds[id];
-    if (desktopIcon != null) return 'assets/macos/$desktopIcon.png';
+    if (desktopIcon != null) return 'assets/shell/$desktopIcon.png';
     if (_preservedBrands.contains(id)) return null;
     final iconName = app.iconName?.trim().toLowerCase();
     final icon = _desktopIds[iconName] ?? _iconNames[iconName];
-    return icon == null ? null : 'assets/macos/$icon.png';
+    return icon == null ? null : 'assets/shell/$icon.png';
   }
 
   /// Dock ordering uses the same exact identity rules as its presentation.
   static bool isFileManager(DesktopApp app) =>
-      assetFor(app) == 'assets/macos/finder.png';
+      assetFor(app) == 'assets/shell/finder.png';
 }

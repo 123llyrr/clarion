@@ -40,8 +40,8 @@ const _terminal = DesktopApp(
 );
 const _roles = [_files, _terminal];
 const _roleAssets = {
-  'org.kde.dolphin.desktop': 'assets/macos/finder.png',
-  'Alacritty.desktop': 'assets/macos/terminal.png',
+  'org.kde.dolphin.desktop': 'assets/shell/finder.png',
+  'Alacritty.desktop': 'assets/shell/terminal.png',
 };
 
 class _Controller extends ShellController {

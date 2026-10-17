@@ -2199,7 +2199,7 @@ class _DesktopViewState extends State<DesktopView> with WidgetsBindingObserver {
             ? Icons.folder_rounded
             : Icons.insert_drive_file_rounded,
         asset:
-            'assets/macos/${entry.isDirectory ? 'generic-folder' : 'generic-document'}.png',
+            'assets/shell/${entry.isDirectory ? 'generic-folder' : 'generic-document'}.png',
         width: size,
         height: size,
         filterQuality: FilterQuality.high,
@@ -2224,7 +2224,7 @@ class _DesktopViewState extends State<DesktopView> with WidgetsBindingObserver {
             left: 0,
             bottom: 0,
             child: OptionalAssetIcon(
-              asset: 'assets/macos/alias-badge.png',
+              asset: 'assets/shell/alias-badge.png',
               fallback: Icons.shortcut_rounded,
               fallbackColor: Colors.white,
               width: size * 14 / 48,

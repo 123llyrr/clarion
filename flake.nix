@@ -50,8 +50,8 @@
               ./clarion-scene
               ./clarion-ipc
               ./clarion-settings
-              ./clarion-shell/assets/macos/SFNS.ttf
-              ./clarion-shell/assets/macos/PingFangSC-Regular.otf
+              ./clarion-shell/assets/shell/ui-text.ttf
+              ./clarion-shell/assets/shell/cjk-regular.otf
               ./clarion-visual-tests
               ./resources
               ./src
