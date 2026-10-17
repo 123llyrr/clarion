@@ -61,6 +61,16 @@ class _LauncherSurfaceState extends State<LauncherSurface> {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final macos = widget.controller.shellStyle == ShellStyle.macos;
+    if (widget.controller.externalLauncherEnabled) {
+      return widget.visible
+          ? GestureDetector(
+              key: const ValueKey('external-launcher-backdrop'),
+              behavior: HitTestBehavior.opaque,
+              onTap: widget.controller.closePanel,
+              child: ColoredBox(color: Colors.black.withValues(alpha: .14)),
+            )
+          : const SizedBox.shrink();
+    }
     if (widget.visible && macos && _macLayout == null) {
       _ownsMacLayout = widget.macLayout == null;
       _macLayout =

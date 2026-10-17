@@ -12,6 +12,7 @@ import '../mac_shell_preferences.dart';
 import '../app_menu_models.dart';
 import '../services/global_app_menu_service.dart';
 import '../services/desktop_apps.dart';
+import '../services/launcher_bridge.dart';
 import '../services/login_items_service.dart';
 import '../services/media_service.dart';
 import '../services/audio_output_service.dart';
@@ -35,6 +36,9 @@ class ShellController extends ChangeNotifier {
     ClarionIpc? ipc,
     SystemService? system,
     DesktopApps? desktopApps,
+    LauncherBridge? launcherBridge,
+    bool useExternalLauncher = true,
+    this.launcherVisibleTimeout = const Duration(seconds: 8),
     LoginItemsService? loginItemsService,
     AudioOutputService? audioOutputService,
     MediaService? mediaService,
@@ -51,7 +55,10 @@ class ShellController extends ChangeNotifier {
     this.mediaEnabled = true,
     bool tray = true,
     this.restoreWallpaperOnStart = true,
-  }) : _ipc = ipc ?? ClarionIpc(),
+  }) : _launcherBridge = launcherBridge ?? LauncherBridge(),
+       _launcherBridgeInjected = launcherBridge != null,
+       _useExternalLauncher = useExternalLauncher,
+       _ipc = ipc ?? ClarionIpc(),
        appMenu = appMenuService ?? GlobalAppMenuService(),
        _system = system ?? SystemService(),
        _desktopApps = desktopApps ?? DesktopApps(),
@@ -86,6 +93,7 @@ class ShellController extends ChangeNotifier {
            ? notificationService ?? NotificationService()
            : null,
        _trayService = tray ? trayService ?? TrayService() : trayService {
+    _subscriptions.add(_launcherBridge.events.listen(_launcherEvent));
     appMenu.addListener(_appMenuChanged);
     audioOutputs.addListener(_audioOutputsChanged);
     media.addListener(_changed);
@@ -94,6 +102,7 @@ class ShellController extends ChangeNotifier {
     if (demo) _loadDemo();
   }
   final bool demo;
+  final Duration launcherVisibleTimeout;
   final int? monitor;
   final bool restoreWallpaperOnStart;
   final bool powerProfilesEnabled;
@@ -133,6 +142,174 @@ class ShellController extends ChangeNotifier {
   final ClarionIpc _ipc;
   final SystemService _system;
   final DesktopApps _desktopApps;
+  final LauncherBridge _launcherBridge;
+  final bool _launcherBridgeInjected;
+  bool _useExternalLauncher;
+  bool _externalLauncherFailed = false;
+  bool _externalLauncherVisible = false;
+  int _externalLauncherRequest = 0;
+  int? _externalAppliedRequest;
+  bool _externalAppliedVisible = false;
+  Timer? _externalVisibleDeadline;
+  bool get useExternalLauncher => _useExternalLauncher;
+  bool get externalLauncherEnabled =>
+      _useExternalLauncher &&
+      !_externalLauncherFailed &&
+      _shellStyle == ShellStyle.macos &&
+      (_launcherBridgeInjected ||
+          (!demo && !Platform.environment.containsKey('FLUTTER_TEST')));
+  bool get externalLauncherDesired =>
+      externalLauncherEnabled && _panel == ShellPanel.launcher;
+  bool get externalLauncherVisible => _externalLauncherVisible;
+  int get externalLauncherRequest => _externalLauncherRequest;
+
+  void _invalidateExternalLauncher() {
+    _externalVisibleDeadline?.cancel();
+    _externalLauncherRequest = _launcherBridge.beginRequest();
+    _externalLauncherVisible = false;
+  }
+
+  void setUseExternalLauncher(bool value) {
+    if (_disposed ||
+        (_useExternalLauncher == value && !_externalLauncherFailed)) {
+      return;
+    }
+    _useExternalLauncher = value;
+    _externalLauncherFailed = false;
+    _invalidateExternalLauncher();
+    _changed();
+  }
+
+  /// The window host calls this only after applying the backdrop and keyboard
+  /// policy. The bridge queues I/O independently so startup cannot block close.
+  Future<void> applyExternalLauncher({
+    required bool visible,
+    required int requestId,
+    required String accent,
+  }) async {
+    if (_disposed || requestId != _externalLauncherRequest) return;
+    final alreadyApplied =
+        _externalAppliedRequest == requestId &&
+        _externalAppliedVisible == visible;
+    if (alreadyApplied && !visible) return;
+    if (!visible && _externalAppliedRequest == null) return;
+    try {
+      if (alreadyApplied) {
+        if (externalLauncherDesired) {
+          await _launcherBridge.preferences(
+            requestId: requestId,
+            theme: _themeMode.name,
+            accent: accent,
+            recent: List.of(_recentAppIds),
+          );
+        }
+        return;
+      }
+      _externalAppliedRequest = requestId;
+      _externalAppliedVisible = visible;
+      if (!visible) {
+        await _launcherBridge.hide(requestId);
+      } else {
+        if (!externalLauncherDesired) return;
+        await _refreshOutputName();
+        var output = _outputName;
+        if (demo && _launcherBridgeInjected) {
+          // An injected native host still needs the real output, rather than
+          // the demo model's synthetic Preview name.
+          try {
+            output = await _window.invokeMethod<String>('outputName');
+          } on MissingPluginException {
+            output = null;
+          }
+        }
+        if (_disposed ||
+            requestId != _externalLauncherRequest ||
+            !externalLauncherDesired) {
+          return;
+        }
+        await _launcherBridge.show(
+          requestId: requestId,
+          output: output,
+          theme: _themeMode.name,
+          accent: accent,
+          recent: List.of(_recentAppIds),
+        );
+        if (!_disposed &&
+            requestId == _externalLauncherRequest &&
+            externalLauncherDesired &&
+            !_externalLauncherVisible) {
+          _externalVisibleDeadline?.cancel();
+          _externalVisibleDeadline = Timer(launcherVisibleTimeout, () {
+            if (!_disposed &&
+                requestId == _externalLauncherRequest &&
+                externalLauncherDesired &&
+                !_externalLauncherVisible) {
+              _externalLauncherFallback('外部应用面板未响应。');
+            }
+          });
+        }
+      }
+    } on Object catch (error) {
+      if (!_disposed &&
+          requestId == _externalLauncherRequest &&
+          externalLauncherDesired) {
+        _externalLauncherFallback('外部应用面板连接失败：$error');
+      }
+    }
+  }
+
+  void _externalLauncherFallback(String message) {
+    if (_disposed || !externalLauncherDesired) return;
+    _externalLauncherFailed = true;
+    _invalidateExternalLauncher();
+    _setError('$message\n已恢复 Flutter 应用启动器。');
+    _changed();
+  }
+
+  void externalLauncherUnavailable(String message) =>
+      _externalLauncherFallback(message);
+
+  void _launcherEvent(LauncherEvent event) {
+    if (_disposed) return;
+    // Launch completion remains real after a hide/reopen supersedes its request.
+    if (event.type == 'Launched') {
+      final id = event.appId?.trim();
+      if (id != null && id.isNotEmpty) {
+        if (!_rememberRecentApp(id)) {
+          _recentAppIds = List.unmodifiable(
+            [id, ..._recentAppIds.where((value) => value != id)].take(24),
+          );
+        }
+        _unresolvedRecentFocus = null;
+        if (event.requestId == _externalLauncherRequest &&
+            externalLauncherDesired) {
+          _setError(null);
+        }
+        _changed();
+      }
+      return;
+    }
+    if (event.requestId != _externalLauncherRequest ||
+        !externalLauncherDesired) {
+      return;
+    }
+    switch (event.type) {
+      case 'Visible':
+        _externalVisibleDeadline?.cancel();
+        _externalLauncherVisible = true;
+        _changed();
+      case 'Hidden':
+        closePanel();
+      case 'Error':
+        if (event.context == 'launch') {
+          _setError('应用启动失败：${event.message ?? '请重试'}');
+          _changed();
+        } else {
+          _externalLauncherFallback(event.message ?? '外部应用面板不可用');
+        }
+    }
+  }
+
   final NotificationService? _notificationService;
   final TrayService? _trayService;
   static const _window = MethodChannel('clarion.shell/window');
@@ -1214,6 +1391,7 @@ class ShellController extends ChangeNotifier {
         if (name != _outputName) {
           _dockGeometryRevision++;
           _outputName = name;
+          if (externalLauncherDesired) _invalidateExternalLauncher();
           unawaited(setDockMinimizeTargets(const {}));
           _desktopRevision++;
           _barTooltip = null;
@@ -2247,6 +2425,9 @@ class ShellController extends ChangeNotifier {
   }
 
   void _setPanel(ShellPanel panel) {
+    if (_panel == ShellPanel.launcher || panel == ShellPanel.launcher) {
+      _invalidateExternalLauncher();
+    }
     if (_panel == ShellPanel.spaces && panel != ShellPanel.spaces) {
       _windowPreviewService?.cancelQueued();
     }
@@ -3164,6 +3345,7 @@ class ShellController extends ChangeNotifier {
     _disposed = true;
     unawaited(_windowPreviewService?.dispose());
     _clock?.cancel();
+    _externalVisibleDeadline?.cancel();
     _poll?.cancel();
     _sliderRefresh?.cancel();
     for (final slider in _sliders.values) {
@@ -3182,6 +3364,7 @@ class ShellController extends ChangeNotifier {
     trashState.removeListener(_changed);
     trashState.dispose();
     appMenu.dispose();
+    unawaited(_launcherBridge.dispose());
     _ipc.dispose();
     _notificationService?.dispose();
     _trayService?.dispose();

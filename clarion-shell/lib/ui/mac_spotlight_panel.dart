@@ -251,6 +251,8 @@ class _MacSpotlightPanelState extends State<MacSpotlightPanel> {
 
   void _activate(_SpotlightResult result) {
     switch (result.kind) {
+      case _ResultKind.launcher:
+        widget.controller.selectPanel(ShellPanel.launcher);
       case _ResultKind.app:
         if (result.appId != null) {
           widget.controller.focusOrLaunchApp(result.appId!);
@@ -297,6 +299,12 @@ class _MacSpotlightPanelState extends State<MacSpotlightPanel> {
   }
 
   static final _systemEntries = [
+    _SpotlightResult(
+      icon: Icons.apps_rounded,
+      title: '应用程序',
+      subtitle: 'Apps Applications 应用面板',
+      kind: _ResultKind.launcher,
+    ),
     _SpotlightResult(
       icon: Icons.settings_rounded,
       title: '系统设置',
@@ -564,7 +572,7 @@ class _SpotlightResultTile extends StatelessWidget {
   }
 }
 
-enum _ResultKind { app, calculator, systemSetting }
+enum _ResultKind { app, calculator, systemSetting, launcher }
 
 class _SpotlightResult {
   const _SpotlightResult({

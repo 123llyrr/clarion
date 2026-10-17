@@ -74,6 +74,8 @@ class IdentityCompatibilityTests(unittest.TestCase):
             for relative in ("clarion-shell", "lib/libflutter_linux_gtk.so", "data/icudtl.dat"):
                 (bundle / relative).write_bytes(b"fixture")
             (bundle / "clarion-shell").chmod(0o755)
+            (bundle / "clarion-launcher").write_bytes(b"launcher fixture")
+            (bundle / "clarion-launcher").chmod(0o755)
             prefix = root / "local"
             result = subprocess.run(
                 [sys.executable, str(ROOT / "scripts/install-shell.py"),

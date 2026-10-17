@@ -775,6 +775,7 @@ class _MacDockViewState extends State<MacDockView> {
       trash: widget.controller.trashState.hasItems,
       folderEntries: widget.controller.dockFolder.entries,
       panel: widget.controller.panel,
+      externalLauncher: widget.controller.externalLauncherEnabled,
       appMenuOpen: widget.controller.appMenuOpen,
       reduced: widget.controller.reduceMotion,
       preferences: widget.controller.macPreferences,
@@ -874,7 +875,7 @@ class _MacDockViewState extends State<MacDockView> {
           slots.add(
             _DockSlot(
               id: _launcher,
-              label: '启动台',
+              label: controller.externalLauncherEnabled ? '应用' : '启动台',
               icon: _asset('launchpad', pixelSize),
               onTap: () => controller.selectPanel(ShellPanel.launcher),
               selected: controller.panel == ShellPanel.launcher,

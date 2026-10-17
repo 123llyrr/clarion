@@ -78,6 +78,7 @@ Future<void> main(List<String> arguments) async {
   );
   controller.setThemeMode(preferences.themeMode);
   controller.setReduceMotion(preferences.reduceMotion);
+  controller.setUseExternalLauncher(preferences.useExternalLauncher);
   controller.setBarPosition(preferences.barPosition);
   controller.setPinnedAppIds(preferences.pinnedAppIds);
   controller.setRecentAppIds(preferences.recentAppIds);
@@ -594,6 +595,10 @@ typedef _DesiredWindowState = ({
   BarPosition position,
   _MenuWindowState menu,
   _LauncherWindowState launcher,
+  bool externalLauncher,
+  int externalLauncherRequest,
+  ThemeMode launcherTheme,
+  List<String> launcherRecent,
   bool expanded,
   bool tooltip,
 });
@@ -602,6 +607,7 @@ class _ShellApplicationState extends State<ShellApplication> {
   static const _window = MethodChannel('clarion.shell/window');
   late ThemeMode _savedTheme;
   late bool _savedMotion;
+  late bool _savedExternalLauncher;
   late BarPosition _savedBarPosition;
   late ShellStyle _savedStyle;
   late MacShellPreferences _savedMacPreferences;
@@ -610,6 +616,7 @@ class _ShellApplicationState extends State<ShellApplication> {
   List<String> _savedRecentApps = const [];
   ShellStyle? _appliedStyle;
   bool? _appliedExpanded;
+  bool _keyboardRelinquished = false;
   BarPosition? _nativeBarPosition;
   _MenuWindowState? _nativeMenu;
   _LauncherWindowState? _nativeLauncher;
@@ -635,6 +642,7 @@ class _ShellApplicationState extends State<ShellApplication> {
     super.initState();
     _savedTheme = widget.controller.themeMode;
     _savedMotion = widget.controller.reduceMotion;
+    _savedExternalLauncher = widget.controller.useExternalLauncher;
     _savedBarPosition = widget.controller.barPosition;
     _savedStyle = widget.controller.shellStyle;
     _savedMacPreferences = widget.controller.macPreferences;
@@ -686,6 +694,10 @@ class _ShellApplicationState extends State<ShellApplication> {
         interactive: macos && controller.panel == ShellPanel.launcher,
       ),
       expanded: expanded,
+      externalLauncher: controller.externalLauncherDesired,
+      externalLauncherRequest: controller.externalLauncherRequest,
+      launcherTheme: controller.themeMode,
+      launcherRecent: controller.recentAppIds,
       tooltip: !expanded && controller.barTooltip != null,
     );
   }
@@ -696,6 +708,7 @@ class _ShellApplicationState extends State<ShellApplication> {
 
   void _changed() {
     final controller = widget.controller;
+    if (controller.externalLauncherEnabled) _launcherSurfaceVisible = false;
     final requested = _desiredWindowState;
     if (_requestedWindowState != requested) {
       _requestedWindowState = requested;
@@ -717,6 +730,7 @@ class _ShellApplicationState extends State<ShellApplication> {
             _appliedStyle = requestedStyle;
             // The runner resets these when a native view changes style.
             _appliedExpanded = null;
+            _keyboardRelinquished = false;
             _nativeLauncher = null;
             _nativeTooltip = null;
           }
@@ -736,6 +750,23 @@ class _ShellApplicationState extends State<ShellApplication> {
               'height': menu.height,
             });
             _nativeMenu = menu;
+          }
+          if (!mounted || revision != _nativeRevision) return;
+          if (!requested.externalLauncher) {
+            unawaited(
+              controller.applyExternalLauncher(
+                visible: false,
+                requestId: requested.externalLauncherRequest,
+                accent: _launcherAccent,
+              ),
+            );
+          } else if (!_keyboardRelinquished || _appliedExpanded == false) {
+            // Arm None before expansion so the backdrop never grabs launcher keys.
+            await _window.invokeMethod<void>(
+              'setKeyboardInteractivity',
+              'none',
+            );
+            _keyboardRelinquished = true;
           }
           if (!mounted || revision != _nativeRevision) return;
           final launcher = requested.launcher;
@@ -759,6 +790,14 @@ class _ShellApplicationState extends State<ShellApplication> {
             if (requestedExpanded) _nativeTooltip = false;
           }
           if (!mounted || revision != _nativeRevision) return;
+          if (!requested.externalLauncher && _keyboardRelinquished) {
+            await _window.invokeMethod<void>(
+              'setKeyboardInteractivity',
+              'default',
+            );
+            _keyboardRelinquished = false;
+          }
+          if (!mounted || revision != _nativeRevision) return;
           clearAfterCommit |= await _syncPanelGlass();
           if (!mounted || revision != _nativeRevision) return;
           final tooltip = requested.tooltip;
@@ -766,7 +805,21 @@ class _ShellApplicationState extends State<ShellApplication> {
             await _window.invokeMethod<void>('setTooltipVisible', tooltip);
             _nativeTooltip = tooltip;
           }
+          if (!mounted || revision != _nativeRevision) return;
+          if (requested.externalLauncher) {
+            // Startup I/O cannot hold the native queue during rapid close/reopen.
+            unawaited(
+              controller.applyExternalLauncher(
+                visible: true,
+                requestId: requested.externalLauncherRequest,
+                accent: _launcherAccent,
+              ),
+            );
+          }
         } on MissingPluginException {
+          if (requested.externalLauncher) {
+            controller.externalLauncherUnavailable('当前外壳不支持应用面板焦点交接。');
+          }
           if (mounted && revision == _nativeRevision) {
             _appliedStyle = controller.shellStyle;
           }
@@ -774,7 +827,11 @@ class _ShellApplicationState extends State<ShellApplication> {
         } on PlatformException catch (error) {
           stderr.writeln('Clarion Shell window: ${error.message}');
           if (!mounted || revision != _nativeRevision) return;
-          if (controller.shellStyle != ShellStyle.material) {
+          if (requested.externalLauncher) {
+            controller.externalLauncherUnavailable(
+              error.message ?? '应用面板焦点交接失败',
+            );
+          } else if (controller.shellStyle != ShellStyle.material) {
             controller.shellStyleFailed('Clarion 外壳启动失败。');
           } else if (controller.panel != ShellPanel.none &&
               panelRevision == controller.panelRevision) {
@@ -789,6 +846,7 @@ class _ShellApplicationState extends State<ShellApplication> {
     }
     if (_savedTheme != controller.themeMode ||
         _savedMotion != controller.reduceMotion ||
+        _savedExternalLauncher != controller.useExternalLauncher ||
         _savedBarPosition != controller.barPosition ||
         _savedStyle != controller.shellStyle ||
         _savedMacPreferences != controller.macPreferences ||
@@ -796,6 +854,7 @@ class _ShellApplicationState extends State<ShellApplication> {
         !listEquals(_savedPins, controller.pinnedAppIdsPreference)) {
       _savedTheme = controller.themeMode;
       _savedMotion = controller.reduceMotion;
+      _savedExternalLauncher = controller.useExternalLauncher;
       _savedBarPosition = controller.barPosition;
       _savedStyle = controller.shellStyle;
       _savedMacPreferences = controller.macPreferences;
@@ -813,6 +872,7 @@ class _ShellApplicationState extends State<ShellApplication> {
           final preferences = ShellPreferences(
             themeMode: controller.themeMode,
             reduceMotion: controller.reduceMotion,
+            useExternalLauncher: controller.useExternalLauncher,
             barPosition: controller.barPosition,
             shellStyle: controller.shellStyle,
             pinnedAppIds: controller.pinnedAppIdsPreference,
@@ -928,7 +988,11 @@ class _ShellApplicationState extends State<ShellApplication> {
     return false;
   }
 
+  String get _launcherAccent =>
+      '#${(widget.preferences.seed.toARGB32() & 0xffffff).toRadixString(16).padLeft(6, '0')}';
+
   void _launcherSurfaceChanged(bool visible) {
+    if (widget.controller.externalLauncherEnabled && visible) return;
     if (!mounted || _launcherSurfaceVisible == visible) return;
     _launcherSurfaceVisible = visible;
     _changed();

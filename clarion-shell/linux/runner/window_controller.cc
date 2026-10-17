@@ -179,6 +179,10 @@ bool WindowController::BarBottom() const {
   return bar_bottom_ && !macos_;
 }
 
+bool WindowController::MainKeyboardExclusive() const {
+  return expanded_ && keyboard_interactivity_override_.value_or(true);
+}
+
 void WindowController::ConfigureLayerWindow() {
   if (window_ == nullptr || preview_) return;
   const bool centered_menu = macos_ && !expanded_ && mac_menu_width_percent_ < 100;
@@ -194,7 +198,7 @@ void WindowController::ConfigureLayerWindow() {
   // input-free surfaces reserve the desktop edges without moving the menu,
   // vertical Dock or full-output modal overlay into a reduced working area.
   gtk_layer_set_exclusive_zone(window_, macos_ ? -1 : BarHeight());
-  gtk_layer_set_keyboard_mode(window_, expanded_
+  gtk_layer_set_keyboard_mode(window_, MainKeyboardExclusive()
       ? GTK_LAYER_SHELL_KEYBOARD_MODE_EXCLUSIVE
       : GTK_LAYER_SHELL_KEYBOARD_MODE_NONE);
 
@@ -301,6 +305,7 @@ void WindowController::DestroyReservations() {
 
 bool WindowController::SetExpanded(bool expanded) {
   if (window_ == nullptr || closed_) return false;
+  if (!expanded) keyboard_interactivity_override_.reset();
   if (expanded_ == expanded) return true;
   expanded_ = expanded;
   if (!expanded_) {
@@ -316,7 +321,19 @@ bool WindowController::SetExpanded(bool expanded) {
   ConfigureDockWindow();
   UpdateInputRegion();
   UpdateBackgroundEffects();
-  if (expanded_ && view_ != nullptr) gtk_widget_grab_focus(GTK_WIDGET(view_));
+  if (MainKeyboardExclusive() && view_ != nullptr) {
+    gtk_widget_grab_focus(GTK_WIDGET(view_));
+  }
+  return true;
+}
+
+bool WindowController::SetKeyboardInteractivity(std::optional<bool> exclusive) {
+  if (window_ == nullptr || closed_) return false;
+  keyboard_interactivity_override_ = exclusive;
+  ConfigureLayerWindow();
+  if (MainKeyboardExclusive() && view_ != nullptr) {
+    gtk_widget_grab_focus(GTK_WIDGET(view_));
+  }
   return true;
 }
 
@@ -447,6 +464,7 @@ bool WindowController::SetShellStyle(bool macos) {
   if (macos_ == macos) return true;
   DismissTooltip();
   expanded_ = false;
+  keyboard_interactivity_override_.reset();
   panel_glass_region_.reset();
   macos_ = macos;
   if (!macos_) {
@@ -676,6 +694,7 @@ gboolean WindowController::DockReadyTimeout(gpointer data) {
   if (self->closed_ || !self->macos_ || self->dock_first_frame_) return G_SOURCE_REMOVE;
   self->macos_ = false;
   self->expanded_ = false;
+  self->keyboard_interactivity_override_.reset();
   self->panel_glass_region_.reset();
   self->DismissTooltip();
   self->DestroyDock();
@@ -861,6 +880,10 @@ FlValue* WindowController::WindowState() const {
       : gtk_layer_get_keyboard_mode(window_);
   fl_value_set_string_take(state, "keyboard", fl_value_new_string(
       mode == GTK_LAYER_SHELL_KEYBOARD_MODE_EXCLUSIVE ? "Exclusive" : "None"));
+  fl_value_set_string_take(state, "keyboardInteractivityOverride",
+      keyboard_interactivity_override_.has_value()
+          ? fl_value_new_string(*keyboard_interactivity_override_ ? "exclusive" : "none")
+          : fl_value_new_null());
   fl_value_set_string_take(state, "exclusiveZone", fl_value_new_int(
       preview_ ? 0 : gtk_layer_get_exclusive_zone(window_)));
   fl_value_set_string_take(state, "reservationZone", fl_value_new_int(
@@ -911,6 +934,24 @@ void WindowController::MethodCall(FlMethodChannel*, FlMethodCall* call,
           "window-closed", "The shell window has closed", nullptr));
     } else {
       response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+    }
+  } else if (strcmp(method, "setKeyboardInteractivity") == 0) {
+    const gchar* mode = arguments != nullptr &&
+        fl_value_get_type(arguments) == FL_VALUE_TYPE_STRING
+        ? fl_value_get_string(arguments) : nullptr;
+    if (mode == nullptr || (strcmp(mode, "none") != 0 &&
+        strcmp(mode, "exclusive") != 0 && strcmp(mode, "default") != 0)) {
+      response = FL_METHOD_RESPONSE(fl_method_error_response_new(
+          "invalid-argument", "setKeyboardInteractivity requires none, exclusive or default", nullptr));
+    } else {
+      const std::optional<bool> exclusive = strcmp(mode, "default") == 0
+          ? std::nullopt : std::optional<bool>(strcmp(mode, "exclusive") == 0);
+      if (!self->SetKeyboardInteractivity(exclusive)) {
+        response = FL_METHOD_RESPONSE(fl_method_error_response_new(
+            "window-closed", "The shell window has closed", nullptr));
+      } else {
+        response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+      }
     }
   } else if (strcmp(method, "setLauncherBackdrop") == 0) {
     const bool map = arguments != nullptr && fl_value_get_type(arguments) == FL_VALUE_TYPE_MAP;

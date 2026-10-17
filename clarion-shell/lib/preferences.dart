@@ -12,6 +12,7 @@ class ShellPreferences {
   const ShellPreferences({
     this.themeMode = ThemeMode.system,
     this.reduceMotion = false,
+    this.useExternalLauncher = true,
     this.seed = const Color(0xff6750a4),
     this.barPosition = BarPosition.top,
     this.shellStyle = ShellStyle.material,
@@ -21,6 +22,7 @@ class ShellPreferences {
   });
   final ThemeMode themeMode;
   final bool reduceMotion;
+  final bool useExternalLauncher;
   final Color seed;
   final BarPosition barPosition;
   final ShellStyle shellStyle;
@@ -43,6 +45,7 @@ class ShellPreferences {
     return ShellPreferences(
       themeMode: mode,
       reduceMotion: json['reduce_motion'] == true,
+      useExternalLauncher: json['use_external_launcher'] != false,
       seed: Color(0xff000000 | rgb),
       barPosition: json['bar_position'] == 'bottom'
           ? BarPosition.bottom
@@ -74,6 +77,7 @@ class ShellPreferences {
     'version': 1,
     'theme': themeMode.name,
     'reduce_motion': reduceMotion,
+    'use_external_launcher': useExternalLauncher,
     'bar_position': barPosition.name,
     'shell_style': shellStyle.name,
     if (pinnedAppIds != null) 'pinned_app_ids': pinnedAppIds,

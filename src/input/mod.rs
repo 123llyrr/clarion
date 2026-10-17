@@ -62,6 +62,7 @@ use crate::utils::{center, get_monotonic_time, CastSessionId, ResizeEdge};
 pub mod backend_ext;
 pub mod click_grab;
 pub mod hot_corner;
+pub mod launcher_gesture;
 pub mod move_grab;
 pub mod pick_color_grab;
 pub mod pick_window_grab;
@@ -466,6 +467,27 @@ impl State {
             )
     }
 
+    fn shell_launcher_available(&self) -> bool {
+        !self.clarion.is_locked()
+            && !self.clarion.screenshot_ui.is_open()
+            && !self.clarion.window_mru_ui.is_open()
+            && !self.clarion.exit_confirm_dialog.is_open()
+            && !self.clarion.hotkey_overlay.is_open()
+            && !self.clarion.overview_mode_transition_active()
+            && !self.clarion.layout.is_overview_open()
+            && !self.is_inhibiting_shortcuts()
+            && !self
+                .clarion
+                .seat
+                .get_pointer()
+                .is_some_and(|pointer| pointer.is_grabbed())
+            && self
+                .clarion
+                .mapped_layer_surfaces
+                .keys()
+                .any(|layer| layer.namespace() == "clarion-shell")
+    }
+
     fn on_keyboard<I: InputBackend>(
         &mut self,
         event: I::KeyboardKeyEvent,
@@ -698,6 +720,14 @@ impl State {
                 }
 
                 if matches!(res, FilterResult::Forward) {
+                    // Preserve user bindings and shortcut inhibitors. Existing configurations
+                    // gain the Apps key only when the native Shell is running.
+                    if pressed && this.shell_launcher_available() {
+                        if let Some(bind) = launcher_key_bind(raw, modifiers) {
+                            this.clarion.suppressed_keys.insert(key_code);
+                            return FilterResult::Intercept(Some(bind));
+                        }
+                    }
                     // If we didn't find any bind, try other hardcoded keys.
                     if this.clarion.keyboard_focus.is_overview() && pressed {
                         let is_expo = this.clarion.layout.overview_mode()
@@ -3540,6 +3570,9 @@ impl State {
 
     fn cancel_layout_gestures(&mut self) {
         self.clarion.gesture_swipe_3f_cumulative = None;
+        if let Some(pinch) = &mut self.clarion.launcher_pinch {
+            pinch.cancel();
+        }
         self.clarion.overview_scroll_swipe_gesture.reset();
         while self
             .clarion
@@ -5159,6 +5192,13 @@ impl State {
     }
 
     fn on_gesture_pinch_begin<I: InputBackend>(&mut self, event: I::GesturePinchBeginEvent) {
+        self.clarion.launcher_pinch = launcher_gesture::LauncherPinch::begin(
+            event.fingers(),
+            self.shell_launcher_available(),
+        );
+        if self.clarion.launcher_pinch.is_some() {
+            return;
+        }
         let serial = SERIAL_COUNTER.next_serial();
         let pointer = self.clarion.seat.get_pointer().unwrap();
 
@@ -5177,6 +5217,11 @@ impl State {
     }
 
     fn on_gesture_pinch_update<I: InputBackend>(&mut self, event: I::GesturePinchUpdateEvent) {
+        let allowed = self.shell_launcher_available();
+        if let Some(pinch) = &mut self.clarion.launcher_pinch {
+            pinch.update(event.scale(), allowed);
+            return;
+        }
         let pointer = self.clarion.seat.get_pointer().unwrap();
 
         if self.update_pointer_contents() {
@@ -5195,6 +5240,15 @@ impl State {
     }
 
     fn on_gesture_pinch_end<I: InputBackend>(&mut self, event: I::GesturePinchEndEvent) {
+        if let Some(pinch) = self.clarion.launcher_pinch.take() {
+            if pinch.finish(event.cancelled(), self.shell_launcher_available()) {
+                self.do_action(
+                    Action::Spawn(vec!["clarion-shell-msg".into(), "launcher".into()]),
+                    false,
+                );
+            }
+            return;
+        }
         let serial = SERIAL_COUNTER.next_serial();
         let pointer = self.clarion.seat.get_pointer().unwrap();
 
@@ -5551,6 +5605,21 @@ fn intercept_hotkey_overlay_key(
     } else {
         false
     }
+}
+
+fn launcher_key_bind(raw: Option<Keysym>, modifiers: Modifiers) -> Option<Bind> {
+    (raw == Some(Keysym::F4) && modifiers.is_empty()).then(|| Bind {
+        key: Key {
+            trigger: Trigger::Keysym(Keysym::F4),
+            modifiers: Modifiers::empty(),
+        },
+        action: Action::Spawn(vec!["clarion-shell-msg".into(), "launcher".into()]),
+        repeat: false,
+        cooldown: None,
+        allow_when_locked: false,
+        allow_inhibiting: true,
+        hotkey_overlay_title: Some(Some("Apps".into())),
+    })
 }
 
 fn is_macos_desktop_shortcut(raw: Option<Keysym>, mods: ModifiersState) -> bool {
@@ -7004,5 +7073,30 @@ mod tests {
             ),
             None,
         );
+    }
+}
+
+#[cfg(test)]
+mod launcher_key_tests {
+    use super::*;
+
+    #[test]
+    fn apps_key_is_unmodified_f4_with_no_repeat_or_lock_bypass() {
+        let bind = launcher_key_bind(Some(Keysym::F4), Modifiers::empty()).unwrap();
+        assert_eq!(
+            bind.action,
+            Action::Spawn(vec!["clarion-shell-msg".into(), "launcher".into()])
+        );
+        assert!(!bind.repeat && !bind.allow_when_locked && bind.allow_inhibiting);
+        for modifiers in [
+            Modifiers::SUPER,
+            Modifiers::SHIFT,
+            Modifiers::CTRL,
+            Modifiers::ALT,
+        ] {
+            assert!(launcher_key_bind(Some(Keysym::F4), modifiers).is_none());
+        }
+        assert!(launcher_key_bind(Some(Keysym::F3), Modifiers::empty()).is_none());
+        assert!(launcher_key_bind(None, Modifiers::empty()).is_none());
     }
 }

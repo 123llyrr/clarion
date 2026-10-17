@@ -129,6 +129,7 @@ class _MacShellViewState extends State<MacShellView> {
   }
 
   void _launcherSurfaceChanged(bool visible) {
+    if (controller.externalLauncherEnabled) visible = false;
     widget.onLauncherSurfaceVisible?.call(visible);
     if (!mounted || _launcherRetained == visible) return;
     _launcherRetained = visible;
@@ -148,6 +149,7 @@ class _MacShellViewState extends State<MacShellView> {
     select: () => (
       panel: controller.panel,
       panelRevision: controller.panelRevision,
+      externalLauncher: controller.externalLauncherEnabled,
       selectedDockAppId: controller.selectedDockAppId,
       reduceMotion: controller.reduceMotion,
       macPreferences: controller.macPreferences,
@@ -158,6 +160,7 @@ class _MacShellViewState extends State<MacShellView> {
       dockFolderEntries: controller.dockFolder.entries,
     ),
     builder: (context, _) {
+      if (controller.externalLauncherEnabled) _launcherRetained = false;
       if (controller.panel != ShellPanel.quickSettings && !_controlRetained) {
         _controlPreferences = false;
         _queuePanelGlass(null);
@@ -172,6 +175,8 @@ class _MacShellViewState extends State<MacShellView> {
       final colors = Theme.of(context).colorScheme;
       return CallbackShortcuts(
         bindings: {
+          const SingleActivator(LogicalKeyboardKey.f4): () =>
+              controller.selectPanel(ShellPanel.launcher),
           const SingleActivator(LogicalKeyboardKey.escape):
               controller.closePanel,
           const SingleActivator(LogicalKeyboardKey.space, meta: true): () =>

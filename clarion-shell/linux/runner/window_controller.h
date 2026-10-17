@@ -35,6 +35,8 @@ class WindowController final {
   static gboolean DockReadyTimeout(gpointer);
   static gboolean DockDeleteEvent(GtkWidget*, GdkEvent*, gpointer);
   bool SetExpanded(bool expanded);
+  bool SetKeyboardInteractivity(std::optional<bool> exclusive);
+  bool MainKeyboardExclusive() const;
   bool SetTooltipVisible(bool visible, bool dock = false);
   bool SetBarPosition(bool bottom);
   bool SetShellStyle(bool macos);
@@ -74,6 +76,9 @@ class WindowController final {
   gchar* output_name_ = nullptr;
   bool preview_ = false;
   bool expanded_ = false;
+  // Expanded normally owns the keyboard. An external overlay can temporarily
+  // own it while this surface continues drawing its full-output backdrop.
+  std::optional<bool> keyboard_interactivity_override_;
   bool tooltip_visible_ = false;
   bool bar_bottom_ = false;
   bool macos_ = false;

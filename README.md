@@ -45,6 +45,7 @@ renderer "vulkan"
 | `src/platform` | 客户端、输入、协议及设备事件适配 |
 | `src/render_helpers/vulkan` | 原生 Vulkan 渲染、同步与完成回收 |
 | `clarion-shell` | 顶部栏、Dock、启动器与桌面界面 |
+| `clarion-launcher` | 独立 Rust/GPUI Tahoe Apps 面板、XDG 应用目录与启动服务 |
 | `clarion-settings` | 配置、窗口管理与性能诊断 |
 | `clarion-ipc` | 合成器、Shell 与工具间的接口 |
 
@@ -70,12 +71,25 @@ Flutter 负责客户端界面绘制；桌面合成、背景模糊和液态玻璃
 
 [Shell 构建与使用](clarion-shell/README.md) · [设置中心](clarion-settings/README.md)
 
+应用入口默认配置为独立的 Rust/GPUI **Tahoe Apps** 浮动面板，初始尺寸
+980×680，使用固定类别、Suggested、名称排序及图标/列表视图。Shell 保留背景玻璃、
+Dock 和焦点交接，通过 `$XDG_RUNTIME_DIR/clarion-launcher.sock` 连接独立进程。
+GPUI 0.2.2 已 vendor；Phase 0 和完整生产入口的隔离原生验收已通过，覆盖真实中文输入、
+Dock 桥接、全屏覆盖与焦点恢复、启动失败和旧入口回退。物理多屏、硬件手势和实际发行包构建
+仍需验证；当前会话不会因源码或安装文件更新而自动切换。
+实现、构建与分阶段验收见 [Tahoe Apps 说明](docs/launcher-apps.md)，
+最初的隔离可行性证据见 [GPUI 启动器验证](docs/launcher-phase0.md)。
+
+在 Shell 的 `preferences.json` 中设置 `"use_external_launcher": false` 可选择保留的
+Flutter 启动器。新面板的排序模式、视图和尺寸单独保存到同一配置目录的 `apps-view.json`，
+不会读取或改写旧的 `launchpad-layout.json` 文件夹布局。已有 `realand-shell` 配置继续按迁移规则读取。
+
 ## 构建与运行
 
 在 Linux 上安装 Rust 工具链及所需的图形、输入和系统库后：
 
 ```sh
-cargo build --release -p clarion -p clarion-settings
+cargo build --locked --release -p clarion -p clarion-settings -p clarion-launcher
 ```
 
 已有图形会话中可嵌套测试；在可用 TTY 上可启动独立物理会话：
@@ -99,6 +113,20 @@ systemctl --user daemon-reload
 
 保存工作后，在下次登录时选择 **Clarion**。安装入口不会自动重启当前桌面。
 
+安装 Flutter Shell 时，把同一次构建的 Apps 二进制放入同一版本目录：
+
+```sh
+scripts/build-shell.sh --release
+python3 scripts/install-shell.py \
+  --bundle clarion-shell/build/linux/x64/release/bundle \
+  --launcher-binary target/release/clarion-launcher
+```
+
+架构不同的机器请替换 bundle 的 `x64` 路径。安装器会先验证两个产物，保留旧版本与备份，
+再原子更新入口；它不会重启 Shell 或启用服务。运行中的 Shell 始终优先使用自身版本目录中的
+`clarion-launcher`，新安装版本不会混入旧进程。诊断时可用绝对可执行路径
+`CLARION_LAUNCHER_BIN` 显式覆盖。
+
 ### 运行时依赖（字体与图标主题）
 
 仓库不分发字体，界面只使用开源字体族：Shell 与系统偏好设置都优先通过 fontconfig 解析
@@ -115,7 +143,8 @@ sudo apt install fonts-noto-cjk fonts-dejavu-core
 SF、PingFang 与微软雅黑等专有字体不会被请求或加载；`scripts/import-shell-assets.sh` 只导入
 图形素材，不再导入字体。
 
-Dock 与启动器优先使用仓库自带的图标集；你自己的应用图标由合成器按系统图标主题解析，因此
+Dock 与启动器优先保留应用自身的图标；GPUI Apps 按 GTK 图标主题配置、主题继承、
+`hicolor` 和 pixmaps 查找 PNG/SVG，Shell 的图标仍由 GTK 解析。因此
 无图标主题的最小系统会显示通用占位图标：
 
 ```sh

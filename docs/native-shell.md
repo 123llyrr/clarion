@@ -15,6 +15,55 @@ replacing the shell does not terminate its applications or break their output.
 An absent user manager permits one direct invocation; errors from an existing
 manager are reported to the user. Wallpaper remains owned by the shell.
 
+The default configured Apps implementation is the independent Rust/GPUI
+[`clarion-launcher`](../clarion-launcher) process. Its 980×680 initial overlay
+uses Tahoe's seven fixed categories, Suggested, category/name modes and
+icon/list views. The Flutter Shell owns the blurred backdrop and Dock; its
+expanded main surface relinquishes keyboard focus while the GPUI surface
+requests Exclusive focus. Closing Apps restores the Shell's policy. The
+[Phase 0 record](launcher-phase0.md) contains the accepted isolated geometry,
+real Chinese IME, window lifecycle and Shell/Dock composition evidence.
+The complete isolated production r6 run also passed real IME, Flutter Dock
+integration, ownership/lifecycle handling, fullscreen layering and native focus
+restoration. Physical multi-output, hardware gestures, actual package builds and
+pixel-exact Tahoe matching remain separate checks. The
+[Apps implementation record](launcher-apps.md) documents Phases 1–4, transport
+semantics, package preparation and the detailed production evidence.
+
+The bridge connects to `$XDG_RUNTIME_DIR/clarion-launcher.sock`, starts a hidden
+`--serve` instance on demand and sends bounded JSON-lines requests. The GPUI
+window can be dropped and recreated without ending the process. GIO retains
+Desktop Entry execution and D-Bus activation; failed scope launches never retry
+an application. Recent IDs are read from the Shell's shared preferences and
+reported successful launches return to the Shell for persistence.
+
+Set `"use_external_launcher": false` in the Shell's `preferences.json` to select
+the retained Flutter implementation when preferences are loaded. The Rust
+panel saves only `mode`, `display`, `width` and `height` in `apps-view.json`
+(defaults: category, icons, 980, 680). It does not import or overwrite the
+fallback's folder/order file `launchpad-layout.json`. Both stores follow the
+existing canonical `clarion-shell` / legacy `realand-shell` namespace selection.
+
+Build and prepare a matched deployment without changing a running session:
+
+```sh
+cargo build --locked --release -p clarion-launcher
+scripts/build-shell.sh --release
+python3 scripts/install-shell.py \
+  --bundle clarion-shell/build/linux/x64/release/bundle \
+  --launcher-binary target/release/clarion-launcher
+```
+
+Use the architecture-specific bundle path. The installer validates the Apps
+binary before writing and copies it into the same immutable release directory
+as `clarion-shell`. Existing releases and launcher/command backups remain
+available, and failed finalization restores the previous entry points together.
+No install step enables, starts or restarts a service. The bridge first honors
+an executable absolute `CLARION_LAUNCHER_BIN`; otherwise it searches the running
+Flutter executable's directory, its parent, the parent's `bin`, then absolute
+PATH entries. Resolving the running Shell's symlink first keeps subsequent Apps
+opens pinned to that generation even after another release is installed.
+
 ## Switchable layouts
 
 Control center → Appearance → Desktop shell selects Material or macOS. Existing
@@ -28,12 +77,13 @@ tray, IPC or device services again. Only the main application owns controller
 disposal. Hidden Dock views are reused across switches; native teardown removes
 them when the main window closes.
 
-Panels share their existing controls through `ShellPanelContent`. Material and
-macOS use separate launcher layouts, with common catalog and launch services.
+Panels share their existing controls through `ShellPanelContent`. The retained
+Flutter fallback has separate Material and macOS launcher layouts with common
+catalog and launch services.
 The Dock shows installed pinned apps and actual running windows. Clicking a
 running app focuses its existing window, including another workspace/output;
 its compact icon-anchored menu lists individual windows, minimize/restore,
-pin/remove, the application-entry directory and an accurately named close-all-windows action. A macOS
+pin/remove, the application-entry directory and an accurately named close-all-windows action. A fallback macOS
 launcher tile can also be right-clicked to pin an app before launching it.
 App identities use desktop IDs, executable names and StartupWMClass; unknown
 running windows remain focusable without becoming an unlaunchable pinned app.
@@ -287,7 +337,7 @@ The macOS menu bar uses a 110-pixel tooltip surface with input and reservation
 remaining confined to its 22-pixel strip.
 
 Panels enter with a 250 ms Material fade and short vertical slide; reduced
-motion completes immediately. The full-screen launcher uses a reversible
+motion completes immediately. The fallback full-screen launcher uses a reversible
 250 ms scale/fade entry and 160 ms exit, retaining the native modal surface until
 exit completes. Reopening continues from the current value. Other panels close
 and release keyboard focus immediately.
@@ -302,7 +352,9 @@ and release keyboard focus immediately.
 | `lib/services` | Clarion IPC, XDG application catalog, system services, D-Bus notifications, StatusNotifier tray, wallpaper catalog/provider |
 | `lib/services/power_profiles_service.dart` | Existing system power-profile provider, supported profiles, authorization and property/owner changes |
 | `lib/ui/launcher_surface.dart` | Reversible launcher motion and native-surface lifetime coordination |
-| `lib/ui/mac_launcher_panel.dart` | macOS search, responsive grid, page navigation, folder and drag interactions |
+| `lib/ui/mac_launcher_panel.dart` | Retained Flutter fallback search, grid, pages, folders and drag interactions |
+| `lib/services/launcher_bridge.dart` | Generation-aware process resolution, launcher IPC and visibility/launch/error events |
+| `../clarion-launcher` | Independent GPUI Tahoe Apps panel, XDG catalog and `apps-view.json` |
 | `lib/mac_launchpad_layout.dart` | Stable application order, folder membership and atomic layout persistence |
 | `lib/mac_shell_preferences.dart` | Validated, immutable menu-bar and Dock preferences |
 | `lib/services/dock_folder_service.dart` | Bounded XDG Downloads listing, watching, real metadata and GIO opening |
@@ -318,14 +370,14 @@ disconnect. UI widgets do not receive Wayland object handles, DRM FDs or Vulkan
 textures. System commands pass argv directly; desktop applications launch
 through GIO's desktop-entry support.
 
-The Material launcher borrows the classic Launchpad interaction pattern:
+The fallback Material launcher borrows the classic Launchpad interaction pattern:
 full-screen grid, search and horizontal pages. It retains
 Material color roles, shapes and feedback, with lazy [PageView](https://api.flutter.dev/flutter/widgets/PageView-class.html)
 pages, bounded native icon lookup and decoded image sizes. It does not claim
 macOS folders or drag-reordering. Missing launch commands are filtered without
 executing desktop-entry content or hiding applications based on names.
 
-The macOS launcher follows the documented
+The fallback macOS launcher follows the documented
 [Catalina Launchpad interactions](https://support.apple.com/zh-cn/guide/mac-help/mh35840/10.15/mac/10.15):
 search across pages and folders, horizontal paging, Command–Left/Right, opening
 real applications, dragging to an edge to change pages, grouping applications,
