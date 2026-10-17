@@ -1,0 +1,1077 @@
+{
+  "pid": 1301,
+  "started_unix": 1792232774.2245471,
+  "duration_seconds": 8.004309605000003,
+  "intervals": [
+    {
+      "seconds": 1.0006057120000378,
+      "started_unix": 1792232774.2248466,
+      "ended_unix": 1792232775.2254531,
+      "cpu_percent_of_one_core": 6.995762582654271,
+      "minor_faults": 0,
+      "major_faults": 0,
+      "latency_event_indices": [],
+      "main_thread_runqueue_wait_ms": 0.175108,
+      "main_thread_runtime_ms": 62.072839,
+      "cpu_pressure_stall_ms": {
+        "some": 3.537,
+        "full": 0.0
+      },
+      "memory_pressure_stall_ms": {
+        "some": 0.0,
+        "full": 0.0
+      },
+      "io_pressure_stall_ms": {
+        "some": 2.702,
+        "full": 2.555
+      },
+      "system_swap_in_bytes": 0,
+      "system_swap_out_bytes": 0,
+      "system_major_faults": 0,
+      "process_io_bytes": {
+        "read_bytes": 0,
+        "write_bytes": 0
+      },
+      "process_swap_bytes": 0,
+      "process_swap_change_bytes": 0
+    },
+    {
+      "seconds": 1.0005872459998955,
+      "started_unix": 1792232775.2254531,
+      "ended_unix": 1792232776.2260401,
+      "cpu_percent_of_one_core": 4.997065493277857,
+      "minor_faults": 0,
+      "major_faults": 0,
+      "latency_event_indices": [],
+      "main_thread_runqueue_wait_ms": 0.148189,
+      "main_thread_runtime_ms": 58.47795,
+      "cpu_pressure_stall_ms": {
+        "some": 4.359,
+        "full": 0.0
+      },
+      "memory_pressure_stall_ms": {
+        "some": 0.0,
+        "full": 0.0
+      },
+      "io_pressure_stall_ms": {
+        "some": 3.719,
+        "full": 2.805
+      },
+      "system_swap_in_bytes": 0,
+      "system_swap_out_bytes": 0,
+      "system_major_faults": 0,
+      "process_io_bytes": {
+        "read_bytes": 0,
+        "write_bytes": 0
+      },
+      "process_swap_bytes": 0,
+      "process_swap_change_bytes": 0
+    },
+    {
+      "seconds": 1.0006001970000398,
+      "started_unix": 1792232776.2260401,
+      "ended_unix": 1792232777.2266402,
+      "cpu_percent_of_one_core": 7.995201304162528,
+      "minor_faults": 0,
+      "major_faults": 0,
+      "latency_event_indices": [],
+      "main_thread_runqueue_wait_ms": 0.32971,
+      "main_thread_runtime_ms": 66.520971,
+      "cpu_pressure_stall_ms": {
+        "some": 2.901,
+        "full": 0.0
+      },
+      "memory_pressure_stall_ms": {
+        "some": 0.0,
+        "full": 0.0
+      },
+      "io_pressure_stall_ms": {
+        "some": 3.271,
+        "full": 2.99
+      },
+      "system_swap_in_bytes": 0,
+      "system_swap_out_bytes": 0,
+      "system_major_faults": 2,
+      "process_io_bytes": {
+        "read_bytes": 0,
+        "write_bytes": 0
+      },
+      "process_swap_bytes": 0,
+      "process_swap_change_bytes": 0
+    },
+    {
+      "seconds": 1.000545087999967,
+      "started_unix": 1792232777.2266402,
+      "ended_unix": 1792232778.2271852,
+      "cpu_percent_of_one_core": 6.996186462713642,
+      "minor_faults": 0,
+      "major_faults": 0,
+      "latency_event_indices": [],
+      "main_thread_runqueue_wait_ms": 0.428669,
+      "main_thread_runtime_ms": 67.384039,
+      "cpu_pressure_stall_ms": {
+        "some": 3.78,
+        "full": 0.0
+      },
+      "memory_pressure_stall_ms": {
+        "some": 0.0,
+        "full": 0.0
+      },
+      "io_pressure_stall_ms": {
+        "some": 3.194,
+        "full": 2.905
+      },
+      "system_swap_in_bytes": 0,
+      "system_swap_out_bytes": 0,
+      "system_major_faults": 1,
+      "process_io_bytes": {
+        "read_bytes": 0,
+        "write_bytes": 0
+      },
+      "process_swap_bytes": 0,
+      "process_swap_change_bytes": 0
+    },
+    {
+      "seconds": 1.000466559000074,
+      "started_unix": 1792232778.2271852,
+      "ended_unix": 1792232779.2276516,
+      "cpu_percent_of_one_core": 6.996735610030002,
+      "minor_faults": 0,
+      "major_faults": 0,
+      "latency_event_indices": [],
+      "main_thread_runqueue_wait_ms": 0.321319,
+      "main_thread_runtime_ms": 70.672622,
+      "cpu_pressure_stall_ms": {
+        "some": 4.002,
+        "full": 0.0
+      },
+      "memory_pressure_stall_ms": {
+        "some": 0.0,
+        "full": 0.0
+      },
+      "io_pressure_stall_ms": {
+        "some": 2.552,
+        "full": 2.36
+      },
+      "system_swap_in_bytes": 0,
+      "system_swap_out_bytes": 0,
+      "system_major_faults": 0,
+      "process_io_bytes": {
+        "read_bytes": 0,
+        "write_bytes": 0
+      },
+      "process_swap_bytes": 0,
+      "process_swap_change_bytes": 0
+    },
+    {
+      "seconds": 1.000464223999984,
+      "started_unix": 1792232779.2276516,
+      "ended_unix": 1792232780.2281163,
+      "cpu_percent_of_one_core": 6.996751939827598,
+      "minor_faults": 5,
+      "major_faults": 0,
+      "latency_event_indices": [
+        0
+      ],
+      "main_thread_runqueue_wait_ms": 0.188356,
+      "main_thread_runtime_ms": 71.994076,
+      "cpu_pressure_stall_ms": {
+        "some": 2.409,
+        "full": 0.0
+      },
+      "memory_pressure_stall_ms": {
+        "some": 0.0,
+        "full": 0.0
+      },
+      "io_pressure_stall_ms": {
+        "some": 2.284,
+        "full": 2.111
+      },
+      "system_swap_in_bytes": 0,
+      "system_swap_out_bytes": 0,
+      "system_major_faults": 0,
+      "process_io_bytes": {
+        "read_bytes": 0,
+        "write_bytes": 0
+      },
+      "process_swap_bytes": 0,
+      "process_swap_change_bytes": 0
+    },
+    {
+      "seconds": 1.0005422509999562,
+      "started_unix": 1792232780.2281163,
+      "ended_unix": 1792232781.2286584,
+      "cpu_percent_of_one_core": 7.9956643430146865,
+      "minor_faults": 0,
+      "major_faults": 0,
+      "latency_event_indices": [],
+      "main_thread_runqueue_wait_ms": 0.416855,
+      "main_thread_runtime_ms": 67.151136,
+      "cpu_pressure_stall_ms": {
+        "some": 2.075,
+        "full": 0.0
+      },
+      "memory_pressure_stall_ms": {
+        "some": 0.0,
+        "full": 0.0
+      },
+      "io_pressure_stall_ms": {
+        "some": 1.751,
+        "full": 1.681
+      },
+      "system_swap_in_bytes": 0,
+      "system_swap_out_bytes": 0,
+      "system_major_faults": 0,
+      "process_io_bytes": {
+        "read_bytes": 0,
+        "write_bytes": 0
+      },
+      "process_swap_bytes": 0,
+      "process_swap_change_bytes": 0
+    },
+    {
+      "seconds": 1.0004983280000488,
+      "started_unix": 1792232781.2286584,
+      "ended_unix": 1792232782.2291565,
+      "cpu_percent_of_one_core": 6.996513441449408,
+      "minor_faults": 0,
+      "major_faults": 0,
+      "latency_event_indices": [],
+      "main_thread_runqueue_wait_ms": 1.014615,
+      "main_thread_runtime_ms": 69.142014,
+      "cpu_pressure_stall_ms": {
+        "some": 3.486,
+        "full": 0.0
+      },
+      "memory_pressure_stall_ms": {
+        "some": 0.0,
+        "full": 0.0
+      },
+      "io_pressure_stall_ms": {
+        "some": 3.057,
+        "full": 2.927
+      },
+      "system_swap_in_bytes": 0,
+      "system_swap_out_bytes": 0,
+      "system_major_faults": 0,
+      "process_io_bytes": {
+        "read_bytes": 0,
+        "write_bytes": 0
+      },
+      "process_swap_bytes": 0,
+      "process_swap_change_bytes": 0
+    }
+  ],
+  "samples": [
+    {
+      "main_thread_wait_channel": "do_epoll_wait",
+      "monotonic": 716.431706619,
+      "unix_time": 1792232774.2248466,
+      "cpu_ticks": 4193,
+      "start_ticks": 1861,
+      "rss_bytes": 302055424,
+      "minor_faults": 475076,
+      "major_faults": 494,
+      "main_thread_switches": {
+        "voluntary_ctxt_switches": 142974,
+        "nonvoluntary_ctxt_switches": 5009
+      },
+      "main_thread_scheduler": {
+        "runtime_ns": 39517552716,
+        "runqueue_wait_ns": 204573197,
+        "slices": 147983
+      },
+      "memory_status_bytes": {
+        "VmRSS": 302346240,
+        "RssAnon": 92979200,
+        "RssFile": 100909056,
+        "RssShmem": 108457984,
+        "VmSwap": 0
+      },
+      "process_io": {
+        "rchar": 6768268,
+        "wchar": 15616971,
+        "syscr": 273078,
+        "syscw": 28159,
+        "read_bytes": 57241600,
+        "write_bytes": 0,
+        "cancelled_write_bytes": 0
+      },
+      "system_paging": {
+        "pswpin": 0,
+        "pswpout": 0,
+        "pgmajfault": 36692
+      },
+      "cpu_pressure": {
+        "some": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 2105453
+        },
+        "full": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 0
+        }
+      },
+      "memory_pressure": {
+        "some": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 45297
+        },
+        "full": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 45062
+        }
+      },
+      "io_pressure": {
+        "some": {
+          "avg10": 0.0,
+          "avg60": 0.08,
+          "avg300": 0.14,
+          "total": 8333766
+        },
+        "full": {
+          "avg10": 0.0,
+          "avg60": 0.06,
+          "avg300": 0.12,
+          "total": 7940497
+        }
+      },
+      "loadavg": [
+        1.2490234375,
+        1.7041015625,
+        1.04638671875
+      ]
+    },
+    {
+      "main_thread_wait_channel": "do_epoll_wait",
+      "monotonic": 717.432312331,
+      "unix_time": 1792232775.2254531,
+      "cpu_ticks": 4200,
+      "start_ticks": 1861,
+      "rss_bytes": 302055424,
+      "minor_faults": 475076,
+      "major_faults": 494,
+      "main_thread_switches": {
+        "voluntary_ctxt_switches": 143208,
+        "nonvoluntary_ctxt_switches": 5019
+      },
+      "main_thread_scheduler": {
+        "runtime_ns": 39579625555,
+        "runqueue_wait_ns": 204748305,
+        "slices": 148227
+      },
+      "memory_status_bytes": {
+        "VmRSS": 302346240,
+        "RssAnon": 92979200,
+        "RssFile": 100909056,
+        "RssShmem": 108457984,
+        "VmSwap": 0
+      },
+      "process_io": {
+        "rchar": 6770604,
+        "wchar": 15617435,
+        "syscr": 273492,
+        "syscw": 28217,
+        "read_bytes": 57241600,
+        "write_bytes": 0,
+        "cancelled_write_bytes": 0
+      },
+      "system_paging": {
+        "pswpin": 0,
+        "pswpout": 0,
+        "pgmajfault": 36692
+      },
+      "cpu_pressure": {
+        "some": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 2108990
+        },
+        "full": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 0
+        }
+      },
+      "memory_pressure": {
+        "some": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 45297
+        },
+        "full": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 45062
+        }
+      },
+      "io_pressure": {
+        "some": {
+          "avg10": 0.0,
+          "avg60": 0.08,
+          "avg300": 0.14,
+          "total": 8336468
+        },
+        "full": {
+          "avg10": 0.0,
+          "avg60": 0.06,
+          "avg300": 0.12,
+          "total": 7943052
+        }
+      },
+      "loadavg": [
+        1.2490234375,
+        1.7041015625,
+        1.04638671875
+      ]
+    },
+    {
+      "main_thread_wait_channel": "do_epoll_wait",
+      "monotonic": 718.432899577,
+      "unix_time": 1792232776.2260401,
+      "cpu_ticks": 4205,
+      "start_ticks": 1861,
+      "rss_bytes": 302055424,
+      "minor_faults": 475076,
+      "major_faults": 494,
+      "main_thread_switches": {
+        "voluntary_ctxt_switches": 143443,
+        "nonvoluntary_ctxt_switches": 5028
+      },
+      "main_thread_scheduler": {
+        "runtime_ns": 39638103505,
+        "runqueue_wait_ns": 204896494,
+        "slices": 148471
+      },
+      "memory_status_bytes": {
+        "VmRSS": 302346240,
+        "RssAnon": 92979200,
+        "RssFile": 100909056,
+        "RssShmem": 108457984,
+        "VmSwap": 0
+      },
+      "process_io": {
+        "rchar": 6773004,
+        "wchar": 15617915,
+        "syscr": 273914,
+        "syscw": 28277,
+        "read_bytes": 57241600,
+        "write_bytes": 0,
+        "cancelled_write_bytes": 0
+      },
+      "system_paging": {
+        "pswpin": 0,
+        "pswpout": 0,
+        "pgmajfault": 36692
+      },
+      "cpu_pressure": {
+        "some": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 2113349
+        },
+        "full": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 0
+        }
+      },
+      "memory_pressure": {
+        "some": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 45297
+        },
+        "full": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 45062
+        }
+      },
+      "io_pressure": {
+        "some": {
+          "avg10": 0.0,
+          "avg60": 0.08,
+          "avg300": 0.14,
+          "total": 8340187
+        },
+        "full": {
+          "avg10": 0.0,
+          "avg60": 0.06,
+          "avg300": 0.12,
+          "total": 7945857
+        }
+      },
+      "loadavg": [
+        1.2490234375,
+        1.7041015625,
+        1.04638671875
+      ]
+    },
+    {
+      "main_thread_wait_channel": "do_epoll_wait",
+      "monotonic": 719.433499774,
+      "unix_time": 1792232777.2266402,
+      "cpu_ticks": 4213,
+      "start_ticks": 1861,
+      "rss_bytes": 302055424,
+      "minor_faults": 475076,
+      "major_faults": 494,
+      "main_thread_switches": {
+        "voluntary_ctxt_switches": 143743,
+        "nonvoluntary_ctxt_switches": 5036
+      },
+      "main_thread_scheduler": {
+        "runtime_ns": 39704624476,
+        "runqueue_wait_ns": 205226204,
+        "slices": 148779
+      },
+      "memory_status_bytes": {
+        "VmRSS": 302346240,
+        "RssAnon": 92979200,
+        "RssFile": 100909056,
+        "RssShmem": 108457984,
+        "VmSwap": 0
+      },
+      "process_io": {
+        "rchar": 6775396,
+        "wchar": 15618387,
+        "syscr": 274338,
+        "syscw": 28336,
+        "read_bytes": 57241600,
+        "write_bytes": 0,
+        "cancelled_write_bytes": 0
+      },
+      "system_paging": {
+        "pswpin": 0,
+        "pswpout": 0,
+        "pgmajfault": 36694
+      },
+      "cpu_pressure": {
+        "some": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 2116250
+        },
+        "full": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 0
+        }
+      },
+      "memory_pressure": {
+        "some": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 45297
+        },
+        "full": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 45062
+        }
+      },
+      "io_pressure": {
+        "some": {
+          "avg10": 0.0,
+          "avg60": 0.08,
+          "avg300": 0.14,
+          "total": 8343458
+        },
+        "full": {
+          "avg10": 0.0,
+          "avg60": 0.06,
+          "avg300": 0.12,
+          "total": 7948847
+        }
+      },
+      "loadavg": [
+        1.2490234375,
+        1.7041015625,
+        1.04638671875
+      ]
+    },
+    {
+      "main_thread_wait_channel": "do_epoll_wait",
+      "monotonic": 720.434044862,
+      "unix_time": 1792232778.2271852,
+      "cpu_ticks": 4220,
+      "start_ticks": 1861,
+      "rss_bytes": 302055424,
+      "minor_faults": 475076,
+      "major_faults": 494,
+      "main_thread_switches": {
+        "voluntary_ctxt_switches": 144062,
+        "nonvoluntary_ctxt_switches": 5056
+      },
+      "main_thread_scheduler": {
+        "runtime_ns": 39772008515,
+        "runqueue_wait_ns": 205654873,
+        "slices": 149118
+      },
+      "memory_status_bytes": {
+        "VmRSS": 302346240,
+        "RssAnon": 92979200,
+        "RssFile": 100909056,
+        "RssShmem": 108457984,
+        "VmSwap": 0
+      },
+      "process_io": {
+        "rchar": 6777756,
+        "wchar": 15618859,
+        "syscr": 274823,
+        "syscw": 28395,
+        "read_bytes": 57241600,
+        "write_bytes": 0,
+        "cancelled_write_bytes": 0
+      },
+      "system_paging": {
+        "pswpin": 0,
+        "pswpout": 0,
+        "pgmajfault": 36695
+      },
+      "cpu_pressure": {
+        "some": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 2120030
+        },
+        "full": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 0
+        }
+      },
+      "memory_pressure": {
+        "some": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 45297
+        },
+        "full": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 45062
+        }
+      },
+      "io_pressure": {
+        "some": {
+          "avg10": 0.0,
+          "avg60": 0.07,
+          "avg300": 0.14,
+          "total": 8346652
+        },
+        "full": {
+          "avg10": 0.0,
+          "avg60": 0.06,
+          "avg300": 0.11,
+          "total": 7951752
+        }
+      },
+      "loadavg": [
+        1.3095703125,
+        1.70947265625,
+        1.0517578125
+      ]
+    },
+    {
+      "main_thread_wait_channel": "do_epoll_wait",
+      "monotonic": 721.434511421,
+      "unix_time": 1792232779.2276516,
+      "cpu_ticks": 4227,
+      "start_ticks": 1861,
+      "rss_bytes": 302055424,
+      "minor_faults": 475076,
+      "major_faults": 494,
+      "main_thread_switches": {
+        "voluntary_ctxt_switches": 144365,
+        "nonvoluntary_ctxt_switches": 5070
+      },
+      "main_thread_scheduler": {
+        "runtime_ns": 39842681137,
+        "runqueue_wait_ns": 205976192,
+        "slices": 149435
+      },
+      "memory_status_bytes": {
+        "VmRSS": 302346240,
+        "RssAnon": 92979200,
+        "RssFile": 100909056,
+        "RssShmem": 108457984,
+        "VmSwap": 0
+      },
+      "process_io": {
+        "rchar": 6780116,
+        "wchar": 15619331,
+        "syscr": 275261,
+        "syscw": 28454,
+        "read_bytes": 57241600,
+        "write_bytes": 0,
+        "cancelled_write_bytes": 0
+      },
+      "system_paging": {
+        "pswpin": 0,
+        "pswpout": 0,
+        "pgmajfault": 36695
+      },
+      "cpu_pressure": {
+        "some": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 2124032
+        },
+        "full": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 0
+        }
+      },
+      "memory_pressure": {
+        "some": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 45297
+        },
+        "full": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 45062
+        }
+      },
+      "io_pressure": {
+        "some": {
+          "avg10": 0.0,
+          "avg60": 0.07,
+          "avg300": 0.14,
+          "total": 8349204
+        },
+        "full": {
+          "avg10": 0.0,
+          "avg60": 0.06,
+          "avg300": 0.11,
+          "total": 7954112
+        }
+      },
+      "loadavg": [
+        1.3095703125,
+        1.70947265625,
+        1.0517578125
+      ]
+    },
+    {
+      "main_thread_wait_channel": "do_epoll_wait",
+      "monotonic": 722.434975645,
+      "unix_time": 1792232780.2281163,
+      "cpu_ticks": 4234,
+      "start_ticks": 1861,
+      "rss_bytes": 302055424,
+      "minor_faults": 475081,
+      "major_faults": 494,
+      "main_thread_switches": {
+        "voluntary_ctxt_switches": 144645,
+        "nonvoluntary_ctxt_switches": 5075
+      },
+      "main_thread_scheduler": {
+        "runtime_ns": 39914675213,
+        "runqueue_wait_ns": 206164548,
+        "slices": 149720
+      },
+      "memory_status_bytes": {
+        "VmRSS": 302346240,
+        "RssAnon": 92979200,
+        "RssFile": 100909056,
+        "RssShmem": 108457984,
+        "VmSwap": 0
+      },
+      "process_io": {
+        "rchar": 6782492,
+        "wchar": 15620178,
+        "syscr": 275686,
+        "syscw": 28517,
+        "read_bytes": 57241600,
+        "write_bytes": 0,
+        "cancelled_write_bytes": 0
+      },
+      "system_paging": {
+        "pswpin": 0,
+        "pswpout": 0,
+        "pgmajfault": 36695
+      },
+      "cpu_pressure": {
+        "some": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 2126441
+        },
+        "full": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 0
+        }
+      },
+      "memory_pressure": {
+        "some": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 45297
+        },
+        "full": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 45062
+        }
+      },
+      "io_pressure": {
+        "some": {
+          "avg10": 0.0,
+          "avg60": 0.07,
+          "avg300": 0.13,
+          "total": 8351488
+        },
+        "full": {
+          "avg10": 0.0,
+          "avg60": 0.05,
+          "avg300": 0.11,
+          "total": 7956223
+        }
+      },
+      "loadavg": [
+        1.3095703125,
+        1.70947265625,
+        1.0517578125
+      ]
+    },
+    {
+      "main_thread_wait_channel": "do_epoll_wait",
+      "monotonic": 723.435517896,
+      "unix_time": 1792232781.2286584,
+      "cpu_ticks": 4242,
+      "start_ticks": 1861,
+      "rss_bytes": 302055424,
+      "minor_faults": 475081,
+      "major_faults": 494,
+      "main_thread_switches": {
+        "voluntary_ctxt_switches": 144917,
+        "nonvoluntary_ctxt_switches": 5081
+      },
+      "main_thread_scheduler": {
+        "runtime_ns": 39981826349,
+        "runqueue_wait_ns": 206581403,
+        "slices": 149998
+      },
+      "memory_status_bytes": {
+        "VmRSS": 302346240,
+        "RssAnon": 92979200,
+        "RssFile": 100909056,
+        "RssShmem": 108457984,
+        "VmSwap": 0
+      },
+      "process_io": {
+        "rchar": 6784892,
+        "wchar": 15620658,
+        "syscr": 276116,
+        "syscw": 28577,
+        "read_bytes": 57241600,
+        "write_bytes": 0,
+        "cancelled_write_bytes": 0
+      },
+      "system_paging": {
+        "pswpin": 0,
+        "pswpout": 0,
+        "pgmajfault": 36695
+      },
+      "cpu_pressure": {
+        "some": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 2128516
+        },
+        "full": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 0
+        }
+      },
+      "memory_pressure": {
+        "some": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 45297
+        },
+        "full": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 45062
+        }
+      },
+      "io_pressure": {
+        "some": {
+          "avg10": 0.0,
+          "avg60": 0.07,
+          "avg300": 0.13,
+          "total": 8353239
+        },
+        "full": {
+          "avg10": 0.0,
+          "avg60": 0.05,
+          "avg300": 0.11,
+          "total": 7957904
+        }
+      },
+      "loadavg": [
+        1.3095703125,
+        1.70947265625,
+        1.0517578125
+      ]
+    },
+    {
+      "main_thread_wait_channel": "do_epoll_wait",
+      "monotonic": 724.436016224,
+      "unix_time": 1792232782.2291565,
+      "cpu_ticks": 4249,
+      "start_ticks": 1861,
+      "rss_bytes": 302055424,
+      "minor_faults": 475081,
+      "major_faults": 494,
+      "main_thread_switches": {
+        "voluntary_ctxt_switches": 145261,
+        "nonvoluntary_ctxt_switches": 5095
+      },
+      "main_thread_scheduler": {
+        "runtime_ns": 40050968363,
+        "runqueue_wait_ns": 207596018,
+        "slices": 150356
+      },
+      "memory_status_bytes": {
+        "VmRSS": 302346240,
+        "RssAnon": 92979200,
+        "RssFile": 100909056,
+        "RssShmem": 108457984,
+        "VmSwap": 0
+      },
+      "process_io": {
+        "rchar": 6787284,
+        "wchar": 15621130,
+        "syscr": 276608,
+        "syscw": 28636,
+        "read_bytes": 57241600,
+        "write_bytes": 0,
+        "cancelled_write_bytes": 0
+      },
+      "system_paging": {
+        "pswpin": 0,
+        "pswpout": 0,
+        "pgmajfault": 36695
+      },
+      "cpu_pressure": {
+        "some": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 2132002
+        },
+        "full": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 0
+        }
+      },
+      "memory_pressure": {
+        "some": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 45297
+        },
+        "full": {
+          "avg10": 0.0,
+          "avg60": 0.0,
+          "avg300": 0.0,
+          "total": 45062
+        }
+      },
+      "io_pressure": {
+        "some": {
+          "avg10": 0.0,
+          "avg60": 0.07,
+          "avg300": 0.13,
+          "total": 8356296
+        },
+        "full": {
+          "avg10": 0.0,
+          "avg60": 0.05,
+          "avg300": 0.11,
+          "total": 7960831
+        }
+      },
+      "loadavg": [
+        1.3095703125,
+        1.70947265625,
+        1.0517578125
+      ]
+    }
+  ],
+  "latency_events": [
+    {
+      "timestamp_unix": 1792232780.1299,
+      "message": "2026-10-17T10:26:20.129662Z  WARN clarion::latency: slow compositor operation; wall time includes scheduling delays operation=\"scene-build\" elapsed_ms=8.992097 threshold_ms=4.0 thread=\"main\" max_ms=8.992097 slow_samples=1",
+      "operation": "scene-build",
+      "thread": "main",
+      "elapsed_ms": 8.992097,
+      "max_ms": 8.992097,
+      "threshold_ms": 4.0,
+      "slow_samples": 1
+    }
+  ],
+  "latency_logs": [
+    "2026-10-17T10:26:20.129662Z  WARN clarion::latency: slow compositor operation; wall time includes scheduling delays operation=\"scene-build\" elapsed_ms=8.992097 threshold_ms=4.0 thread=\"main\" max_ms=8.992097 slow_samples=1"
+  ],
+  "journal_error": null,
+  "notes": [
+    "CPU percentage aggregates process threads; scheduler counters refer only to the main thread.",
+    "Zero scheduler wait may mean kernel scheduler statistics are disabled, not absence of contention.",
+    "Wall-time warnings include scheduling delays; nested render phases overlap and must not be added.",
+    "PSI and swap-in/out counters describe the entire system, not only this compositor.",
+    "A nonzero VmSwap is retained swapped memory, not proof of swap IO during this interval.",
+    "Missing optional counters are unavailable, never a measured zero; CPU time is not GPU time.",
+    "Latency events correlate by journal receipt time; slow_samples/max_ms can summarize preceding seconds.",
+    "New timing instrumentation needs a compositor session running the updated binary.",
+    "No journal match during this sample is not proof that input or rendering cannot stall."
+  ]
+}

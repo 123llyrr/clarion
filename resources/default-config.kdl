@@ -324,6 +324,24 @@ screenshot-path "~/Pictures/Screenshots/Screenshot from %Y-%m-%d %H-%M-%S.png"
 // Animation settings.
 // The wiki explains how to configure individual animations:
 // https://github.com/123llyrr/clarion/blob/main/docs/wiki/Configuration:-Animations.md
+// Idle policy. The compositor owns the decision so the session does not need a
+// separate idle daemon; set `idle { off }` if you would rather run swayidle.
+idle {
+    // Seconds without input before the action below runs. 0 never acts.
+    timeout 300
+
+    // "lock" | "suspend" | "none"
+    action "lock"
+
+    // Started when a lock is requested: the session lock itself comes from a
+    // client, and it authenticates through PAM on its own. "hyprlock" and
+    // "gtklock" work the same way if you prefer them.
+    lock-command "swaylock"
+
+    // Lock before this policy suspends the system.
+    lock-before-suspend
+}
+
 animations {
     // Clarion: continuous vertical 3D workspace cube for keys and touchpad gestures.
     workspace-switch {

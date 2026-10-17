@@ -41,6 +41,23 @@ pub struct DBusServers {
 }
 
 impl DBusServers {
+    /// Asks logind to suspend the system. The idle policy calls this after it
+    /// has locked, if locking before sleep is configured.
+    pub fn suspend(&self) -> anyhow::Result<()> {
+        let conn = self
+            .conn_login1
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("login1 connection unavailable"))?;
+        conn.call_method(
+            Some("org.freedesktop.login1"),
+            "/org/freedesktop/login1",
+            Some("org.freedesktop.login1.Manager"),
+            "Suspend",
+            &(false,),
+        )?;
+        Ok(())
+    }
+
     pub fn start(state: &mut State, is_session_instance: bool) {
         let _span = clarion_tracy_span!("DBusServers::start");
 

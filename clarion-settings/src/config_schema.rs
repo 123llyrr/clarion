@@ -104,6 +104,13 @@ sections![
     ),
     ("cursor", "鼠标光标", "CursorPart", "cursor {\n}", false),
     (
+        "idle",
+        "空闲、锁屏与挂起",
+        "IdlePart",
+        "idle {\n    timeout 300\n    action \"lock\"\n    lock-command \"swaylock\"\n}",
+        false
+    ),
+    (
         "clipboard",
         "剪贴板",
         "ClipboardPart",

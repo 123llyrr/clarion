@@ -1295,6 +1295,7 @@ fn node_summary(node: &Node, source: &str) -> String {
 fn section_group(name: &str) -> &'static str {
     match name {
         "layout" | "animations" | "blur" | "overview" | "cursor" | "prefer-no-csd" => "桌面与外观",
+        "idle" => "设备与操作",
         "input" | "output" | "gestures" | "binds" | "clipboard" | "screenshot-path"
         | "recent-windows" | "hotkey-overlay" => "设备与操作",
         "window-rule" | "layer-rule" | "workspace" | "spawn-at-startup" | "spawn-sh-at-startup" => {
@@ -1312,6 +1313,7 @@ fn section_icon(name: &str) -> Icon {
         "animations" | "blur" | "overview" | "cursor" | "prefer-no-csd" => Icon::Appearance,
         "window-rule" | "layer-rule" | "recent-windows" => Icon::Windows,
         "include" | "debug" | "environment" | "renderer" | "renderer-backend" => Icon::Code,
+        "idle" => Icon::Settings,
         _ => Icon::Settings,
     }
 }
@@ -1319,6 +1321,10 @@ fn section_icon(name: &str) -> Icon {
 fn friendly_label(name: &str) -> &str {
     match name {
         "name" => "名称",
+        "timeout" => "超时（秒）",
+        "action" => "超时动作",
+        "lock-command" => "锁屏命令",
+        "lock-before-suspend" => "挂起前锁屏",
         "layout" => "布局",
         "title" => "标题",
         "value" => "设置值",

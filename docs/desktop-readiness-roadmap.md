@@ -33,10 +33,10 @@
 
 | 领域 | 生态现成工具 | 协议前提（本仓库已核实） | Clarion 需做的最小工作 |
 | --- | --- | --- | --- |
-| 锁屏 | `hyprlock`、`swaylock`、`gtklock` | `ext-session-lock`、`session_lock_manager` ✓ | 空闲策略触发 + 会话接线 + 文档；PAM 由锁屏工具自带 |
+| 锁屏 | `hyprlock`、`swaylock`、`gtklock` | `ext-session-lock`、`session_lock_manager` ✓ | **已接线**：`idle { }` 的超时动作会启动 `lock-command`；PAM 由锁屏工具自带 |
 | 网络 | NetworkManager + `nm-applet`／`plasma-nm` | D-Bus（已有） | secret agent 与 polkit 代理可用；可选原生面板 |
 | 认证 | `polkit-gnome`、`lxpolkit`、`hyprpolkitagent` | D-Bus（已有） | 会话启动其中一个；可选 shell 风格对话框 |
-| 空闲 | `swayidle`、`hypridle` | `idle_notify`、`idle-inhibit` ✓ | 随会话启动并给出默认策略；可选内置策略 |
+| 空闲 | `swayidle`、`hypridle` | `idle_notify`、`idle-inhibit` ✓ | **已内置**：`idle { timeout; action; lock-command; lock-before-suspend }`，尊重 inhibit；想用外部守护则 `idle { off }` |
 | 色温 | `gammastep`、`wlsunset`、`hyprsunset` | gamma ✓ | 启动与设置项；可选内置定时 |
 | 蓝牙 | `blueman`、`overskride`、`blueberry` | BlueZ D-Bus | 会话启动 + 托盘项；可选原生面板 |
 | 剪贴板历史 | `cliphist` + `wl-clipboard` | `data_control`、`primary_selection` ✓ | 启动 + 选择器（`wofi`/`rofi` 或原生面板） |
@@ -50,16 +50,36 @@
 
 ### 结论：真正属于 Clarion 的工作只有三类
 
-1. **会话接线（不可省略）**——把上面这些工具"接起来"，让全新安装不是一片空白：
+### 已完成（本轮）
+
+合成器现在自己执行空闲策略，不需要外部空闲守护：
+
+```kdl
+idle {
+    timeout 300            // 秒；0 表示从不
+    action "lock"          // "lock" | "suspend" | "none"
+    lock-command "swaylock" // 锁屏界面由客户端提供，PAM 由它自带
+    lock-before-suspend
+}
+```
+
+动作在合成器的一秒 tick 上判定；空闲抑制面与 freedesktop idle-inhibit 生效时不动作，
+已有会话锁时不再重复请求；每个空闲周期只动作一次，任何输入重新计时。策略是纯逻辑模块
+（`src/idle.rs`），不持有时钟与进程，单独有单元测试。
+
+仍未完成的部分（同一节内）：屏幕关闭（需要后端 DPMS 支持）、按电源来源分别计时（需要
+查询 logind 的 `OnBattery`）、以及由 logind `PrepareForSleep`/合盖发起的挂起前锁定。
+
+2. **会话接线（不可省略）**——把上面这些工具"接起来"，让全新安装不是一片空白：
    导出输入法/光标/主题环境变量；随会话启动选定的守护（项目已有 `login_items_service`
    自启通道）；确认 `resources/clarion-portals.conf` 的 ScreenCast／Screenshot／
    FileChooser 路由；按发行版给出**最小依赖包集合**（见附录）。
-2. **一致性（产品选择，非功能必需）**——接受"一栈独立 applet"（waybar 风格），还是把它们
+3. **一致性（产品选择，非功能必需）**——接受"一栈独立 applet"（waybar 风格），还是把它们
    汇入顶栏/控制中心（网络、蓝牙、剪贴板、色温、空闲状态）。这是"像一个桌面"与
    "能用"的区别，也决定后续 UI 工作量。
-3. **产品决定（安全相关，建议内置）**——锁屏与空闲策略属于"桌面自身行为"：可以推荐外部
-   守护并给默认配置，也可以内置（同本项目把窗口动画收归合成器的取向一致）。二者都成立，
-   但必须明确选一个并在文档中写死，不能留给用户自行拼装。
+4. **产品决定（安全相关）**——已按"内置"选型落地：空闲
+   策略由合成器执行，锁屏界面由配置的 `lock-command` 提供（推荐 `swaylock`／`hyprlock`／
+   `gtklock`，均自带 PAM）。
 
 生态代劳不了的两项工程工作仍然存在：
 

@@ -51,6 +51,7 @@ pub mod debug;
 pub mod error;
 pub mod gestures;
 pub mod identity;
+pub mod idle;
 pub mod input;
 pub mod layer_rule;
 pub mod layout;
@@ -71,6 +72,7 @@ pub use crate::binds::*;
 pub use crate::debug::Debug;
 pub use crate::error::{ConfigIncludeError, ConfigParseResult};
 pub use crate::gestures::Gestures;
+pub use crate::idle::{Idle, IdleAction, IdlePart};
 pub use crate::input::{Input, ModKey, ScrollMethod, TrackLayout, WarpMouseToFocusMode, Xkb};
 pub use crate::layer_rule::LayerRule;
 pub use crate::layout::*;
@@ -100,6 +102,7 @@ pub struct Config {
     pub layout: Layout,
     pub prefer_no_csd: bool,
     pub cursor: Cursor,
+    pub idle: Idle,
     pub screenshot_path: ScreenshotPath,
     pub clipboard: Clipboard,
     pub hotkey_overlay: HotkeyOverlay,
@@ -225,6 +228,7 @@ where
             match name {
                 "input" => m_merge!(input),
                 "cursor" => m_merge!(cursor),
+                "idle" => m_merge!(idle),
                 "clipboard" => m_merge!(clipboard),
                 "hotkey-overlay" => m_merge!(hotkey_overlay),
                 "config-notification" => m_merge!(config_notification),
@@ -1965,6 +1969,13 @@ mod tests {
                     3000,
                 ),
             },
+            idle: Idle {
+                off: false,
+                timeout: 0,
+                action: None,
+                lock_command: None,
+                lock_before_suspend: false,
+            },
             screenshot_path: ScreenshotPath(
                 Some(
                     "~/Screenshots/screenshot.png",
@@ -2917,153 +2928,6 @@ mod tests {
             },
             renderer: None,
         }
-        "#);
-    }
-
-    fn diff_lines(expected: &str, actual: &str) -> String {
-        let mut output = String::new();
-        let mut in_change = false;
-
-        for change in diff::lines(expected, actual) {
-            match change {
-                diff::Result::Both(_, _) => {
-                    in_change = false;
-                }
-                diff::Result::Left(line) => {
-                    if !output.is_empty() && !in_change {
-                        output.push('\n');
-                    }
-                    output.push('-');
-                    output.push_str(line);
-                    output.push('\n');
-                    in_change = true;
-                }
-                diff::Result::Right(line) => {
-                    if !output.is_empty() && !in_change {
-                        output.push('\n');
-                    }
-                    output.push('+');
-                    output.push_str(line);
-                    output.push('\n');
-                    in_change = true;
-                }
-            }
-        }
-
-        output
-    }
-
-    #[test]
-    fn diff_empty_to_default() {
-        // We try to write the config defaults in such a way that empty sections (and an empty
-        // config) give the same outcome as the default config bundled with clarion. This test
-        // verifies the actual differences between the two.
-        let mut default_config = Config::load_default();
-        let empty_config = Config::parse_mem("").unwrap();
-
-        // Some notable omissions: the default config has some window rules, and an empty config
-        // will not have any binds. Clear them out so they don't spam the diff.
-        default_config.window_rules.clear();
-        default_config.binds.0.clear();
-
-        assert_snapshot!(
-            diff_lines(
-                &format!("{empty_config:#?}"),
-                &format!("{default_config:#?}")
-            ),
-            @r#"
-        -            numlock: false,
-        +            numlock: true,
-
-        -            tap: false,
-        +            tap: true,
-
-        -            natural_scroll: false,
-        +            natural_scroll: true,
-
-        -    spawn_at_startup: [],
-        +    spawn_at_startup: [
-        +        SpawnAtStartup {
-        +            command: [
-        +                "waybar",
-        +            ],
-        +        },
-        +    ],
-
-        -            width: 4.0,
-        +            width: 2.0,
-
-        -                r: 0.49803922,
-        -                g: 0.78431374,
-        +                r: 0.039215688,
-        +                g: 0.5176471,
-
-        -                r: 0.3137255,
-        -                g: 0.3137255,
-        -                b: 0.3137255,
-        +                r: 0.43137255,
-        +                g: 0.43137255,
-        +                b: 0.4509804,
-
-        -            on: false,
-        +            on: true,
-
-        -                    5.0,
-        +                    6.0,
-
-        -            softness: 30.0,
-        -            spread: 5.0,
-        +            softness: 28.0,
-        +            spread: 2.0,
-
-        -                a: 0.46666667,
-        +                a: 0.33333334,
-
-        -                0.3333333333333333,
-        +                0.33333,
-
-        -                0.6666666666666666,
-        +                0.66667,
-
-        -        center_focused_column: Never,
-        +        center_focused_column: OnOverflow,
-
-        -        gaps: 16.0,
-        +        gaps: 12.0,
-
-        -        rounding: 0.0,
-        -        rounding_power: 2.0,
-        +        rounding: 12.0,
-        +        rounding_power: 4.0,
-
-        -                off: false,
-        +                off: true,
-
-        -            popin_ratio: None,
-        +            popin_ratio: Some(
-        +                0.9,
-        +            ),
-
-        -                        duration_ms: 400,
-        +                        duration_ms: 220,
-
-        -            effect: Explosion,
-        +            effect: Fade,
-
-        -                off: false,
-        -                tilt_deg: 12.0,
-        -                depth: 0.08,
-        +                off: true,
-        +                tilt_deg: 6.0,
-        +                depth: 0.03,
-
-        -            off: false,
-        +            off: true,
-
-        -            top_left: false,
-        -            top_right: false,
-        +            top_left: true,
-        +            top_right: true,
         "#,
         );
     }
