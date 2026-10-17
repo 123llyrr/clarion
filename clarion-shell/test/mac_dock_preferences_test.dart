@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:clarion_shell/app_menu_models.dart';
 import 'package:clarion_shell/mac_shell_preferences.dart';
@@ -301,13 +302,16 @@ void main() {
     testWidgets('Dock $dpr DPR prepares a sharp 2x icon before hover', (
       tester,
     ) async {
+      // The answer must be a decodable file: use a shipped icon rather than an
+      // imported asset, so a fresh checkout runs this too.
+      final iconPath = File('assets/icons/trash-full.png').absolute.path;
       final requests = <Map<Object?, Object?>>[];
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, (call) async {
             if (call.method == 'outputName') return 'QA-1';
             if (call.method != 'appIcon') return null;
             requests.add(Map<Object?, Object?>.from(call.arguments as Map));
-            return File('assets/shell/generic-application.png').absolute.path;
+            return iconPath;
           });
       final f = await _fixture(
         tester,
@@ -341,7 +345,21 @@ void main() {
       final before = tester.widget<RawImage>(raw).image;
       expect(before, isNotNull);
       expect(before!.width, (128 * dpr).ceil());
+      // The utility slots prefer imported artwork, which reserves a raster
+      // texture; without an import they render the shipped vector icons.
+      final imported = File('assets/shell/launchpad.png').existsSync();
       for (final key in ['dock-launcher', 'dock-overview']) {
+        if (!imported) {
+          expect(
+            find.descendant(
+              of: find.byKey(ValueKey(key)),
+              matching: find.byType(SvgPicture),
+            ),
+            findsWidgets,
+            reason: 'a checkout without imports renders the shipped icons',
+          );
+          continue;
+        }
         final utilityImage = find.descendant(
           of: find.byKey(ValueKey(key)),
           matching: find.byType(RawImage),

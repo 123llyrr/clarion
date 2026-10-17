@@ -153,9 +153,18 @@ void main() {
 
   test('font declarations only reference files that exist', () {
     final pubspec = File('pubspec.yaml').readAsStringSync();
-    final declared = RegExp(
-      r'- asset: (assets/shell/[^\n]+)',
-    ).allMatches(pubspec).toList();
+    // Commented declarations are not declarations: the import block stays
+    // commented out until an import happens.
+    final declared = pubspec
+        .split('\n')
+        .where((line) => !line.trimLeft().startsWith('#'))
+        .map(
+          (line) => RegExp(
+            r'- asset: (assets/shell/\S+)',
+          ).firstMatch(line)?.group(1),
+        )
+        .whereType<String>()
+        .toList();
     if (declared.isEmpty) {
       // A fresh checkout ships no fonts: the imported families stay commented
       // out and the shell falls back to system families.
@@ -166,7 +175,7 @@ void main() {
     expect(pubspec, contains('family: ClarionChinese'));
     expect(declared.length, 3);
     for (final font in declared) {
-      expect(File(font.group(1)!).lengthSync(), greaterThan(0));
+      expect(File(font).lengthSync(), greaterThan(0));
     }
   });
 
