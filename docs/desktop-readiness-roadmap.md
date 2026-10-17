@@ -26,123 +26,70 @@
 | 设置 | 外观设置 + 配置原文编辑器 | `clarion-shell/lib/ui/mac_shell_settings.dart`、`clarion-settings/`（egui） |
 | 会话与打包 | logind/DBus、关机会话目标、portal 配置、会话入口、Nix/RPM、CI 与 release | `src/dbus/freedesktop_login1.rs`、`resources/clarion-shutdown.target`、`flake.nix`、`clarion.spec.rpkg`、`.github/workflows/` |
 
-## 二、缺口
+## 二、能力来源分类（生态代劳 vs 必须自做）
 
-### P0：不补不算能日用
+桌面能力大多**不需要自己实现**：只要合成器提供协议、会话提供接线，现成客户端就能用。
+下表把每一项分成"生态现成工具 / 已核实的协议前提 / Clarion 需做的最小工作"。
 
-#### 1. 锁屏（UI + PAM）
+| 领域 | 生态现成工具 | 协议前提（本仓库已核实） | Clarion 需做的最小工作 |
+| --- | --- | --- | --- |
+| 锁屏 | `hyprlock`、`swaylock`、`gtklock` | `ext-session-lock`、`session_lock_manager` ✓ | 空闲策略触发 + 会话接线 + 文档；PAM 由锁屏工具自带 |
+| 网络 | NetworkManager + `nm-applet`／`plasma-nm` | D-Bus（已有） | secret agent 与 polkit 代理可用；可选原生面板 |
+| 认证 | `polkit-gnome`、`lxpolkit`、`hyprpolkitagent` | D-Bus（已有） | 会话启动其中一个；可选 shell 风格对话框 |
+| 空闲 | `swayidle`、`hypridle` | `idle_notify`、`idle-inhibit` ✓ | 随会话启动并给出默认策略；可选内置策略 |
+| 色温 | `gammastep`、`wlsunset`、`hyprsunset` | gamma ✓ | 启动与设置项；可选内置定时 |
+| 蓝牙 | `blueman`、`overskride`、`blueberry` | BlueZ D-Bus | 会话启动 + 托盘项；可选原生面板 |
+| 剪贴板历史 | `cliphist` + `wl-clipboard` | `data_control`、`primary_selection` ✓ | 启动 + 选择器（`wofi`/`rofi` 或原生面板） |
+| 显示器排列 | `wdisplays`、`nwg-displays`、`kanshi` | `output-management` ✓ | `kanshi` 式配置驱动自动应用最贴合本项目；可选原生 UI |
+| 文件管理器 | `dolphin`、`nautilus`、`thunar`、`nemo` | `xdg-decoration`、portal FileChooser | 默认应用与 MIME 关联；桌面视图与外部管理器分工 |
+| 输入法 | `fcitx5`（含中文引擎） | `input-method`、`text-input` ✓ | **会话导出 `GTK_IM_MODULE`／`QT_IM_MODULE`／`XMODIFIERS`** + 文档 |
+| 可访问性 | `Orca` | `at-spi2`（需验证 Flutter 语义桥） | 验证桥接并写验收；可选放大与高对比 |
+| 截图/录屏 | `grim`／`slurp`／`wf-recorder` | `screencopy`、PipeWire ✓ | 已内置 UI；外部工具可用属附带能力 |
+| 状态栏/启动器替代 | `waybar`、`fuzzel`、`rofi` | `wlr-layer-shell`、`foreign-toplevel` ✓ | 无需工作；说明可替换 Shell 组件 |
+| 登录管理器 | 任意 DM（`greetd` + `gtkgreet`／`tuigreet`） | 会话入口已提供 ✓ | 文档化；可选会话选择器主题 |
 
-- 现状：`ext-session-lock` 协议、`lock_surface`、`lock_surface_focus` 已存在；但
-  **没有锁屏界面**（`src/ui/` 与 shell 中均无锁屏视图），**没有任何 PAM 调用**。
-- 缺口：密码认证、锁屏渲染、失败节流、多输出一致、通知隐私。
-- 验收：空闲策略或快捷键触发后进入锁屏；错误密码有节流与提示；正确密码解锁回到
-  原焦点；锁屏期间不显示通知内容；`loginctl lock-session` 生效并回报
-  `LockedHint=true`。
-- 依赖：PAM（`pam`/`pam-sys` 或独立认证进程）、空闲策略（P1-4）、logind 的
-  `Lock`/`PrepareForSleep` 信号。
+### 结论：真正属于 Clarion 的工作只有三类
 
-#### 2. 网络
+1. **会话接线（不可省略）**——把上面这些工具"接起来"，让全新安装不是一片空白：
+   导出输入法/光标/主题环境变量；随会话启动选定的守护（项目已有 `login_items_service`
+   自启通道）；确认 `resources/clarion-portals.conf` 的 ScreenCast／Screenshot／
+   FileChooser 路由；按发行版给出**最小依赖包集合**（见附录）。
+2. **一致性（产品选择，非功能必需）**——接受"一栈独立 applet"（waybar 风格），还是把它们
+   汇入顶栏/控制中心（网络、蓝牙、剪贴板、色温、空闲状态）。这是"像一个桌面"与
+   "能用"的区别，也决定后续 UI 工作量。
+3. **产品决定（安全相关，建议内置）**——锁屏与空闲策略属于"桌面自身行为"：可以推荐外部
+   守护并给默认配置，也可以内置（同本项目把窗口动画收归合成器的取向一致）。二者都成立，
+   但必须明确选一个并在文档中写死，不能留给用户自行拼装。
 
-- 现状：shell 服务清单中无网络服务（`lib/services/` 无 network 相关）。
-- 缺口：Wi-Fi 扫描/连接/密码与 PIN、以太网状态、已知网络、VPN 基础、无线开关。
-- 验收：控制中心可看到并连接 Wi-Fi；连接过程有状态与错误反馈；密码走 secret
-  agent 保存；断线自动重连；有线/无线切换不打断会话。
-- 依赖：NetworkManager 或 iwd 的 D-Bus 接口、secret agent（与 polkit/keyring 协同）。
+生态代劳不了的两项工程工作仍然存在：
 
-#### 3. Polkit 认证代理
+- **主线程 `scene-build`**：`scripts/diagnose-latency.py --output <output> --seconds 8`
+  采样到 6–28 ms（阈值 4 ms），同帧 `output-render` 达 29 ms，而渲染仅 0.4 ms。详见
+  [compositor-fluency-audit.md](compositor-fluency-audit.md)。
+- **真机矩阵**：Intel/NVIDIA、多屏混合刷新率、真实 VRR 面板的呈现偏差与延迟未系统验证。
 
-- 现状：无。特权操作（挂载、装包、改系统设置）缺少密码对话框，会直接失败。
-- 验收：注册到会话总线的 polkit agent；特权操作弹出 shell 风格对话框；取消/失败
-  返回明确错误；与锁屏共用认证后端。
-- 依赖：polkit、PAM。
+## 附录：最小依赖包集合（Arch 包名，其他发行版按同名包替换）
 
-### P1：日常体验明显缺
-
-#### 4. 空闲策略（黑屏 / 锁屏 / 挂起）
-
-- 现状：idle-notify 与 idle-inhibit 协议已有；`resources/default-config.kdl` 中
-  **没有任何空闲时长或动作的配置项**。
-- 验收：配置可表达"空闲 N 秒后黑屏/锁屏/挂起"，分交流电与电池；全屏视频等
-  inhibitor 被尊重；唤醒后按策略决定是否要求解锁；含"演示模式"总开关。
-- 依赖：P0-1（锁屏）、logind。
-
-#### 5. 夜间模式（色温）
-
-- 现状：gamma 协议已实现（wlsunset/gammastep 可用），但无内置定时与设置项。
-- 验收：手动/按日落时间调整色温，过渡平滑（不闪），逐输出生效，配置持久化，设置
-  面板可开关与调色温。
-
-#### 6. 蓝牙
-
-- 现状：无。
-- 验收：开关、扫描、配对（含 PIN 确认）、已配对设备管理、电量显示（若设备提供）。
-- 依赖：BlueZ D-Bus、配对代理（agent）。
-
-#### 7. 显示器排列界面
-
-- 现状：`wlr-output-management` 协议已有（可用 `wlr-randr`），但无可交互 UI。
-- 验收：拖拽排列、主输出选择、分辨率/刷新率、缩放、旋转、VRR/HDR 开关；变更可
-  自动回退（保持可见输出在线）；结果写入配置并可恢复。
-
-#### 8. 剪贴板历史
-
-- 现状：data-control/primary-selection 协议已有；无随会话提供的管理器。
-- 验收：历史面板（文本 + 图片）、置顶/删除/清空、粘贴到任意客户端、随会话启动；
-  密码管理器等敏感来源至少支持"忽略标记"的尽力而为策略。
-
-### P2：打磨与生态
-
-#### 9. 输入法会话接线
-
-- 现状：compositor 支持 input-method 与候选窗定位（`text_input_rectangle`）；但会话
-  脚本未导出 `GTK_IM_MODULE`/`QT_IM_MODULE`/`XMODIFIERS`，也没有输入法指示器。
-- 验收：会话按存在的输入法框架导出正确变量；顶栏或控制中心显示当前输入法；候选窗
-  位置跟随光标；文档给出 fcitx5/ibus 的最小安装步骤。
-
-#### 10. 可访问性
-
-- 现状：无屏幕阅读器集成、放大镜、高对比度与可访问性设置。
-- 验收：Orca 可启动并朗读 shell 与 GTK/Qt 应用的关键控件（需确认 Flutter 语义树到
-  AT-SPI 的桥接是否可用）；键盘可完整导航 shell；提供放大与高对比选项。
-- 依赖：at-spi2、Orca；Flutter 侧语义导出需先验证。
-
-#### 11. 文件管理器
-
-- 现状：仅桌面内嵌文件视图（复制/重命名/属性/打开方式/搜索等交互不成体系）。
-- 验收：可独立开窗；复制/剪切/粘贴/重命名/删除到废纸篓/属性/打开方式/搜索/排序/
-  多选/拖放；与 portal FileChooser 协同；大目录滚动流畅。
-
-#### 12. 设置覆盖面
-
-- 现状：外观与配置原文编辑已有。
-- 验收：网络、显示、电源、蓝牙、快捷键、默认应用（MIME 关联）面板可用，且与配置
-  文件双向一致（改配置不丢 UI 设置）。
-
-#### 13. 更新机制
-
-- 现状：仅打包（Nix/RPM）与 release 工作流。
-- 验收：版本化渠道、更新可用性提示（可选自动检查）、升级说明；不阻塞登录。
-
-### 工程侧
-
-#### 14. 主线程 `scene-build`
-
-- 证据：`scripts/diagnose-latency.py --output <output> --seconds 8` 采样到
-  `scene-build` 反复 6–28 ms（阈值 4 ms），同帧 `output-render` 达 29 ms，而渲染本身
-  仅 0.4 ms。详见 [compositor-fluency-audit.md](compositor-fluency-audit.md)。
-- 验收：Tracy 采样给出内部子阶段分解；修复后 95 分位 `scene-build` 低于 4 ms，且
-  `clarion msg frame-timings` 的近期晚帧样本不增加。
-
-#### 15. 真机矩阵
-
-- 现状：Intel/NVIDIA、多屏混合刷新率、真实 VRR 面板的呈现偏差与延迟未系统验证
-  （项目文档亦如此标注）。
-- 验收：每种组合记录 `frame-timings` 的 P50/P95 与晚帧率，形成可复现的验收表。
-
-#### 16. 打包面
-
-- 现状：Nix、Fedora RPM 已覆盖。
-- 验收：按需增加 AUR/DEB/Flatpak；每个渠道有版本化产物与安装校验步骤。
+```
+# 会话与门户
+xdg-desktop-portal xdg-desktop-portal-gtk
+# 网络与认证
+networkmanager polkit polkit-gnome gnome-keyring
+# 空闲与锁屏
+swayidle hyprlock        # 或 swaylock / gtklock
+# 显示与色温
+wdisplays kanshi gammastep
+# 蓝牙
+bluez bluez-utils blueman
+# 剪贴板
+wl-clipboard cliphist
+# 输入法（中文）
+fcitx5 fcitx5-chinese-addons fcitx5-gtk fcitx5-qt
+# 捕获（可选，替代内置 UI）
+grim slurp
+# 可访问性（可选）
+orca
+```
 
 ## 三、边界
 
