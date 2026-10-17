@@ -141,6 +141,9 @@ impl NativeOffscreenBuffer {
                 inner.texture.width() < target_size.w as u32
                     || inner.texture.height() < target_size.h as u32
                     || inner.renderer_context_id != renderer.context_id()
+                    || inner.texture.color.description != renderer.scene_color_description()
+                    || inner.texture.format()
+                        != Some(renderer.scene_buffer_format(Fourcc::Abgr8888))
             }
             None => true,
         };
@@ -604,5 +607,80 @@ impl
         _renderer: &mut crate::render_helpers::vulkan::native::NativeRenderer,
     ) -> Option<UnderlyingStorage<'_>> {
         None
+    }
+}
+
+#[cfg(test)]
+mod native_color_cache_tests {
+    use super::*;
+    use crate::color::{ColorDescription, HdrOutputSettings};
+    use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
+    use crate::render_helpers::vulkan::hardware_tests::setup;
+    use crate::render_helpers::vulkan::native::NativeRenderer;
+
+    #[test]
+    #[ignore = "requires a real DRM render node"]
+    fn native_offscreen_color_cache_rebuilds_for_sdr_hdr_and_headroom_changes() {
+        let (vk, reference, allocator) = setup();
+        drop(reference);
+        drop(allocator);
+        let mut renderer = NativeRenderer::new(vk).unwrap();
+        renderer
+            .prepare_output_format_for_test(Fourcc::Abgr8888)
+            .unwrap();
+        let buffer = NativeOffscreenBuffer::default();
+        let source = SolidColorBuffer::new((32., 24.), [0.75, 0.5, 0.25, 1.]);
+        let elements = [SolidColorRenderElement::from_buffer(
+            &source,
+            (0., 0.),
+            1.,
+            Kind::Unspecified,
+        )];
+        let outputs = [
+            None,
+            Some(ColorDescription::srgb()),
+            Some(HdrOutputSettings::default().description()),
+            Some(
+                HdrOutputSettings {
+                    peak_luminance: 500.,
+                    ..Default::default()
+                }
+                .description(),
+            ),
+            None,
+        ];
+        let mut previous: Option<super::super::vulkan::VulkanTexture> = None;
+        for output in outputs {
+            let _scope = renderer.output_color_scope(output);
+            let (texture, sync, _, _, _) = buffer
+                .render(&mut renderer, Scale::from(1.), &elements)
+                .unwrap();
+            sync.wait().unwrap();
+            assert_eq!(
+                texture.color.description,
+                renderer.scene_color_description()
+            );
+            assert_eq!(
+                texture.format(),
+                Some(renderer.scene_buffer_format(Fourcc::Abgr8888))
+            );
+            if let Some(previous) = previous.take() {
+                assert_ne!(
+                    texture.image(),
+                    previous.image(),
+                    "a retained old scene must not be overwritten or relabeled"
+                );
+            }
+            let (same, sync, _, _, _) = buffer
+                .render(&mut renderer, Scale::from(1.), &elements)
+                .unwrap();
+            sync.wait().unwrap();
+            assert_eq!(
+                same.image(),
+                texture.image(),
+                "unchanged scene should retain its cache"
+            );
+            previous = Some(texture);
+        }
     }
 }

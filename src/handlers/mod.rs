@@ -89,6 +89,42 @@ use crate::utils::{output_size, send_scale_transform};
 
 pub const XDG_ACTIVATION_TOKEN_TIMEOUT: Duration = Duration::from_secs(10);
 
+impl crate::protocols::color_management::ColorManagementHandler for State {
+    fn color_management_state(
+        &mut self,
+    ) -> &mut crate::protocols::color_management::ColorManagementState {
+        &mut self.clarion.color_management_state
+    }
+
+    fn color_output_description(&self, output: &Output) -> crate::color::ColorDescription {
+        self.backend.output_color_description(output)
+    }
+
+    fn color_surface_preferred_description(
+        &self,
+        surface: &WlSurface,
+    ) -> crate::color::ColorDescription {
+        let root = self.clarion.root_surface.get(surface).unwrap_or(surface);
+        self.clarion
+            .output_for_root(root)
+            .or_else(|| self.clarion.layout.active_output())
+            .map(|output| self.backend.output_color_description(output))
+            .unwrap_or_default()
+    }
+
+    fn color_surface_changed(&mut self, surface: &WlSurface) {
+        with_states(surface, |states| {
+            if let Some(renderer) = states
+                .data_map
+                .get::<smithay::backend::renderer::utils::RendererSurfaceStateUserData>(
+            ) {
+                renderer.lock().unwrap().invalidate_color();
+            }
+        });
+        self.clarion.queue_redraw_all();
+    }
+}
+
 impl SeatHandler for State {
     type KeyboardFocus = WlSurface;
     type PointerFocus = WlSurface;

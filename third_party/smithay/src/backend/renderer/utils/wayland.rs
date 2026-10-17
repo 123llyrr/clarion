@@ -325,6 +325,16 @@ impl RendererSurfaceState {
         self.textures.get(&id.erased()).and_then(|e| e.downcast_ref())
     }
 
+    /// Invalidate imported textures after a committed color description changes.
+    /// The attached allocation is unchanged, but every visible pixel changes.
+    pub fn invalidate_color(&mut self) {
+        self.textures.clear();
+        self.renderer_seen.clear();
+        if let Some(size) = self.buffer_dimensions {
+            self.damage.add([Rectangle::from_size(size)]);
+        }
+    }
+
     /// Gets the opaque regions of this surface
     pub fn opaque_regions(&self) -> Option<&[Rectangle<i32, Logical>]> {
         // If the surface is unmapped there can be no opaque regions

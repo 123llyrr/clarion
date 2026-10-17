@@ -11,7 +11,7 @@ use super::VulkanTexture;
 use crate::render_helpers::blur::BlurOptions;
 
 const MAX_RETAINED_OUTPUTS: usize = 8;
-const MAX_RETAINED_OUTPUT_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_RETAINED_OUTPUT_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Evict the oldest cache entries until the new allocation fits. Driver padding
 /// counts toward the byte budget; an oversized output remains usable but is not
@@ -119,10 +119,14 @@ impl NativeBlur {
         id: ContextId<VulkanTexture>,
         size: Size<i32, Buffer>,
         passes: usize,
+        color: crate::color::ColorDescription,
+        format: Fourcc,
         mut create: impl FnMut(Size<i32, Buffer>) -> Result<VulkanTexture, NativeError>,
     ) -> Result<(), NativeError> {
         if self.context.as_ref() != Some(&id)
-            || self.textures.first().is_some_and(|t| t.size() != size)
+            || self.textures.first().is_some_and(|t| {
+                t.size() != size || t.color.description != color || t.format() != Some(format)
+            })
         {
             // Owners in submitted frames or snapshots remain alive independently.
             self.textures.clear();
@@ -224,9 +228,14 @@ impl NativeBlur {
         renderer.retire_completed()?;
         let id = renderer.context_id();
         let passes = usize::from(options.passes.clamp(1, 31));
-        self.prepare_textures(id, source.size(), passes, |size| {
-            renderer.create_buffer(Fourcc::Abgr8888, size)
-        })
+        self.prepare_textures(
+            id,
+            source.size(),
+            passes,
+            renderer.scene_color_description(),
+            renderer.scene_buffer_format(Fourcc::Abgr8888),
+            |size| renderer.create_buffer(Fourcc::Abgr8888, size),
+        )
     }
 
     /// Allocate before borrowing a frame, then enqueue after capturing its source.
@@ -265,9 +274,14 @@ impl NativeBlur {
         }
         let id = frame.context_id();
         let passes = usize::from(options.passes.clamp(1, 31));
-        self.prepare_textures(id, source.size(), passes, |size| {
-            frame.create_buffer(Fourcc::Abgr8888, size)
-        })?;
+        self.prepare_textures(
+            id,
+            source.size(),
+            passes,
+            frame.scene_color_description(),
+            frame.scene_buffer_format(),
+            |size| frame.create_buffer(Fourcc::Abgr8888, size),
+        )?;
         Ok(PreparedBlur {
             source: source.clone(),
             textures: self.textures.clone(),
@@ -355,10 +369,11 @@ mod tests {
     #[test]
     fn output_pool_bounds_driver_padded_allocations_and_oversized_outputs() {
         let mib = 1024 * 1024;
-        // Three logical 16 MiB outputs fit, but their actual 24 MiB Vulkan
-        // allocations require retiring the oldest before retaining another.
+        // Three logical quarter-budget outputs fit; driver-padded allocations
+        // consume three eighths each, requiring one eviction for the third.
+        let padded = MAX_RETAINED_OUTPUT_BYTES * 3 / 8;
         assert_eq!(
-            output_pool_evictions([24 * mib, 24 * mib].into_iter(), 24 * mib),
+            output_pool_evictions([padded, padded].into_iter(), padded),
             Some(1)
         );
         assert_eq!(

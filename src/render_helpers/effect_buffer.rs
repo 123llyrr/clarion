@@ -273,7 +273,12 @@ impl EffectBuffer {
         let _latency =
             crate::utils::latency::Span::new(crate::utils::latency::Operation::NativeBackground);
         let context = renderer.context_id();
-        if self.native_context.as_ref() != Some(&context) {
+        if self.native_context.as_ref() != Some(&context)
+            || self.native_texture.as_ref().is_some_and(|texture| {
+                texture.color.description != renderer.scene_color_description()
+                    || texture.format() != Some(renderer.scene_buffer_format(Fourcc::Abgr8888))
+            })
+        {
             self.native_texture = None;
             self.native_blurred = None;
             self.native_damage = None;
@@ -637,6 +642,69 @@ mod tests {
             Some(1)
         );
         assert!(matches!(elements, Elements::Unchanged(_)));
+    }
+
+    #[test]
+    #[ignore = "requires a real DRM render node"]
+    fn native_effect_color_cache_rebuilds_for_output_color_and_precision_changes() {
+        use crate::color::{ColorDescription, HdrOutputSettings};
+        use crate::render_helpers::solid_color::SolidColorBuffer;
+        use crate::render_helpers::vulkan::hardware_tests::setup;
+        use crate::render_helpers::vulkan::native::NativeRenderer;
+        use smithay::backend::allocator::Fourcc;
+        use smithay::backend::renderer::Texture;
+        use smithay::utils::Scale;
+        let (vk, reference, allocator) = setup();
+        drop(reference);
+        drop(allocator);
+        let mut renderer = NativeRenderer::new(vk).unwrap();
+        renderer
+            .prepare_output_format_for_test(Fourcc::Abgr8888)
+            .unwrap();
+        let mut buffer = super::EffectBuffer::new();
+        buffer.update_size((32, 24).into(), Scale::from(1.));
+        let source = SolidColorBuffer::new((32., 24.), [0.75, 0.5, 0.25, 1.]);
+        buffer.elements_native().push(
+            SolidColorRenderElement::from_buffer(&source, (0., 0.), 1., Kind::Unspecified).into(),
+        );
+        let outputs = [
+            None,
+            Some(ColorDescription::srgb()),
+            Some(HdrOutputSettings::default().description()),
+            Some(
+                HdrOutputSettings {
+                    peak_luminance: 500.,
+                    ..Default::default()
+                }
+                .description(),
+            ),
+            None,
+        ];
+        let mut previous: Option<crate::render_helpers::vulkan::VulkanTexture> = None;
+        for output in outputs {
+            let _scope = renderer.output_color_scope(output);
+            buffer.prepare_native(&mut renderer, false).unwrap();
+            let texture = buffer.native_texture(false).unwrap().clone();
+            assert_eq!(
+                texture.color.description,
+                renderer.scene_color_description()
+            );
+            assert_eq!(
+                texture.format(),
+                Some(renderer.scene_buffer_format(Fourcc::Abgr8888))
+            );
+            if let Some(previous) = previous.take() {
+                assert_ne!(
+                    texture.image(),
+                    previous.image(),
+                    "retained prior scene pixels must stay immutable"
+                );
+            }
+            let commit = buffer.commit();
+            buffer.prepare_native(&mut renderer, false).unwrap();
+            assert_eq!(buffer.commit(), commit, "unchanged scene must not redraw");
+            previous = Some(texture);
+        }
     }
 
     #[test]

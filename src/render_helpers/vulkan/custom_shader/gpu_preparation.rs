@@ -36,7 +36,13 @@ impl OffscreenBudget {
     pub fn reserve(key: OffscreenKey) -> Result<Self, String> {
         let estimate = u64::from(key.width)
             .checked_mul(u64::from(key.height))
-            .and_then(|pixels| pixels.checked_mul(4))
+            .and_then(|pixels| {
+                pixels.checked_mul(if key.format == vk::Format::R16G16B16A16_SFLOAT {
+                    8
+                } else {
+                    4
+                })
+            })
             .ok_or_else(|| "offscreen allocation size overflow".to_owned())?;
         let mut budget = Self(0);
         budget.grow_to(estimate)?;

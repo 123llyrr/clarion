@@ -13,6 +13,10 @@ pub struct Server {
 
 impl Server {
     pub fn new(config: Config) -> Self {
+        Self::with_renderer(config, crate::backend::RendererBackendType::Gles)
+    }
+
+    pub fn with_renderer(config: Config, renderer: crate::backend::RendererBackendType) -> Self {
         let event_loop = EventLoop::try_new().unwrap();
         let handle = event_loop.handle();
         let display = Display::new().unwrap();
@@ -24,7 +28,7 @@ impl Server {
             true,
             false,
             false,
-            crate::backend::RendererBackendType::Gles,
+            renderer,
         )
         .unwrap();
 

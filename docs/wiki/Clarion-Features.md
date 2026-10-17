@@ -1,9 +1,22 @@
 # Clarion Features
 
-Clarion is a Rust Wayland desktop with a device-independent `clarion-core`, a native
-Vulkan compositor backend and an integrated Shell. The core owns window and workspace
+Clarion is a Rust Wayland desktop with native Vulkan composition, **HDR10/scRGB color
+management and mixed SDR/HDR composition**, a device-independent `clarion-core` and an
+integrated Shell. The core owns window and workspace
 identity, layout policy, interaction state and presentation timing. Platform adapters
 handle Wayland, input devices and DRM/KMS through Smithay.
+
+## HDR10 and Color Management
+
+The native Vulkan path blends SDR, HDR10 PQ and Windows scRGB clients in a persistent
+RGBA16F scene, preserving highlight range before mapping to SDR or BT.2020/PQ output.
+Wayland color descriptions follow surface commits; SDR outputs and screenshots use
+tone mapping. On supported displays, HDR metadata, colorspace and the 10-bit framebuffer
+switch together in one atomic KMS commit. SDR white is configurable and the peak
+luminance defaults to the display's EDID.
+
+See [HDR configuration and implementation scope](../hdr.md) for requirements, limits
+and physical-display validation.
 
 ## Native Vulkan Composition
 
@@ -19,9 +32,12 @@ Select it in `~/.config/clarion/config.kdl`:
 renderer "vulkan"
 ```
 
-Alternatively, use `clarion --renderer vulkan` for a development run. The current default
-is GLES when no renderer is selected. Backend changes require a new compositor process;
-available import, synchronization and presentation paths depend on the driver and output.
+Alternatively, use `clarion --renderer vulkan` for a development run. Vulkan is the default;
+initialization can fall back to GLES if the driver, device or output is unsuitable.
+Once color management has been advertised, native GPU recovery preserves its color
+semantics instead of switching accepted HDR clients to GLES. Backend changes require a
+new compositor process; available import, synchronization and presentation paths depend
+on the driver and output.
 
 Clarion Shell provides the launcher, Dock, control center, notifications and desktop
 controls, with Material and macOS-inspired appearances.

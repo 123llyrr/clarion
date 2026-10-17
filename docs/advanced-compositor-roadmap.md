@@ -92,7 +92,7 @@ window-rule {
 | P1 | 性能与续航 | 静止场景停止无效重绘；限制后台特效开销；提供可重复的场景基线，不以禁用功能掩盖故障 |
 | P2 | 色彩管理与 HDR | 完成输入色彩描述、线性合成、色调映射、输出色彩描述及 KMS/HDR 元数据，再宣告 HDR 支持 |
 
-当前已接入 FIFO、定时提交和受硬件能力约束的显式同步；色彩管理协议尚未接入。现有内部 Vulkan fence 和 10-bit 图像处理不能替代完整 HDR 管线。
+当前已接入 FIFO、定时提交和受硬件能力约束的显式同步；[HDR10 与 RGB 色彩管理](hdr.md)已接入客户端描述、浮点场景、色调映射和匹配帧的 KMS 元数据提交。物理面板、恢复、多输出与校准仍需单独验收，不能由 render-node 测试或 10-bit 格式代替。
 
 参考：[Smithay 协议模块](https://smithay.github.io/smithay/smithay/wayland/index.html)、[Wayland 色彩管理说明](https://wayland.freedesktop.org/docs/book/Color.html)。集成须以项目锁定的 Smithay 版本为准，不能仅注册 global 后就宣称完整支持。
 

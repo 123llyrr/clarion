@@ -588,6 +588,8 @@ impl Inner {
 #[derive(Default)]
 pub(crate) struct NativeInner {
     renderer_context: Option<ContextId<VulkanTexture>>,
+    scene_color: Option<crate::color::ColorDescription>,
+    scene_format: Option<Fourcc>,
     pub(crate) framebuffer: Option<VulkanTexture>,
     pub(crate) blur: Option<NativeBlur>,
     pub(crate) intermediate: Option<VulkanTexture>,
@@ -600,12 +602,22 @@ impl NativeInner {
     /// Damage trackers retain effect caches across renderer replacement. Size and element ID
     /// cannot establish image ownership, so every capture and draw validates the device epoch.
     /// Submitted frames hold independent Arc leases to any images released by this cache.
-    fn select_context(&mut self, context: ContextId<VulkanTexture>) -> bool {
-        if self.renderer_context.as_ref() == Some(&context) {
+    fn select_scene(
+        &mut self,
+        context: ContextId<VulkanTexture>,
+        color: crate::color::ColorDescription,
+        format: Fourcc,
+    ) -> bool {
+        if self.renderer_context.as_ref() == Some(&context)
+            && self.scene_color == Some(color)
+            && self.scene_format == Some(format)
+        {
             return true;
         }
         *self = Self {
             renderer_context: Some(context),
+            scene_color: Some(color),
+            scene_format: Some(format),
             ..Self::default()
         };
         false
@@ -628,7 +640,11 @@ impl RenderElement<NativeRenderer> for FramebufferEffectElement {
             cache.get_or_insert::<RefCell<NativeInner>, _>(|| RefCell::new(NativeInner::default()));
         let mut inner = inner.borrow_mut();
         let inner = &mut *inner;
-        inner.select_context(frame.context_id());
+        inner.select_scene(
+            frame.context_id(),
+            frame.scene_color_description(),
+            frame.scene_buffer_format(),
+        );
 
         let clamped_dst = match dst.intersection(output_rect) {
             Some(clamped) => clamped,
@@ -756,7 +772,11 @@ impl RenderElement<NativeRenderer> for FramebufferEffectElement {
         };
         let mut inner = inner.borrow_mut();
         let inner = &mut *inner;
-        if !inner.select_context(frame.context_id()) {
+        if !inner.select_scene(
+            frame.context_id(),
+            frame.scene_color_description(),
+            frame.scene_buffer_format(),
+        ) {
             // A direct draw can arrive before capture when a persistent damage tracker has
             // no new capture for this element. Never sample an old device's cached pixels.
             return Ok(());
@@ -982,6 +1002,70 @@ mod recovery_tests {
             }),
             "cached effect must contain this renderer's new pixels"
         );
+    }
+
+    #[test]
+    #[ignore = "requires a real DRM render node"]
+    fn native_framebuffer_effect_color_cache_rebuilds_for_scene_encoding_changes() {
+        use crate::color::{ColorDescription, HdrOutputSettings};
+        let (vk, reference, allocator) = setup();
+        drop(reference);
+        drop(allocator);
+        let mut renderer = NativeRenderer::new(vk).unwrap();
+        renderer
+            .prepare_output_format_for_test(Fourcc::Abgr8888)
+            .unwrap();
+        let effect = FramebufferEffect::new();
+        let element = element(&effect);
+        let cache = UserDataMap::new();
+        let outputs = [
+            None,
+            Some(ColorDescription::srgb()),
+            Some(HdrOutputSettings::default().description()),
+            Some(
+                HdrOutputSettings {
+                    peak_luminance: 500.,
+                    ..Default::default()
+                }
+                .description(),
+            ),
+            None,
+        ];
+        let mut previous: Option<VulkanTexture> = None;
+        for output in outputs {
+            let _scope = renderer.output_color_scope(output);
+            // A direct draw can arrive before a new capture. It must discard
+            // the old encoding instead of drawing stale, differently mapped pixels.
+            render_direct(&mut renderer, &element, &cache, false, [0., 1., 0., 1.]);
+            if let Some(inner) = cache.get::<RefCell<NativeInner>>() {
+                assert!(inner.borrow().intermediate.is_none());
+            }
+            render_direct(&mut renderer, &element, &cache, true, [1., 0., 0., 1.]);
+            let texture = cache
+                .get::<RefCell<NativeInner>>()
+                .unwrap()
+                .borrow()
+                .framebuffer
+                .as_ref()
+                .unwrap()
+                .clone();
+            assert_eq!(
+                texture.color.description,
+                renderer.scene_color_description()
+            );
+            assert_eq!(
+                texture.format(),
+                Some(renderer.scene_buffer_format(Fourcc::Abgr8888))
+            );
+            if let Some(previous) = previous.take() {
+                assert_ne!(
+                    texture.image(),
+                    previous.image(),
+                    "a scene change must allocate a new capture for retained snapshots"
+                );
+            }
+            previous = Some(texture);
+        }
     }
 
     #[test]

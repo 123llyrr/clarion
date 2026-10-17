@@ -74,7 +74,7 @@ pub struct Stream {
 #[derive(Clone)]
 enum StreamTarget {
     // FIXME: update on scale changes and whatnot.
-    Output(clarion_ipc::Output),
+    Output(Box<clarion_ipc::Output>),
     Window { id: u64 },
 }
 
@@ -228,7 +228,7 @@ impl Session {
 
         let cursor_mode = properties.cursor_mode.unwrap_or_default();
 
-        let target = StreamTarget::Output(output);
+        let target = StreamTarget::Output(Box::new(output));
         let stream = Stream::new(
             stream_id,
             self.id,

@@ -1,12 +1,12 @@
 # Vulkan backend validation
 
-On a physical TTY, Clarion's primary GPU can use the native Vulkan `Renderer`/`Frame` implementation to draw the desktop into Smithay's DRM compositor. It does not render the scene through GLES first. Secondary GPU outputs try the same primary-GPU Vulkan renderer with linear DMA-BUFs allocated on the primary GPU; connection-time KMS scanout and Vulkan target-import probes select GLES per output if cross-device sharing is unsupported. Direct scanout can bypass Vulkan composition. Headless mode has a native Vulkan offscreen renderer. Nested winit mode creates a Vulkan WSI surface and swapchain directly; it composites to a Vulkan texture and queues a GPU copy for presentation without a GLES scene pass. Its two frame slots avoid a per-frame queue-idle wait.
+On a physical TTY, Clarion's primary GPU can use the native Vulkan `Renderer`/`Frame` implementation to draw the desktop into Smithay's DRM compositor. It does not render the scene through GLES first. Secondary GPU outputs try the same primary-GPU Vulkan renderer with linear DMA-BUFs allocated on the primary GPU; connection-time KMS scanout and Vulkan target-import probes select GLES per output if cross-device sharing is unsupported. After the color-management global is published, outputs requiring GLES are rejected and native-device failures use native recovery. Managed composition disables direct scanout and overlays until per-plane color conversion exists. Hardware cursors are allowed only after SDR signaling is confirmed and the cursor uses compatible default sRGB pixels; HDR/unknown transitions and PQ/scRGB/floating-point cursor surfaces remain composited. Headless mode has a native Vulkan offscreen renderer. Nested winit mode creates a Vulkan WSI surface and swapchain directly; it composites to a Vulkan texture and queues a GPU copy for presentation without a GLES scene pass. Its two frame slots avoid a per-frame queue-idle wait.
 
 Select `renderer "vulkan"` in the configuration, or start with `--renderer vulkan`. On TTY, check the startup log for `Native Vulkan desktop renderer ready for direct KMS submission`; nested mode logs `nested native Vulkan WSI renderer initialized` and its first presentation. The requested option alone does not prove that Vulkan initialized. TTY initialization or KMS swapchain format negotiation failures select the GLES fallback; an explicitly requested nested Vulkan backend reports an initialization error if the host cannot support Vulkan WSI.
 
 TTY native initialization resolves the render node from DRM topology and defers EGL/GLES registration. A working Vulkan device therefore does not require an EGL probe for normal startup. The compatibility manager activates only when an output or legacy import actually needs GLES; failed activation remains retryable. Explicit GLES selection keeps EGL's device discovery and software-renderer rejection. The policy and device registration lifecycle have independent tests; those tests do not substitute for booting a physical KMS session.
 
-The native renderer returns a GPU completion `SyncPoint`. For a client DMA-BUF associated with a Smithay surface buffer, the frame retains that buffer until GPU completion; this delays both `wl_buffer.release` and the syncobj release point without blocking ordinary frames on the CPU. Raw imported DMA-BUFs without a known surface owner still take the synchronous safety path. Direct scanout keeps its Wayland buffer through the KMS frame. The TTY path waits when Smithay's `needs_sync()` reports that an exportable fence cannot reach KMS, or when the debug option explicitly requests a wait. On supported drivers, Smithay submits the exported fence through KMS `IN_FENCE_FD`; older NVIDIA drivers and unsupported planes need the wait. A supported primary DRM device publishes `linux-drm-syncobj-v1`; client acquire points block the corresponding surface commit until signaled, and release points follow the retained buffer's lifetime.
+The native renderer returns a GPU completion `SyncPoint`. For a client DMA-BUF associated with a Smithay surface buffer, the frame retains that buffer until GPU completion; this delays both `wl_buffer.release` and the syncobj release point without blocking ordinary frames on the CPU. Raw imported DMA-BUFs without a known surface owner still take the synchronous safety path. Direct scanout keeps its Wayland buffer through the KMS frame. The TTY path retains the prepared slot and retries after completion when Smithay's `needs_sync()` reports that an exportable fence cannot reach KMS, or when the debug option requests completion before queueing. On supported drivers, Smithay submits the exported fence through KMS `IN_FENCE_FD`; unsupported planes require completion before queueing, handled by the retained-frame retry rather than an event-loop wait. A supported primary DRM device publishes `linux-drm-syncobj-v1`; client acquire points block the corresponding surface commit until signaled, and release points follow the retained buffer's lifetime.
 
 One completion worker per native renderer retires submitted frames and SHM uploads even when no later frame is drawn. It waits for GPU completion without holding the command-pool lock and then pings the compositor event loop so queued Wayland release events are flushed. The worker sleeps while idle, serves all the renderer's outputs and has a bounded submission queue. Queue saturation uses the existing bounded cleanup path rather than an unbounded channel send. Native `SyncPoint`s retain lightweight retirement state and independent native fence FDs; keeping one after completion does not keep client buffers or GPU textures alive. Explicit `wait()` confirms the submission fence and releases completed GPU references before returning, preserving immediate blur-cache reuse. Ordinary render-time retirement only checks completed fences and does not wait for the worker to run. Renderer teardown lets in-flight owners finish safely without joining a stalled GPU on the event-loop thread.
 
@@ -16,7 +16,7 @@ Vulkan initialization requires API 1.3 and dynamic rendering. Linux external-mem
 
 Output-scoped work always follows the output's active renderer. This includes animation snapshots, resize retargets, screencopies, color picking, window/output screenshots, screen-cast frames and the screenshot selection UI. If one KMS surface has migrated to GLES while another remains native Vulkan, captures retain per-output texture and help-panel types; selecting a mismatched or removed output reports an error instead of drawing a foreign texture or panicking.
 
-When the driver advertises the required modifier and sampler features, client NV12, YUV420 and P010 DMA-BUFs use Vulkan sampler YCbCr conversion rather than a CPU conversion pass. Multi-FD disjoint planes are bound separately when supported. The linux-dmabuf protocol does not supply a YUV matrix or range description here, so this path currently uses limited range and an SDR 601/709 resolution heuristic; it is not a color-managed or HDR video pipeline.
+When the driver advertises the required modifier and sampler features, client NV12, YUV420 and P010 DMA-BUFs use Vulkan sampler YCbCr conversion rather than a CPU conversion pass. Multi-FD disjoint planes are bound separately when supported. Tagged BT.2020 surfaces select the BT.2020 sampler model before the RGB color transform; untagged content uses the existing 601/709 resolution heuristic. Sampling uses limited range. The color-representation protocol and general YUV range/chroma-location control are not implemented.
 
 Native frames wait for imported producer semaphores at `ALL_COMMANDS`. Their
 FOREIGN queue-family acquire barriers do not opt into maintenance8's
@@ -31,20 +31,22 @@ output to make progress while a transfer is pending. Animation shader draws
 lease their own descriptors until their final GPU owner releases them; each
 program retains at most 32 idle slots for subsequent draws.
 
-HDR final conversion records writes in attachment coordinates, unions them
-into disjoint rectangles and converts those pixels to PQ once. Empty damage
-skips the conversion. Retained output pixels are already encoded and must not
-pass through the conversion again. The opaque draw paths also record damage
-when no background clear was needed. HDR and scaled-capture scratch images
-share a cache keyed by device, dimensions, format, alpha and required usage;
-images return only after GPU completion. Idle retention is capped at eight
-images and 64 MiB of actual Vulkan allocation sizes, including driver padding.
+Color-managed output retains a persistent RGBA16F extended-sRGB scene for each
+live framebuffer. Per-surface transforms decode SDR/PQ/scRGB, adapt color and
+luminance, and preserve negative values and highlight headroom. The final pass
+converts damaged regions to the output's SDR or BT.2020/PQ encoding once; empty
+damage skips conversion. Blur and effects sample the scene rather than mixing
+new SDR and retained PQ pixels. A first partial repaint of an initialized target
+reconstructs its scene from the previous encoding. Cache identity includes color
+description and precision, including changes of HDR peak and reference white.
+Scene retention follows framebuffer lifetime and has a 1 GiB allocation budget;
+exhaustion defers a new frame instead of losing live partial-damage history.
 
-This is a partial-redraw correctness and allocation-reuse fix. HDR still copies
-the full framebuffer before the final pass, and the framebuffer mixes freshly
-composed SDR pixels with retained PQ pixels. Effects that sample retained
-framebuffer content need a persistent SDR scene target and a complete color
-pipeline; this change does not provide that larger redesign.
+HDR and scaled-capture scratch images share a cache keyed by device, dimensions,
+format, alpha and required usage; images return only after GPU completion. Idle
+retention is capped at eight images and 256 MiB of actual Vulkan allocation
+sizes, including driver padding. See [HDR implementation](hdr.md) for protocol,
+brightness, gamut and KMS transition semantics.
 
 ## Hardware check
 
@@ -67,13 +69,26 @@ VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.json \
 ```
 
 Adjust the node and ICD paths to the machine. The checker also runs the native
-headless output and both Wayland syncobj acquire/release integrations. Every
+headless output, both Wayland syncobj acquire/release integrations, FP16
+Wayland color-client/capture and resize-snapshot integrations, and three effect-cache color-switch
+integrations. Every
 integration must execute exactly one test and report the same actual GPU as
-the render-node suite. Headless device selection follows the loader/ICD, not
-the render-node environment variable. The namespace total includes CPU/cache
+the render-node suite. The test headless fixture selects the node through
+`CLARION_VULKAN_TEST_NODE`; the selected loader/ICD must expose that node.
+Normal, non-test headless sessions use loader/ICD device selection. The namespace total includes CPU/cache
 tests and optional YUV probes; it is not a count of GPU cases exercised.
+The private lifecycle subprocess entry point is excluded from the parent suite;
+its lifecycle tests invoke it with the required fixture environment themselves.
 
-For a locally unpacked validation layer, set `VK_LAYER_PATH` to its `explicit_layer.d` directory and `LD_LIBRARY_PATH` to its library directory. The script requires the layer, enables synchronization validation, fails on validation diagnostics and requires actual GPU tests. It reports unsupported optional YUV cases in a per-device `*.unsupported.log`; these do not count as exercised. Any other skipped GPU case is an error. It does not take display master or restart the desktop. When testing headless backend integration on a multi-GPU machine, also select the matching loader ICD with `VK_DRIVER_FILES`; the render-node test variable alone does not select the headless renderer's device.
+`CLARION_VULKAN_TEST_SCOPE=rgb-hdr` runs the RGB/HDR acceptance scope. It excludes
+exactly three experimental CPU-dumb NV12 interoperability probes in `yuv_cold`,
+while retaining GPU-produced NV12 sampling and all RGB/HDR cases. On this task's
+NVIDIA driver those CPU-dumb probes expose an allocation-size mismatch or wrong
+pixels; they have not passed acceptance. The default `all` scope keeps these
+checks strict and reports their failures. RGB/HDR acceptance does not certify
+that producer path.
+
+For a locally unpacked validation layer, set `VK_LAYER_PATH` to its `explicit_layer.d` directory and `LD_LIBRARY_PATH` to its library directory. The script requires the layer, enables synchronization validation, fails on validation diagnostics and requires actual GPU tests. It reports unsupported optional YUV cases in a per-device `*.unsupported.log`; these do not count as exercised. Any other skipped GPU case is an error. It does not take display master or restart the desktop. When testing headless backend integration on a multi-GPU machine, also select the matching loader ICD with `VK_DRIVER_FILES` so it can expose the node requested by the test fixture.
 
 Coverage includes:
 
@@ -87,11 +102,15 @@ Coverage includes:
 - A blocked GPU queue released by a later command-lock owner during synchronous readback and partial upload, with exact pixel comparisons.
 - Animation descriptor lifetime across asynchronous GPU completion, bounded idle reuse, and changed texture/uniform pixel comparisons.
 - HDR 10-bit partial redraw with overlapping and opaque damage across all eight output transforms, unchanged-region byte equality, and empty-damage stability.
+- Mixed SDR/PQ/scRGB, BT.2020 primaries, configurable reference white, absolute luminance, black-point adaptation, FP16 snapshots and HDR-to-SDR capture against a CPU reference.
+- Color-managed partial repaint through more than sixteen live owned and GBM/DMA-BUF targets, target retirement and scene reconstruction on the first managed repaint.
+- A real FP16 Wayland SHM client changing only its image description, checked against the composed output and production PNG screenshot action.
+- A resize commit replacing buffers and color descriptions on a parent and synchronized child, checking the old snapshot and new output independently.
 - Interrupted producer waits during initial, partial and empty-damage composition, followed by successful retries with preserved damage and pixel equality.
 - Rejection of zero/negative DMA-BUF dimensions and extents exceeding the queried format limits, before Vulkan image creation for both sampled textures and targets.
 - A 1080p final-pass timing measurement including CPU overhead and GPU fence wait, with and without the import/scratch cache. Validation layers affect timing; it is not a desktop FPS benchmark.
 
-The original GLES-to-Vulkan composition path remains available for regression tests. Its target cache identifies underlying DMA-BUF allocations, retains their FDs against inode reuse and is limited to 16 entries. Empty frames skip that Vulkan pass. Each allocation keeps its own damage commit. Unknown or expired damage history conservatively repaints fully. A clipped bounding rectangle limits partial updates. Command buffers and completion fences are reused after completion (at most eight idle slots).
+The original GLES-to-Vulkan composition path remains available for regression tests. The target cache identifies underlying DMA-BUF allocations and retains imported images while their swapchain slots remain live. Dead slots are pruned; a 1 GiB allocation budget bounds admission without evicting live color-managed history. Empty frames skip that Vulkan pass. Each allocation keeps its own damage commit. Unknown or expired damage history conservatively repaints fully. A clipped bounding rectangle limits partial updates. Command buffers and completion fences are reused after completion (at most eight idle slots).
 
 Hardware tests exercise both native Vulkan rendering and the earlier GLES-to-Vulkan composition path without taking DRM display master. They do not replace TTY checks for KMS presentation, VRR, monitor hotplug, suspend/resume or long-duration use.
 

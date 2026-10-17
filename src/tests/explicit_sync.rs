@@ -497,7 +497,8 @@ fn wayland_client_acquire_and_release_follow_gpu_use() {
     assert_eq!(release.value(), 0, "client still owns an attached buffer");
 
     // Submit fresh client-buffer damage and render it before the normal event
-    // loop redraw. The native headless path waits for its GPU fence to complete.
+    // loop redraw. Drive asynchronous FP16 preparation through its owner sources;
+    // the submitted native headless frame still waits for its GPU fence to complete.
     surface.damage_buffer(0, 0, 64, 64);
     surface.commit();
     fixture.client.connection.flush().unwrap();
@@ -515,16 +516,36 @@ fn wayland_client_acquire_and_release_follow_gpu_use() {
         .next()
         .unwrap()
         .clone();
-    {
-        let State { backend, clarion } = &mut fixture.server.state;
-        clarion.queue_redraw(&output);
-        let mut coordinator = crate::frame_pipeline::FrameCoordinator::new(clarion, &output);
+    fixture.server.state.clarion.queue_redraw(&output);
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let result = {
+            let State { backend, clarion } = &mut fixture.server.state;
+            let mut coordinator = crate::frame_pipeline::FrameCoordinator::new(clarion, &output);
+            backend.headless().render(&mut coordinator, &output)
+        };
+        if matches!(result, crate::backend::RenderResult::Submitted) {
+            break;
+        }
         assert!(
-            matches!(
-                backend.headless().render(&mut coordinator, &output),
-                crate::backend::RenderResult::Submitted
-            ),
+            matches!(result, crate::backend::RenderResult::GpuDeferred),
             "native Vulkan did not submit the client-buffer damage"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "native client-buffer scene preparation did not complete"
+        );
+        // Publish real GPU preparation/completion events without the fixture's
+        // refresh redraw consuming the frame whose submission we assert here.
+        fixture
+            .server
+            .event_loop
+            .dispatch(Duration::from_millis(5), &mut fixture.server.state)
+            .unwrap();
+        assert_eq!(
+            release.value(),
+            0,
+            "release signaled while native scene preparation was deferred"
         );
     }
     assert_eq!(

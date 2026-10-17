@@ -1,6 +1,7 @@
 //! Opt-in real GPU regression tests. No display master or running session is required.
 
-mod lifecycle;
+mod color_management;
+pub(super) mod lifecycle;
 mod window_snapshot;
 mod yuv_cold;
 
@@ -1129,6 +1130,9 @@ fn frame_packs_interleaved_meshes_and_reuses_draw_bindings() {
 #[test]
 #[ignore = "requires real DRM render node and Vulkan"]
 fn fence_timeout_keeps_submitted_frame_resources_alive() {
+    if lifecycle::run_quarantine_fixture_in_child() {
+        return;
+    }
     {
         let (renderer, _gles, _allocator) = setup();
         let ctx = renderer.ctx.as_ref().unwrap().clone();
@@ -1197,6 +1201,9 @@ fn fence_timeout_keeps_submitted_frame_resources_alive() {
 #[test]
 #[ignore = "requires real DRM render node and Vulkan"]
 fn fence_timeout_keeps_transfer_texture_alive() {
+    if lifecycle::run_quarantine_fixture_in_child() {
+        return;
+    }
     for readback in [false, true] {
         let (renderer, _gles, _allocator) = setup();
         let texture = renderer
@@ -1224,6 +1231,9 @@ fn fence_timeout_keeps_transfer_texture_alive() {
 #[test]
 #[ignore = "requires real DRM render node and Vulkan"]
 fn timeout_preserves_submitted_layouts_for_readback_and_retry() {
+    if lifecycle::run_quarantine_fixture_in_child() {
+        return;
+    }
     let (renderer, _gles, _allocator) = setup();
     let ctx = renderer.ctx.as_ref().unwrap();
     let make_texture = || {
@@ -1435,6 +1445,10 @@ fn native_smithay_renderer_matches_gles_transforms() {
     ];
     let mods = modifiers(&vk, &reference, Fourcc::Argb8888);
     let mut native = NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    native
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     native.upscale_filter(TextureFilter::Nearest).unwrap();
     reference.upscale_filter(TextureFilter::Nearest).unwrap();
     let transforms = [
@@ -1581,6 +1595,10 @@ fn native_smithay_offscreen_and_overlapping_damage() {
     let mods = modifiers(&vk, &oracle, Fourcc::Argb8888);
     let mut sampled_only = vk.create_solid_texture([255; 4]).unwrap();
     let mut renderer = NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    renderer
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     assert!(renderer.bind(&mut sampled_only).is_err());
     let mut offscreen = renderer
         .create_buffer(Fourcc::Abgr8888, (16, 16).into())
@@ -1700,6 +1718,10 @@ fn native_frame_multiple_gpu_producers_and_abort() {
         ));
     }
     let mut renderer = NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    renderer
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let mut output = allocator
         .create_buffer(32, 16, Fourcc::Argb8888, &mods)
         .unwrap()
@@ -2057,6 +2079,10 @@ fn native_dmabuf_import_cache_retains_rotating_buffers_and_bounds_driver_objects
         paint(&mut gles, buffer, color.map(|v| f32::from(v) / 255.));
     }
     let mut native = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    native
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let weak_context = Arc::downgrade(native.vulkan().ctx.as_ref().unwrap());
     let importer = native.vulkan().importer.as_ref().unwrap().clone();
     let mut target = native
@@ -2392,8 +2418,8 @@ fn nourish_damage_and_gpu_acquire() {
     assert!(!fallback_stats.gpu_acquire);
     assert_eq!(
         waits.load(Ordering::SeqCst),
-        1,
-        "a non-exportable producer must be waited on"
+        0,
+        "an already-completed non-exportable producer needs no CPU wait"
     );
     eprintln!(
         "PASS: Nourish damage: 4096 -> 91 pixels; GPU acquire; zero producer CPU waits; command/fence reuse; expired-history full redraw"
@@ -2485,13 +2511,13 @@ fn interrupted_producer_preserves_damage_and_allows_retry() {
             .composite_dmabuf_after(&target, &producer, Some(&damage.snapshot()))
             .unwrap_err();
         assert!(
-            error.is::<Interrupted>(),
+            error.is::<crate::render_helpers::sync::ProducerNotReady>(),
             "retain the recoverable error type: {error}"
         );
         assert_eq!(
             waits.load(Ordering::SeqCst) - count,
-            3,
-            "persistent interruption must not spin"
+            0,
+            "an unresolved producer must defer without CPU fence waits"
         );
         assert_eq!(vk.target_cache[&key].last_commit, last_commit);
         assert_eq!(pixels(&mut gles, &mut target), expected);
@@ -2507,7 +2533,8 @@ fn interrupted_producer_preserves_damage_and_allows_retry() {
     let error = vk
         .composite_dmabuf_after(&target, &producer, Some(&damage.snapshot()))
         .unwrap_err();
-    assert!(error.is::<Interrupted>());
+    assert!(error.is::<crate::render_helpers::sync::ProducerNotReady>());
+    assert_eq!(waits.load(Ordering::SeqCst), 0);
     interrupted.store(false, Ordering::SeqCst);
     assert_eq!(
         vk.composite_dmabuf_after(&target, &producer, Some(&damage.snapshot()))
@@ -2516,7 +2543,7 @@ fn interrupted_producer_preserves_damage_and_allows_retry() {
         0
     );
     eprintln!(
-        "PASS: interrupted producer: bounded waits, preserved damage, full/partial/empty retry, unchanged pixels"
+        "PASS: unresolved producer: zero CPU waits, preserved damage, full/partial/empty retry, unchanged pixels"
     );
 }
 
@@ -2587,6 +2614,10 @@ fn native_dma_format_negotiation_and_import() {
     use super::native::NativeRenderer;
     let (vk, mut oracle, mut allocator) = setup();
     let mut renderer = NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    renderer
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let samples = renderer.dmabuf_formats();
     let targets = <NativeRenderer as Bind<Dmabuf>>::supported_formats(&renderer).unwrap();
     assert!(samples.iter().next().is_some());
@@ -2690,6 +2721,10 @@ fn nv12_dmabuf_immutable_ycbcr_sampler_pixels() {
     impl drm::control::Device for Card {}
     let (vk, mut oracle, mut allocator) = setup();
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    renderer
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     // A different producer GPU may advertise linear NV12 but still reject
     // that cross-device PRIME fd. Use this renderer's own primary node.
     let Some(primary_node) = intel_primary_node(renderer.vulkan().ctx.as_ref().unwrap()) else {
@@ -3193,6 +3228,10 @@ fn native_idle_upload_completion_releases_storage_and_stops_waking() {
         let (vk, _gles, _allocator) = setup();
         let ctx = vk.ctx.as_ref().unwrap().clone();
         let mut renderer = NativeRenderer::new(vk).unwrap();
+        // Exercise pixels/lifetimes after the owner has prepared scene formats.
+        renderer
+            .prepare_output_format_for_test(Fourcc::Abgr8888)
+            .unwrap();
         let mut event_loop = smithay::reexports::calloop::EventLoop::<()>::try_new().unwrap();
         renderer
             .install_completion_wakeup(&event_loop.handle())
@@ -3232,6 +3271,9 @@ fn native_idle_upload_completion_releases_storage_and_stops_waking() {
 #[test]
 #[ignore = "requires real DRM render node, Vulkan and timeline semaphores"]
 fn deferred_shm_upload_timeout_keeps_resources_alive() {
+    if lifecycle::run_quarantine_fixture_in_child() {
+        return;
+    }
     let (renderer, _oracle, _allocator) = setup();
     let blocked = BlockedQueue::new(renderer.ctx.as_ref().unwrap().clone());
     let (texture, pending) = renderer
@@ -3423,6 +3465,10 @@ mod shm_protocol {
             .export()
             .unwrap();
         let mut renderer = NativeRenderer::new(vk).unwrap();
+        // Exercise pixels/lifetimes after the owner has prepared scene formats.
+        renderer
+            .prepare_output_format_for_test(Fourcc::Abgr8888)
+            .unwrap();
         let mut display = server::Display::<ServerState>::new().unwrap();
         let mut handle = display.handle();
         let mut state = ServerState {
@@ -3900,6 +3946,10 @@ fn native_opaque_offscreen_attachment_and_sampling_views() {
         .export()
         .unwrap();
     let mut renderer = NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    renderer
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let all = Rectangle::from_size((16, 16).into());
     for format in [
         Fourcc::Xrgb8888,
@@ -3907,6 +3957,7 @@ fn native_opaque_offscreen_attachment_and_sampling_views() {
         Fourcc::Xrgb2101010,
         Fourcc::Xbgr2101010,
     ] {
+        renderer.prepare_output_format_for_test(format).unwrap();
         let mut source = renderer.create_buffer(format, (16, 16).into()).unwrap();
         assert_eq!(
             smithay::backend::renderer::Texture::format(&source),
@@ -3977,6 +4028,10 @@ fn native_export_memory_formats_regions_and_reuse() {
         .export()
         .unwrap();
     let mut renderer = NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    renderer
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let all = Rectangle::from_size((4, 4).into());
     let physical = Rectangle::from_size((4, 4).into());
     for code in [
@@ -3989,6 +4044,7 @@ fn native_export_memory_formats_regions_and_reuse() {
         Fourcc::Xrgb2101010,
         Fourcc::Xbgr2101010,
     ] {
+        renderer.prepare_output_format_for_test(code).unwrap();
         let mut source = renderer.create_buffer(code, (4, 4).into()).unwrap();
         assert!(renderer.can_read_texture(&source).unwrap());
         assert!(
@@ -4310,6 +4366,10 @@ fn native_render_and_download_matches_gles() {
     use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
     let (vk, mut reference, _allocator) = setup();
     let mut native = NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    native
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let background = SolidColorBuffer::new((6., 6.), [0.25, 0., 0.5, 0.5]);
     let foreground = SolidColorBuffer::new((2., 3.), [0., 0.5, 0., 0.5]);
     let elements = [
@@ -4369,6 +4429,10 @@ fn native_damage_tracker_dmabuf_updates_and_idle_frames() {
     let (vk, mut reference, mut allocator) = setup();
     let mods = modifiers(&vk, &reference, Fourcc::Argb8888);
     let mut native = NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    native
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     for transform in [
         Transform::Normal,
         Transform::_90,
@@ -4492,6 +4556,10 @@ fn native_frozen_snapshot_queues_copies_and_draws_without_cpu_wait() {
     let ctx = vk.ctx.as_ref().unwrap().clone();
     assert!(ctx.supports_sync_file_export);
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    renderer
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let source = renderer
         .import_memory(
             &[255, 0, 0, 255].repeat(16 * 12),
@@ -4664,6 +4732,10 @@ fn native_async_finish_returns_before_gpu_and_exports_sync_file() {
     let ctx = vk.ctx.as_ref().unwrap().clone();
     assert!(ctx.supports_sync_file_import && ctx.supports_sync_file_export);
     let mut renderer = NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    renderer
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let mut texture = renderer
         .create_buffer(Fourcc::Abgr8888, (16, 16).into())
         .unwrap();
@@ -4850,6 +4922,10 @@ fn native_config_notification_matches_gles() {
 
     let (vk, mut reference, _) = setup();
     let mut native = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    native
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let mut clock = Clock::default();
     clock.set_complete_instantly(true);
     let mut notification = ConfigErrorNotification::new(
@@ -4944,6 +5020,10 @@ fn native_hotkeys_and_exit_dialog_match_gles() {
 
     let (vk, mut reference, _) = setup();
     let mut native = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    native
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let config = Rc::new(RefCell::new(clarion_config::Config::default()));
     let mut clock = Clock::with_time(Duration::ZERO);
     let mut dialog = ExitConfirmDialog::new(clock.clone(), config.clone());
@@ -5076,6 +5156,10 @@ fn native_border_element_gradients_crop_and_transforms() {
     use crate::render_helpers::{render_to_vec, resources, shaders};
     let (vk, mut reference, _) = setup();
     let mut native = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    native
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     resources::init(&mut reference);
     shaders::init(&mut reference);
     assert!(BorderRenderElement::has_shader(&mut reference));
@@ -5238,6 +5322,10 @@ fn native_shadow_element_blur_cutout_and_transforms() {
     use crate::render_helpers::{render_to_vec, resources, shaders};
     let (vk, mut reference, _) = setup();
     let mut native = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    native
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     resources::init(&mut reference);
     shaders::init(&mut reference);
     assert!(ShadowRenderElement::has_shader(&mut reference));
@@ -5408,6 +5496,10 @@ fn native_layout_decorations_match_gles() {
     use crate::scene::shadow::Shadow;
     let (vk, mut reference, _) = setup();
     let mut native = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    native
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     resources::init(&mut reference);
     shaders::init(&mut reference);
     let mut gradient = Gradient::from(Color::new_unpremul(0.8, 0.2, 0.1, 0.8));
@@ -5561,6 +5653,10 @@ fn native_tabs_and_insert_hints_match_gles() {
     use crate::scene::tab_indicator::{TabIndicator, TabInfo};
     let (vk, mut reference, _) = setup();
     let mut native = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    native
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     resources::init(&mut reference);
     shaders::init(&mut reference);
     let mut gradient = Gradient::from(Color::new_unpremul(0.8, 0.1, 0.2, 0.6));
@@ -5712,6 +5808,10 @@ fn native_dual_kawase_blur_matches_gles_and_preserves_results() {
     use crate::render_helpers::{resources, shaders};
     let (vk, mut reference, _) = setup();
     let mut native = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    native
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let mut blur = blur::NativeBlur::default();
     resources::init(&mut reference);
     shaders::init(&mut reference);
@@ -5969,6 +6069,10 @@ fn native_blur_rotates_outputs_without_overwriting_pending_or_retained_results()
         let ctx = vk.ctx.as_ref().unwrap().clone();
         assert!(ctx.supports_sync_file_export);
         let mut native = native::NativeRenderer::new(vk).unwrap();
+        // Exercise pixels/lifetimes after the owner has prepared scene formats.
+        native
+            .prepare_output_format_for_test(Fourcc::Abgr8888)
+            .unwrap();
         let mut blur = blur::NativeBlur::default();
         let size = (37, 23);
         let sources = [[160, 0, 0, 192], [0, 128, 0, 192], [0, 0, 96, 192]].map(|color| {
@@ -6065,6 +6169,10 @@ fn native_blur_rotates_outputs_without_overwriting_pending_or_retained_results()
         // dimensions match, without changing any retained old-device texture.
         let (vk, _reference, _allocator) = setup();
         let mut other = native::NativeRenderer::new(vk).unwrap();
+        // Exercise pixels/lifetimes after the owner has prepared scene formats.
+        other
+            .prepare_output_format_for_test(Fourcc::Abgr8888)
+            .unwrap();
         let other_source = other
             .import_memory(
                 &[0, 80, 80, 128].repeat(19 * 11),
@@ -6096,6 +6204,10 @@ fn native_ordered_framebuffer_capture_and_resampling() {
     use smithay::backend::renderer::Texture;
     let (vk, mut reference, _) = setup();
     let mut native = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    native
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let mut target = native
         .create_buffer(Fourcc::Abgr8888, (16, 12).into())
         .unwrap();
@@ -6265,6 +6377,10 @@ fn native_scaled_capture_matches_gles_blit() {
     let (vk, mut reference, mut allocator) = setup();
     let mods = modifiers(&vk, &reference, Fourcc::Argb8888);
     let mut native = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    native
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let data = (0..17 * 13)
         .flat_map(|i| {
             let a = (128 + (i * 13) % 128) as u8;
@@ -6633,6 +6749,10 @@ fn native_noise_keeps_transparent_pixels_premultiplied() {
 
     let (vk, _gles, _allocator) = setup();
     let mut renderer = NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    renderer
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let size: smithay::utils::Size<i32, smithay::utils::Buffer> = (16, 16).into();
     let physical_size: smithay::utils::Size<i32, smithay::utils::Physical> = (16, 16).into();
     let rect = Rectangle::from_size(size);
@@ -7026,6 +7146,10 @@ fn native_offscreen_multioutput_scaling_rotation_and_readback() {
     drop(reference);
 
     let mut native = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    native
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     // Verify no GLES scene renderer exists or is accessible
     assert!(
         native.as_gles_renderer().is_none(),
@@ -7263,6 +7387,10 @@ fn native_screenshot_selection_pixels_and_pointer() {
     let (vk, reference, _) = setup();
     drop(reference);
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    renderer
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let output = Output::new(
         "screenshot-test".into(),
         PhysicalProperties {
@@ -7353,6 +7481,10 @@ fn native_screenshot_selection_survives_output_changes() {
     let (vk, reference, _) = setup();
     drop(reference);
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    renderer
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let make_output = |name: &str| {
         let output = Output::new(
             name.into(),
@@ -7439,6 +7571,10 @@ fn native_offscreen_recycle_preserves_live_images_and_alpha() {
     use smithay::backend::renderer::Texture as _;
     let (vk, _reference, _) = setup();
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    renderer
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let texture = renderer
         .create_buffer(Fourcc::Abgr8888, (32, 24).into())
         .unwrap();
@@ -7465,6 +7601,10 @@ fn native_offscreen_recycle_preserves_live_images_and_alpha() {
     // A foreign texture must never enter this renderer's offscreen pool.
     let (other, _reference, _) = setup();
     let mut other = native::NativeRenderer::new(other).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    other
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let foreign = other
         .create_buffer(Fourcc::Abgr8888, (17, 13).into())
         .unwrap();
@@ -7495,6 +7635,10 @@ fn native_pooled_snapshots_sample_without_cpu_wait() {
 
     let (vk, _reference, _) = setup();
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    renderer
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let mut previous = None;
     for i in 0..24 {
         let color = if i % 2 == 0 {
@@ -7600,6 +7744,10 @@ fn native_animation_glsl_interface_and_crossfade() {
     use crate::render_helpers::shaders::{animation_source, ProgramType};
     let (vk, _gles, _) = setup();
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    renderer
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     for kind in [ProgramType::Resize, ProgramType::Open, ProgramType::Close] {
         renderer
             .animation_program(kind, &animation_source(kind, None))
@@ -8463,6 +8611,10 @@ fn native_effect_buffer_keeps_unchanged_shared_background() {
 
     let (vk, _gles, _) = setup();
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    renderer
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let mut background = EffectBuffer::new();
     background.update_size((96, 64).into(), 1.0.into());
     let mut source = SolidColorBuffer::new((96., 64.), [1., 0., 0., 1.]);
@@ -8555,6 +8707,10 @@ fn native_animation_target_growth_reuses_capacity_and_clears_shrink() {
 
     let (vk, _gles, _) = setup();
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    renderer
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let buffer = NativeOffscreenBuffer::default();
     let mut source = SolidColorBuffer::new((32., 24.), [1., 0., 0., 1.]);
     let mut identities = HashSet::new();
@@ -8747,6 +8903,10 @@ fn native_closing_animation_owns_a_stable_dmabuf_snapshot() {
     repaint(&mut gles, &mut source, [1., 0., 0., 1.]);
 
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    renderer
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let clock = Clock::with_time(Duration::ZERO);
     let transaction = Transaction::new();
     let scene_resources = crate::scene::resources::SceneResources::new();
@@ -8820,6 +8980,23 @@ fn native_explosion_close_does_not_tint_pixels_outside_the_window_area() {
 
     let (vk, _gles, _) = setup();
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    renderer
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
+    let close_source = crate::render_helpers::shaders::animation_source(
+        crate::render_helpers::shaders::ProgramType::Close,
+        crate::render_helpers::shaders::resolve_close_shader(
+            None,
+            clarion_config::WindowCloseEffect::Explosion,
+        ),
+    );
+    renderer
+        .wait_for_animation_program_for_test(
+            crate::render_helpers::shaders::ProgramType::Close,
+            &close_source,
+        )
+        .unwrap();
     let texture = renderer
         .import_memory(
             &[255, 0, 0, 255].repeat(64 * 64),
@@ -8946,6 +9123,10 @@ fn explosion_transparent_snapshot_has_no_flash_or_ring() {
 
     let (vk, mut gles, _) = setup();
     let mut native = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    native
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     shaders::init(&mut gles);
     shaders::set_custom_close_program(&mut gles, Some(shaders::DENIAL_EXPLOSION_SHADER));
     crate::render_helpers::resources::init(&mut gles);
@@ -8962,6 +9143,9 @@ fn explosion_transparent_snapshot_has_no_flash_or_ring() {
         shaders::ProgramType::Close,
         Some(shaders::DENIAL_EXPLOSION_SHADER),
     );
+    native
+        .wait_for_animation_program_for_test(shaders::ProgramType::Close, &source)
+        .unwrap();
     for progress in [0., 0.08, 0.2, 0.37, 0.38, 0.5, 0.75, 1.] {
         let uniforms: Rc<[Uniform<'static>]> = Rc::new([
             shaders::mat3_uniform("clarion_input_to_geo", glam::Mat3::IDENTITY),
@@ -9111,6 +9295,10 @@ fn native_particle_batches_match_gles_with_perspective_and_meshes() {
 
     let (vk, mut gles, _) = setup();
     let mut native = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    native
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     crate::render_helpers::shaders::init(&mut gles);
     crate::render_helpers::resources::init(&mut gles);
     let mesh_vertices = [[0., 0.], [0., 1.], [1., 1.], [0., 0.], [1., 1.], [1., 0.]]
@@ -9483,6 +9671,20 @@ mod resize_capture_bounds_regressions {
     fn native_resize_retarget_does_not_repeat_translucent_edges() {
         let (vk, _gles, _) = setup();
         let mut renderer = native::NativeRenderer::new(vk).unwrap();
+        // Exercise pixels/lifetimes after the owner has prepared scene formats.
+        renderer
+            .prepare_output_format_for_test(Fourcc::Abgr8888)
+            .unwrap();
+        let resize_source = crate::render_helpers::shaders::animation_source(
+            crate::render_helpers::shaders::ProgramType::Resize,
+            None,
+        );
+        renderer
+            .wait_for_animation_program_for_test(
+                crate::render_helpers::shaders::ProgramType::Resize,
+                &resize_source,
+            )
+            .unwrap();
         exercise_bounds(
             &mut renderer,
             |renderer, area, scale, (previous, previous_size), (next, next_size), progress| {
@@ -9527,6 +9729,10 @@ fn native_regional_framebuffer_blur_matches_full_pass_pixels() {
 
     let (vk, _gles, _allocator) = setup();
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    renderer
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let size: Size<i32, Buffer> = (257, 193).into();
     let mut backgrounds = Vec::new();
     for phase in [0, 91] {
@@ -9738,6 +9944,10 @@ fn native_transition_batch_reuses_equal_pixels_without_mutating_private_snapshot
 
     let (vk, _gles, _) = setup();
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    renderer
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     for transform in [Transform::Normal, Transform::_90, Transform::Flipped180] {
         for scale in [1., 1.25, 2.] {
             let size: Size<i32, Physical> = (128, 96).into();
@@ -9860,6 +10070,10 @@ fn native_transition_batch_preserves_live_backdrop_pixels() {
     }
     let (vk, _gles, _) = setup();
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    renderer
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     for glass in [false, true] {
         let effect = FramebufferEffect::new();
         let mut background = SolidColorBuffer::new((128., 96.), [1., 0., 0., 1.]);
@@ -9943,6 +10157,10 @@ fn native_transition_batch_reports_4k_capture_cost() {
     use crate::render_helpers::transition_capture::TransitionCapture;
     let (vk, _gles, _) = setup();
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
+    // Exercise pixels/lifetimes after the owner has prepared scene formats.
+    renderer
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     let buffers: Vec<_> = (0..24)
         .map(|i| SolidColorBuffer::new((1400., 1000.), [i as f32 / 24., 0.3, 0.7, 1.]))
         .collect();

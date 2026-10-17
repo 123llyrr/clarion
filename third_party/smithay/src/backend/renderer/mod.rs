@@ -436,6 +436,17 @@ pub trait Renderer: RendererSuper {
     /// Wait for a [`SyncPoint`] to be signaled
     fn wait(&mut self, sync: &sync::SyncPoint) -> Result<(), Self::Error>;
 
+    /// Whether an error requests a retry without invalidating output allocations.
+    ///
+    /// Return `true` only if this attempt submitted no writes to the output
+    /// framebuffer. The damage tracker still invalidates its history, so a retry
+    /// repaints the complete output. Retaining the swapchain lets asynchronous
+    /// target preparation finish without continually replacing its target.
+    /// Errors after output submission or with unknown contents must return `false`.
+    fn is_render_deferred(_error: &Self::Error) -> bool {
+        false
+    }
+
     /// Forcibly clean up the renderer internal texture cache
     ///
     /// Note: Resources used by the renderer will be implicitly cleaned-up after finishing

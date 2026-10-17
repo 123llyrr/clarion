@@ -56,6 +56,12 @@ python3 scripts/diagnose-latency.py --seconds 15 --output /tmp/clarion-latency.j
 
 ## KMS 帧调度
 
+HDR 色彩管理使用按实际输出缓冲保存的 FP16 场景。冷场景的异步准备会返回可重试状态，
+此时保留交换链分配，只清除损伤历史；重置缓冲年龄也不能释放仍由 KMS/GPU 持有的槽位。
+否则会形成“新目标需要准备 → 清空缓冲池 → 下一次仍是新目标”的循环，表现为持续的
+`gpu_work_deferrals` 和隔帧呈现。普通渲染错误仍会丢弃内容未知的缓冲。
+对比修复前后应检查热身后该计数的增量与实际呈现间隔，不能只以像素测试或 GPU 平均耗时验收流畅度。
+
 物理输出可用 `clarion msg frame-timings` 查看最近渲染耗时、预测呈现偏差和当前 latch 预算；`clarion msg --json frame-timings` 适合保存两次快照作比较。`late_presentations` 与 `fixed_refresh_presentations` 是累计计数，应比较同一输出在相同负载下两次快照的增量。没有历史呈现时间的首帧和缺少目标时间的帧不计入预测偏差。嵌套或无头输出不会使用 KMS latch 调度。
 
 `kms_latch_delay_ms` 是计划等待时长，`kms_latch_wakeup_lateness_ms` 是定时器回调相对计划期限的实际晚醒时间（提前唤醒记为零）。若晚醒 P95 偏高，应先检查主线程负载和调度等待；若晚醒很小但硬件呈现仍迟到，应继续检查回调后的主循环处理、渲染、GPU 同步和 KMS 提交阶段。这个指标不包含回调后等待实际重绘及渲染所花的时间。

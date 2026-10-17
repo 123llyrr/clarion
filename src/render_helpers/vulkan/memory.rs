@@ -217,12 +217,23 @@ impl Drop for PendingReadback {
     }
 }
 
+#[cfg(test)]
 fn source_layout(width: u32, height: u32, stride: usize, len: usize) -> Result<usize, vk::Result> {
+    source_layout_bpp(width, height, stride, len, 4)
+}
+
+fn source_layout_bpp(
+    width: u32,
+    height: u32,
+    stride: usize,
+    len: usize,
+    bpp: usize,
+) -> Result<usize, vk::Result> {
     let invalid = vk::Result::ERROR_INITIALIZATION_FAILED;
     if width == 0 || height == 0 || width > i32::MAX as u32 || height > i32::MAX as u32 {
         return Err(invalid);
     }
-    let row = (width as usize).checked_mul(4).ok_or(invalid)?;
+    let row = (width as usize).checked_mul(bpp).ok_or(invalid)?;
     let required = stride
         .checked_mul(height as usize - 1)
         .and_then(|n| n.checked_add(row))
@@ -281,8 +292,20 @@ impl VulkanRenderer {
         height: u32,
         stride: usize,
     ) -> Result<VulkanTexture, vk::Result> {
-        source_layout(width, height, stride, data.len())?;
+        source_layout_bpp(
+            width,
+            height,
+            stride,
+            data.len(),
+            if matches!(format, Fourcc::Abgr16161616f | Fourcc::Xbgr16161616f) {
+                8
+            } else {
+                4
+            },
+        )?;
         let (format, alpha) = match format {
+            Fourcc::Abgr16161616f => (vk::Format::R16G16B16A16_SFLOAT, true),
+            Fourcc::Xbgr16161616f => (vk::Format::R16G16B16A16_SFLOAT, false),
             Fourcc::Abgr8888 => (vk::Format::R8G8B8A8_UNORM, true),
             Fourcc::Xbgr8888 => (vk::Format::R8G8B8A8_UNORM, false),
             Fourcc::Argb8888 => (vk::Format::B8G8R8A8_UNORM, true),
@@ -387,12 +410,21 @@ impl VulkanRenderer {
                 | vk::Format::B8G8R8A8_UNORM
                 | vk::Format::A2B10G10R10_UNORM_PACK32
                 | vk::Format::A2R10G10B10_UNORM_PACK32
+                | vk::Format::R16G16B16A16_SFLOAT
         ) {
             return Err(vk::Result::ERROR_FORMAT_NOT_SUPPORTED);
         }
         let size = (region.size.w as usize)
             .checked_mul(region.size.h as usize)
-            .and_then(|n| n.checked_mul(4))
+            .and_then(|n| {
+                n.checked_mul(
+                    if texture.format == vk::Format::R16G16B16A16_SFLOAT.as_raw() as u32 {
+                        8
+                    } else {
+                        4
+                    },
+                )
+            })
             .ok_or(invalid)?;
         Ok(size)
     }
@@ -605,13 +637,20 @@ impl VulkanRenderer {
                 .contains(vk::ImageUsageFlags::TRANSFER_DST)
             || !matches!(
                 vk::Format::from_raw(texture.format as i32),
-                vk::Format::R8G8B8A8_UNORM | vk::Format::B8G8R8A8_UNORM
+                vk::Format::R8G8B8A8_UNORM
+                    | vk::Format::B8G8R8A8_UNORM
+                    | vk::Format::R16G16B16A16_SFLOAT
             )
         {
             return Err(invalid);
         }
+        let bpp = if texture.format == vk::Format::R16G16B16A16_SFLOAT.as_raw() as u32 {
+            8
+        } else {
+            4
+        };
         if let Some(stride) = source_stride {
-            source_layout(texture.width, texture.height, stride, data.len())?;
+            source_layout_bpp(texture.width, texture.height, stride, data.len(), bpp)?;
         }
         let mut size = 0usize;
         let mut copies = Vec::new();
@@ -656,7 +695,7 @@ impl VulkanRenderer {
                     }),
             );
             let bytes = (region.size.w as usize)
-                .checked_mul(4)
+                .checked_mul(bpp)
                 .and_then(|row| row.checked_mul(region.size.h as usize))
                 .ok_or(invalid)?;
             size = size.checked_add(bytes).ok_or(invalid)?;
@@ -678,10 +717,10 @@ impl VulkanRenderer {
                 vk::MemoryMapFlags::empty(),
             )? as *mut u8;
             for (region, copy) in nonempty.iter().zip(&copies) {
-                let row = region.size.w as usize * 4;
+                let row = region.size.w as usize * bpp;
                 for y in 0..region.size.h as usize {
                     let offset = if let Some(stride) = source_stride {
-                        (region.loc.y as usize + y) * stride + region.loc.x as usize * 4
+                        (region.loc.y as usize + y) * stride + region.loc.x as usize * bpp
                     } else {
                         copy.buffer_offset as usize + y * row
                     };

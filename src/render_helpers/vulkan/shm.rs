@@ -204,7 +204,12 @@ impl ImportMemWl for NativeRenderer {
                 .filter(|f| {
                     matches!(
                         f,
-                        Fourcc::Argb8888 | Fourcc::Xrgb8888 | Fourcc::Abgr8888 | Fourcc::Xbgr8888
+                        Fourcc::Argb8888
+                            | Fourcc::Xrgb8888
+                            | Fourcc::Abgr8888
+                            | Fourcc::Xbgr8888
+                            | Fourcc::Abgr16161616f
+                            | Fourcc::Xbgr16161616f
                     )
                 })
                 .ok_or_else(|| NativeError::Other("unsupported Vulkan SHM format".into()))?;
@@ -212,7 +217,12 @@ impl ImportMemWl for NativeRenderer {
             if data.offset < 0 || data.width <= 0 || data.height <= 0 || data.stride <= 0 {
                 return Err(invalid());
             }
-            let row = (data.width as usize).checked_mul(4).ok_or_else(invalid)?;
+            let bpp = if matches!(format, Fourcc::Abgr16161616f | Fourcc::Xbgr16161616f) {
+                8
+            } else {
+                4
+            };
+            let row = (data.width as usize).checked_mul(bpp).ok_or_else(invalid)?;
             let stride = data.stride as usize;
             let offset = data.offset as usize;
             let end = (data.height as usize - 1)
@@ -243,7 +253,7 @@ impl ImportMemWl for NativeRenderer {
                     .iter()
                     .try_fold(0usize, |total, rect: &Rectangle<i32, Buffer>| {
                         (rect.size.w as usize)
-                            .checked_mul(4)
+                            .checked_mul(bpp)
                             .and_then(|row| row.checked_mul(rect.size.h as usize))
                             .and_then(|bytes| total.checked_add(bytes))
                             .ok_or_else(invalid)
@@ -263,14 +273,14 @@ impl ImportMemWl for NativeRenderer {
             if same_texture {
                 let mut position = 0;
                 for region in &regions {
-                    let patch_row = region.size.w as usize * 4;
+                    let patch_row = region.size.w as usize * bpp;
                     for y in 0..region.size.h as usize {
                         unsafe {
                             std::ptr::copy_nonoverlapping(
                                 ptr.add(
                                     offset
                                         + (region.loc.y as usize + y) * stride
-                                        + region.loc.x as usize * 4,
+                                        + region.loc.x as usize * bpp,
                                 ),
                                 pixels.as_mut_ptr().add(position),
                                 patch_row,
@@ -307,7 +317,7 @@ impl ImportMemWl for NativeRenderer {
                 .ok_or_else(|| NativeError::Other("missing unchanged SHM texture".into()));
         };
         let permit = self.reserve_upload()?;
-        let (texture, upload) = if let Some(texture) = previous {
+        let (mut texture, upload) = if let Some(texture) = previous {
             let upload = self
                 .vulkan()
                 .update_memory_texture_packed_regions_deferred(&texture, &pixels, &regions)?;
@@ -325,6 +335,9 @@ impl ImportMemWl for NativeRenderer {
         };
         if let Some(upload) = upload {
             self.retain_shm_upload(upload, permit)?;
+        }
+        if let Some(surface) = surface {
+            texture.color = crate::protocols::color_management::surface_color_description(surface);
         }
         if let Some(cache) = cache {
             self.track_shm_cache(cache);

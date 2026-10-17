@@ -6,6 +6,26 @@ repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 log_dir=${CLARION_VULKAN_LOG_DIR:-${REALAND_VULKAN_LOG_DIR:-"$repo_dir/target/vulkan-check"}}
 mkdir -p -- "$log_dir"
 
+namespace_args=(
+    --include-ignored --nocapture --test-threads=1
+    --skip render_helpers::vulkan::hardware_tests::lifecycle::gpu_lifecycle_child_fixture
+)
+case ${CLARION_VULKAN_TEST_SCOPE:-all} in
+    all) ;;
+    rgb-hdr)
+        # These experimental CPU-dumb NV12 interoperability probes are separate
+        # from RGB/HDR composition and GPU-produced NV12 sampling. Keep the
+        # default all scope strict so their failures cannot be hidden.
+        namespace_args+=(
+            --skip render_helpers::vulkan::hardware_tests::yuv_cold::native_nv12_cold_import_and_first_submit_owner_work
+            --skip render_helpers::vulkan::hardware_tests::yuv_cold::native_nv12_padded_backing_import_and_compatibility_pixels
+            --skip render_helpers::vulkan::hardware_tests::yuv_cold::native_nv12_cold_target_preparation_defers_without_owner_wait_or_overwrite
+        )
+        echo 'RGB/HDR scope: excluding three experimental CPU-dumb NV12 probes.'
+        ;;
+    *) echo 'CLARION_VULKAN_TEST_SCOPE must be all or rgb-hdr.' >&2; exit 1 ;;
+esac
+
 check_validation_log() {
     if grep -Eq 'Validation (Error|Warning)|VUID-|SYNC-HAZARD|Failed to find layer' "$1"; then
         echo "Vulkan validation failed: $1" >&2
@@ -35,7 +55,8 @@ for node in "$@"; do
     skip_file="$log_dir/$(basename -- "$node").unsupported.log"
     : > "$skip_file"
     cargo test --manifest-path "$repo_dir/Cargo.toml" -p clarion --lib --offline --locked \
-        render_helpers::vulkan -- --include-ignored --nocapture --test-threads=1 2>&1 | tee "$log_file"
+        render_helpers::vulkan -- "${namespace_args[@]}" \
+        2>&1 | tee "$log_file"
     check_validation_log "$log_file"
     if ! grep -Eq '^test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$log_file"; then
         echo "Vulkan namespace tests did not complete: $log_file" >&2
@@ -68,6 +89,11 @@ for node in "$@"; do
         'headless:backend::headless::tests::native_vulkan_renders_headless_output'
         'client-sync:tests::explicit_sync::wayland_client_acquire_and_release_follow_gpu_use'
         'idle-client-release:tests::explicit_sync::idle_gpu_completion_releases_replaced_and_detached_wayland_buffers'
+        'color-client:tests::color_management_native::native_fp16_wayland_metadata_reaches_scene_and_sdr_capture'
+        'color-resize:tests::color_management_native::native_resize_snapshot_keeps_previous_parent_and_synchronized_child_colors'
+        'color-offscreen:render_helpers::offscreen::native_color_cache_tests::native_offscreen_color_cache_rebuilds_for_sdr_hdr_and_headroom_changes'
+        'color-effect:render_helpers::effect_buffer::tests::native_effect_color_cache_rebuilds_for_output_color_and_precision_changes'
+        'color-framebuffer:render_helpers::framebuffer_effect::recovery_tests::native_framebuffer_effect_color_cache_rebuilds_for_scene_encoding_changes'
     )
     for integration_case in "${integration_cases[@]}"; do
         integration_name=${integration_case%%:*}
@@ -88,5 +114,5 @@ for node in "$@"; do
         fi
     done
 done
-echo "Required Vulkan/EGL and three headless/Wayland integrations passed per device. Logs: $log_dir"
+echo "Required Vulkan/EGL and eight headless/Wayland/color integrations passed per device. Logs: $log_dir"
 echo 'Namespace totals include CPU/cache cases; optional unsupported YUV cases were not exercised.'

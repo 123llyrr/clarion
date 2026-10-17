@@ -44,6 +44,15 @@ pub struct State {
     pub blob: property::Value<'static>,
     pub vrr: bool,
     pub connectors: HashSet<connector::Handle>,
+    /// Extra connector properties committed together with the matching framebuffer.
+    pub connector_properties: Vec<(
+        connector::Handle,
+        property::Handle,
+        property::RawValue,
+        property::RawValue,
+    )>,
+    /// CRTC color properties belonging to the same framebuffer transition.
+    pub crtc_properties: Vec<(property::Handle, property::RawValue)>,
 }
 
 impl PartialEq for State {
@@ -53,6 +62,8 @@ impl PartialEq for State {
             && self.mode == other.mode
             && self.vrr == other.vrr
             && self.connectors == other.connectors
+            && self.connector_properties == other.connector_properties
+            && self.crtc_properties == other.crtc_properties
     }
 }
 
@@ -150,6 +161,8 @@ impl State {
             // If we don't know the VRR state, the driver doesn't support the property
             vrr: vrr.unwrap_or(false),
             connectors: current_connectors,
+            connector_properties: Vec::new(),
+            crtc_properties: Vec::new(),
         })
     }
 
@@ -159,6 +172,8 @@ impl State {
         self.connectors.clear();
         self.active = false;
         self.vrr = false;
+        self.connector_properties.clear();
+        self.crtc_properties.clear();
     }
 }
 
@@ -207,6 +222,8 @@ impl AtomicDrmSurface {
             blob,
             vrr: false,
             connectors: connectors.iter().copied().collect(),
+            connector_properties: Vec::new(),
+            crtc_properties: Vec::new(),
         };
 
         drop(_guard);
@@ -685,6 +702,49 @@ impl AtomicDrmSurface {
         Ok(())
     }
 
+    /// Stage connector properties for the next full atomic frame commit.
+    /// The caller retains ownership of any property blobs until replacement.
+    pub fn set_connector_properties(
+        &self,
+        connector: connector::Handle,
+        properties: &[(property::Handle, property::RawValue, property::RawValue)],
+    ) {
+        let mut pending = self.pending.write().unwrap();
+        pending
+            .connector_properties
+            .retain(|(conn, _, _, _)| *conn != connector);
+        pending.connector_properties.extend(
+            properties
+                .iter()
+                .map(|(property, value, reset)| (connector, *property, *value, *reset)),
+        );
+        pending
+            .connector_properties
+            .sort_by_key(|(conn, prop, _, _)| (Into::<u32>::into(*conn), Into::<u32>::into(*prop)));
+    }
+
+    pub fn set_crtc_properties(&self, properties: &[(property::Handle, property::RawValue)]) {
+        let mut pending = self.pending.write().unwrap();
+        pending.crtc_properties = properties.to_vec();
+        pending
+            .crtc_properties
+            .sort_by_key(|(property, _)| Into::<u32>::into(*property));
+    }
+
+    pub fn current_connector_property(
+        &self,
+        connector: connector::Handle,
+        property: property::Handle,
+    ) -> Option<property::RawValue> {
+        self.state
+            .read()
+            .unwrap()
+            .connector_properties
+            .iter()
+            .find(|(conn, prop, _, _)| *conn == connector && *prop == property)
+            .map(|(_, _, value, _)| *value)
+    }
+
     pub fn commit_pending(&self) -> bool {
         *self.pending.read().unwrap() != *self.state.read().unwrap()
     }
@@ -735,13 +795,18 @@ impl AtomicDrmSurface {
         } else {
             AtomicCommitFlags::TEST_ONLY
         };
-        self.fd.atomic_commit(flags, req.build()?).map_err(|source| {
-            Error::Access(AccessError {
-                errmsg: "Error testing state",
-                dev: self.fd.dev_path(),
-                source,
+        self.fd
+            .atomic_commit(
+                flags,
+                request_with_color_properties(&req, pending, self.crtc)?,
+            )
+            .map_err(|source| {
+                Error::Access(AccessError {
+                    errmsg: "Error testing state",
+                    dev: self.fd.dev_path(),
+                    source,
+                })
             })
-        })
     }
 
     #[instrument(level = "trace", parent = &self.span, skip(self, planes))]
@@ -804,9 +869,12 @@ impl AtomicDrmSurface {
 
             if let Err(err) = self.fd.atomic_commit(
                 AtomicCommitFlags::ALLOW_MODESET | AtomicCommitFlags::TEST_ONLY,
-                req.build()?,
+                request_with_color_properties(&req, &pending, self.crtc)?,
             ) {
-                warn!("New screen configuration invalid!:\n\t{:?}\n\t{}\n", req, err);
+                warn!(
+                    "New screen configuration invalid!:\n\t{:?}\n\t{}\n",
+                    req, err
+                );
 
                 return Err(Error::TestFailed(self.crtc));
             } else {
@@ -839,7 +907,7 @@ impl AtomicDrmSurface {
                 } else {
                     AtomicCommitFlags::ALLOW_MODESET
                 },
-                req.build()?,
+                request_with_color_properties(&req, &pending, self.crtc)?,
             )
             .map_err(|source| {
                 Error::Access(AccessError {
@@ -978,11 +1046,20 @@ impl AtomicDrmSurface {
 
         // disable crtc
         req.reset_crtc(self.crtc)?;
+        let mut request = req.build()?;
+        // Return managed signal properties to their safe inactive values so
+        // the next compositor does not inherit PQ metadata for SDR buffers.
+        for (connector, property, _, reset) in &current.connector_properties {
+            request.add_raw_property((*connector).into(), *property, *reset);
+        }
+        for (connector, property, _, reset) in &self.pending.read().unwrap().connector_properties {
+            request.add_raw_property((*connector).into(), *property, *reset);
+        }
         std::mem::drop(current);
 
         let res = self
             .fd
-            .atomic_commit(AtomicCommitFlags::ALLOW_MODESET, req.build()?)
+            .atomic_commit(AtomicCommitFlags::ALLOW_MODESET, request)
             .map_err(|source| {
                 Error::Access(AccessError {
                     errmsg: "Failed to commit on clear_state",
@@ -1032,6 +1109,25 @@ impl AtomicDrmSurface {
     pub fn clear(&self) -> Result<(), Error> {
         self.clear_state()
     }
+}
+
+// Keep the same extra properties in TEST_ONLY and the real framebuffer commit.
+// Their state becomes current only after the real commit succeeds.
+fn request_with_color_properties(
+    request: &AtomicRequest<'_>,
+    state: &State,
+    crtc: crtc::Handle,
+) -> Result<AtomicModeReq, Error> {
+    let mut request = request.build()?;
+    for (property, value) in &state.crtc_properties {
+        request.add_raw_property(crtc.into(), *property, *value);
+    }
+    for (connector, property, value, _) in &state.connector_properties {
+        if state.connectors.contains(connector) {
+            request.add_raw_property((*connector).into(), *property, *value);
+        }
+    }
+    Ok(request)
 }
 
 struct TestBuffer {

@@ -24,6 +24,7 @@ pub mod a11y;
 pub mod animation;
 pub mod backend;
 pub mod cli;
+pub mod color;
 mod commit_timing;
 pub mod compositor;
 pub mod cursor;

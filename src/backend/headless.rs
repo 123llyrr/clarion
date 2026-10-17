@@ -170,6 +170,13 @@ impl Headless {
         }
     }
 
+    pub(crate) fn supports_color_management(&self) -> bool {
+        match self.renderer.as_ref() {
+            Some(HeadlessRenderer::Native(native)) => native.supports_color_management(),
+            _ => false,
+        }
+    }
+
     pub(crate) fn render(
         &mut self,
         port: &mut impl crate::frame_pipeline::FramePort,
@@ -242,6 +249,8 @@ impl Headless {
             );
         }
 
+        let _color_scope =
+            renderer.output_color_scope(Some(crate::color::ColorDescription::srgb()));
         renderer.begin_scene();
         let _allocation_scope = renderer.async_offscreen_scope();
         let scene = port.prepare_scene(renderer);
@@ -419,9 +428,15 @@ mod tests {
     #[test]
     #[ignore = "requires a Vulkan-capable GPU"]
     fn native_vulkan_renders_headless_output() {
+        use smithay::backend::renderer::ExportMem;
+        use smithay::utils::Rectangle;
+
         let mut event_loop = EventLoop::<State>::try_new().unwrap();
+        let mut config = Config::default();
+        config.layout.background_color =
+            clarion_config::Color::from_rgba8_unpremul(17, 51, 85, 255);
         let mut state = State::new(
-            Config::default(),
+            config,
             event_loop.handle(),
             event_loop.get_signal(),
             Display::new().unwrap(),
@@ -462,39 +477,84 @@ mod tests {
                 .unwrap();
         }
 
+        let output = {
+            let State { backend, clarion } = &mut state;
+            let Backend::Headless(headless) = backend else {
+                unreachable!();
+            };
+            assert_eq!(headless.renderer_backend(), RendererBackendType::Vulkan);
+            assert_eq!(
+                headless.with_renderer(|renderer| renderer.backend_type()),
+                Some(RendererBackendType::Vulkan)
+            );
+            let Some(HeadlessRenderer::Native(renderer)) = headless.renderer.as_ref() else {
+                unreachable!("test requires the native Vulkan renderer");
+            };
+            eprintln!(
+                "HARDWARE: {} (headless loader/ICD selection)",
+                renderer.vulkan().info.device_name
+            );
+            assert!(headless.dmabuf_global.is_some());
+            headless.add_output(
+                &mut crate::platform::device_bridge::DeviceCoordinator::new(clarion),
+                1,
+                (64, 48),
+            );
+            let output = clarion.global_space.outputs().next().unwrap().clone();
+            clarion.queue_redraw(&output);
+            output
+        };
+
+        // A managed output allocates its FP16 scene asynchronously. Run the real
+        // owner sources between retries; deferred preparation is not a submitted
+        // frame and must never satisfy this assertion.
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            let result = {
+                let State { backend, clarion } = &mut state;
+                backend.headless().render(
+                    &mut crate::frame_pipeline::FrameCoordinator::new(clarion, &output),
+                    &output,
+                )
+            };
+            if matches!(result, RenderResult::Submitted) {
+                break;
+            }
+            assert!(
+                matches!(result, RenderResult::GpuDeferred),
+                "native Vulkan failed to submit the first headless frame"
+            );
+            assert!(
+                std::time::Instant::now() < deadline,
+                "native headless scene preparation did not complete"
+            );
+            event_loop
+                .dispatch(Duration::from_millis(5), &mut state)
+                .unwrap();
+        }
+
         let State { backend, clarion } = &mut state;
-        let Backend::Headless(headless) = backend else {
+        let headless = backend.headless();
+        assert!(headless.native_targets[&output.name()].valid);
+        let target = headless.native_targets[&output.name()].buffer.clone();
+        let Some(HeadlessRenderer::Native(renderer)) = headless.renderer.as_mut() else {
             unreachable!();
         };
-        assert_eq!(headless.renderer_backend(), RendererBackendType::Vulkan);
-        assert_eq!(
-            headless.with_renderer(|renderer| renderer.backend_type()),
-            Some(RendererBackendType::Vulkan)
-        );
-        let Some(HeadlessRenderer::Native(renderer)) = headless.renderer.as_ref() else {
-            unreachable!("test requires the native Vulkan renderer");
-        };
-        eprintln!(
-            "HARDWARE: {} (headless loader/ICD selection)",
-            renderer.vulkan().info.device_name
-        );
-        assert!(headless.dmabuf_global.is_some());
-        headless.add_output(
-            &mut crate::platform::device_bridge::DeviceCoordinator::new(clarion),
-            1,
-            (64, 48),
-        );
-        let output = clarion.global_space.outputs().next().unwrap().clone();
-        clarion.queue_redraw(&output);
-
-        assert!(matches!(
-            headless.render(
-                &mut crate::frame_pipeline::FrameCoordinator::new(clarion, &output),
-                &output
-            ),
-            RenderResult::Submitted
-        ));
-        assert!(headless.native_targets[&output.name()].valid);
+        let mapping = renderer
+            .copy_texture(
+                &target,
+                Rectangle::new((63, 47).into(), (1, 1).into()),
+                Fourcc::Abgr8888,
+            )
+            .expect("submitted native headless frame must be readable");
+        let pixels = renderer.map_texture(&mapping).unwrap();
+        assert_eq!(pixels.len(), 4);
+        for (actual, expected) in pixels.iter().zip([17u8, 51, 85, 255]) {
+            assert!(
+                actual.abs_diff(expected) <= 2,
+                "submitted headless background readback differed: {pixels:?}"
+            );
+        }
         clarion.queue_redraw(&output);
         assert!(matches!(
             headless.render(

@@ -12,7 +12,7 @@ use std::{io, mem};
 
 use anyhow::{anyhow, bail, ensure, Context};
 use bytemuck::cast_slice_mut;
-use clarion_config::output::{MaxBpc, Modeline};
+use clarion_config::output::Modeline;
 use clarion_config::{Config, OutputName};
 use clarion_ipc::{HSyncPolarity, VSyncPolarity};
 use drm_ffi::drm_mode_modeinfo;
@@ -67,6 +67,7 @@ use crate::render_helpers::{resources, shaders};
 use crate::utils::{get_monotonic_time, is_laptop_panel};
 
 pub(crate) mod gles_fallback;
+pub(crate) mod hdr;
 pub(crate) mod recovery;
 pub(crate) mod renderer_init;
 
@@ -80,8 +81,12 @@ use renderer_init::resolve_gles_render_node;
 
 // When copying from rendering Nvidia dGPU to target iGPU,
 // it only understands X/Abgr and not X/Argb.
-pub(crate) const SUPPORTED_COLOR_FORMATS_10BIT: [Fourcc; 3] =
-    [Fourcc::Abgr2101010, Fourcc::Argb8888, Fourcc::Abgr8888];
+pub(crate) const SUPPORTED_COLOR_FORMATS_10BIT: [Fourcc; 4] = [
+    Fourcc::Abgr2101010,
+    Fourcc::Argb2101010,
+    Fourcc::Argb8888,
+    Fourcc::Abgr8888,
+];
 
 // Smithay should fall back to Xrgb/Xbgr automatically if needed.
 pub(crate) const SUPPORTED_COLOR_FORMATS: [Fourcc; 2] = [Fourcc::Argb8888, Fourcc::Abgr8888];
@@ -112,6 +117,8 @@ pub struct Tty {
     /// Active native Vulkan hardware renderer for display compositing.
     pub(crate) native_renderer: Option<crate::render_helpers::vulkan::native::NativeRenderer>,
     pub(crate) requested_renderer: crate::backend::RendererBackendType,
+    pub(crate) color_management_enabled: bool,
+    pub(crate) color_management_rejections: HashMap<String, String>,
     pub(crate) vulkan_recovery: VulkanRecoveryWorker,
     pub(crate) vulkan_recovery_generation: Option<u64>,
     pub(crate) vulkan_recovery_attempt: u8,
@@ -260,6 +267,62 @@ pub(crate) fn gles_swapchain_candidates(
             (!modifiers.is_empty()).then_some((code, modifiers))
         })
         .collect()
+}
+
+// Smithay's transparent DRM/damage wrappers skip their contained renderer
+// error in Error::source(). Inspect the typed rendering branch before walking
+// other error chains, so cold FP16 preparation cannot reject an HDR transition.
+fn native_drm_frame_is_backpressure<A, B, F>(
+    error: &smithay::backend::drm::compositor::RenderFrameError<
+        A,
+        B,
+        F,
+        crate::render_helpers::vulkan::native::NativeError,
+    >,
+) -> bool
+where
+    A: std::error::Error + Send + Sync + 'static,
+    B: std::error::Error + Send + Sync + 'static,
+    F: std::error::Error + Send + Sync + 'static,
+{
+    use smithay::backend::drm::compositor::RenderFrameError;
+    use smithay::backend::renderer::damage::Error as DamageError;
+
+    use crate::render_helpers::vulkan::native::NativeError;
+
+    matches!(error, RenderFrameError::RenderFrame(DamageError::Rendering(error)) if error.is_busy())
+        || NativeError::is_backpressure(error)
+}
+
+fn cursor_color_is_sdr(description: crate::color::ColorDescription, format: u32) -> bool {
+    // Floating-point pixels can exceed SDR or premultiplied-alpha bounds
+    // even with the default description. Keep them in FP16 composition so
+    // hardware cursor conversion cannot clip them before background blending.
+    description == crate::color::ColorDescription::srgb()
+        && format != ash::vk::Format::R16G16B16A16_SFLOAT.as_raw() as u32
+}
+
+/// Client cursor surfaces may themselves carry PQ/scRGB declarations. Inspect
+/// the frozen texture metadata before allowing any raw cursor-buffer scanout.
+fn native_cursor_elements_are_sdr(
+    elements: &[crate::scene::OutputRenderElements<
+        crate::render_helpers::vulkan::native::NativeRenderer,
+    >],
+) -> bool {
+    use smithay::backend::renderer::element::surface::WaylandSurfaceTexture;
+    use smithay::backend::renderer::element::{Element, Kind};
+
+    use crate::scene::{OutputRenderElements, PointerRenderElements};
+
+    elements.iter().filter(|element| element.kind() == Kind::Cursor).all(|element| {
+        match element {
+            OutputRenderElements::Pointer(PointerRenderElements::NamedPointer(_)) => true,
+            OutputRenderElements::Pointer(PointerRenderElements::Wayland(element)) => {
+                matches!(element.texture(), WaylandSurfaceTexture::Texture(texture) if cursor_color_is_sdr(texture.color.description, texture.format))
+            }
+            _ => false,
+        }
+    })
 }
 
 pub(crate) type GbmDrmCompositor = DrmCompositor<
@@ -569,6 +632,7 @@ pub(crate) struct Surface {
     pub(crate) quarantined_kms: Vec<DeferredFrame<PendingKmsFrame>>,
     /// Set until the KMS swapchain has been converted to a GLES-compatible format.
     pub(crate) native_swapchain: bool,
+    pub(crate) hdr: hdr::HdrOutputState,
     pub(crate) last_gles_migration_warning: Option<Duration>,
     pub(crate) next_gles_migration_attempt: Duration,
     pub(crate) connector: connector::Handle,
@@ -653,10 +717,14 @@ fn submit_kms_frame(
     };
     match result {
         Ok(()) => {
+            surface
+                .hdr
+                .refresh_active(surface.compositor.surface(), surface.connector);
             port.kms_submitted();
             RenderResult::Submitted
         }
         Err(error) => {
+            surface.hdr.reject_transition(&error.to_string());
             surface.compositor.reset_buffer_ages();
             drop(surface.vblank_frame.take());
             port.kms_submission_failed(target, &error);
@@ -691,22 +759,41 @@ pub(crate) struct ConnectorProperties<'a> {
     pub(crate) properties: Vec<(property::Info, property::RawValue)>,
     pub(crate) has_change: bool,
     pub(crate) requests: AtomicModeReq,
-    pub(crate) property_blobs: Vec<u64>,
-}
-
-impl Drop for ConnectorProperties<'_> {
-    fn drop(&mut self) {
-        // A successful atomic commit takes its own reference to each blob.
-        // Release our creation references after success, failure or abandonment.
-        for blob in self.property_blobs.drain(..) {
-            if let Err(err) = self.device.destroy_property_blob(blob) {
-                warn!("error destroying connector property blob: {err:?}");
-            }
-        }
-    }
 }
 
 impl Tty {
+    /// Whether every connected output can decode managed client colors.
+    pub(crate) fn supports_color_management(&self) -> bool {
+        self.native_renderer
+            .as_ref()
+            .is_some_and(|renderer| renderer.supports_color_management())
+            && self
+                .devices
+                .values()
+                .flat_map(|device| device.surfaces.values())
+                .all(|surface| surface.native_swapchain)
+    }
+
+    pub(crate) fn enable_color_management(&mut self) {
+        debug_assert!(self.supports_color_management());
+        self.color_management_enabled = true;
+    }
+
+    pub(crate) fn output_color_description(
+        &self,
+        output: &Output,
+    ) -> crate::color::ColorDescription {
+        let Some(tty) = output.user_data().get::<TtyOutputState>() else {
+            return Default::default();
+        };
+        self.devices
+            .get(&tty.node)
+            .and_then(|device| device.surfaces.get(&tty.crtc))
+            .and_then(|surface| surface.hdr.active)
+            .map(|settings| settings.description())
+            .unwrap_or_default()
+    }
+
     /// Reports the primary scene renderer; individual KMS outputs can fall back to GLES.
     pub fn renderer_backend(&self) -> crate::render_helpers::renderer::RendererBackendType {
         if self.native_renderer.is_some() {
@@ -951,6 +1038,8 @@ impl Tty {
             ipc_outputs: Arc::new(Mutex::new(HashMap::new())),
             native_renderer: None,
             requested_renderer,
+            color_management_enabled: false,
+            color_management_rejections: HashMap::new(),
             vulkan_recovery,
             vulkan_recovery_generation: None,
             vulkan_recovery_attempt: 0,
@@ -1150,33 +1239,6 @@ impl Tty {
             surface.compositor.reset_buffer_ages();
         }
 
-        let flags = {
-            let debug = &self.config.debug;
-
-            let primary_scanout_flag = if debug.restrict_primary_scanout_to_matching_format {
-                FrameFlags::ALLOW_PRIMARY_PLANE_SCANOUT
-            } else {
-                FrameFlags::ALLOW_PRIMARY_PLANE_SCANOUT_ANY
-            };
-            let mut flags = primary_scanout_flag | FrameFlags::ALLOW_CURSOR_PLANE_SCANOUT;
-
-            if debug.enable_overlay_planes {
-                flags.insert(FrameFlags::ALLOW_OVERLAY_PLANE_SCANOUT);
-            }
-            if debug.disable_direct_scanout {
-                flags.remove(primary_scanout_flag);
-                flags.remove(FrameFlags::ALLOW_OVERLAY_PLANE_SCANOUT);
-            }
-            if debug.disable_cursor_plane {
-                flags.remove(FrameFlags::ALLOW_CURSOR_PLANE_SCANOUT);
-            }
-            if debug.skip_cursor_only_updates_during_vrr && port.request().variable_refresh {
-                flags.insert(FrameFlags::SKIP_CURSOR_ONLY_UPDATES);
-            }
-
-            flags
-        };
-
         if surface.native_swapchain && self.vulkan_recovery_generation.is_some() {
             // The failed renderer is detached, but KMS keeps its last committed buffer.
             // Do not migrate swapchains or consume client leases during initialization.
@@ -1214,6 +1276,127 @@ impl Tty {
             return RenderResult::GpuDeferred;
         }
 
+        if self.color_management_enabled
+            && surface.native_swapchain
+            && self.native_renderer.is_none()
+        {
+            // Clients may retain PQ/scRGB surfaces for the lifetime of the
+            // advertised global. Preserve the last correct image while the
+            // bounded native device recovery runs; GLES cannot decode them.
+            let status = "native Vulkan renderer unavailable; preserving last color-correct frame during recovery";
+            if surface.hdr.status.as_deref() != Some(status) {
+                warn!("output {}: {status}", surface.name.connector);
+                surface.hdr.status = Some(status.into());
+                surface.hdr.ipc_dirty = true;
+                if let Some(output) = self
+                    .ipc_outputs
+                    .lock()
+                    .unwrap()
+                    .values_mut()
+                    .find(|output| output.name == surface.name.connector)
+                {
+                    output.hdr_status = Some(status.into());
+                }
+            }
+            port.retry_after_vblank(
+                target_presentation_time.max(get_monotonic_time() + Duration::from_millis(100)),
+            );
+            return RenderResult::GpuDeferred;
+        }
+
+        if surface
+            .hdr
+            .status
+            .as_ref()
+            .is_some_and(|status| status.starts_with("native Vulkan renderer unavailable"))
+        {
+            surface.hdr.resume();
+        }
+        let output_config = self
+            .config
+            .as_ref()
+            .outputs
+            .find(&surface.name)
+            .cloned()
+            .unwrap_or_default();
+        if surface.hdr.configure(
+            &output_config,
+            surface.native_swapchain
+                && self
+                    .native_renderer
+                    .as_ref()
+                    .is_some_and(|renderer| renderer.supports_color_management()),
+            surface.compositor.format(),
+            !surface.compositor.surface().is_legacy(),
+        ) {
+            surface.frame_epoch = surface.frame_epoch.wrapping_add(1);
+            surface.compositor.reset_buffer_ages();
+        }
+        if surface.hdr.needs_stage {
+            if get_monotonic_time() < surface.hdr.retry_after {
+                port.retry_after_vblank(surface.hdr.retry_after);
+                return RenderResult::GpuDeferred;
+            }
+            if surface.compositor.has_pending_frames() {
+                port.retry_after_vblank(target_presentation_time);
+                return RenderResult::GpuDeferred;
+            }
+            if let Err(error) =
+                surface
+                    .hdr
+                    .stage(&device.drm, surface.compositor.surface(), surface.connector)
+            {
+                surface.hdr.reject_transition(&error.to_string());
+                // Do not display an image until signaling for that image can be staged.
+                port.retry_after_vblank(target_presentation_time);
+                return RenderResult::Skipped;
+            }
+            surface.compositor.reset_buffer_ages();
+        }
+
+        let mut flags = {
+            let debug = &self.config.debug;
+
+            let primary_scanout_flag = if debug.restrict_primary_scanout_to_matching_format {
+                FrameFlags::ALLOW_PRIMARY_PLANE_SCANOUT
+            } else {
+                FrameFlags::ALLOW_PRIMARY_PLANE_SCANOUT_ANY
+            };
+            let mut flags = primary_scanout_flag | FrameFlags::ALLOW_CURSOR_PLANE_SCANOUT;
+
+            if debug.enable_overlay_planes {
+                flags.insert(FrameFlags::ALLOW_OVERLAY_PLANE_SCANOUT);
+            }
+            if debug.disable_direct_scanout {
+                flags.remove(primary_scanout_flag);
+                flags.remove(FrameFlags::ALLOW_OVERLAY_PLANE_SCANOUT);
+            }
+            if debug.disable_cursor_plane {
+                flags.remove(FrameFlags::ALLOW_CURSOR_PLANE_SCANOUT);
+            }
+            if debug.skip_cursor_only_updates_during_vrr && port.request().variable_refresh {
+                flags.insert(FrameFlags::SKIP_CURSOR_ONLY_UPDATES);
+            }
+
+            // Client surfaces and overlays must pass through the color pipeline.
+            // A confirmed SDR signal can also carry ordinary sRGB cursor pixels.
+            // HDR transitions keep the cursor composited until SDR is confirmed.
+            if self.color_management_enabled
+                || surface.hdr.target.is_some()
+                || surface.hdr.active.is_some()
+            {
+                flags.remove(
+                    FrameFlags::ALLOW_PRIMARY_PLANE_SCANOUT
+                        | FrameFlags::ALLOW_PRIMARY_PLANE_SCANOUT_ANY
+                        | FrameFlags::ALLOW_OVERLAY_PLANE_SCANOUT,
+                );
+                if !surface.hdr.hardware_cursor_allowed() {
+                    flags.remove(FrameFlags::ALLOW_CURSOR_PLANE_SCANOUT);
+                }
+            }
+            flags
+        };
+
         let use_native_renderer = self.native_renderer.is_some() && surface.native_swapchain;
 
         if use_native_renderer {
@@ -1222,6 +1405,7 @@ impl Tty {
 
             let _allocation_scope = native.async_offscreen_scope();
 
+            let _color_scope = native.output_color_scope(Some(surface.hdr.description()));
             native.begin_scene();
             let scene = port.prepare_scene(native);
             if native.scene_was_deferred() {
@@ -1229,22 +1413,9 @@ impl Tty {
                 return RenderResult::GpuDeferred;
             }
             let elements = scene.elements();
-            let hdr_output = self
-                .config
-                .as_ref()
-                .outputs
-                .find(&surface.name)
-                .is_some_and(|output| {
-                    output.hdr
-                        && matches!(
-                            surface.compositor.format(),
-                            Fourcc::Argb2101010
-                                | Fourcc::Abgr2101010
-                                | Fourcc::Xrgb2101010
-                                | Fourcc::Xbgr2101010
-                        )
-                });
-            native.set_hdr_output(hdr_output);
+            if !native_cursor_elements_are_sdr(elements) {
+                flags.remove(FrameFlags::ALLOW_CURSOR_PLANE_SCANOUT);
+            }
             let drm_compositor = &mut surface.compositor;
             native.set_completion_export_required(true);
             if let (Some(tag), Some(extent)) = (
@@ -1263,7 +1434,6 @@ impl Tty {
             };
             // The flag belongs only to this KMS output frame. Capture and offscreen
             // rendering must remain in the SDR scene space.
-            native.set_hdr_output(false);
             native.clear_output_timing();
             native.set_completion_export_required(false);
             match render_result {
@@ -1314,7 +1484,7 @@ impl Tty {
                     );
                 }
                 Err(err) => {
-                    if crate::render_helpers::vulkan::native::NativeError::is_backpressure(&err) {
+                    if native_drm_frame_is_backpressure(&err) {
                         drm_compositor.reset_buffer_ages();
                         drop(surface.vblank_frame.take());
                         port.retry_after_vblank(target_presentation_time);
@@ -1325,6 +1495,7 @@ impl Tty {
                         surface.name.connector
                     );
                     let err_str = format!("{err:?}");
+                    surface.hdr.reject_transition(&err_str);
                     let is_device_lost = err_str.contains("DEVICE_LOST");
                     if is_device_lost {
                         warn!("Vulkan device lost; queuing bounded asynchronous device recovery");
@@ -1636,6 +1807,10 @@ impl Tty {
             .context("missing device")?;
         let surface = device.surfaces.get_mut(&crtc).context("missing surface")?;
 
+        if ramp.is_some() && !surface.hdr.gamma_allowed() {
+            bail!("gamma ramps/night-light are unavailable while HDR is active or pending; PQ requires an identity CRTC gamma LUT");
+        }
+
         // Cannot change properties while the device is inactive.
         if !self.session.is_active() {
             surface.pending_gamma_change = Some(ramp);
@@ -1680,8 +1855,21 @@ impl Tty {
         for device in self.devices.values_mut() {
             for surface in device.surfaces.values_mut() {
                 surface.frame_epoch = surface.frame_epoch.wrapping_add(1);
-                if let Err(err) = surface.compositor.clear() {
-                    warn!("error clearing drm surface: {err:?}");
+                match surface.compositor.clear() {
+                    Ok(()) => {
+                        surface.hdr.resume();
+                        if let Some(output) = self
+                            .ipc_outputs
+                            .lock()
+                            .unwrap()
+                            .values_mut()
+                            .find(|output| output.name == surface.name.connector)
+                        {
+                            output.hdr_active = false;
+                            output.hdr_status = surface.hdr.status.clone();
+                        }
+                    }
+                    Err(err) => warn!("error clearing drm surface: {err:?}"),
                 }
             }
         }
@@ -2507,7 +2695,6 @@ impl<'a> ConnectorProperties<'a> {
             properties,
             has_change: false,
             requests: AtomicModeReq::new(),
-            property_blobs: Vec::new(),
         })
     }
 
@@ -2542,76 +2729,6 @@ impl<'a> ConnectorProperties<'a> {
         }
     }
 
-    pub(crate) fn set_hdr10(&mut self) -> anyhow::Result<()> {
-        let (info, _) = self.find(c"HDR_OUTPUT_METADATA")?;
-        let property::ValueType::Blob = info.value_type() else {
-            bail!("wrong HDR_OUTPUT_METADATA property type")
-        };
-        let metadata_property = info.handle();
-        let (info, _) = self.find(c"Colorspace")?;
-        let property::ValueType::Enum(values) = info.value_type() else {
-            bail!("wrong Colorspace property type")
-        };
-        if values
-            .get_value_from_raw_value(crate::render_helpers::vulkan::hdr::DRM_COLORSPACE_BT2020_RGB)
-            .is_none()
-        {
-            bail!("Colorspace property does not support BT.2020 RGB")
-        }
-        let colorspace_property = info.handle();
-        // Validate both properties before queuing either HDR change. A failed
-        // setup must not leave metadata paired with the old SDR colorspace.
-        let metadata = crate::render_helpers::vulkan::hdr::hdr10_metadata_blob();
-        let blob: u64 = self
-            .device
-            .create_property_blob(&metadata)
-            .context("error creating HDR metadata blob")?
-            .into();
-        self.property_blobs.push(blob);
-        self.requests
-            .add_raw_property(self.connector.into(), metadata_property, blob);
-        self.requests.add_raw_property(
-            self.connector.into(),
-            colorspace_property,
-            crate::render_helpers::vulkan::hdr::DRM_COLORSPACE_BT2020_RGB,
-        );
-        self.has_change = true;
-        Ok(())
-    }
-
-    pub(crate) fn reset_hdr(&mut self) -> anyhow::Result<()> {
-        const DRM_MODE_COLORIMETRY_DEFAULT: u64 = 0;
-
-        let (info, value) = self.find(c"HDR_OUTPUT_METADATA")?;
-
-        let property::ValueType::Blob = info.value_type() else {
-            bail!("wrong property type")
-        };
-        let metadata_property = info.handle();
-        let reset_metadata = *value != 0;
-        let (info, value) = self.find(c"Colorspace")?;
-        let property::ValueType::Enum(_) = info.value_type() else {
-            bail!("wrong property type")
-        };
-        let colorspace_property = info.handle();
-        let reset_colorspace = *value != DRM_MODE_COLORIMETRY_DEFAULT;
-        if reset_metadata {
-            self.requests
-                .add_raw_property(self.connector.into(), metadata_property, 0);
-            self.has_change = true;
-        }
-        if reset_colorspace {
-            self.requests.add_raw_property(
-                self.connector.into(),
-                colorspace_property,
-                DRM_MODE_COLORIMETRY_DEFAULT,
-            );
-            self.has_change = true;
-        }
-
-        Ok(())
-    }
-
     /// Sets the connector's DPMS state. The enum values are driver-defined, so
     /// the wanted state is matched by name instead of by index.
     pub(crate) fn set_dpms(&mut self, on: bool) -> anyhow::Result<()> {
@@ -2640,39 +2757,6 @@ impl<'a> ConnectorProperties<'a> {
         Ok(())
     }
 
-    pub(crate) fn current_max_bpc(&self) -> Option<u64> {
-        let (info, value) = self.find(c"max bpc").ok()?;
-        info.value_type().convert_value(*value).as_unsigned_range()
-    }
-
-    pub(crate) fn set_max_bpc(&mut self, max_bpc: MaxBpc) -> anyhow::Result<u64> {
-        let (info, value) = self.find(c"max bpc")?;
-
-        let property::ValueType::UnsignedRange(min, max) = info.value_type() else {
-            bail!("wrong property type")
-        };
-
-        let max_bpc = max_bpc.0 as u64;
-        if !(min..=max).contains(&max_bpc) {
-            bail!("max-bpc {max_bpc} outside valid range of [{min}, {max}]");
-        }
-
-        let property::Value::UnsignedRange(value) = info.value_type().convert_value(*value) else {
-            bail!("wrong property type")
-        };
-
-        if value != max_bpc {
-            self.requests.add_raw_property(
-                self.connector.into(),
-                info.handle(),
-                property::Value::UnsignedRange(max_bpc).into(),
-            );
-            self.has_change = true;
-        }
-
-        Ok(max_bpc)
-    }
-
     pub(crate) fn commit(&mut self) -> anyhow::Result<()> {
         if self.has_change {
             self.device.atomic_commit(
@@ -2682,56 +2766,6 @@ impl<'a> ConnectorProperties<'a> {
         }
 
         Ok(())
-    }
-}
-
-pub(crate) fn set_connector_properties(
-    props: &mut ConnectorProperties,
-    max_bpc: Option<MaxBpc>,
-    hdr: bool,
-) {
-    let mut applied_bpc = None;
-    if let Some(max_bpc) = max_bpc {
-        match props.set_max_bpc(max_bpc) {
-            Ok(value) => applied_bpc = Some(value),
-            Err(err) => debug!("failed to set `max bpc` property: {err}"),
-        }
-    }
-
-    // HDR requires at least 10 bpc. When max-bpc is not configured, the
-    // connector keeps the driver default, so look at the current property
-    // value instead of assuming SDR.
-    let effective_bpc = applied_bpc.or_else(|| props.current_max_bpc());
-    let mut hdr_capable_bpc = effective_bpc.is_some_and(|bpc| bpc >= 10);
-    if hdr && !hdr_capable_bpc && max_bpc.is_none() {
-        // HDR is useless below 10 bpc; try to raise the bit depth when the
-        // user did not pin it explicitly.
-        match props.set_max_bpc(MaxBpc(clarion_ipc::MaxBpc::_10)) {
-            Ok(_) => {
-                debug!("raised max bpc to 10 for HDR output");
-                hdr_capable_bpc = true;
-            }
-            Err(err) => {
-                debug!("cannot raise max bpc to 10 for HDR: {err}");
-            }
-        }
-    }
-
-    if hdr && hdr_capable_bpc {
-        if let Err(err) = props.set_hdr10() {
-            debug!("failed to enable HDR10 properties: {err}");
-        }
-    } else {
-        if hdr && !hdr_capable_bpc {
-            warn!("HDR requested without 10 bpc capability; keeping HDR metadata disabled");
-        }
-        if let Err(err) = props.reset_hdr() {
-            debug!("failed to reset HDR properties: {err}");
-        }
-    }
-
-    if let Err(err) = props.commit() {
-        warn!("failed to atomically commit properties: {err}");
     }
 }
 
@@ -2760,6 +2794,10 @@ pub fn set_gamma_for_crtc(
         let _span = clarion_tracy_span!("generate linear gamma");
 
         // The legacy API provides no way to reset the gamma, so set a linear one manually.
+        ensure!(
+            gamma_length > 1,
+            "legacy gamma table cannot represent an identity ramp"
+        );
         temp = vec![0u16; gamma_length * 3];
 
         let (red, rest) = temp.split_at_mut(gamma_length);
@@ -2871,6 +2909,79 @@ mod tests {
         vulkan_scanout_formats, KmsFrameIdentity,
     };
     use crate::frame_clock::FrameClock;
+
+    #[test]
+    fn hardware_cursor_rejects_hdr_scrgb_wide_gamut_and_extended_sdr_sources() {
+        use ash::vk::Format;
+
+        use crate::color::{ColorDescription, Primaries};
+
+        let packed = Format::B8G8R8A8_UNORM.as_raw() as u32;
+        assert!(super::cursor_color_is_sdr(ColorDescription::srgb(), packed));
+        assert!(super::cursor_color_is_sdr(
+            ColorDescription::srgb(),
+            Format::R8G8B8A8_UNORM.as_raw() as u32
+        ));
+        assert!(!super::cursor_color_is_sdr(
+            ColorDescription::bt2020_pq(),
+            packed
+        ));
+        assert!(!super::cursor_color_is_sdr(
+            ColorDescription::windows_scrgb(),
+            packed
+        ));
+        assert!(!super::cursor_color_is_sdr(
+            ColorDescription {
+                primaries: Primaries::DisplayP3,
+                ..ColorDescription::srgb()
+            },
+            packed
+        ));
+        assert!(!super::cursor_color_is_sdr(
+            ColorDescription {
+                max_luminance: 1000.,
+                ..ColorDescription::srgb()
+            },
+            packed
+        ));
+        assert!(
+            !super::cursor_color_is_sdr(
+                ColorDescription::srgb(),
+                Format::R16G16B16A16_SFLOAT.as_raw() as u32
+            ),
+            "default sRGB metadata does not bound floating-point cursor pixels"
+        );
+    }
+
+    #[test]
+    fn drm_native_busy_survives_transparent_wrappers_without_rejecting_hard_errors() {
+        use smithay::backend::drm::compositor::{FrameError, RenderFrameError};
+        use smithay::backend::renderer::damage::Error as DamageError;
+
+        use crate::render_helpers::vulkan::native::{NativeBusy, NativeError};
+
+        type TestError =
+            RenderFrameError<std::io::Error, std::io::Error, std::io::Error, NativeError>;
+        for kind in [
+            NativeBusy::Frame,
+            NativeBusy::Upload,
+            NativeBusy::Completion,
+            NativeBusy::OutputFormat,
+            NativeBusy::YuvPipelines,
+            NativeBusy::ProducerFence,
+            NativeBusy::OffscreenAllocation,
+        ] {
+            let error = TestError::RenderFrame(DamageError::Rendering(NativeError::Busy(kind)));
+            assert!(std::error::Error::source(&error).is_none());
+            assert!(super::native_drm_frame_is_backpressure(&error));
+        }
+        let hard = TestError::RenderFrame(DamageError::Rendering(NativeError::Other(
+            "actual GPU preparation failure".into(),
+        )));
+        assert!(!super::native_drm_frame_is_backpressure(&hard));
+        let prepare = TestError::PrepareFrame(FrameError::NoSupportedPlaneFormat);
+        assert!(!super::native_drm_frame_is_backpressure(&prepare));
+    }
 
     fn kms_identity_output() -> Output {
         let output = Output::new(

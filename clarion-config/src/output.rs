@@ -64,6 +64,12 @@ pub struct Output {
     /// Enable HDR10 output metadata and PQ/BT.2020 signaling when supported.
     #[knuffel(child)]
     pub hdr: bool,
+    /// SDR reference white in cd/m² when HDR is active (default: 203).
+    #[knuffel(child, unwrap(argument))]
+    pub sdr_white_level: Option<FloatOrInt<80, 500>>,
+    /// Override the HDR peak in cd/m²; otherwise use the display's EDID.
+    #[knuffel(child, unwrap(argument))]
+    pub hdr_peak_luminance: Option<FloatOrInt<80, 10000>>,
     #[knuffel(child)]
     pub mode: Option<Mode>,
     #[knuffel(child)]
@@ -108,6 +114,8 @@ impl Default for Output {
             position: None,
             max_bpc: None,
             hdr: false,
+            sdr_white_level: None,
+            hdr_peak_luminance: None,
             mode: None,
             modeline: None,
             variable_refresh_rate: None,
@@ -552,6 +560,31 @@ mod tests {
     use insta::assert_debug_snapshot;
 
     use super::*;
+
+    #[test]
+    fn hdr_luminance_options_are_bounded_and_optional() {
+        let legacy = crate::Config::parse_mem("output \"DP-1\" { hdr; }").unwrap();
+        assert!(legacy.outputs.0[0].hdr);
+        assert!(legacy.outputs.0[0].sdr_white_level.is_none());
+        assert!(legacy.outputs.0[0].hdr_peak_luminance.is_none());
+        let config = crate::Config::parse_mem(
+            "output \"DP-1\" { hdr; sdr-white-level 200; hdr-peak-luminance 600; }",
+        )
+        .unwrap();
+        assert_eq!(config.outputs.0[0].sdr_white_level, Some(FloatOrInt(200.0)));
+        assert_eq!(
+            config.outputs.0[0].hdr_peak_luminance,
+            Some(FloatOrInt(600.0))
+        );
+        for field in [
+            "sdr-white-level 79",
+            "sdr-white-level 501",
+            "hdr-peak-luminance 79",
+            "hdr-peak-luminance 10001",
+        ] {
+            assert!(crate::Config::parse_mem(&format!("output \"DP-1\" {{ {field}; }}")).is_err());
+        }
+    }
 
     #[test]
     fn parse_mode() {

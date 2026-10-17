@@ -299,6 +299,7 @@ pub struct Clarion {
     pub ext_workspace_state: ExtWorkspaceManagerState,
     pub screencopy_state: ScreencopyManagerState,
     pub output_management_state: OutputManagementManagerState,
+    pub color_management_state: crate::protocols::color_management::ColorManagementState,
     pub viewporter_state: ViewporterState,
     pub background_effect_state: BackgroundEffectState,
     pub gtk_shell_state: crate::handlers::gtk_shell::GtkShellState,
@@ -804,6 +805,28 @@ impl State {
 
         let mut state = Self { backend, clarion };
 
+        if state.backend.supports_color_management() {
+            state.backend.enable_color_management();
+            let formats = state
+                .backend
+                .with_renderer(|renderer| {
+                    use smithay::backend::renderer::ImportMemWl as _;
+                    match renderer {
+                        crate::render_helpers::renderer::AnyRenderer::Native(native) => {
+                            native.shm_formats().collect::<Vec<_>>()
+                        }
+                        crate::render_helpers::renderer::AnyRenderer::Gles(_) => Vec::new(),
+                    }
+                })
+                .unwrap_or_default();
+            state.clarion.shm_state.update_formats(formats);
+            state.clarion.color_management_state =
+                crate::protocols::color_management::ColorManagementState::new::<State>(
+                    &state.clarion.display_handle,
+                    true,
+                );
+        }
+
         // Load the xkb_file config option if set by the user.
         state.load_xkb_file();
         // Initialize some IPC server state.
@@ -918,6 +941,7 @@ impl State {
 
         self.clarion.refresh_window_rules();
         self.refresh_ipc_outputs();
+        crate::protocols::color_management::ColorManagementState::refresh(self);
         self.ipc_refresh_layout();
         self.ipc_refresh_keyboard_layout_index();
 
@@ -3140,6 +3164,7 @@ impl Clarion {
             foreign_toplevel_state,
             ext_workspace_state,
             output_management_state,
+            color_management_state: Default::default(),
             screencopy_state,
             viewporter_state,
             background_effect_state,
@@ -3514,6 +3539,7 @@ impl Clarion {
         };
         let rv = self.output_state.insert(output.clone(), state);
         assert!(rv.is_none(), "output was already tracked");
+        self.color_management_state.output_added(&output);
 
         // Must be last since it will call queue_redraw(output) which needs things to be filled-in.
         self.reposition_outputs(Some(&output));
@@ -3553,6 +3579,7 @@ impl Clarion {
         self.global_space.unmap_output(output);
         self.reposition_outputs(None);
         self.gamma_control_manager_state.output_removed(output);
+        self.color_management_state.output_removed(output);
 
         let mut state = self.output_state.remove(output).unwrap();
         state.schedule.cancel_timers(&self.event_loop);

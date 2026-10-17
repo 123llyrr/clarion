@@ -666,6 +666,10 @@ fn print_output(output: Output) -> anyhow::Result<()> {
         logical,
         max_bpc,
         hdr_active,
+        hdr_supported,
+        hdr_status,
+        hdr_peak_luminance,
+        sdr_white_level,
     } = output;
 
     let serial = serial.as_deref().unwrap_or("Unknown");
@@ -755,6 +759,16 @@ fn print_output(output: Output) -> anyhow::Result<()> {
 
     let hdr = if hdr_active { "enabled" } else { "disabled" };
     println!("  HDR: {hdr}");
+    println!("  HDR10 supported: {hdr_supported}");
+    if let Some(status) = hdr_status {
+        println!("  HDR status: {status}");
+    }
+    if let Some(peak) = hdr_peak_luminance {
+        println!("  HDR peak luminance: {peak:.1} cd/m²");
+    }
+    if let Some(white) = sdr_white_level {
+        println!("  SDR reference white: {white:.1} cd/m²");
+    }
 
     println!("  Available modes:");
     for (idx, mode) in modes.into_iter().enumerate() {
