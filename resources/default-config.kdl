@@ -336,11 +336,11 @@ animations {
         }
     }
 
-    // Quick reveal from 94% size with a small rebound and zero-speed finish.
+    // Lively reveal from 94% size. A lightly underdamped spring overshoots a
+    // few percent, then settles; an interrupted open keeps its velocity.
     window-open {
         // Reveal starts with the first mapped buffer; no extra fixed warm-up delay.
-        duration-ms 200
-        curve "cubic-bezier" 0.16 1.4 0.30 1.0
+        spring damping-ratio=0.62 stiffness=600 epsilon=0.0015
         effect "fade"
         popin 0.94
 

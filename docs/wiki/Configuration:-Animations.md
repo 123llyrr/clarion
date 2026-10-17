@@ -27,8 +27,7 @@ animations {
     }
 
     window-open {
-        duration-ms 200
-        curve "cubic-bezier" 0.16 1.4 0.30 1.0
+        spring damping-ratio=0.62 stiffness=600 epsilon=0.0015
         effect "fade"
         popin 0.94
         glide { off; }
@@ -228,16 +227,18 @@ the pointer remain flat.
 
 #### `window-open`
 
-Window opening defaults to a 200 ms transition from 94% size. The window becomes
-fully opaque early, briefly reaches about 100.32% size, and settles at 100% with
-zero end velocity. Opacity stays at full strength during the scale rebound.
-It starts with the first mapped buffer. The complete window snapshot is cached
-and redrawn only on damage; the fade uses the ordinary texture pipeline on both
-Vulkan and GLES. This is a Clarion motion profile. The supplied curve is a Clarion
-parameter choice; it is not a measured macOS window-opening curve. Timed `fade`
-curves retain their scale settling phase; physical springs and `reveal` keep their
-first-arrival completion behavior. Turning animations off or enabling reduced
-motion removes the complete transform immediately.
+Window opening defaults to a spring from 94% size: lightly underdamped, so it
+overshoots a few percent before settling. Because the duration comes from the
+spring rather than a fixed timeline, a window that is closed and reopened while
+still moving keeps its velocity instead of restarting from rest. Opacity stays at
+full strength during the rebound. The animation starts with the first mapped
+buffer. The complete window snapshot is cached and redrawn only on damage; the
+fade uses the ordinary texture pipeline on both Vulkan and GLES. These spring
+parameters are a Clarion choice, not a measured macOS curve. Turning animations
+off or enabling reduced motion removes the complete transform immediately.
+
+Setting `duration-ms` and `curve` replaces the spring with a fixed timeline;
+`effect "reveal"` keeps its first-arrival completion behavior either way.
 
 ```kdl
 animations {

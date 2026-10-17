@@ -428,9 +428,13 @@ impl Default for WindowOpenAnim {
         Self {
             anim: Animation {
                 off: false,
-                kind: Kind::Easing(EasingParams {
-                    duration_ms: 200,
-                    curve: Curve::CubicBezier(0.16, 1.4, 0.30, 1.0),
+                // A lightly underdamped spring: one visible overshoot, then a
+                // short settle. Duration comes from the spring rather than a
+                // fixed timeline, so interrupts keep their velocity.
+                kind: Kind::Spring(SpringParams {
+                    damping_ratio: 0.62,
+                    stiffness: 600,
+                    epsilon: 0.0015,
                 }),
             },
             custom_shader: None,
@@ -1313,9 +1317,10 @@ mod tests {
         let reference = WindowOpenAnim::default();
         assert_eq!(
             reference.anim.kind,
-            Kind::Easing(EasingParams {
-                duration_ms: 200,
-                curve: Curve::CubicBezier(0.16, 1.4, 0.30, 1.0),
+            Kind::Spring(SpringParams {
+                damping_ratio: 0.62,
+                stiffness: 600,
+                epsilon: 0.0015,
             })
         );
         assert_eq!(reference.effect, WindowOpenEffect::Fade);
