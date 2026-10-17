@@ -394,6 +394,9 @@ pub struct Clarion {
     pub last_user_activity: Instant,
     /// Idle policy: inactivity turns into a lock or a suspend request.
     pub idle_policy: crate::idle::IdlePolicy,
+    /// Pending panel switch-off request. Blanking belongs to the backend, which
+    /// the core state cannot reach, so the owner drains this on its refresh.
+    pub(crate) pending_dpms_blank: Option<bool>,
     hot_corners: crate::input::hot_corner::HotCornerState,
     pub pointer_constraint_position_hint: Option<Point<f64, Logical>>,
     pub tablet_cursor_location: Option<Point<f64, Logical>>,
@@ -870,6 +873,13 @@ impl State {
 
     fn refresh(&mut self) {
         let _span = clarion_tracy_span!("State::refresh");
+
+        // The idle policy asks for panel blanking, but only the owner can reach
+        // the backend. Drain it here so a wake-up is served on the next turn
+        // rather than waiting for the one-second policy tick.
+        if let Some(blanked) = self.clarion.pending_dpms_blank.take() {
+            self.backend.set_outputs_blanked(blanked);
+        }
 
         // Handle commits for surfaces whose blockers cleared this cycle. This should happen before
         // layout.refresh() since this is where these surfaces handle commits.
@@ -3193,6 +3203,7 @@ impl Clarion {
             notified_activity_this_iteration: false,
             last_user_activity: Instant::now(),
             idle_policy,
+            pending_dpms_blank: None,
             hot_corners: Default::default(),
             pointer_constraint_position_hint: None,
             tablet_cursor_location: None,
@@ -7658,7 +7669,14 @@ impl Clarion {
         let _span = clarion_tracy_span!("Clarion::notify_activity");
 
         self.last_user_activity = Instant::now();
-        self.idle_policy.activity(self.last_user_activity);
+        if self.idle_policy.activity(self.last_user_activity) {
+            // The panels were off: switch them back on and repaint what the
+            // blanked frames never presented.
+            self.pending_dpms_blank = Some(false);
+            for output in self.global_space.outputs().cloned().collect::<Vec<_>>() {
+                self.queue_redraw(&output);
+            }
+        }
         self.idle_notifier_state.notify_activity(&self.seat);
 
         self.notified_activity_this_iteration = true;
@@ -7679,6 +7697,7 @@ impl Clarion {
         match action {
             crate::idle::IdleAction::Lock => self.request_lock(),
             crate::idle::IdleAction::Suspend => self.request_suspend(),
+            crate::idle::IdleAction::Blank => self.pending_dpms_blank = Some(true),
         }
     }
 

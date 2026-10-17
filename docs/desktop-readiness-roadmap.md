@@ -56,19 +56,24 @@
 
 ```kdl
 idle {
-    timeout 300            // 秒；0 表示从不
-    action "lock"          // "lock" | "suspend" | "none"
+    timeout 300             // 秒；0 表示从不
+    action "lock"           // "lock" | "suspend" | "none"
+    blank-timeout 600       // 独立于动作；到时通过连接器 DPMS 熄屏，输入即亮
     lock-command "swaylock" // 锁屏界面由客户端提供，PAM 由它自带
     lock-before-suspend
 }
 ```
 
 动作在合成器的一秒 tick 上判定；空闲抑制面与 freedesktop idle-inhibit 生效时不动作，
-已有会话锁时不再重复请求；每个空闲周期只动作一次，任何输入重新计时。策略是纯逻辑模块
-（`src/idle.rs`），不持有时钟与进程，单独有单元测试。
+已有会话锁时不再重复请求；每个空闲周期只动作一次，任何输入重新计时。熄屏走连接器的
+`DPMS` 属性（`ConnectorProperties::set_dpms`），只在该属性实际变化时提交原子请求；
+面板关闭期间会话仍保持合成，输入到达时立即亮屏并重绘（`pending_dpms_blank` 由拥有后端的
+刷新周期消费，因此唤醒不受一秒 tick 限制）。熄屏独立于动作、且在已锁屏时依然生效——
+锁屏后屏幕应当熄灭。策略是纯逻辑模块（`src/idle.rs`），不持有时钟与进程，单独有单元测试。
 
-仍未完成的部分（同一节内）：屏幕关闭（需要后端 DPMS 支持）、按电源来源分别计时（需要
-查询 logind 的 `OnBattery`）、以及由 logind `PrepareForSleep`/合盖发起的挂起前锁定。
+仍未完成的部分（同一节内）：按电源来源分别计时（需要查询 logind 的 `OnBattery`），以及由
+logind `PrepareForSleep` 或合盖发起的挂起前锁定（需要订阅该信号；目前只有本策略自己发起的
+挂起会先锁屏）。
 
 2. **会话接线（不可省略）**——把上面这些工具"接起来"，让全新安装不是一片空白：
    导出输入法/光标/主题环境变量；随会话启动选定的守护（项目已有 `login_items_service`

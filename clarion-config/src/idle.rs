@@ -10,6 +10,9 @@ pub struct Idle {
     pub off: bool,
     /// Seconds without input before `action` runs. Zero never acts.
     pub timeout: u32,
+    /// Seconds without input before the panels are switched off by DPMS. This
+    /// is independent of `action` and usually longer. Zero never blanks.
+    pub blank_timeout: u32,
     pub action: IdleAction,
     /// Command started when the policy requests a lock. Empty leaves locking to
     /// whatever the session runs on its own.
@@ -33,6 +36,7 @@ impl Default for Idle {
         Self {
             off: false,
             timeout: 0,
+            blank_timeout: 0,
             action: IdleAction::default(),
             lock_command: None,
             lock_before_suspend: false,
@@ -47,6 +51,8 @@ pub struct IdlePart {
     #[knuffel(child, unwrap(argument))]
     pub timeout: Option<u32>,
     #[knuffel(child, unwrap(argument))]
+    pub blank_timeout: Option<u32>,
+    #[knuffel(child, unwrap(argument))]
     pub action: Option<IdleAction>,
     #[knuffel(child, unwrap(argument))]
     pub lock_command: Option<String>,
@@ -58,6 +64,7 @@ impl MergeWith<IdlePart> for Idle {
     fn merge_with(&mut self, part: &IdlePart) {
         merge!((self, part), off);
         merge_clone!((self, part), timeout);
+        merge_clone!((self, part), blank_timeout);
         merge_clone!((self, part), action);
         merge_clone_opt!((self, part), lock_command);
         merge!((self, part), lock_before_suspend);
