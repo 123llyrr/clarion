@@ -1309,8 +1309,8 @@ class _MacMenuBar extends StatelessWidget {
                             controller.selectPanel(ShellPanel.systemMenu),
                         child: Image.asset(
                           dark
-                              ? 'assets/shell/clarion-mark-white.png'
-                              : 'assets/shell/clarion-mark-black.png',
+                              ? 'assets/icons/clarion-mark-white.png'
+                              : 'assets/icons/clarion-mark-black.png',
                           key: const ValueKey('mac-apple-logo'),
                           width: 17,
                           height: 18,
