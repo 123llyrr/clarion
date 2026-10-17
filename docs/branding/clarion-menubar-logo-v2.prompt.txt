@@ -1,0 +1,2 @@
+Tool: built-in image_gen.
+Prompt: Original Clarion monochrome menu-bar brand symbol inspired by the timeless simplicity and organic sculptural balance of classic Macintosh identity. Bold rounded crescent/abstract C, generous opening on right, gently tapered terminals and connected rising upper-left crest. Pure white solid silhouette, transparent background, centered with generous padding, readable at 18px. No apple fruit, bite, detached leaf, existing company marks, text, gradients, texture, 3D or enclosing app tile.

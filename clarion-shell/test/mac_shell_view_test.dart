@@ -16,6 +16,7 @@ import 'package:clarion_shell/services/clarion_ipc.dart';
 import 'package:clarion_shell/services/system_service.dart';
 import 'package:clarion_shell/services/wallpaper_service.dart';
 import 'package:clarion_shell/state/shell_controller.dart';
+import 'package:clarion_shell/theme/font_fallback.dart';
 import 'package:clarion_shell/theme/mac_shell_theme.dart';
 import 'package:clarion_shell/ui/mac_dock_view.dart';
 import 'package:clarion_shell/ui/global_app_menu_bar.dart';
@@ -386,8 +387,10 @@ void main() {
 
     await menuAction('system-menu-settings');
     expect(ipc.actions.last.$1, 'Spawn');
+    // The settings window draws its own palette, so it is told which
+    // appearance the desktop is using (the controller defaults to dark).
     expect(ipc.actions.last.$2, {
-      'command': ['clarion-settings'],
+      'command': ['clarion-settings', '--theme', 'dark'],
     });
     await menuAction('system-menu-recent');
     expect(find.byKey(const ValueKey('system-recent-clear')), findsOneWidget);
@@ -460,7 +463,7 @@ void main() {
       );
       expect(
         buildMacShellTheme(Brightness.light).textTheme.bodyMedium?.fontFamily,
-        'ClarionSystem',
+        shellFontFamily,
       );
       await tester.tap(find.byKey(const ValueKey('dock-finder')));
       await tester.pumpAndSettle();

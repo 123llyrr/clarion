@@ -3,7 +3,7 @@
 //! Dimensions are engineering values in logical points, not measured NIB frames.
 //! This module only returns navigation requests; the app owns saving and history.
 
-use eframe::egui::{self, Color32, FontId, Rect, Response, Sense, Stroke, Ui, Vec2};
+use eframe::egui::{self, FontId, Rect, Response, Sense, Stroke, Ui, Vec2};
 
 use crate::app::ActiveTab;
 use crate::icons::{self, PreferenceIcon};
@@ -255,7 +255,7 @@ fn show_observed(
             ui.painter().layout(
                 pane.title.to_owned(),
                 FontId::proportional(13.),
-                colors::TEXT,
+                colors::text(),
                 (tile_width - 8.).max(1.),
             )
         })
@@ -271,7 +271,7 @@ fn show_observed(
         ui.painter().hline(
             origin.x..=origin.x + layout.size.x,
             origin.y + y,
-            Stroke::new(1_f32, colors::BORDER.gamma_multiply(0.55)),
+            Stroke::new(1_f32, colors::border().gamma_multiply(0.55)),
         );
     }
 
@@ -290,13 +290,13 @@ fn show_observed(
         let emphasized = response.hovered() || response.has_focus();
         if emphasized {
             ui.painter()
-                .rect_filled(rect.shrink(3.), 5., colors::SURFACE_HOVER);
+                .rect_filled(rect.shrink(3.), 5., colors::surface_hover());
         }
         if response.has_focus() {
             ui.painter().rect_stroke(
                 rect.shrink(3.),
                 5.,
-                Stroke::new(2_f32, colors::CONTROL_ACCENT),
+                Stroke::new(2_f32, colors::control_accent()),
             );
         }
         let mut paint_ui = ui.new_child(
@@ -315,12 +315,12 @@ fn show_observed(
             paint_ui.painter().circle_filled(
                 icon_rect.center(),
                 icon_size / 2. + 7.,
-                Color32::WHITE,
+                colors::surface(),
             );
             paint_ui.painter().circle_stroke(
                 icon_rect.center(),
                 icon_size / 2. + 7.,
-                Stroke::new(1_f32, colors::BORDER),
+                Stroke::new(1_f32, colors::border()),
             );
         }
         icons::paint_preference(&paint_ui, icon_rect, pane.icon);
@@ -331,7 +331,7 @@ fn show_observed(
                 icon_rect.bottom() + 5.,
             ),
             label.clone(),
-            colors::TEXT,
+            colors::text(),
         );
         on_tile(pane, &response, matched);
         if response.clicked() {
@@ -344,7 +344,7 @@ fn show_observed(
             egui::Label::new(
                 egui::RichText::new("未找到匹配的设置。请尝试其他名称或关键词。")
                     .size(13.)
-                    .color(colors::MUTED),
+                    .color(colors::muted()),
             )
             .wrap(),
         );
@@ -404,7 +404,7 @@ mod tests {
 
     fn context() -> egui::Context {
         let context = egui::Context::default();
-        crate::theme::setup_custom_fonts_and_styles(&context);
+        crate::theme::setup_custom_fonts_and_styles(&context, false);
         context
     }
 
@@ -519,7 +519,7 @@ mod tests {
         let (_, before, _) = frame(&context, 668., 1., "", vec![]);
         let (_, searched, highlighted) = frame(&context, 668., 1., "显示器", vec![]);
         assert_eq!(searched.iter().filter(|tile| tile.matched).count(), 1);
-        assert_eq!(highlighted.shapes.iter().filter(|shape| matches!(&shape.shape, egui::Shape::Circle(circle) if circle.radius == ICON_SIZE / 2. + 7. && circle.fill == Color32::WHITE)).count(), 1);
+        assert_eq!(highlighted.shapes.iter().filter(|shape| matches!(&shape.shape, egui::Shape::Circle(circle) if circle.radius == ICON_SIZE / 2. + 7. && circle.fill == crate::theme::colors::surface())).count(), 1);
         for (before, searched) in before.iter().zip(&searched) {
             assert_eq!(before.tab, searched.tab);
             assert_eq!(before.rect, searched.rect);

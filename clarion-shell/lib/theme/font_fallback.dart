@@ -1,16 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/// Font families the shell falls back through when a preferred family is absent.
+/// Font families the shell renders with, resolved through the system font
+/// configuration (fontconfig on Linux).
 ///
-/// A fresh checkout ships no fonts: the imported Apple families (`ClarionSystem`,
-/// `ClarionChinese`) only exist after `scripts/import-shell-assets.sh` restores
-/// them from an image the user owns, and Apple's SF and PingFang are not
-/// redistributable. Without a fallback chain, CJK labels would render as tofu on
-/// any system that has no CJK family installed, so the chain names the common
-/// open-licensed families by the names fontconfig actually exposes.
+/// Clarion ships no font binaries and never requests Apple families such as SF
+/// Pro or PingFang: they are proprietary and cannot accompany a GPL-3.0-or-
+/// later desktop. The chain names only open-licensed families, CJK before
+/// Latin, so Chinese labels keep their glyphs while Latin text gets a matching
+/// sans face on systems that have Noto Sans installed.
 const List<String> shellFontFallback = [
-  // Optional local import first: it shapes the intended look when present.
-  'ClarionChinese',
   // Open-licensed CJK families, most common first.
   'Noto Sans CJK SC',
   'Noto Sans CJK TC',
@@ -21,12 +19,12 @@ const List<String> shellFontFallback = [
   'WenQuanYi Micro Hei',
   'HarmonyOS Sans SC',
   // Latin coverage for systems without any CJK family at all.
-  'Inter',
   'Noto Sans',
+  'Inter',
   'DejaVu Sans',
   'Liberation Sans',
 ];
 
-/// Preferred family. It exists only after the optional import, so every use is
-/// paired with [shellFontFallback].
-const String shellFontFamily = 'ClarionSystem';
+/// Preferred family. Resolved by fontconfig; the chain above covers systems
+/// where it is not installed.
+const String shellFontFamily = 'Noto Sans';

@@ -2187,8 +2187,19 @@ class ShellController extends ChangeNotifier {
     }
     final panelRevision = _panelRevision;
     await _perform('settings', () async {
+      // Resolve the theme here, exactly as the shell's own MaterialApp does,
+      // so a "system" desktop still tells the settings window which palette it
+      // is currently drawing. egui's Linux backend rarely reports a system
+      // theme, so passing "system" would open a light window on a dark desktop.
+      final dark = switch (themeMode) {
+        ThemeMode.dark => true,
+        ThemeMode.light => false,
+        ThemeMode.system =>
+          WidgetsBinding.instance.platformDispatcher.platformBrightness ==
+              Brightness.dark,
+      };
       await _ipc.action('Spawn', {
-        'command': ['clarion-settings'],
+        'command': ['clarion-settings', '--theme', dark ? 'dark' : 'light'],
       });
       _closePanelIfCurrent(panelRevision);
     });

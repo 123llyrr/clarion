@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# Restore the Apple-derived reference assets that were removed from this tree.
+# Restore the Apple-derived reference artwork that was removed from this tree.
 #
-# Clarion is GPL-3.0-or-later. The icons, Apple wordmark and the SF / PingFang
-# fonts are Apple property and cannot be redistributed, so they are not in git.
-# Users who own a macOS image can extract them locally and re-import them here.
+# Clarion is GPL-3.0-or-later. The icons and Apple wordmark are Apple property
+# and cannot be redistributed, so they are not in git. Users who own a macOS
+# image can extract them locally and re-import them here.
+#
+# Fonts are deliberately not imported: the shell and the settings app render
+# with open-licensed system families (Noto, Source Han, Sarasa, DejaVu...), so
+# the SF / PingFang faces are skipped even when the source directory has them.
 #
 # This script never downloads anything and never modifies a tracked file except
 # clarion-shell/pubspec.yaml. Imported assets are git-ignored.
@@ -93,9 +97,6 @@ declare -A source_alias=(
   [closebox@2x.png]=ecsb_closebox@2x.png
   [closebox-pressed.png]=ecsb_closebox_pressed.png
   [closebox-pressed@2x.png]=ecsb_closebox_pressed@2x.png
-  [cjk-regular.otf]=PingFangSC-Regular.otf
-  [cjk-semibold.otf]=PingFangSC-Semibold.otf
-  [ui-text.ttf]=SFNS.ttf
   [app-icon.icns]=ProductPageIcon.icns
   [app-icon-256.tiff]=ProductPageIcon_256x256.tiff
   [app-icon-512.tiff]=ProductPageIcon_512x512.tiff
@@ -111,6 +112,11 @@ declare -a mismatched_list=()
 
 while read -r expected path; do
   [[ -z "${expected:-}" || "${expected:0:1}" == "#" ]] && continue
+
+  # Text is drawn with open-licensed system fonts; never restore SF/PingFang.
+  case "$path" in
+    *.ttf|*.otf) continue ;;
+  esac
 
   candidate="$source_dir/$path"
   base=${path##*/}
@@ -171,50 +177,32 @@ if [[ "$restored" -eq 0 ]]; then
   exit 1
 fi
 
-# Re-enable the Flutter asset and font declarations between the pubspec markers.
+# The imported artwork must be listed as a Flutter asset. Fonts stay out of
+# the declaration: text uses open-licensed system families instead.
 python3 - "$pubspec" <<'PY'
 import pathlib
 import sys
 
 path = pathlib.Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
-begin = "  # BEGIN shell assets\n"
-end = "  # END shell assets\n"
-start = text.find(begin)
-stop = text.find(end)
-if start == -1 or stop == -1 or stop < start:
-    print("pubspec.yaml: shell asset markers not found; add the declarations manually", file=sys.stderr)
-    raise SystemExit(1)
-# The assets list stays live (the shipped icons always apply); an import only
-# appends the shell line to it and uncomments the fonts. Replacing the block
-# with another assets: key would duplicate the YAML mapping key.
-block = """  fonts:
-    - family: ClarionSystem
-      fonts:
-        - asset: assets/shell/ui-text.ttf
-    - family: ClarionChinese
-      fonts:
-        - asset: assets/shell/cjk-regular.otf
-          weight: 400
-        - asset: assets/shell/cjk-semibold.otf
-          weight: 600
-"""
-text = text[:start] + begin + block + text[stop:]
 if "    - assets/shell/\n" not in text:
+    if "    - assets/icons/\n" not in text:
+        print("pubspec.yaml: asset list not found; add assets/shell/ manually", file=sys.stderr)
+        raise SystemExit(1)
     text = text.replace(
         "    - assets/icons/\n",
         "    - assets/icons/\n    - assets/shell/\n",
     )
-path.write_text(text, encoding="utf-8")
-print("pubspec.yaml: assets/shell/ and both font families re-enabled")
+    path.write_text(text, encoding="utf-8")
+print("pubspec.yaml: assets/shell/ enabled; no fonts declared")
 PY
 
 cat <<'NOTE'
 
 Imported. Next steps:
-  * scripts/build-shell.sh --release     # shell picks up icons and fonts
-  * clarion-settings uses vector icons until the five include_bytes! entries in
-    clarion-settings/src/icons.rs are restored; fonts resolve through fontconfig
-    and need no change.
+  * scripts/build-shell.sh --release     # shell picks up the imported artwork
+  * Fonts are not imported: the shell and settings app resolve open-licensed
+    system families through fontconfig. Install noto-fonts-cjk (or an
+    equivalent Source Han / Sarasa / WenQuanYi package) for Chinese text.
   * Do not commit the imported files. They are git-ignored on purpose.
 NOTE

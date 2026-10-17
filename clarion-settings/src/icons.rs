@@ -59,20 +59,44 @@ impl PreferenceIcon {
         }
     }
 
-    /// Apple preference-pane artwork cannot be redistributed under
-    /// GPL-3.0-or-later, so every pane draws its vector fallback. Keeping the
-    /// hook lets a local import restore bitmaps without touching this file.
+    /// Pane artwork ships with the repository (see assets/icons). A pane whose
+    /// bitmap is missing falls back to its vector symbol, so the hook stays
+    /// optional rather than failing the pane.
     fn asset(self) -> Option<(&'static str, &'static [u8])> {
-        match self {
-            Self::General
-            | Self::MissionControl
-            | Self::Keyboard
-            | Self::Trackpad
-            | Self::Displays
-            | Self::Advanced
-            | Self::Code
-            | Self::WindowLayout => None,
-        }
+        Some(match self {
+            Self::General => (
+                "clarion-pane-general",
+                include_bytes!("../assets/icons/general.png"),
+            ),
+            Self::MissionControl => (
+                "clarion-pane-mission-control",
+                include_bytes!("../assets/icons/mission-control.png"),
+            ),
+            Self::Keyboard => (
+                "clarion-pane-keyboard",
+                include_bytes!("../assets/icons/keyboard.png"),
+            ),
+            Self::Trackpad => (
+                "clarion-pane-trackpad",
+                include_bytes!("../assets/icons/trackpad.png"),
+            ),
+            Self::Displays => (
+                "clarion-pane-display",
+                include_bytes!("../assets/icons/display.png"),
+            ),
+            Self::Advanced => (
+                "clarion-pane-advanced",
+                include_bytes!("../assets/icons/advanced-settings.png"),
+            ),
+            Self::Code => (
+                "clarion-pane-configuration",
+                include_bytes!("../assets/icons/configuration.png"),
+            ),
+            Self::WindowLayout => (
+                "clarion-pane-window-layout",
+                include_bytes!("../assets/icons/window-layout.png"),
+            ),
+        })
     }
 }
 
@@ -121,7 +145,7 @@ pub fn paint_preference(ui: &Ui, rect: Rect, icon: PreferenceIcon) {
             ui,
             rect,
             icon.vector_fallback(),
-            crate::theme::colors::ACCENT,
+            crate::theme::colors::accent(),
         );
     }
 }
@@ -400,12 +424,12 @@ pub fn primary_button(ui: &mut Ui, icon: Icon, label: &str) -> Response {
             &mut widgets.active,
             &mut widgets.open,
         ] {
-            widget.bg_fill = crate::theme::colors::ACCENT;
-            widget.weak_bg_fill = crate::theme::colors::ACCENT;
-            widget.fg_stroke.color = crate::theme::colors::ON_ACCENT;
+            widget.bg_fill = crate::theme::colors::accent();
+            widget.weak_bg_fill = crate::theme::colors::accent();
+            widget.fg_stroke.color = crate::theme::colors::on_accent();
         }
         // egui uses the hovered visuals for keyboard focus too.
-        widgets.hovered.bg_stroke = Stroke::new(1.5_f32, crate::theme::colors::ON_ACCENT);
+        widgets.hovered.bg_stroke = Stroke::new(1.5_f32, crate::theme::colors::on_accent());
         widgets.active.bg_stroke = widgets.hovered.bg_stroke;
         button(ui, icon, label)
     })
@@ -417,15 +441,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_preference_pane_has_an_original_vector_fallback() {
-        // No Apple bitmap is compiled in; each pane must still render something
-        // distinguishable and stay within the icon box at any DPI.
+    fn every_preference_pane_has_decodable_artwork_and_a_vector_fallback() {
+        // Clarion's own artwork ships with the repository, so each pane must
+        // decode and stay legible; the vector symbol stays available for a pane
+        // whose bitmap is removed.
         for icon in PreferenceIcon::ALL {
+            let (name, bytes) = icon
+                .asset()
+                .unwrap_or_else(|| panic!("{}: missing pane artwork", icon.label()));
+            assert!(!name.is_empty(), "{}: unnamed texture", icon.label());
+            let image = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
+                .unwrap_or_else(|err| panic!("{}: artwork does not decode: {err}", icon.label()));
             assert!(
-                icon.asset().is_none(),
-                "{}: Apple artwork must not be bundled",
-                icon.label()
+                image.width() >= 32 && image.height() >= 32,
+                "{}: artwork is {}x{}",
+                icon.label(),
+                image.width(),
+                image.height()
             );
+            let _ = icon.vector_fallback();
         }
         assert_ne!(
             PreferenceIcon::General.vector_fallback(),
@@ -547,7 +581,7 @@ mod tests {
     #[test]
     fn vector_icons_stay_inside_their_allocated_bounds_at_fractional_dpi() {
         let context = egui::Context::default();
-        crate::theme::apply_style(&context);
+        crate::theme::apply_style(&context, false);
         for scale in [1., 1.25, 1.5, 2.] {
             for size in [14., 18., 24., 32.] {
                 for icon in Icon::ALL {
@@ -566,7 +600,7 @@ mod tests {
                         egui::CentralPanel::default()
                             .frame(egui::Frame::none())
                             .show(ctx, |ui| {
-                                paint(ui, rect, icon, crate::theme::colors::ACCENT);
+                                paint(ui, rect, icon, crate::theme::colors::accent());
                             });
                     });
                     assert!(!output
@@ -625,7 +659,7 @@ mod tests {
     fn icon_buttons_keep_pointer_keyboard_and_disabled_behavior() {
         for paint_button in [button, primary_button] {
             let context = egui::Context::default();
-            crate::theme::apply_style(&context);
+            crate::theme::apply_style(&context, false);
             let mut rect = Rect::NOTHING;
             let mut id = egui::Id::NULL;
             let mut clicked = false;

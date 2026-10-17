@@ -439,7 +439,10 @@ class _DockApplicationState extends State<DockApplication> {
         final geometry = (
           position: prefs.dockPosition,
           size: size,
-          reservedSize: (prefs.dockSize + 16).ceil(),
+          // A hidden dock reserves nothing: the native reservation surface
+          // derives its exclusive zone from this number, so a hidden dock must
+          // report zero or the desktop keeps a strip along that edge.
+          reservedSize: prefs.dockHidden ? 0 : (prefs.dockSize + 16).ceil(),
           autoHide: prefs.dockAutoHide,
         );
         // Magnification changes the hit/glass regions on each frame, while

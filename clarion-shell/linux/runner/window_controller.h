@@ -88,7 +88,10 @@ class WindowController final {
   bool dock_tooltip_visible_ = false;
   int dock_desired_width_ = clarion_shell::kDefaultDockWidth;
   int dock_desired_height_ = clarion_shell::kDockSurfaceHeight;
-  int dock_reserved_size_ = clarion_shell::kDockHeight;
+  // Reserve nothing until Dart reports the Dock it is actually drawing. A
+  // Dock hidden from startup never sends geometry, so a nonzero default would
+  // keep an exclusive strip along the edge with no Dock to justify it.
+  int dock_reserved_size_ = 0;
   bool dock_auto_hide_ = false;
   clarion_shell::DockPosition dock_position_ = clarion_shell::DockPosition::Bottom;
   bool dock_custom_input_ = false;

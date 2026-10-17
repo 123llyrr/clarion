@@ -5,15 +5,28 @@ pub fn highlight_kdl(text: &str) -> LayoutJob {
     let mut job = LayoutJob::default();
 
     let font_id = FontId::monospace(13.0);
-    // The settings editor uses the light theme's white field and pale-blue
-    // selection. Keep every syntax class readable on both backgrounds.
-    let default_color = crate::theme::colors::TEXT;
-    let keyword_color = Color32::from_rgb(148, 0, 148);
-    let prop_color = Color32::from_rgb(0, 88, 150);
-    let string_color = Color32::from_rgb(163, 21, 21);
-    let number_color = Color32::from_rgb(112, 60, 0);
-    let comment_color = crate::theme::colors::MUTED;
-    let bool_color = Color32::from_rgb(123, 31, 162);
+    // Syntax colors follow the selected palette: the light field and pale-blue
+    // selection need darker inks, while the dark field needs luminous ones.
+    let dark = crate::theme::colors::is_dark();
+    let default_color = crate::theme::colors::text();
+    let (keyword_color, prop_color, string_color, number_color, bool_color) = if dark {
+        (
+            Color32::from_rgb(255, 122, 178),
+            Color32::from_rgb(130, 194, 255),
+            Color32::from_rgb(255, 138, 128),
+            Color32::from_rgb(255, 184, 108),
+            Color32::from_rgb(216, 146, 255),
+        )
+    } else {
+        (
+            Color32::from_rgb(148, 0, 148),
+            Color32::from_rgb(0, 88, 150),
+            Color32::from_rgb(163, 21, 21),
+            Color32::from_rgb(112, 60, 0),
+            Color32::from_rgb(123, 31, 162),
+        )
+    };
+    let comment_color = crate::theme::colors::muted();
 
     let lines = text.split('\n');
     let total_lines = lines.clone().count();
@@ -109,7 +122,7 @@ pub fn highlight_kdl(text: &str) -> LayoutJob {
                         0.0,
                         TextFormat {
                             font_id: font_id.clone(),
-                            color: crate::theme::colors::MUTED,
+                            color: crate::theme::colors::muted(),
                             ..Default::default()
                         },
                     );
@@ -270,9 +283,9 @@ mod tests {
         for section in &job.sections {
             unique_colors.insert(section.format.color);
             for background in [
-                crate::theme::colors::SURFACE,
-                crate::theme::colors::BACKGROUND,
-                crate::theme::colors::ACCENT_SOFT,
+                crate::theme::colors::surface(),
+                crate::theme::colors::background(),
+                crate::theme::colors::accent_soft(),
             ] {
                 assert!(
                     contrast(section.format.color, background) >= 4.5,
@@ -287,6 +300,30 @@ mod tests {
             7,
             "exercise every syntax color, including punctuation/comments"
         );
+        assert_eq!(job.text, source);
+    }
+
+    #[test]
+    fn all_highlight_classes_are_readable_on_dark_editor_and_selection() {
+        crate::theme::colors::set_dark(true);
+        let source =
+            "// 中文注释\nlayout { width 12.5; active-color \"#fff\"; custom true }\n/- ignored";
+        let job = highlight_kdl(source);
+        for section in &job.sections {
+            for background in [
+                crate::theme::colors::surface(),
+                crate::theme::colors::background(),
+                crate::theme::colors::accent_soft(),
+            ] {
+                assert!(
+                    contrast(section.format.color, background) >= 4.5,
+                    "{:?} on {background:?}: {}",
+                    section.format.color,
+                    &job.text[section.byte_range.clone()]
+                );
+            }
+        }
+        crate::theme::colors::set_dark(false);
         assert_eq!(job.text, source);
     }
 
