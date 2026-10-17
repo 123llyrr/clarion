@@ -76,19 +76,6 @@ void main() {
     expect(find.text('管理…'), findsOneWidget);
   });
 
-  testWidgets('switches to Support tab and renders resources', (tester) async {
-    await tester.pumpWidget(buildDialog());
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('支持'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Clarion 资源'), findsOneWidget);
-    expect(find.text('Clarion 支持'), findsOneWidget);
-    expect(find.text('硬件规范'), findsOneWidget);
-    expect(find.text('开源许可'), findsOneWidget);
-  });
-
   testWidgets('closes dialog when OK button or traffic light is tapped', (
     tester,
   ) async {

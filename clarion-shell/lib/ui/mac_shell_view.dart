@@ -1118,7 +1118,7 @@ class _MacMenuBar extends StatelessWidget {
           children: [
             GlobalMenuItem(
               id: 'finder-help-about',
-              label: 'macOS 帮助',
+              label: 'Clarion 帮助',
               onAction: () => controller.openSettings(),
             ),
           ],

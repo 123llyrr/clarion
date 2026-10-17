@@ -623,7 +623,7 @@ class _ShellApplicationState extends State<ShellApplication> {
       } else if (mounted && call.method == 'shellStyleFallback') {
         stderr.writeln('Clarion Dock unavailable: ${call.arguments}');
         if (widget.controller.shellStyle == ShellStyle.macos) {
-          widget.controller.shellStyleFailed('macOS 外壳启动失败。');
+          widget.controller.shellStyleFailed('Clarion 外壳启动失败。');
         }
       }
     });
@@ -749,7 +749,7 @@ class _ShellApplicationState extends State<ShellApplication> {
           stderr.writeln('Clarion Shell window: ${error.message}');
           if (!mounted || revision != _nativeRevision) return;
           if (controller.shellStyle != ShellStyle.material) {
-            controller.shellStyleFailed('macOS 外壳启动失败。');
+            controller.shellStyleFailed('Clarion 外壳启动失败。');
           } else if (controller.panel != ShellPanel.none &&
               panelRevision == controller.panelRevision) {
             controller.closePanel();
@@ -893,7 +893,7 @@ class _ShellApplicationState extends State<ShellApplication> {
         stderr.writeln('Clarion Shell readiness: ${error.message}');
       }
       if (DateTime.now().isAfter(deadline)) {
-        widget.controller.shellStyleFailed('macOS 外壳未能完成启动。');
+        widget.controller.shellStyleFailed('Clarion 外壳未能完成启动。');
         await _drainWindowWork();
         return mounted && _appliedStyle == widget.controller.shellStyle;
       }

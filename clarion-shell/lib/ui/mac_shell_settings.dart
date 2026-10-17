@@ -107,7 +107,7 @@ class MacShellSettings extends StatelessWidget {
             Text('图标', style: Theme.of(context).textTheme.titleSmall),
             toggle(
               'mac-original-icons',
-              '应用使用 macOS 系统图标',
+              '应用使用 Clarion 系统图标',
               p.useOriginalIcons,
               (v) => update(p.copyWith(useOriginalIcons: v)),
               subtitle: 'Dock 与启动器统一图标；第三方应用保留自己的标识',
@@ -319,7 +319,7 @@ class MacShellSettings extends StatelessWidget {
             TextButton(
               key: const ValueKey('mac-shell-reset'),
               onPressed: () => update(const MacShellPreferences()),
-              child: const Text('恢复 macOS 外壳默认设置'),
+              child: const Text('恢复 Clarion 外壳默认设置'),
             ),
           ],
         ),

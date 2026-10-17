@@ -13,7 +13,7 @@ class SystemInformation {
     this.modelName = '',
     this.graphics = '',
     this.serialNumber = '',
-    this.startupDisk = 'Macintosh HD',
+    this.startupDisk = 'Clarion HD',
     this.storageTotalGb = 450,
     this.storageFreeGb = 112,
   });

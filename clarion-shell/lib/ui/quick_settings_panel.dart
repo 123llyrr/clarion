@@ -120,7 +120,7 @@ class QuickSettingsPanel extends StatelessWidget {
                           ),
                           DropdownMenuItem(
                             value: ShellStyle.macos,
-                            child: Text('macOS'),
+                            child: Text('Clarion'),
                           ),
                         ],
                         onChanged: (value) {
@@ -138,7 +138,7 @@ class QuickSettingsPanel extends StatelessWidget {
                         ),
                         ButtonSegment(
                           value: ShellStyle.macos,
-                          label: Text('macOS'),
+                          label: Text('Clarion'),
                           icon: Icon(Icons.desktop_mac_rounded),
                         ),
                       ],

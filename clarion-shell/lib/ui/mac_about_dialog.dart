@@ -23,7 +23,7 @@ class _MacAboutDialogState extends State<MacAboutDialog> {
   int _selectedTab = 0;
   bool _closeHovered = false;
 
-  static const _tabs = ['概览', '显示器', '储存空间', '支持'];
+  static const _tabs = ['概览', '显示器', '储存空间'];
 
   @override
   Widget build(BuildContext context) {
@@ -80,7 +80,7 @@ class _MacAboutDialogState extends State<MacAboutDialog> {
                   return Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      // macOS Title Bar with Traffic Lights & Segmented Tabs
+                      // Title bar with traffic lights & segmented tabs
                       _buildHeader(dark, isSmallScreen),
 
                       // Dialog Content
@@ -98,7 +98,7 @@ class _MacAboutDialogState extends State<MacAboutDialog> {
                         ),
                       ),
 
-                      // macOS Dialog Footer
+                      // Dialog footer
                       _buildFooter(dark, isSmallScreen),
                     ],
                   );
@@ -289,7 +289,6 @@ class _MacAboutDialogState extends State<MacAboutDialog> {
       0 => _buildOverviewTab(info, dark, isSmallScreen),
       1 => _buildDisplaysTab(info, dark, isSmallScreen),
       2 => _buildStorageTab(info, dark, isSmallScreen),
-      3 => _buildSupportTab(dark, isSmallScreen),
       _ => _buildOverviewTab(info, dark, isSmallScreen),
     };
   }
@@ -481,107 +480,6 @@ class _MacAboutDialogState extends State<MacAboutDialog> {
       ),
     ],
   );
-
-  Widget _buildSupportTab(bool dark, bool isSmallScreen) {
-    return Column(
-      children: [
-        const SizedBox(height: 6),
-        Row(
-          children: [
-            Expanded(
-              child: _buildSupportCard(
-                icon: Icons.menu_book_rounded,
-                title: 'Clarion 资源',
-                subtitle: '用户指南与新增功能',
-                dark: dark,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _buildSupportCard(
-                icon: Icons.support_agent_rounded,
-                title: 'Clarion 支持',
-                subtitle: '官方知识库与诊断帮助',
-                dark: dark,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        Row(
-          children: [
-            Expanded(
-              child: _buildSupportCard(
-                icon: Icons.memory_rounded,
-                title: '硬件规范',
-                subtitle: '技术规格与配置信息',
-                dark: dark,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _buildSupportCard(
-                icon: Icons.verified_user_rounded,
-                title: '开源许可',
-                subtitle: 'GPL-3.0-or-later',
-                dark: dark,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 6),
-      ],
-    );
-  }
-
-  Widget _buildSupportCard({
-    required IconData icon,
-    required String title,
-    required String subtitle,
-    required bool dark,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: dark ? const Color(0xff222224) : Colors.white,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: dark ? Colors.white10 : Colors.black12,
-          width: 0.6,
-        ),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, size: 24, color: const Color(0xff007aff)),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w600,
-                    color: dark ? Colors.white : Colors.black87,
-                  ),
-                ),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: dark ? Colors.white60 : Colors.black54,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 
   Widget _buildMacButton({
     required String label,

@@ -1469,7 +1469,7 @@ class ShellController extends ChangeNotifier {
     selectPanel(ShellPanel.quickSettings);
     final detail = message.trim();
     _setError(
-      'macOS 界面暂时不可用，已恢复 Material。'
+      'Clarion 界面暂时不可用，已恢复 Material。'
       '${detail.isEmpty ? '' : '\n$detail'}',
     );
     _changed();
