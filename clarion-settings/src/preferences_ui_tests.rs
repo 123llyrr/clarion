@@ -658,16 +658,12 @@ fn hot_corners_sheet_fits_all_widths_blocks_parent_commands_and_yields_to_close_
         let output = run(&mut app, &context, input(width, 1., vec![]));
         let screen = Rect::from_min_size(Pos2::ZERO, egui::vec2(width, 580.));
         let monitor = text_rects(&output, "屏幕")[0];
-        for (label, right, bottom) in [
-            ("工作区概览", false, false),
-            ("Expo 全景工作区", true, false),
-            ("系统偏好设置", false, true),
-        ] {
+        for (label, right) in [("工作区概览", false), ("Expo 全景工作区", true)] {
             let rect = text_rects(&output, label)
                 .into_iter()
                 .find(|rect| {
                     (rect.center().x > monitor.center().x) == right
-                        && (rect.center().y > monitor.center().y) == bottom
+                        && rect.center().y < monitor.center().y
                 })
                 .unwrap_or_else(|| panic!("missing {label} in its corner at width {width}"));
             assert!(
@@ -675,13 +671,18 @@ fn hot_corners_sheet_fits_all_widths_blocks_parent_commands_and_yields_to_close_
                 "{label} extends past the window at {width}"
             );
         }
-        let unbound = text_rects(&output, "—")
-            .into_iter()
-            .find(|rect| {
-                rect.center().x > monitor.center().x && rect.center().y > monitor.center().y
-            })
-            .expect("visible fourth corner, explicitly unbound");
-        assert!(screen.contains_rect(unbound));
+        for right in [false, true] {
+            let unbound = text_rects(&output, "—")
+                .into_iter()
+                .find(|rect| {
+                    (rect.center().x > monitor.center().x) == right
+                        && rect.center().y > monitor.center().y
+                })
+                .unwrap_or_else(|| {
+                    panic!("missing unbound bottom corner (right={right}) at width {width}")
+                });
+            assert!(screen.contains_rect(unbound));
+        }
         assert!(screen.contains_rect(text_rects(&output, "好")[0]));
         for shortcut in [Key::K, Key::S] {
             run(

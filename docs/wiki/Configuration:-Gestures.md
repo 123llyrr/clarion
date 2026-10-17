@@ -82,7 +82,8 @@ gestures {
 Put your mouse at the very top-left corner of a monitor to toggle the overview.
 It uses the [configured overview style](./Configuration:-Miscellaneous.md#style):
 the spatial stage by default, or the classic vertical strip. The top-right Expo
-corner remains independent; the bottom-left corner opens the graphical settings center.
+corner remains independent. The bottom corners are accepted for compatibility
+but currently have no bound action.
 Also works during drag-and-dropping something.
 
 `off` disables the hot corners.

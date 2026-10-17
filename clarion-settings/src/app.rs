@@ -2309,13 +2309,6 @@ impl ClarionSettingsApp {
                         true,
                         false,
                     ),
-                    (
-                        "左下角",
-                        &mut settings.hot_corner_bottom_left,
-                        "系统偏好设置",
-                        false,
-                        true,
-                    ),
                 ] {
                     let position = egui::pos2(
                         if right {
@@ -2343,19 +2336,31 @@ impl ClarionSettingsApp {
                         },
                     );
                 }
-                ui.allocate_new_ui(
-                    egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
-                        egui::pos2(rect.right() - control_width, rect.top() + 82.),
-                        egui::vec2(control_width, 26.),
-                    )),
-                    |ui| {
-                        ui.add_enabled(
-                            false,
-                            Button::new("—").min_size(egui::vec2(control_width, 22.)),
-                        )
-                        .on_hover_text("右下角暂未绑定操作");
-                    },
-                );
+                for (right, hint) in [
+                    (false, "左下角暂未绑定操作"),
+                    (true, "右下角暂未绑定操作"),
+                ] {
+                    ui.allocate_new_ui(
+                        egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
+                            egui::pos2(
+                                if right {
+                                    rect.right() - control_width
+                                } else {
+                                    rect.left()
+                                },
+                                rect.top() + 82.,
+                            ),
+                            egui::vec2(control_width, 26.),
+                        )),
+                        |ui| {
+                            ui.add_enabled(
+                                false,
+                                Button::new("—").min_size(egui::vec2(control_width, 22.)),
+                            )
+                            .on_hover_text(hint);
+                        },
+                    );
+                }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     done = ui
                         .add(
