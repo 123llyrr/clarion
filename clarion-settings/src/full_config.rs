@@ -1322,6 +1322,7 @@ fn friendly_label(name: &str) -> &str {
     match name {
         "name" => "名称",
         "timeout" => "超时（秒）",
+        "blank-timeout" => "熄屏超时（秒）",
         "action" => "超时动作",
         "lock-command" => "锁屏命令",
         "lock-before-suspend" => "挂起前锁屏",

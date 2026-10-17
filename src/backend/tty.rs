@@ -832,6 +832,30 @@ impl Tty {
         port.estimated_vblank(output);
     }
 
+    /// Turns every connected panel on or off through each connector's DPMS
+    /// property. Blanking is the power-saving half of the idle policy; the
+    /// session itself stays composited so input can wake it immediately.
+    pub(crate) fn set_outputs_blanked(&mut self, blanked: bool) {
+        let _span = clarion_tracy_span!("Tty::set_outputs_blanked");
+
+        for device in self.devices.values() {
+            for surface in device.surfaces.values() {
+                let Ok(mut props) = ConnectorProperties::try_new(&device.drm, surface.connector)
+                else {
+                    debug!("failed to read connector properties for DPMS");
+                    continue;
+                };
+                if let Err(err) = props.set_dpms(!blanked) {
+                    debug!("failed to set DPMS for {:?}: {err:?}", surface.name);
+                    continue;
+                }
+                if let Err(err) = props.commit() {
+                    warn!("failed to commit the DPMS change for {:?}: {err:?}", surface.name);
+                }
+            }
+        }
+    }
+
     pub(crate) fn new(
         config: Rc<RefCell<Config>>,
         setup: &mut impl DeviceSetup,
@@ -2585,6 +2609,34 @@ impl<'a> ConnectorProperties<'a> {
             self.has_change = true;
         }
 
+        Ok(())
+    }
+
+    /// Sets the connector's DPMS state. The enum values are driver-defined, so
+    /// the wanted state is matched by name instead of by index.
+    pub(crate) fn set_dpms(&mut self, on: bool) -> anyhow::Result<()> {
+        let (info, value) = self.find(c"DPMS")?;
+        let value_type = info.value_type();
+        let property::ValueType::Enum(values) = &value_type else {
+            bail!("wrong DPMS property type")
+        };
+        let property::Value::Enum(current) = value_type.convert_value(*value) else {
+            bail!("wrong DPMS property type")
+        };
+        let want = if on { c"On" } else { c"Off" };
+        let (raws, enums) = values.values();
+        let index = enums
+            .iter()
+            .position(|entry| entry.name() == want)
+            .context("DPMS property has no On/Off value")?;
+        if current.map(|entry| entry.value()) != Some(raws[index]) {
+            self.requests.add_raw_property(
+                self.connector.into(),
+                info.handle(),
+                property::Value::Enum(Some(&enums[index])).into(),
+            );
+            self.has_change = true;
+        }
         Ok(())
     }
 

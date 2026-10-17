@@ -333,6 +333,11 @@ idle {
     // "lock" | "suspend" | "none"
     action "lock"
 
+    // Seconds without input before the panels switch off (DPMS). Independent of
+    // the action above and usually longer; any input switches them back on.
+    // 0 never blanks.
+    blank-timeout 600
+
     // Started when a lock is requested: the session lock itself comes from a
     // client, and it authenticates through PAM on its own. "hyprlock" and
     // "gtklock" work the same way if you prefer them.

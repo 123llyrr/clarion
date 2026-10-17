@@ -325,6 +325,15 @@ impl Backend {
         }
     }
 
+    /// Blanks or unblanks every DRM output. Nested and headless backends own no
+    /// panel to switch off.
+    pub(crate) fn set_outputs_blanked(&mut self, blanked: bool) {
+        match self {
+            Backend::Tty(tty) => tty.set_outputs_blanked(blanked),
+            Backend::Winit(_) | Backend::Headless(_) => (),
+        }
+    }
+
     pub fn tty_checked(&mut self) -> Option<&mut Tty> {
         if let Self::Tty(v) = self {
             Some(v)

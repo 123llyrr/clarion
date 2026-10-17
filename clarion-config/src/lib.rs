@@ -1972,6 +1972,7 @@ mod tests {
             idle: Idle {
                 off: false,
                 timeout: 0,
+                blank_timeout: 0,
                 action: None,
                 lock_command: None,
                 lock_before_suspend: false,

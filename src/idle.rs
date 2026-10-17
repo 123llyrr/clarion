@@ -13,17 +13,20 @@ use clarion_config::Idle as IdleConfig;
 pub enum IdleAction {
     Lock,
     Suspend,
+    Blank,
 }
 
 #[derive(Debug)]
 pub struct IdlePolicy {
     off: bool,
     timeout: Option<Duration>,
+    blank_timeout: Option<Duration>,
     action: clarion_config::IdleAction,
     lock_command: Option<Vec<String>>,
     lock_before_suspend: bool,
     last_activity: Instant,
     acted: bool,
+    blanked: bool,
 }
 
 impl IdlePolicy {
@@ -31,6 +34,8 @@ impl IdlePolicy {
         Self {
             off: config.off,
             timeout: (config.timeout > 0).then(|| Duration::from_secs(config.timeout.into())),
+            blank_timeout: (config.blank_timeout > 0)
+                .then(|| Duration::from_secs(config.blank_timeout.into())),
             action: config.action,
             lock_command: config
                 .lock_command
@@ -40,13 +45,16 @@ impl IdlePolicy {
             lock_before_suspend: config.lock_before_suspend,
             last_activity: now,
             acted: false,
+            blanked: false,
         }
     }
 
-    /// Records input. An idle period that already acted starts over.
-    pub fn activity(&mut self, now: Instant) {
+    /// Records input. An idle period that already acted starts over. Returns
+    /// whether the panels were blanked and must be switched back on.
+    pub fn activity(&mut self, now: Instant) -> bool {
         self.last_activity = now;
         self.acted = false;
+        std::mem::take(&mut self.blanked)
     }
 
     /// The command that provides the lock surface, if one is configured.
@@ -62,11 +70,21 @@ impl IdlePolicy {
     /// and the freedesktop idle-inhibit state; `locked` covers a session lock
     /// already being active, which must not restart itself.
     pub fn poll(&mut self, now: Instant, inhibited: bool, locked: bool) -> Option<IdleAction> {
-        if self.off || self.acted || inhibited || locked {
+        if self.off || inhibited {
+            return None;
+        }
+        let elapsed = now.saturating_duration_since(self.last_activity);
+        // Blanking is independent of the action and outlives a lock: the panels
+        // should switch off while the session stays locked.
+        if !self.blanked && self.blank_timeout.is_some_and(|timeout| elapsed >= timeout) {
+            self.blanked = true;
+            return Some(IdleAction::Blank);
+        }
+        if self.acted || locked {
             return None;
         }
         let timeout = self.timeout?;
-        if now.saturating_duration_since(self.last_activity) < timeout {
+        if elapsed < timeout {
             return None;
         }
         self.acted = true;
@@ -86,6 +104,7 @@ mod tests {
         IdleConfig {
             off: false,
             timeout,
+            blank_timeout: 0,
             action,
             lock_command: Some("hyprlock --immediate".to_owned()),
             lock_before_suspend: true,
@@ -146,6 +165,60 @@ mod tests {
         // "none" keeps the session awake without acting.
         let mut policy = IdlePolicy::new(&config(10, clarion_config::IdleAction::None), start);
         assert_eq!(policy.poll(later, false, false), None);
+    }
+
+    #[test]
+    fn blanking_is_independent_of_the_action_and_survives_a_lock() {
+        let start = Instant::now();
+        let mut blanking = config(600, clarion_config::IdleAction::Lock);
+        blanking.blank_timeout = 300;
+        let mut policy = IdlePolicy::new(&blanking, start);
+
+        // Blanking is due before the action is.
+        assert_eq!(
+            policy.poll(start + Duration::from_secs(300), false, false),
+            Some(IdleAction::Blank)
+        );
+        // It happens once per idle period.
+        assert_eq!(policy.poll(start + Duration::from_secs(400), false, false), None);
+        // A locked session still switches its panels off.
+        let mut locked_blanking = config(600, clarion_config::IdleAction::Lock);
+        locked_blanking.blank_timeout = 300;
+        let mut locked = IdlePolicy::new(&locked_blanking, start);
+        assert_eq!(
+            locked.poll(start + Duration::from_secs(300), false, true),
+            Some(IdleAction::Blank)
+        );
+        // Input switches them back on and re-arms the whole period.
+        assert!(policy.activity(start + Duration::from_secs(301)));
+        assert!(!policy.activity(start + Duration::from_secs(302)));
+        assert_eq!(
+            policy.poll(start + Duration::from_secs(500), false, false),
+            None
+        );
+        assert_eq!(
+            policy.poll(start + Duration::from_secs(603), false, false),
+            Some(IdleAction::Blank)
+        );
+    }
+
+    #[test]
+    fn an_inhibitor_suppresses_blanking_and_off_disables_it() {
+        let start = Instant::now();
+        let mut blanking = config(600, clarion_config::IdleAction::Lock);
+        blanking.blank_timeout = 60;
+        let mut policy = IdlePolicy::new(&blanking, start);
+        assert_eq!(policy.poll(start + Duration::from_secs(90), true, false), None);
+        assert_eq!(
+            policy.poll(start + Duration::from_secs(90), false, false),
+            Some(IdleAction::Blank)
+        );
+
+        let mut disabled = blanking.clone();
+        disabled.off = true;
+        let mut policy = IdlePolicy::new(&disabled, start);
+        assert_eq!(policy.poll(start + Duration::from_secs(90), false, false), None);
+        assert!(!policy.activity(start));
     }
 
     #[test]
