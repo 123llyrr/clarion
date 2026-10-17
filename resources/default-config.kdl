@@ -798,7 +798,7 @@ binds {
 // and overview-open-close animation settings apply to either style.
 // - Top-left / Mod+O: opens the configured overview style
 // - Top-right: triggers Wayfire-style Expo 2D workspace grid wall
-// - Bottom-left: opens the graphical settings center when enabled
+// - Bottom corners: reserved; no action is bound
 gestures {
     hot-corners {
         top-left

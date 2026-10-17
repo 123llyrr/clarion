@@ -3391,7 +3391,8 @@ impl State {
             HotCornerKind::TopRight => {
                 self.overview_command(OverviewCommand::ToggleExpo);
             }
-            HotCornerKind::BottomLeft => self.toggle_settings_gui(),
+            // The bottom-left corner must not open the settings center.
+            HotCornerKind::BottomLeft => {}
             _ => {
                 self.overview_command(OverviewCommand::Toggle);
             }
