@@ -2,8 +2,9 @@
 
 Clarion 使用 `clarion` 可执行文件、`clarion.service` 会话服务与 `clarion-*` 模块。
 原生 Vulkan 后端与 GLES 兼容后端消费同一桌面及场景路径；旧命令只转交参数，不启动另一套核心。
-代码来源、版权、第三方声明及许可证继续保留。仓库地址仍为
-[123llyrr/realand](https://github.com/123llyrr/realand)，更名不改变现有 Git 远程地址。
+代码来源、版权、第三方声明及许可证继续保留。仓库已迁至
+[123llyrr/clarion](https://github.com/123llyrr/clarion)，旧的 remote 需要重新指向该地址；
+`REALAND_*` 环境变量与旧命令入口的兼容只在本地运行期有效，与仓库位置无关。
 
 ## 配置优先级
 

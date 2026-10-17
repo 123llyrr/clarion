@@ -48,7 +48,7 @@ Set them as automatically-installed optional dependencies, if possible.
 Working hardware acceleration is required for running clarion.
 - Some notification daemon like `mako`, generally required for apps to work correctly.
 
-Finally, you may want to auto-install some of the applications bound in clarion's [default configuration file](https://github.com/123llyrr/realand/blob/main/resources/default-config.kdl) (search for `spawn`), such as `alacritty` and `fuzzel`.
+Finally, you may want to auto-install some of the applications bound in clarion's [default configuration file](https://github.com/123llyrr/clarion/blob/main/resources/default-config.kdl) (search for `spawn`), such as `alacritty` and `fuzzel`.
 
 ### Running tests
 

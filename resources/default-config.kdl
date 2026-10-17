@@ -1,11 +1,11 @@
 // This config is in the KDL format: https://kdl.dev
 // "/-" comments out the following node.
 // Check the wiki for a full description of the configuration:
-// https://github.com/123llyrr/realand/blob/main/docs/wiki/Configuration:-Introduction.md
+// https://github.com/123llyrr/clarion/blob/main/docs/wiki/Configuration:-Introduction.md
 
 // Input device configuration.
 // Find the full list of options on the wiki:
-// https://github.com/123llyrr/realand/blob/main/docs/wiki/Configuration:-Input.md
+// https://github.com/123llyrr/clarion/blob/main/docs/wiki/Configuration:-Input.md
 input {
     keyboard {
         xkb {
@@ -73,7 +73,7 @@ input {
 // by running `clarion msg outputs` while inside a clarion instance.
 // The built-in laptop monitor is usually called "eDP-1".
 // Find more information on the wiki:
-// https://github.com/123llyrr/realand/blob/main/docs/wiki/Configuration:-Outputs.md
+// https://github.com/123llyrr/clarion/blob/main/docs/wiki/Configuration:-Outputs.md
 // Remember to uncomment the node by removing "/-"!
 /-output "eDP-1" {
     // Uncomment this line to disable this output.
@@ -108,7 +108,7 @@ input {
 
 // Settings that influence how windows are positioned and sized.
 // Find more information on the wiki:
-// https://github.com/123llyrr/realand/blob/main/docs/wiki/Configuration:-Layout.md
+// https://github.com/123llyrr/clarion/blob/main/docs/wiki/Configuration:-Layout.md
 layout {
     // Hyprland-style rounded windows. 0 keeps square corners.
     // The default 4th-power squircle is intentionally closer to macOS than a
@@ -323,7 +323,7 @@ screenshot-path "~/Pictures/Screenshots/Screenshot from %Y-%m-%d %H-%M-%S.png"
 
 // Animation settings.
 // The wiki explains how to configure individual animations:
-// https://github.com/123llyrr/realand/blob/main/docs/wiki/Configuration:-Animations.md
+// https://github.com/123llyrr/clarion/blob/main/docs/wiki/Configuration:-Animations.md
 animations {
     // Clarion: continuous vertical 3D workspace cube for keys and touchpad gestures.
     workspace-switch {
@@ -399,7 +399,7 @@ animations {
 
 // Window rules let you adjust behavior for individual windows.
 // Find more information on the wiki:
-// https://github.com/123llyrr/realand/blob/main/docs/wiki/Configuration:-Window-Rules.md
+// https://github.com/123llyrr/clarion/blob/main/docs/wiki/Configuration:-Window-Rules.md
 
 // Work around WezTerm's initial configure bug
 // by setting an empty default-column-width.

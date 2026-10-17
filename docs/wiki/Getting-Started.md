@@ -39,7 +39,7 @@ Or, if not using a display manager, run `clarion-session` on a TTY.
 The example config starts Waybar. If using Clarion Shell, remove or comment out
 `spawn-at-startup "waybar"` in your config to avoid starting a second bar on the next login.
 Shell is built and installed separately; see its
-[build, preview and installation instructions](https://github.com/123llyrr/realand/blob/main/clarion-shell/README.md).
+[build, preview and installation instructions](https://github.com/123llyrr/clarion/blob/main/clarion-shell/README.md).
 
 See the [Building](#building) section and the [Packaging clarion](./Packaging-clarion.md) page if you want to package clarion.
 

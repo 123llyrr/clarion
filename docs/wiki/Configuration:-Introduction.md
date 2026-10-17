@@ -22,7 +22,7 @@ Clarion will load configuration from `$XDG_CONFIG_HOME/clarion/config.kdl` or `~
 During migration, an existing `realand/config.kdl` is selected only when the corresponding
 Clarion file is absent. `REALAND_CONFIG` is also accepted after the canonical `CLARION_CONFIG`.
 Files are not copied or rewritten; see the [migration guide](../clarion-migration.md).
-If both of these files are missing, clarion will create `$XDG_CONFIG_HOME/clarion/config.kdl` with the contents of [the default configuration file](https://github.com/123llyrr/realand/blob/main/resources/default-config.kdl), which are embedded into the clarion binary at build time.
+If both of these files are missing, clarion will create `$XDG_CONFIG_HOME/clarion/config.kdl` with the contents of [the default configuration file](https://github.com/123llyrr/clarion/blob/main/resources/default-config.kdl), which are embedded into the clarion binary at build time.
 Please use the default configuration file as the starting point for your custom configuration.
 
 The configuration is live-reloaded.

@@ -6,7 +6,7 @@ First, for creating a clarion package, see the [Packaging](./Packaging-clarion.m
 Clarion will load configuration from `$XDG_CONFIG_HOME/clarion/config.kdl` or `~/.config/clarion/config.kdl`, falling back to `/etc/clarion/config.kdl`.
 Existing Realand paths are used only when their Clarion equivalents are absent; the
 [migration guide](../clarion-migration.md) describes CLI, Shell and IPC compatibility.
-If both of these files are missing, clarion will create `$XDG_CONFIG_HOME/clarion/config.kdl` with the contents of [the default configuration file](https://github.com/123llyrr/realand/blob/main/resources/default-config.kdl), which are embedded into the clarion binary at build time.
+If both of these files are missing, clarion will create `$XDG_CONFIG_HOME/clarion/config.kdl` with the contents of [the default configuration file](https://github.com/123llyrr/clarion/blob/main/resources/default-config.kdl), which are embedded into the clarion binary at build time.
 
 This means that you can customize your distribution defaults by creating `/etc/clarion/config.kdl`.
 When this file is present, clarion *will not* automatically create a config at `~/.config/clarion/`, so you'll need to direct your users how to do it themselves.
@@ -38,7 +38,7 @@ Make sure your system installer sets the keyboard layout via systemd-localed, an
 ### Autostart
 
 Clarion works with the normal systemd autostart.
-The default [clarion.service](https://github.com/123llyrr/realand/blob/main/resources/clarion.service) brings up `graphical-session.target` as well as `xdg-desktop-autostart.target`.
+The default [clarion.service](https://github.com/123llyrr/clarion/blob/main/resources/clarion.service) brings up `graphical-session.target` as well as `xdg-desktop-autostart.target`.
 
 To make a program run at clarion startup without editing the clarion config, you can either link its .desktop to `~/.config/autostart/`, or use a .service file with `WantedBy=graphical-session.target`.
 See the [example systemd setup](./Example-systemd-Setup.md) page for some examples.

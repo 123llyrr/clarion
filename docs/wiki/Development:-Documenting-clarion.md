@@ -1,8 +1,8 @@
 clarion's documentation files are found in `docs/wiki/` and should be viewable and browsable in at least three systems:
 
 - The GitHub repo's markdown file preview
-- [The GitHub repo's wiki](https://github.com/123llyrr/realand/wiki)
-- [The documentation site](https://github.com/123llyrr/realand/tree/main/docs/wiki/)
+- [The GitHub repo's wiki](https://github.com/123llyrr/clarion/wiki)
+- [The documentation site](https://github.com/123llyrr/clarion/tree/main/docs/wiki/)
 
 ## The GitHub repo's wiki
 

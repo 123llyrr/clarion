@@ -101,7 +101,7 @@ Here are some design considerations for the window layout logic.
 
 ## Default config
 
-The [default config](https://github.com/123llyrr/realand/blob/main/resources/default-config.kdl) is intended to give a familiar, helpful, and not too jarring experience to new clarion users.
+The [default config](https://github.com/123llyrr/clarion/blob/main/resources/default-config.kdl) is intended to give a familiar, helpful, and not too jarring experience to new clarion users.
 Importantly, it is not a "suggested rice config"; we don't want to startle people with full-on rainbow borders and crazy shaders.
 
 Clarion provides an integrated Shell and settings app while keeping the compositor

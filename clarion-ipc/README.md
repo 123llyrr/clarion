@@ -1,6 +1,6 @@
 # clarion-ipc
 
-Types and helpers for interfacing with the [Clarion](https://github.com/123llyrr/realand) Wayland compositor.
+Types and helpers for interfacing with the [Clarion](https://github.com/123llyrr/clarion) Wayland compositor.
 
 ## Backwards compatibility
 

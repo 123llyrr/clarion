@@ -25,7 +25,7 @@
 - **待对齐：** 当前分页网格与 Catalina 自由桌面不同；网格起点、冲突换位、Shift 范围、图标/标签尺寸、阴影及失焦改名提交规则需实机对照。回收前确认也是现有产品行为差异。
 - **平台差异：** Finder 元数据、标签与预览需要真实 Linux 存储/预览提供者；不能仅补相同名称的菜单。
 
-依据：[desktop_view.dart](../realand-shell/lib/desktop/desktop_view.dart)、[desktop_service.dart](../realand-shell/lib/desktop/desktop_service.dart)。
+依据：[desktop_view.dart](../clarion-shell/lib/desktop/desktop_view.dart)、[desktop_service.dart](../clarion-shell/lib/desktop/desktop_service.dart)。
 
 ### 2. Dock、Launchpad 与窗口
 
@@ -38,7 +38,7 @@
 - **待对齐：** Dock 放大传播、弹跳、自动隐藏延迟、Stack/Fan 动效、Launchpad 翻页/惯性/文件夹阈值、Genie/Scale 曲线均仍需逐帧参考。Downloads 存在 256 项扫描、Fan 8 项等工程上限，完整层级/预览体验尚不同。
 - **平台差异：** 应用卸载、进程生命周期、`.desktop` 扩展动作、最近文稿及其他 Dock tile 类型需要各自后端，不能靠 macOS 外观自动获得。
 
-依据：[mac_dock_app_menu.dart](../realand-shell/lib/ui/mac_dock_app_menu.dart)、[mac_dock_view.dart](../realand-shell/lib/ui/mac_dock_view.dart)、[mac_launcher_panel.dart](../realand-shell/lib/ui/mac_launcher_panel.dart)、[mac_launchpad_layout.dart](../realand-shell/lib/mac_launchpad_layout.dart)、[调度中心卡片](../realand-shell/lib/ui/mac_mission_control_panel.dart#L674)。
+依据：[mac_dock_app_menu.dart](../clarion-shell/lib/ui/mac_dock_app_menu.dart)、[mac_dock_view.dart](../clarion-shell/lib/ui/mac_dock_view.dart)、[mac_launcher_panel.dart](../clarion-shell/lib/ui/mac_launcher_panel.dart)、[mac_launchpad_layout.dart](../clarion-shell/lib/mac_launchpad_layout.dart)、[调度中心卡片](../clarion-shell/lib/ui/mac_mission_control_panel.dart#L674)。
 
 ### 3. 菜单栏、系统菜单与 Spotlight
 
@@ -50,7 +50,7 @@
 - **待对齐：** 菜单栏高度、图标间距、状态图标、菜单行高/阴影、键盘子菜单、紧凑音量滑条与对齐锚点仍需 Catalina 截图和输入对照。
 - **平台差异：** 全局应用菜单只对实际导出菜单的 Linux 应用可用；非导出应用没有可读取的完整菜单。电源/锁屏和声音偏好由 logind、swaylock、pavucontrol 等真实组件提供，界面与 AppKit 不同。
 
-依据：[mac_shell_view.dart](../realand-shell/lib/ui/mac_shell_view.dart)、[mac_system_menu.dart](../realand-shell/lib/ui/mac_system_menu.dart)、[mac_spotlight_panel.dart](../realand-shell/lib/ui/mac_spotlight_panel.dart)、[global_app_menu_service.dart](../realand-shell/lib/services/global_app_menu_service.dart)。
+依据：[mac_shell_view.dart](../clarion-shell/lib/ui/mac_shell_view.dart)、[mac_system_menu.dart](../clarion-shell/lib/ui/mac_system_menu.dart)、[mac_spotlight_panel.dart](../clarion-shell/lib/ui/mac_spotlight_panel.dart)、[global_app_menu_service.dart](../clarion-shell/lib/services/global_app_menu_service.dart)。
 
 ### 4. 控制中心与通知
 
@@ -62,7 +62,7 @@
 - **缺失：** 通知主动横幅/声音提供者、Today 天气/账户日程/股票/第三方组件编辑；当前月历不是已连接账户的日程组件。DND 只是 Realand 状态，尚非全系统/按时退出勿扰策略。
 - **待对齐：** 通知侧栏宽度、底色/模糊、文字、清除动作、进退动画仍缺真实 Catalina 同尺度对照。已经过真实 widget 检查，不应再列为“没有通知中心”。
 
-依据：[quick_settings_panel.dart](../realand-shell/lib/ui/quick_settings_panel.dart)、[system_service.dart](../realand-shell/lib/services/system_service.dart)、[mac_notification_center.dart](../realand-shell/lib/ui/mac_notification_center.dart)、[notification_service.dart](../realand-shell/lib/services/notification_service.dart)。
+依据：[quick_settings_panel.dart](../clarion-shell/lib/ui/quick_settings_panel.dart)、[system_service.dart](../clarion-shell/lib/services/system_service.dart)、[mac_notification_center.dart](../clarion-shell/lib/ui/mac_notification_center.dart)、[notification_service.dart](../clarion-shell/lib/services/notification_service.dart)。
 
 ### 5. 系统偏好设置
 
@@ -72,7 +72,7 @@
 - **待对齐：** 主 System Preferences.app/NIB/PrefApp.icns 未恢复；应用图标暂用标准 `preferences-system`。工具栏/控件/间距、原生窗口行为、主题及无障碍状态未完成 AppKit 实机对照。设置当前主要按浅色样式实现。
 - **平台差异：** Linux 键盘/libinput/触控板能力与 Apple 硬件不同；只配置已有参数，不能把不存在的手势、影片或设备信息做成可用选项。
 
-依据：[preferences_home.rs](../realand-settings/src/preferences_home.rs)、[app.rs](../realand-settings/src/app.rs)、[设置主题](../realand-settings/src/theme.rs)。
+依据：[preferences_home.rs](../clarion-settings/src/preferences_home.rs)、[app.rs](../clarion-settings/src/app.rs)、[设置主题](../clarion-settings/src/theme.rs)。
 
 ### 6. 字体、材质与动画
 
@@ -98,7 +98,7 @@ Genie 和统一时长的误读，详见 [动画方案实施记录](macos-animati
 - **实现风险待针对性复现：** Dock 最小化目标登记尚无输出所有者令牌/条件清除；跨输出旧登记清除有效目标的风险在旧对照文档中仍待收口，不能直接当作当前已观察故障。
 - **待验证：** 混合 DPI、分数缩放、热插拔、旋转、跨屏窗口/弹窗/Dock、不同 GPU 与高刷新率的物理验收矩阵。已有逻辑尺寸和边界测试，不能重复列为“完全不支持多屏”。
 
-依据：[性能记录](macos-desktop-fidelity-audit.md#L209)、[Shell controller](../realand-shell/lib/state/shell_controller.dart)、[Dock 对照风险](macos-dock-detail-comparison.md)。
+依据：[性能记录](macos-desktop-fidelity-audit.md#L209)、[Shell controller](../clarion-shell/lib/state/shell_controller.dart)、[Dock 对照风险](macos-dock-detail-comparison.md)。
 
 ## 建议收口顺序
 

@@ -93,7 +93,7 @@ python3 scripts/verify-catalina-samples.py \
   MPRIS 的 80 项扩展回归通过；四个修改的 Dart 源文件和两项新测试的静态检查无问题。
 - Python：样本校验脚本 7 项回归通过，项目脚本套件共 26 项通过；17 个实际样本校验通过。
 - 源文件格式与定向 diff 检查通过；`scripts/build-shell.sh --release` 成功，产物在
-  `realand-shell/build/linux/x64/release/bundle/`。构建记录在 `work/shell-release-build.log`。
+  `clarion-shell/build/linux/x64/release/bundle/`。构建记录在 `work/shell-release-build.log`。
   本轮没有把产物安装到运行会话，也没有重启合成器；源码修改需使用新构建启动后生效。
 
 | 范围 | 当前源码已具备/本轮验证 | 仍需完成或测量 |

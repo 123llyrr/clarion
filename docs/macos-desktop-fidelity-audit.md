@@ -24,7 +24,7 @@ $HOME/Documents/Codex/2026-10-06/jia/work/macos-image-inspection-20261008
 
 ### 桌面文件键盘操作
 
-`realand-shell/lib/desktop/desktop_view.dart` 现在为 macOS 风格单独匹配完整组合键：
+`clarion-shell/lib/desktop/desktop_view.dart` 现在为 macOS 风格单独匹配完整组合键：
 
 | 操作 | macOS 风格 | 验证 |
 | --- | --- | --- |

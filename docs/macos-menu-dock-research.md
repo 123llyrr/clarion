@@ -164,7 +164,7 @@ AppKit `Resources/Assets.car` 为 BOMStore 格式，1,354,416 字节，SHA256 `e
 
 Dock 原 bundle 包含 `dockbackground@2x.png`（284×284，SHA256 `a071f705d033e904600d7a7973e974bf67be2f907a5f04ab91c409104277a933`）、`dockbackgroundax@2x.png`（284×284，`dd6ecf51817a0a19c13b9daf7f32f990d7f306dabf51b9977bbde725a391c338`），以及 dark/AX、cartouche 和 shadow 变体。原图片可以作为视觉参照，但文件名和尺寸不证明原 Dock 如何九宫格切分、模糊、组合或响应无障碍设置。
 
-原始 Downloads 图标已经存在于 `W/BaseSystem/macOS Base System/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/DownloadsFolder.icns`，不是 `DownloadsFolderIcon.icns`。项目已有图标、字体和 Apple logo 的来源见 `realand-shell/assets/macos/provenance.json`；早期 Launchpad/Mission Control 的 60px 图来自 Apple Catalina 官方帮助。2026-10-09 进一步恢复了 Core.pkg 中 Launchpad.app/Launchpad.icns 和 Mission Control.app/Expose.icns，现已换为未修改的 1024px `ic10` PNG；两份 ICNS 均匹配各自 CodeResources 的 SHA-1 和 SHA-256。此次仅验证选定资源完整性，不代表缺尾镜像或 Apple 证书信任验证。
+原始 Downloads 图标已经存在于 `W/BaseSystem/macOS Base System/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/DownloadsFolder.icns`，不是 `DownloadsFolderIcon.icns`。项目已有图标、字体和 Apple logo 的来源见 `clarion-shell/assets/macos/provenance.json`；早期 Launchpad/Mission Control 的 60px 图来自 Apple Catalina 官方帮助。2026-10-09 进一步恢复了 Core.pkg 中 Launchpad.app/Launchpad.icns 和 Mission Control.app/Expose.icns，现已换为未修改的 1024px `ic10` PNG；两份 ICNS 均匹配各自 CodeResources 的 SHA-1 和 SHA-256。此次仅验证选定资源完整性，不代表缺尾镜像或 Apple 证书信任验证。
 
 ## 4. 菜单真正由谁提供、动作发给谁
 
@@ -213,7 +213,7 @@ Apple 菜单中的关于本机、系统偏好、最近项目、强制退出、�
 
 ## 7. Realand 的配置与缺项建议
 
-本轮只读参考 `realand-shell/lib/mac_shell_preferences.dart`。新设置已经涵盖三位置、大小、放大、自动隐藏、运行指示灯、打开应用动画、Downloads、菜单栏隐藏和时钟等。以下是后续实现顺序建议，并非本次研究文档已实现这些行为：
+本轮只读参考 `clarion-shell/lib/mac_shell_preferences.dart`。新设置已经涵盖三位置、大小、放大、自动隐藏、运行指示灯、打开应用动画、Downloads、菜单栏隐藏和时钟等。以下是后续实现顺序建议，并非本次研究文档已实现这些行为：
 
 原 Dock 菜单与当前能力的缺项矩阵（当前列结合源码及负责实现者本轮同步；本文没有独立运行 UI 测试）：
 

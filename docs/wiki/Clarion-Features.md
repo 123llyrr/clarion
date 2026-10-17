@@ -152,7 +152,7 @@ The default effect can also be overridden globally with the `CLARION_WINDOW_CLOS
 environment variable (`explosion`, `implode` or `fade`).
 
 The opening and closing effect adaptations are documented in the
-[Denial source and attribution record](https://github.com/123llyrr/realand/blob/main/docs/denial-reference.txt).
+[Denial source and attribution record](https://github.com/123llyrr/clarion/blob/main/docs/denial-reference.txt).
 
 ## Classic 3D Effects
 

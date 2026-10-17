@@ -26,7 +26,7 @@ To get a taste of the events, run `clarion msg event-stream`.
 Though, this is more of a debug function than anything.
 You can get raw events from `clarion msg --json event-stream`, or by connecting to the clarion socket and requesting an event stream manually.
 
-You can find the full list of events along with documentation [here](https://github.com/123llyrr/realand/blob/main/clarion-ipc/src/lib.rs).
+You can find the full list of events along with documentation [here](https://github.com/123llyrr/clarion/blob/main/clarion-ipc/src/lib.rs).
 
 ### Programmatic Access
 
@@ -57,7 +57,7 @@ $ env CLARION_SOCKET=./temp.sock clarion msg action focus-workspace 2
 {"Action":{"FocusWorkspace":{"reference":{"Index":2}}}}
 ```
 
-You can find all available requests and response types in the [clarion-ipc sub-crate documentation](https://github.com/123llyrr/realand/tree/main/clarion-ipc).
+You can find all available requests and response types in the [clarion-ipc sub-crate documentation](https://github.com/123llyrr/clarion/tree/main/clarion-ipc).
 
 ### Backwards Compatibility
 

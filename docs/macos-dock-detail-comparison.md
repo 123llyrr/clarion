@@ -12,7 +12,7 @@
 | `Dock.app/Contents/Resources/zh_CN.lproj/DockMenus.strings` | 原中文菜单名：神奇/缩放、Folder/Stack、Fan/Grid/List/Automatic、排序、登录打开等 | SHA-256 `647a5ab0d83c034682b06ab0c8d6850a55e651986de8d8f7e96584d156eece5a` |
 | `Dock.prefPane/Contents/Resources/Base.lproj/PrefPane.nib` | `self.size`、`magnificationSize`、`showRecents`、`minimizeIntoApp`、`minimizeEffect` 等独立绑定 | SHA-256 `a8ce59fe7da4b9497b76efaa7f5643d3bb9dd77b5562f3778974f1e1980eab5e` |
 | `Dock.app/Contents/Resources/default.plist`、`com.apple.dockfixup.plist` | 有序应用模板、独立 Downloads directory tile、Mission Control 的真实应用身份；不是登录用户偏好 | 原值、哈希见本轮镜像清单 |
-| Core.pkg 的 CoreTypes / 应用 ICNS | Realand 使用的 Finder、Downloads、空/满 Trash、Launchpad 等原图来源；第三方 Linux 应用保持自身图标 | 资产来源与转换记录（本地记录：`$HOME/realand/realand-shell/assets/macos/provenance.json`）、运行资产哈希（本地记录：`$HOME/realand/realand-shell/assets/macos/SHA256SUMS`） |
+| Core.pkg 的 CoreTypes / 应用 ICNS | Realand 使用的 Finder、Downloads、空/满 Trash、Launchpad 等原图来源；第三方 Linux 应用保持自身图标 | 资产来源与转换记录（本地记录：`$HOME/realand/clarion-shell/assets/macos/provenance.json`）、运行资产哈希（本地记录：`$HOME/realand/clarion-shell/assets/macos/SHA256SUMS`） |
 
 完整绝对路径、115 个选定文件的哈希、菜单 flags、44 条 NIB 绑定和 PNG 尺寸保存在镜像核对清单（本地记录：`$HOME/Documents/Codex/2026-10-06/jia/work/dock-detail-completion-20261009/image-evidence.json`）与原始比较报告（本地记录：`$HOME/Documents/Codex/2026-10-06/jia/work/dock-detail-completion-20261009/mirror-comparison.md`）。Dock bundle 的 256px 图与运行资产中从 CoreTypes ICNS 恢复的 1024px 图是不同来源，不应混写为同一文件。
 
@@ -53,7 +53,7 @@
 
 在控制中心的 macOS 外观配置中调整最近应用、下载图标和展开视图；下载面板的选项菜单提供排序。隐藏 Downloads 只隐藏入口并保留设置。两套外壳共同遵守“减少动态”，最小化/恢复和键盘选择产生的自动滚动可直接完成。
 
-生产接口分别位于 [DockFolderService](../realand-shell/lib/services/dock_folder_service.dart)、[Downloads 面板与关闭态图标](../realand-shell/lib/ui/mac_downloads_stack_panel.dart)、[Dock 布局](../realand-shell/lib/ui/mac_dock_view.dart)、[应用菜单](../realand-shell/lib/ui/mac_dock_app_menu.dart)、[锚点几何](../realand-shell/lib/ui/mac_dock_panel_geometry.dart)、[控制器与历史](../realand-shell/lib/state/shell_controller.dart)、[Trash 状态](../realand-shell/lib/services/trash_state_service.dart)。偏好保存于 `preferences.json`，新增 enum 未知值回退，旧配置可读。
+生产接口分别位于 [DockFolderService](../clarion-shell/lib/services/dock_folder_service.dart)、[Downloads 面板与关闭态图标](../clarion-shell/lib/ui/mac_downloads_stack_panel.dart)、[Dock 布局](../clarion-shell/lib/ui/mac_dock_view.dart)、[应用菜单](../clarion-shell/lib/ui/mac_dock_app_menu.dart)、[锚点几何](../clarion-shell/lib/ui/mac_dock_panel_geometry.dart)、[控制器与历史](../clarion-shell/lib/state/shell_controller.dart)、[Trash 状态](../clarion-shell/lib/services/trash_state_service.dart)。偏好保存于 `preferences.json`，新增 enum 未知值回退，旧配置可读。
 
 下一步先解决目标 owner/输出 epoch 和隐藏终点，再增加无剪贴板/截图界面副作用的窗口缩略图协议。独立窗口 tile 必须在 MinimizeWindow 前准备真实目标，销毁、锁屏、输出迁移及隐私变化时作废；普通 ScreenshotWindow 动作不能冒充该通道。之后才适合提供“最小化到应用图标/独立窗口”选择，并继续补齐真实应用生命周期与按能力生成的菜单。
 

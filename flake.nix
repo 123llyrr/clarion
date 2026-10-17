@@ -179,7 +179,7 @@
 
           meta = {
             description = "Wayland compositor with an independent desktop core and native Vulkan backend";
-            homepage = "https://github.com/123llyrr/realand";
+            homepage = "https://github.com/123llyrr/clarion";
             license = lib.licenses.gpl3Plus;
             mainProgram = "clarion";
             platforms = lib.platforms.linux;
