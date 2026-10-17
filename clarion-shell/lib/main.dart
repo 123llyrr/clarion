@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
@@ -22,8 +23,30 @@ import 'ui/mac_shell_view.dart';
 import 'ui/controller_selector.dart';
 import 'ui/shell_surface_clear.dart';
 
+/// Opt-in frame accounting for the shell itself, which the compositor's
+/// per-output timings cannot see. `CLARION_SHELL_FRAME_LOG=1` reports frames
+/// whose total span reaches a visible stall, split into build/raster/vsync so
+/// the next step is a measurement instead of a guess.
+void _installFrameTimingLog() {
+  const stall = Duration(milliseconds: 20);
+  SchedulerBinding.instance.addTimingsCallback((timings) {
+    for (final timing in timings) {
+      if (timing.totalSpan < stall) continue;
+      stderr.writeln(
+        'clarion-shell frame total=${timing.totalSpan.inMilliseconds}ms '
+        'build=${timing.buildDuration.inMilliseconds}ms '
+        'raster=${timing.rasterDuration.inMilliseconds}ms '
+        'vsync=${timing.vsyncOverhead.inMilliseconds}ms',
+      );
+    }
+  });
+}
+
 Future<void> main(List<String> arguments) async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (Platform.environment['CLARION_SHELL_FRAME_LOG'] == '1') {
+    _installFrameTimingLog();
+  }
   if (arguments.any(
     (argument) => const {
       '--desktop',

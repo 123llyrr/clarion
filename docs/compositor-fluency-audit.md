@@ -67,6 +67,21 @@ WARN clarion::latency: slow compositor operation; operation="vulkan-render" elap
 - **晚帧的长期统计**：用 `clarion msg frame-timings` 的近期样本判断当前状态；只有近期
   样本变差时才调整参数，避免用累计值驱动调参。
 
+## Shell 自身的帧会计（客户端侧）
+
+合成器的 `frame-timings` 看不到 shell 进程内部的构建与栅格化耗时。用环境变量开启
+shell 的帧会计后，任何总跨度达到 20 ms 的帧都会带上分项写入日志：
+
+```sh
+systemctl --user set-environment CLARION_SHELL_FRAME_LOG=1
+systemctl --user restart clarion-shell.service
+journalctl --user -u clarion-shell.service -f | grep 'clarion-shell frame'
+```
+
+输出形如 `total=42ms build=31ms raster=6ms vsync=1ms`：build 偏大指向 Dart 侧的
+构建/布局，raster 偏大指向引擎的光栅化，两者都小但 total 大指向等待（vsync 或
+合成器反馈）。这条测量决定了"继续优化 Dart 侧"与"替换 UI 框架"之间该选哪边。
+
 ## 边界
 
 本审计只覆盖报告中的合成器侧机制。报告第 10 条（字形与图标缓存）属于客户端职责，
