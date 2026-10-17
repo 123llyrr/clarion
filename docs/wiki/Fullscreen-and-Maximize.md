@@ -14,8 +14,6 @@ You can make a window open in a maximized column with the [`open-maximized true`
 
 ## Windows maximized to edges
 
-<sup>Since: 25.11</sup>
-
 You can maximize an individual window via `maximize-window-to-edges` (bound to <kbd>Mod</kbd><kbd>M</kbd> by default).
 This is the same maximize as you can find on other desktop environments and operating systems: it expands a window to the edges of the available screen area.
 You will still see your bar, but not struts, gaps, or borders.
@@ -66,8 +64,6 @@ From clarion's point of view, the window is already open by this point, so if th
 
 ## Windowed fullscreen
 
-<sup>Since: 25.05</sup>
-
 Clarion can also tell a window that it's in fullscreen without actually making it fullscreen, via the `toggle-windowed-fullscreen` action.
 This is generally useful for screencasting browser-based presentations, when you want to hide the browser UI, but still have the window sized as a normal window.
 
@@ -75,7 +71,6 @@ When in windowed fullscreen, you can use the clarion action to maximize or unmax
 Window-side titlebar maximize buttons and gestures may not work, since the window will always think that it's in fullscreen.
 
 See also windowed fullscreen on the [screencasting features wiki page](./Screencasting.md#windowed-fakedetached-fullscreen).
-
 
 [struts]: ./Configuration:-Layout.md#struts
 [gaps]: ./Configuration:-Layout.md#gaps

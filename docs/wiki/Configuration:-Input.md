@@ -132,12 +132,8 @@ input {
 ```
 
 > [!TIP]
->
-> <sup>Since: 25.02</sup>
->
 > Alternatively, you can directly set a path to a .xkb file containing an xkb keymap.
 > This overrides all other xkb settings.
->
 > ```kdl
 > input {
 >     keyboard {
@@ -149,13 +145,9 @@ input {
 > ```
 
 > [!NOTE]
->
-> <sup>Since: 25.08</sup>
->
 > If the `xkb` section is empty (like it is by default), clarion will fetch xkb settings from systemd-localed at `org.freedesktop.locale1` over D-Bus.
 > This way, for example, system installers can dynamically set the clarion keyboard layout.
 > You can see this layout in `localectl` and change it with `localectl set-x11-keymap`, for example:
->
 > ```sh
 > $ localectl set-x11-keymap "us" "" "colemak_dh_ortho" "compose:ralt,ctrl:nocaps"
 > $ localectl
@@ -170,10 +162,8 @@ input {
 >   X11 Variant: colemak_dh_ortho
 >   X11 Options: compose:ralt,ctrl:nocaps
 > ```
->
 > By default, `localectl` will set the TTY keymap to the closest match of the XKB keymap.
 > You can prevent that with a `--no-convert` flag, for example: `localectl set-x11-keymap --no-convert "us,ru"`.
->
 > These settings are picked up by some other programs too, like GDM.
 
 When using multiple layouts, clarion can remember the current layout globally (the default) or per-window.
@@ -206,8 +196,6 @@ input {
 
 #### Num Lock
 
-<sup>Since: 25.05</sup>
-
 Set the `numlock` flag to turn on Num Lock automatically at startup.
 
 You might want to disable (comment out) `numlock` if you're using a laptop with a keyboard that overlays Num Lock keys on top of regular keys.
@@ -238,7 +226,7 @@ A few settings are common between `touchpad`, `mouse`, `trackpoint`, and `trackb
 - `scroll-method`: when to generate scroll events instead of pointer motion events, can be `no-scroll`, `two-finger`, `edge`, or `on-button-down`.
   The default and supported methods vary depending on the device type.
 - `scroll-button`: <sup>Since: 0.1.10</sup> the button code used for the `on-button-down` scroll method. You can find it in `libinput debug-events`.
-- `scroll-button-lock`: <sup>Since: 25.08</sup> when enabled, the button does not need to be held down. Pressing once engages scrolling, pressing a second time disengages it, and double click acts as single click of the the underlying button.
+- `scroll-button-lock`: when enabled, the button does not need to be held down. Pressing once engages scrolling, pressing a second time disengages it, and double click acts as single click of the the underlying button.
 - `left-handed`: if set, changes the device to left-handed mode.
 - `middle-emulation`: emulate a middle mouse click by pressing left and right mouse buttons at once.
 
@@ -247,8 +235,8 @@ Settings specific to `touchpad`s:
 - `tap`: tap-to-click.
 - `dwt`: disable-when-typing.
 - `dwtp`: disable-when-trackpointing.
-- `drag`: <sup>Since: 25.05</sup> can be `true` or `false`, controls if tap-and-drag is enabled.
-- `drag-lock`: <sup>Since: 25.02</sup> if set, lifting the finger off for a short time while dragging will not drop the dragged item. See the [libinput documentation](https://wayland.freedesktop.org/libinput/doc/latest/tapping.html#tap-and-drag).
+- `drag`: can be `true` or `false`, controls if tap-and-drag is enabled.
+- `drag-lock`: if set, lifting the finger off for a short time while dragging will not drop the dragged item. See the [libinput documentation](https://wayland.freedesktop.org/libinput/doc/latest/tapping.html#tap-and-drag).
 - `tap-button-map`: can be `left-right-middle` or `left-middle-right`, controls which button corresponds to a two-finger tap and a three-finger tap.
 - `click-method`: can be `button-areas` or `clickfinger`, changes the [click method](https://wayland.freedesktop.org/libinput/doc/latest/clickpad-softbuttons.html).
 - `disabled-on-external-mouse`: do not send events while external pointer device is plugged in.
@@ -257,13 +245,13 @@ Settings specific to `touchpad` and `mouse`:
 
 - `scroll-factor`: <sup>Since: 0.1.10</sup> scales the scrolling speed by this value.
 
-    <sup>Since: 25.08</sup> You can also override horizontal and vertical scroll factor separately like so: `scroll-factor horizontal=2.0 vertical=-1.0`
+    You can also override horizontal and vertical scroll factor separately like so: `scroll-factor horizontal=2.0 vertical=-1.0`
 
 Settings specific to `tablet` and `touch`:
 
 - `calibration-matrix`: set to six floating point numbers to change the calibration matrix. See the [`LIBINPUT_CALIBRATION_MATRIX` documentation](https://wayland.freedesktop.org/libinput/doc/latest/device-configuration-via-udev.html) for examples.
-    - <sup>Since: 25.02</sup> for `tablet`
-    - <sup>Since: 25.11</sup> for `touch`
+    - for `tablet`
+    - for `touch`
 
 Tablets and touchscreens are absolute pointing devices that can be mapped to a specific output like so:
 
@@ -285,7 +273,7 @@ Valid output names are the same as the ones used for output configuration.
 
 Settings specific to `tablet`:
 
-- `map-to-focused-output`: <sup>Since: 26.04</sup> will map the tablet to the focused output, takes precedence over `map-to-output`.
+- `map-to-focused-output`: will map the tablet to the focused output, takes precedence over `map-to-output`.
 
 - `map-to-focused-window`: <sup>Since: next release</sup> will map the tablet to the focused window's geometry, takes precedence over `map-to-focused-output` and `map-to-output`.
 Falls back to those when no window is focused (for example, in the overview).
@@ -323,7 +311,7 @@ input {
 By default, the cursor warps *separately* horizontally and vertically.
 I.e. if moving the mouse only horizontally is enough to put it inside the newly focused window, then the mouse will move only horizontally, and not vertically.
 
-<sup>Since: 25.05</sup> You can customize this with the `mode` property.
+You can customize this with the `mode` property.
 
 - `mode="center-xy"`: warps by both X and Y coordinates together.
 So if the mouse was anywhere outside the newly focused window, it will warp to the center of the window.
@@ -377,8 +365,6 @@ input {
 ```
 
 #### `mod-key`, `mod-key-nested`
-
-<sup>Since: 25.05</sup>
 
 Customize the `Mod` key for [key bindings](./Configuration:-Key-Bindings.md).
 Only valid modifiers are allowed, e.g. `Super`, `Alt`, `Mod3`, `Mod5`, `Ctrl`, `Shift`.

@@ -108,8 +108,6 @@ debug {
 
 ### `force-disable-connectors-on-resume`
 
-<sup>Since: 26.04</sup>
-
 Force-disables all outputs upon resuming clarion (TTY switch or waking up from suspend).
 This causes a modeset/screen blank on all outputs.
 
@@ -135,8 +133,6 @@ debug {
 
 ### `ignore-drm-device`
 
-<sup>Since: 25.11</sup>
-
 List DRM devices that clarion will ignore.
 Useful for GPU passthrough when you don't want clarion to open a certain device.
 
@@ -148,8 +144,6 @@ debug {
 ```
 
 ### `force-pipewire-invalid-modifier`
-
-<sup>Since: 25.01</sup>
 
 Forces PipeWire screencasting to use the invalid modifier, even when DRM offers more modifiers.
 
@@ -263,8 +257,6 @@ debug {
 
 ### `strict-new-window-focus-policy`
 
-<sup>Since: 25.01</sup>
-
 Disables heuristic automatic focusing for new windows.
 Only windows that activate themselves with a valid xdg-activation token will be focused.
 
@@ -275,8 +267,6 @@ debug {
 ```
 
 ### `honor-xdg-activation-with-invalid-serial`
-
-<sup>Since: 25.05</sup>
 
 Widely-used clients such as Discord and Telegram make fresh xdg-activation tokens upon clicking on their tray icon or on their notification.
 Most of the time, these fresh tokens will have invalid serials, because the app needs to be focused to get a valid serial, and if the user clicks on a tray icon or a notification, it is usually because the app *isn't* focused, and the user wants to focus it.
@@ -297,8 +287,6 @@ debug {
 
 ### `skip-cursor-only-updates-during-vrr`
 
-<sup>Since: 25.08</sup>
-
 Skips redrawing the screen from cursor input while variable refresh rate is active.
 
 Useful for games where the cursor isn't drawn internally to prevent erratic VRR shifts in response to cursor movement.
@@ -312,8 +300,6 @@ debug {
 ```
 
 ### `deactivate-unfocused-windows`
-
-<sup>Since: 25.08</sup>
 
 Some clients (notably, Chromium- and Electron-based, like Teams or Slack) erroneously use the Activated xdg window state instead of keyboard focus for things like deciding whether to send notifications for new messages, or for picking where to show an IME popup.
 Clarion keeps the Activated state on unfocused workspaces and invisible tabbed windows (to reduce unwanted animations), surfacing bugs in these applications.

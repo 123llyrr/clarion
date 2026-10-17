@@ -1,7 +1,5 @@
 ### Overview
 
-<sup>Since: 25.01</sup>
-
 Floating windows in clarion always show on top of the tiled windows.
 The floating layout does not scroll.
 Each workspace/monitor has its own floating layout, just like each workspace/monitor has its own tiling layout.

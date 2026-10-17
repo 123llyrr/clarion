@@ -93,8 +93,6 @@ output "eDP-1" {
 
 #### `mode custom=true`
 
-<sup>Since: 25.11</sup>
-
 You can configure a custom mode (not offered by the monitor) by setting `custom=true`.
 In this case, the refresh rate is mandatory.
 
@@ -114,8 +112,6 @@ output "HDMI-A-1" {
 ```
 
 ### `modeline`
-
-<sup>Since: 25.11</sup>
 
 Directly configures the monitor's mode via a modeline, overriding any configured `mode`.
 The modeline can be calculated via utilities such as [cvt](https://man.archlinux.org/man/cvt.1.en) or [gtf](https://man.archlinux.org/man/gtf.1.en).
@@ -204,11 +200,8 @@ You can check whether an output supports VRR in `clarion msg outputs`.
 
 > [!NOTE]
 > Some drivers have various issues with VRR.
->
 > If the cursor moves at a low framerate with VRR, try setting the [`disable-cursor-plane` debug flag](./Configuration:-Debug-Options.md#disable-cursor-plane) and reconnecting the monitor.
->
 > If a monitor is not detected as VRR-capable when it should, sometimes unplugging a different monitor fixes it.
->
 > Some monitors will continuously modeset (flash black) with VRR enabled; I'm not sure if there's a way to fix it.
 
 ```kdl
@@ -227,8 +220,6 @@ output "HDMI-A-1" {
 ```
 
 ### `focus-at-startup`
-
-<sup>Since: 25.05</sup>
 
 Focus this output by default when clarion starts.
 
@@ -257,7 +248,7 @@ This is visible when you're not using any background tools like swaybg.
 
 <sup>Until: 25.05</sup> The alpha channel for this color will be ignored.
 
-<sup>Since: 25.11</sup> This setting is deprecated, set `background-color` in the [output `layout {}` block](#layout-config-overrides) instead.
+This setting is deprecated, set `background-color` in the [output `layout {}` block](#layout-config-overrides) instead.
 
 ```kdl
 output "HDMI-A-1" {
@@ -266,8 +257,6 @@ output "HDMI-A-1" {
 ```
 
 ### `backdrop-color`
-
-<sup>Since: 25.05</sup>
 
 Set the backdrop color that clarion draws for this output.
 This is visible between workspaces or in the overview.
@@ -333,8 +322,6 @@ output "HDMI-A-1" {
 
 ### `hot-corners`
 
-<sup>Since: 25.11</sup>
-
 Customize the hot corners for this output.
 By default, hot corners [in the gestures settings](./Configuration:-Gestures.md#hot-corners) are used for all outputs.
 
@@ -360,8 +347,6 @@ output "DP-2" {
 ```
 
 ### Layout config overrides
-
-<sup>Since: 25.11</sup>
 
 You can customize layout settings for an output with a `layout {}` block:
 

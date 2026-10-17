@@ -15,15 +15,15 @@ Keep in mind that we update the default config in new releases, so if you have a
 
 The default configuration locations can be overridden with the `CLARION_CONFIG` environment variable.
 
-<sup>Since: 26.04</sup> You can also change the configuration path at runtime via the clarion IPC or using the command `clarion msg action load-config-file --path <path-to-config.kdl>`.
+You can also change the configuration path at runtime via the clarion IPC or using the command `clarion msg action load-config-file --path <path-to-config.kdl>`.
 
-<sup>Since: 25.11</sup> You can split the clarion config file into multiple files using [`include`](./Configuration:-Include.md).
+You can split the clarion config file into multiple files using [`include`](./Configuration:-Include.md).
 
 ### Xwayland
 
 Xwayland is required for running X11 apps and games, and also the Orca screen reader.
 
-<sup>Since: 25.08</sup> Clarion integrates with [xwayland-satellite](https://github.com/Supreeeme/xwayland-satellite) out of the box.
+Clarion integrates with [xwayland-satellite](https://github.com/Supreeeme/xwayland-satellite) out of the box.
 The integration requires xwayland-satellite >= 0.7 available in `$PATH`.
 Please consider making clarion depend on (or at least recommend) the xwayland-satellite package.
 If you had a custom config which manually started `xwayland-satellite` and set `$DISPLAY`, you should remove those customizations for the automatic integration to work.
@@ -32,7 +32,7 @@ You can change the path where clarion looks for xwayland-satellite using the [`x
 
 ### Keyboard layout
 
-<sup>Since: 25.08</sup> By default (unless [manually configured](./Configuration:-Input.md#layout) otherwise), clarion reads keyboard layout settings from systemd-localed at `org.freedesktop.locale1` over D-Bus.
+By default (unless [manually configured](./Configuration:-Input.md#layout) otherwise), clarion reads keyboard layout settings from systemd-localed at `org.freedesktop.locale1` over D-Bus.
 Make sure your system installer sets the keyboard layout via systemd-localed, and clarion should pick it up.
 
 ### Autostart
@@ -47,7 +47,7 @@ If this is inconvenient, you can also add [`spawn-at-startup`](./Configuration:-
 
 ### Screen readers
 
-<sup>Since: 25.08</sup> Clarion works with the [Orca](https://orca.gnome.org) screen reader.
+Clarion works with the [Orca](https://orca.gnome.org) screen reader.
 Please see the [Accessibility](./Accessibility.md) page for details and advice for accessibility-focused distributions.
 
 ### Desktop components

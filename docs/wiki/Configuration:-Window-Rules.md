@@ -197,7 +197,6 @@ You can find the title and the app ID of a window by running `clarion msg pick-w
 
 > [!TIP]
 > Another way to find the window title and app ID is to configure the `wlr/taskbar` module in [Waybar](https://github.com/Alexays/Waybar) to include them in the tooltip:
-> 
 > ```json
 > "wlr/taskbar": {
 >     "tooltip-format": "{title} | {app_id}",
@@ -243,7 +242,7 @@ Matches the window that is the "active" window in its column.
 Contrary to `is-active`, there is always one `is-active-in-column` window in each column.
 It is the window that was last focused in the column, i.e. the one that will gain focus if this column is focused.
 
-<sup>Since: 25.01</sup> This rule will match `true` during the initial window opening.
+This rule will match `true` during the initial window opening.
 
 ```kdl
 window-rule {
@@ -252,8 +251,6 @@ window-rule {
 ```
 
 #### `is-floating`
-
-<sup>Since: 25.01</sup>
 
 Can be `true` or `false`.
 Matches floating windows.
@@ -269,8 +266,6 @@ window-rule {
 ```
 
 #### `is-window-cast-target`
-
-<sup>Since: 25.02</sup>
 
 Can be `true` or `false`.
 Matches `true` for windows that are target of an ongoing window screencast.
@@ -309,8 +304,6 @@ Example:
 ![A screenshot showing that only the is-window-cast-target=true windows receive the special border colors](https://github.com/user-attachments/assets/375b381e-3a87-4e94-8676-44404971d893)
 
 #### `is-urgent`
-
-<sup>Since: 25.05</sup>
 
 Can be `true` or `false`.
 Matches windows that request the user's attention.
@@ -364,8 +357,6 @@ window-rule {
 ```
 
 #### `default-window-height`
-
-<sup>Since: 25.01</sup>
 
 Set the default height for the new window.
 
@@ -439,8 +430,6 @@ window-rule {
 
 #### `open-maximized-to-edges`
 
-<sup>Since: 25.11</sup>
-
 Make the window open [maximized to edges](./Fullscreen-and-Maximize.md).
 
 ```kdl
@@ -480,8 +469,6 @@ window-rule {
 
 #### `open-floating`
 
-<sup>Since: 25.01</sup>
-
 Make the window open in the floating layout.
 
 ```kdl
@@ -503,8 +490,6 @@ window-rule {
 ```
 
 #### `open-focused`
-
-<sup>Since: 25.01</sup>
 
 Set this to `false` to prevent this window from being automatically focused upon opening.
 
@@ -578,20 +563,15 @@ window-rule {
 
 > [!WARNING]
 > Be careful when blocking out windows based on a dynamically changing window title.
->
 > For example, you might try to block out specific Firefox tabs like this:
->
 > ```kdl
 > window-rule {
 >     // Doesn't quite work! Try to block out the Gmail tab.
 >     match app-id="firefox$" title="- Gmail "
->
 >     block-out-from "screencast"
 > }
 > ```
->
 > It will work, but when switching from a sensitive tab to a regular tab, the contents of the sensitive tab **will show up on a screencast** for an instant.
->
 > This is because window title (and app ID) are not double-buffered in the Wayland protocol, so they are not tied to specific window contents.
 > There's no robust way for Firefox to synchronize visibly showing a different tab and changing the window title.
 
@@ -669,8 +649,6 @@ window-rule {
 
 #### `default-column-display`
 
-<sup>Since: 25.02</sup>
-
 Set the default display mode for columns created from this window.
 Can be `normal` or `tabbed`.
 
@@ -690,8 +668,6 @@ window-rule {
 ```
 
 #### `default-floating-position`
-
-<sup>Since: 25.01</sup>
 
 Set the initial position for this window when it opens on, or moves to the floating layout.
 
@@ -742,8 +718,6 @@ window-rule {
 ```
 
 #### `scroll-factor`
-
-<sup>Since: 25.02</sup>
 
 Set a scroll factor for all scroll events sent to a window.
 
@@ -806,8 +780,6 @@ window-rule {
 
 #### `shadow`
 
-<sup>Since: 25.02</sup>
-
 Override the shadow options for the window.
 
 This rule has the same options as the normal [`shadow` config in the layout section](./Configuration:-Layout.md#shadow), so check the documentation there.
@@ -827,8 +799,6 @@ window-rule {
 ```
 
 #### `tab-indicator`
-
-<sup>Since: 25.02</sup>
 
 Override the tab indicator options for the window.
 
@@ -918,8 +888,6 @@ window-rule {
 
 #### `tiled-state`
 
-<sup>Since: 25.05</sup>
-
 Informs the window that it is tiled.
 Usually, windows will react by becoming rectangular and hiding their client-side shadows.
 Windows that snap their size to a grid (e.g. terminals like [foot](https://codeberg.org/dnkl/foot)) will usually disable this snapping when they are tiled.
@@ -937,8 +905,6 @@ window-rule {
 ```
 
 #### `baba-is-float`
-
-<sup>Since: 25.02</sup>
 
 Make your windows FLOAT up and down.
 
@@ -959,8 +925,6 @@ https://github.com/user-attachments/assets/3f4cb1a4-40b2-4766-98b7-eec014c19509
 </video>
 
 #### `background-effect`
-
-<sup>Since: 26.04</sup>
 
 Override the background effect options for this window.
 
@@ -988,8 +952,6 @@ window-rule {
 
 #### `popups`
 
-<sup>Since: 26.04</sup>
-
 Override properties for this window's pop-ups (menus and tooltips).
 
 The properties work the same way as the corresponding window-rule properties, except that they apply to the window's pop-ups rather than to the window itself.
@@ -999,21 +961,15 @@ Other properties apply independently.
 
 > [!NOTE]
 > This block affects only pop-ups created by the app via Wayland's [xdg-popup](https://wayland.app/protocols/xdg-shell#xdg_popup) (which should be most of them).
->
 > Examples of things that look like pop-ups that won't work:
->
 > - Fully emulated by the client, i.e. not a pop-up at all, the client just draws something that looks like a pop-up inside its window.
 > These are common in game engines and in web apps, e.g. the right click menu in Google Docs or in Electron apps like Discord.
->
 > - Uses a wl-subsurface instead of an xdg-popup.
 > Common in older apps using GTK 3, notably Firefox still uses these for some menus.
 > Subsurfaces are an indivisible part of a surface and they aren't usually pop-ups, so it wouldn't make sense for clarion to apply these rules to them.
->
 > These emulated pop-ups come with other downsides: they cannot reliably extend outside their window, and if the app tries to do that, they will be clipped by rules such as `clip-to-geometry`.
 > So most modern apps will correctly use xdg-popup, which is the intended way to show pop-ups on Wayland.
->
 > This block also does not affect input-method pop-ups, such as Fcitx.
->
 > For pop-ups created by your desktop shell or desktop components, use the corresponding [layer rule](./Configuration:-Layer-Rules.md#popups).
 
 ```kdl
@@ -1057,7 +1013,6 @@ These values instruct clarion to never ask the window to be smaller than the min
 > [!NOTE]
 > `max-height` will only apply to automatically-sized windows if it is equal to `min-height`.
 > Either set it equal to `min-height`, or change the window height manually after opening it with `set-window-height`.
->
 > This is a limitation of clarion's window height distribution algorithm.
 
 ```kdl

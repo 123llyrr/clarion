@@ -1,4 +1,3 @@
-<sup>Since: 25.11</sup>
 
 You can include other files at the top level of the config.
 
@@ -20,7 +19,7 @@ You can include by filename or path.
 
 * Relative to the current file: `other.kdl` or `./other.kdl`
 * By absolute path: `/path/to/file.kdl`
-* <sup>Since: 26.04</sup> Home dir paths: `~/file.kdl` expands to `/home/user/file.kdl`
+* Home dir paths: `~/file.kdl` expands to `/home/user/file.kdl`
 
 Includes work only at the top level of the config:
 
@@ -122,8 +121,6 @@ window-rule {
 
 ### Optional includes
 
-<sup>Since: 26.04</sup>
-
 By default, including a nonexistent file will cause an error.
 You can allow nonexistent includes by setting `optional=true`:
 
@@ -142,7 +139,6 @@ The optional file is still watched for changes, so if you create it later, the c
 
 Note that `optional` only affects whether a missing file causes an error.
 If the file exists but contains invalid syntax or other errors, those errors will still cause a parsing failure.
-
 
 ### Merging
 

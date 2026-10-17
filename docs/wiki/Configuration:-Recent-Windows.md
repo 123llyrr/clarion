@@ -1,7 +1,5 @@
 ### Overview
 
-<sup>Since: 25.11</sup>
-
 In this section you can configure the recent windows switcher (Alt-Tab).
 
 Here is an outline of the available settings and their default values:

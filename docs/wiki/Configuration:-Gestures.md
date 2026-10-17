@@ -1,7 +1,5 @@
 ### Overview
 
-<sup>Since: 25.02</sup>
-
 The `gestures` config section contains gesture settings.
 For an overview of all clarion gestures, see the [Gestures](./Gestures.md) wiki page.
 
@@ -58,8 +56,6 @@ gestures {
 
 ### `dnd-edge-workspace-switch`
 
-<sup>Since: 25.05</sup>
-
 Scroll the workspaces up/down when moving the mouse cursor against a monitor edge during drag-and-drop (DnD) while in the overview.
 Also works on a touchscreen.
 
@@ -83,8 +79,6 @@ gestures {
 
 ### `hot-corners`
 
-<sup>Since: 25.05</sup>
-
 Put your mouse at the very top-left corner of a monitor to toggle the overview.
 It uses the [configured overview style](./Configuration:-Miscellaneous.md#style):
 the spatial stage by default, or the classic vertical strip. The top-right Expo
@@ -102,7 +96,7 @@ gestures {
 }
 ```
 
-<sup>Since: 25.11</sup> You can choose specific hot corners by name: `top-left`, `top-right`, `bottom-left`, `bottom-right`.
+You can choose specific hot corners by name: `top-left`, `top-right`, `bottom-left`, `bottom-right`.
 If no corners are explicitly set, the top-left corner will be active by default.
 
 ```kdl

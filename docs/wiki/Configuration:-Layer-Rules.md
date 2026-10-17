@@ -1,7 +1,5 @@
 ### Overview
 
-<sup>Since: 25.01</sup>
-
 Layer rules let you adjust behavior for individual layer-shell surfaces.
 They have `match` and `exclude` directives that control which layer-shell surfaces the rule should apply to, and a number of properties that you can set.
 
@@ -91,8 +89,6 @@ layer-rule {
 
 #### `layer`
 
-<sup>Since: 26.04</sup>
-
 Matches surfaces on this layer-shell layer.
 Can be `"background"`, `"bottom"`, `"top"`, or `"overlay"`.
 
@@ -148,8 +144,6 @@ layer-rule {
 
 #### `shadow`
 
-<sup>Since: 25.02</sup>
-
 Override the shadow options for the surface.
 
 These rules have the same options as the normal [`shadow` config in the layout section](./Configuration:-Layout.md#shadow), so check the documentation there.
@@ -179,8 +173,6 @@ layer-rule {
 
 #### `geometry-corner-radius`
 
-<sup>Since: 25.02</sup>
-
 Set the corner radius of the surface.
 
 This setting will only affect the shadow—it will round its corners to match the geometry corner radius.
@@ -194,8 +186,6 @@ layer-rule {
 ```
 
 #### `place-within-backdrop`
-
-<sup>Since: 25.05</sup>
 
 Set to `true` to place the surface into the backdrop visible in the [Overview](./Overview.md) and between workspaces.
 
@@ -213,8 +203,6 @@ layer-rule {
 
 #### `baba-is-float`
 
-<sup>Since: 25.05</sup>
-
 Make your layer surfaces FLOAT up and down.
 
 This is a natural extension of the [April Fools' 2025 feature](./Configuration:-Window-Rules.md#baba-is-float).
@@ -229,8 +217,6 @@ layer-rule {
 ```
 
 #### `background-effect`
-
-<sup>Since: 26.04</sup>
 
 Override the background effect options for this surface.
 
@@ -273,8 +259,6 @@ The refraction is adapted from [Niri-glass](https://github.com/zaroutt/Niri-glas
 The pinned source and license are recorded in `resources/licenses/liquid-glass-sources.txt`.
 
 #### `popups`
-
-<sup>Since: 26.04</sup>
 
 Override properties for this layer surface's pop-ups (e.g. a menu opened by clicking an item in Waybar).
 

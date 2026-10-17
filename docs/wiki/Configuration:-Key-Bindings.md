@@ -31,14 +31,12 @@ Valid modifiers are:
 This way, you can test clarion in a window without causing too many conflicts with the host compositor's key bindings.
 For this reason, most of the default keys use the `Mod` modifier.
 
-<sup>Since: 25.05</sup> You can customize the `Mod` key [in the `input` section of the config](./Configuration:-Input.md#mod-key-mod-key-nested).
+You can customize the `Mod` key [in the `input` section of the config](./Configuration:-Input.md#mod-key-mod-key-nested).
 
 > [!TIP]
 > To find an XKB name for a particular key, you may use a program like [`wev`](https://git.sr.ht/~sircmpwn/wev).
->
 > Open it from a terminal and press the key that you want to detect.
 > In the terminal, you will see output like this:
->
 > ```
 > [14:     wl_keyboard] key: serial: 757775; time: 44940343; key: 113; state: 1 (pressed)
 >                       sym: Left         (65361), utf8: ''
@@ -49,16 +47,12 @@ For this reason, most of the default keys use the `Mod` modifier.
 > [14:     wl_keyboard] key: serial: 757778; time: 44940846; key: 114; state: 0 (released)
 >                       sym: Right        (65363), utf8: ''
 > ```
->
 > Here, look at `sym: Left` and `sym: Right`: these are the key names.
 > I was pressing the left and the right arrow in this example.
->
 > Keep in mind that binding shifted keys requires spelling out Shift and the unshifted version of the key, according to your XKB layout.
 > For example, on the US QWERTY layout, <kbd>&lt;</kbd> is on <kbd>Shift</kbd> + <kbd>,</kbd>, so to bind it, you spell out something like `Mod+Shift+Comma`.
->
 > As another example, if you've configured the French [BÉPO](https://en.wikipedia.org/wiki/B%C3%89PO) XKB layout, your <kbd>&lt;</kbd> is on <kbd>AltGr</kbd> + <kbd>«</kbd>.
 > <kbd>AltGr</kbd> is `ISO_Level3_Shift`, or equivalently `Mod5`, so to bind it, you spell out something like `Mod+Mod5+guillemotleft`.
->
 > When resolving latin keys, clarion will search for the *first* configured XKB layout that has the latin key.
 > So for example with US QWERTY and RU layouts configured, US QWERTY will be used for latin binds.
 
@@ -112,8 +106,6 @@ For example, if you have a `Mod+WheelScrollDown` bind, then while holding `Mod`,
 
 ### Mouse Click Bindings
 
-<sup>Since: 25.01</sup>
-
 You can bind mouse clicks using the following syntax.
 
 ```kdl
@@ -131,8 +123,6 @@ Mouse clicks operate on the window that was focused at the time of the click, no
 Note that binding `Mod+MouseLeft` or `Mod+MouseRight` will override the corresponding gesture (moving or resizing the window).
 
 ### Custom Hotkey Overlay Titles
-
-<sup>Since: 25.02</sup>
 
 The hotkey overlay (the Important Hotkeys dialog) shows common actions first, followed by
 custom titles, Spawn binds, and the remaining Mod/Super keyboard binds.
@@ -209,11 +199,8 @@ binds {
 ```
 
 > [!TIP]
->
 > <sup>Since: 0.1.5</sup>
->
 > Spawn bindings have a special `allow-when-locked=true` property that makes them work even while the session is locked:
->
 > ```kdl
 > binds {
 >     // This mute bind will work even when the session is locked.
@@ -266,8 +253,6 @@ binds {
 ```
 
 #### `spawn-sh`
-
-<sup>Since: 25.08</sup>
 
 Run a command through the shell.
 
@@ -353,8 +338,6 @@ clarion msg action do-screen-transition --delay-ms 100
 
 #### `toggle-window-rule-opacity`
 
-<sup>Since: 25.02</sup>
-
 Toggle the opacity window rule of the focused window.
 This only has an effect if the window's opacity window rule is already set to semitransparent.
 
@@ -373,7 +356,7 @@ Actions for taking screenshots.
 
 The screenshot is both stored to the clipboard and saved to disk, according to the [`screenshot-path` option](./Configuration:-Miscellaneous.md#screenshot-path).
 
-<sup>Since: 25.02</sup> You can disable saving to disk for a specific bind with the `write-to-disk=false` property:
+You can disable saving to disk for a specific bind with the `write-to-disk=false` property:
 
 ```kdl
 binds {
@@ -384,7 +367,7 @@ binds {
 
 In the interactive screenshot UI, pressing <kbd>Ctrl</kbd><kbd>C</kbd> will copy the screenshot to the clipboard without writing it to disk.
 
-<sup>Since: 25.05</sup> You can hide the mouse pointer in screenshots with the `show-pointer=false` property:
+You can hide the mouse pointer in screenshots with the `show-pointer=false` property:
 
 ```kdl
 binds {
@@ -397,7 +380,7 @@ binds {
 }
 ```
 
-<sup>Since: 26.04</sup> You can show the mouse pointer on window screenshots with the `show-pointer=true` property.
+You can show the mouse pointer on window screenshots with the `show-pointer=true` property.
 The pointer will be included only if the window is currently receiving pointer input (usually this means the pointer is on top of the window).
 
 ```kdl
@@ -409,8 +392,6 @@ binds {
 ```
 
 #### `toggle-keyboard-shortcuts-inhibit`
-
-<sup>Since: 25.02</sup>
 
 Applications such as remote-desktop clients and software KVM switches may request that clarion stops processing its keyboard shortcuts so that they may, for example, forward the key presses as-is to a remote machine.
 `toggle-keyboard-shortcuts-inhibit` is an escape hatch that toggles the inhibitor.

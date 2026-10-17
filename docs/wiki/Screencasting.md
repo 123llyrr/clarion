@@ -46,8 +46,6 @@ Check [the corresponding wiki section](./Configuration:-Window-Rules.md#block-ou
 
 ### Dynamic screencast target
 
-<sup>Since: 25.05</sup>
-
 Clarion provides a special screencast stream that you can change dynamically.
 It shows up as "clarion Dynamic Cast Target" in the screencast window dialog.
 
@@ -77,8 +75,6 @@ If the cast target disappears (e.g. the target window closes), the stream goes b
 All dynamic casts share the same target, but new ones start out empty until the next time you change it (to avoid surprises and sharing something sensitive by mistake).
 
 ### Indicate screencasted windows
-
-<sup>Since: 25.02</sup>
 
 The [`is-window-cast-target=true` window rule](./Configuration:-Window-Rules.md#is-window-cast-target) matches windows targeted by an ongoing window screencast.
 You use it with a special border color to clearly indicate screencasted windows.
@@ -116,8 +112,6 @@ Example:
 ![Screencasted window indicated with a red border and shadow.](https://github.com/user-attachments/assets/375b381e-3a87-4e94-8676-44404971d893)
 
 ### Windowed (fake/detached) fullscreen
-
-<sup>Since: 25.05</sup>
 
 When screencasting browser-based presentations like Google Slides, you usually want to hide the browser UI, which requires making the browser fullscreen.
 This is not always convenient, for example if you have an ultrawide monitor, or just want to leave the browser as a smaller window, without taking up an entire monitor.

@@ -99,7 +99,7 @@ layout {
 }
 ```
 
-<sup>Since: 25.11</sup> You can override these settings for specific [outputs](./Configuration:-Outputs.md#layout-config-overrides) and [named workspaces](./Configuration:-Named-Workspaces.md#layout-config-overrides).
+You can override these settings for specific [outputs](./Configuration:-Outputs.md#layout-config-overrides) and [named workspaces](./Configuration:-Named-Workspaces.md#layout-config-overrides).
 
 ### `rounding`
 
@@ -167,8 +167,6 @@ layout {
 
 ### `empty-workspace-above-first`
 
-<sup>Since: 25.01</sup>
-
 If set, clarion will always add an empty workspace at the very start, in addition to the empty workspace at the very end.
 
 ```kdl
@@ -178,8 +176,6 @@ layout {
 ```
 
 ### `default-column-display`
-
-<sup>Since: 25.02</sup>
 
 Sets the default display mode for new columns.
 Can be `normal` or `tabbed`.
@@ -200,7 +196,7 @@ layout {
 ### `preset-column-widths`
 
 Set the widths that the `switch-preset-column-width` action (Mod+R) toggles between.
-<sup>Since: 25.08</sup> You can use the `switch-preset-column-width-back` action (Mod+Shift+R) to toggle in reverse.
+You can use the `switch-preset-column-width-back` action (Mod+Shift+R) to toggle in reverse.
 
 `proportion` sets the width as a fraction of the output width, taking gaps into account.
 For example, you can perfectly fit four windows sized `proportion 0.25` on an output, regardless of the gaps setting.
@@ -244,7 +240,6 @@ layout {
 
 > [!NOTE]
 > `default-column-width {}` causes clarion to send a (0, H) size in the initial configure request.
->
 > This is a bit [unclearly defined](https://gitlab.freedesktop.org/wayland/wayland-protocols/-/issues/155) in the Wayland protocol, so some clients may misinterpret it.
 > Either way, `default-column-width {}` is most useful for specific windows, in form of a [window rule](./Configuration:-Window-Rules.md#default-column-width) with the same syntax.
 
@@ -253,7 +248,7 @@ layout {
 <sup>Since: 0.1.9</sup>
 
 Set the heights that the `switch-preset-window-height` action (Mod+Ctrl+Shift+R) toggles between.
-<sup>Since: 25.08</sup> You can use the `switch-preset-window-height-back` action (not bound by default) to toggle in reverse.
+You can use the `switch-preset-window-height-back` action (not bound by default) to toggle in reverse.
 
 `proportion` sets the height as a fraction of the output height, taking gaps into account.
 The default preset heights are <sup>1</sup>&frasl;<sub>3</sub>, <sup>1</sup>&frasl;<sub>2</sub> and <sup>2</sup>&frasl;<sub>3</sub> of the output.
@@ -287,10 +282,8 @@ The difference is that the focus ring is drawn only around the active window, wh
 > By default, focus ring and border are rendered as a solid background rectangle behind windows.
 > That is, they will show up through semitransparent windows.
 > This is because windows using client-side decorations can have an arbitrary shape.
->
 > If you don't like that, you should uncomment the [`prefer-no-csd` setting](./Configuration:-Miscellaneous.md#prefer-no-csd) at the top level of the config.
 > Clarion will draw focus rings and borders *around* windows that agree to omit their client-side decorations.
->
 > Alternatively, you can override this behavior with the [`draw-border-with-background` window rule](./Configuration:-Window-Rules.md#draw-border-with-background).
 
 Focus ring and border have the following options.
@@ -404,8 +397,6 @@ layout {
 
 ### `shadow`
 
-<sup>Since: 25.02</sup>
-
 Shadow rendered behind a window.
 
 Set `on` to enable the shadow.
@@ -414,7 +405,7 @@ Set `on` to enable the shadow.
 Setting `softness 0` will give you hard shadows.
 
 `spread` is the distance to expand the window rectangle in logical pixels, same as CSS box-shadow spread.
-<sup>Since: 25.05</sup> Spread can be negative.
+Spread can be negative.
 
 `offset` moves the shadow relative to the window in logical pixels, same as CSS box-shadow offset.
 For example, `offset x=2 y=2` will move the shadow 2 logical pixels downwards and to the right.
@@ -453,8 +444,6 @@ prefer-no-csd
 [CSS box-shadow]: https://developer.mozilla.org/en-US/docs/Web/CSS/box-shadow
 
 ### `tab-indicator`
-
-<sup>Since: 25.02</sup>
 
 Controls the appearance of the tab indicator that appears next to columns in tabbed display mode.
 
@@ -571,8 +560,6 @@ layout {
 ```
 
 ### `background-color`
-
-<sup>Since: 25.05</sup>
 
 Set the default background color that clarion draws for workspaces.
 This is visible when you're not using any background tools like swaybg.

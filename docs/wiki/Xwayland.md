@@ -1,6 +1,6 @@
 ## Using xwayland-satellite
 
-<sup>Since: 25.08</sup> Clarion integrates with [xwayland-satellite](https://github.com/Supreeeme/xwayland-satellite) out of the box.
+Clarion integrates with [xwayland-satellite](https://github.com/Supreeeme/xwayland-satellite) out of the box.
 Ensure xwayland-satellite >= 0.7 is installed and available in `$PATH`.
 With no further configuration, clarion will create X11 sockets on disk, export `$DISPLAY`, and spawn xwayland-satellite on-demand when an X11 client connects.
 If xwayland-satellite dies, clarion will automatically restart it.

@@ -82,8 +82,6 @@ Thanks to this, apps that you configured to autostart in GNOME will also "just w
 
 ### `spawn-sh-at-startup`
 
-<sup>Since: 25.08</sup>
-
 Add lines like this to run shell commands at clarion startup.
 
 The argument is a single string that is passed verbatim to `sh`.
@@ -198,8 +196,6 @@ cursor {
 
 ### `overview`
 
-<sup>Since: 25.05</sup>
-
 Settings for the [Overview](./Overview.md).
 
 #### `style`
@@ -274,8 +270,6 @@ overview {
 
 ### `xwayland-satellite`
 
-<sup>Since: 25.08</sup>
-
 Settings for integration with [xwayland-satellite](https://github.com/Supreeeme/xwayland-satellite).
 
 When a recent enough xwayland-satellite is detected, clarion will create the X11 sockets and set `DISPLAY`, then automatically spawn `xwayland-satellite` when an X11 client tries to connect.
@@ -295,8 +289,6 @@ xwayland-satellite {
 ```
 
 ### `clipboard`
-
-<sup>Since: 25.02</sup>
 
 Clipboard settings.
 
@@ -329,8 +321,6 @@ hotkey-overlay {
 
 #### `hide-not-bound`
 
-<sup>Since: 25.08</sup>
-
 By default, clarion will show the most important actions even if they aren't bound to any key, to prevent confusion.
 Set the `hide-not-bound` flag if you want to hide all actions not bound to any key.
 
@@ -344,8 +334,6 @@ You can customize which binds the hotkey overlay shows using the [`hotkey-overla
 
 ### `config-notification`
 
-<sup>Since: 25.08</sup>
-
 Settings for the config created/failed notification.
 
 Set the `disable-failed` flag to disable the "Failed to parse the config file" notification.
@@ -358,8 +346,6 @@ config-notification {
 ```
 
 ### `blur`
-
-<sup>Since: 26.04</sup>
 
 Blur configuration that affects all background blur.
 

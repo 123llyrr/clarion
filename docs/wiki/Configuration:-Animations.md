@@ -130,7 +130,7 @@ You can get a feel for them on pages like [easings.net](https://easings.net/).
 - `ease-in` (aliases `macos-ease-in`, `ca-ease-in`), equivalent to `cubic-bezier(0.42, 0, 1, 1)`
 - `ease-out` (aliases `macos-ease-out`, `ca-ease-out`), equivalent to `cubic-bezier(0, 0, 0.58, 1)`
 - `ease-in-out` (aliases `ease-in-ease-out`, `macos-ease-in-out`, `ca-ease-in-out`), equivalent to `cubic-bezier(0.42, 0, 0.58, 1)`
-- `cubic-bezier` <sup>Since: 25.08</sup>
+- `cubic-bezier` 
     A custom [cubic Bézier curve](https://www.w3.org/TR/css-easing-1/#cubic-bezier-easing-functions). You need to set 4 numbers defining the control points of the curve, for example:
     ```kdl
     animations {
@@ -277,7 +277,6 @@ If a custom shader fails to compile, clarion will print a warning and fall back 
 When running clarion as a systemd service, you can see the warnings in the journal: `journalctl -ef /usr/bin/clarion`
 
 > [!WARNING]
->
 > Custom shaders do not have a backwards compatibility guarantee.
 > I may need to change their interface as I'm developing new features.
 
@@ -356,7 +355,6 @@ If a custom shader fails to compile, clarion will print a warning and fall back 
 When running clarion as a systemd service, you can see the warnings in the journal: `journalctl -ef /usr/bin/clarion`
 
 > [!WARNING]
->
 > Custom shaders do not have a backwards compatibility guarantee.
 > I may need to change their interface as I'm developing new features.
 
@@ -452,7 +450,6 @@ If a custom shader fails to compile, clarion will print a warning and fall back 
 When running clarion as a systemd service, you can see the warnings in the journal: `journalctl -ef /usr/bin/clarion`
 
 > [!WARNING]
->
 > Custom shaders do not have a backwards compatibility guarantee.
 > I may need to change their interface as I'm developing new features.
 
@@ -488,8 +485,6 @@ animations {
 
 #### `exit-confirmation-open-close`
 
-<sup>Since: 25.08</sup>
-
 The open/close animation of the exit confirmation dialog.
 
 This one uses an underdamped spring by default (`damping-ratio=0.6`) which causes a slight oscillation in the end.
@@ -519,8 +514,6 @@ animations {
 
 #### `overview-open-close`
 
-<sup>Since: 25.05</sup>
-
 The open/close zoom animation of the [Overview](./Overview.md).
 
 ```kdl
@@ -532,8 +525,6 @@ animations {
 ```
 
 #### `recent-windows-close`
-
-<sup>Since: 25.11</sup>
 
 The close fade-out animation of the recent windows switcher.
 

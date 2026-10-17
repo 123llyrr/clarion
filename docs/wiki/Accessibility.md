@@ -1,7 +1,5 @@
 ## Screen readers
 
-<sup>Since: 25.08</sup>
-
 Clarion has basic support for screen readers (specifically, [Orca](https://orca.gnome.org)) when running as a full desktop session, i.e. you need to start clarion through a display manager or through `clarion-session`.
 To avoid conflicts with an already running compositor, clarion won't expose accessibility interfaces when started as a nested window, or as a plain `/usr/bin/clarion` on a TTY.
 
@@ -10,7 +8,7 @@ Specifically, clarion will announce:
 
 - workspace switching, for example it'll say "Workspace 2" when you switch to the second workspace;
 - the exit confirmation dialog (appears on <kbd>Super</kbd><kbd>Shift</kbd><kbd>E</kbd> by default);
-- <sup>Since: 25.11</sup> clarion has an <kbd>Alt</kbd><kbd>Tab</kbd> window switcher where it will announce the selected window title;
+- clarion has an <kbd>Alt</kbd><kbd>Tab</kbd> window switcher where it will announce the selected window title;
 - entering the screenshot UI and the overview (clarion will say when these are focused, nothing else for now);
 - whenever a config parse error occurs;
 - the important hotkeys list (for now, as one big announcement without tab navigation; appears on <kbd>Super</kbd><kbd>Shift</kbd><kbd>/</kbd> by default).

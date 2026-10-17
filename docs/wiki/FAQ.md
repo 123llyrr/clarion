@@ -74,13 +74,13 @@ A combination of factors:
 
 All in all, the situation works out in favor of avoiding Xwayland integration.
 
-<sup>Since: 25.08</sup> clarion has seamless built-in xwayland-satellite integration that by and large works as well as built-in Xwayland in other compositors, solving the hurdle of having to set it up manually.
+clarion has seamless built-in xwayland-satellite integration that by and large works as well as built-in Xwayland in other compositors, solving the hurdle of having to set it up manually.
 
 I wouldn't be too surprised if, down the road, xwayland-satellite becomes the standard way of integrating Xwayland into new compositors, since it takes on the bulk of the annoying work, and isolates the compositor from misbehaving clients.
 
 ### Can I enable blur behind semitransparent windows?
 
-<sup>Since: 26.04</sup> Yes.
+Yes.
 See the [window effects](./Window-Effects.md) wiki page.
 
 ### Can I make a window sticky / pinned / always on top / appear on all workspaces?
