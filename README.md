@@ -101,6 +101,7 @@ systemctl --user daemon-reload
 
 已有 Realand 配置、Shell 偏好和旧命令通过兼容入口继续使用，迁移规则见 [名称与配置迁移](docs/clarion-migration.md)。
 依赖、嵌套运行和登录管理器说明见 [Getting Started](docs/wiki/Getting-Started.md)。
+从合成器到完整桌面的能力现状与缺口见 [桌面就绪度清单](docs/desktop-readiness-roadmap.md)。
 
 ## 开发与验证
 
