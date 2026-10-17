@@ -187,6 +187,58 @@ void main() {
     },
   );
 
+  testWidgets('a page turn moves the indicator without rebuilding the grids', (
+    tester,
+  ) async {
+    final controller = _Controller(
+      _Catalogue([for (var i = 0; i < 100; i++) _App(i)]),
+      macos: true,
+    );
+    final layout = MacLaunchpadLayout(persist: false);
+    addTearDown(controller.dispose);
+    addTearDown(layout.dispose);
+    await layout.load(controller.apps.map((app) => app.id));
+    await _show(
+      tester,
+      MacLauncherPanel(controller: controller, layout: layout),
+    );
+    final pages = find.byKey(const ValueKey('mac-launchpad-pages'));
+    // A page outside the viewport is offstage; identity checks must see it.
+    final firstPage = find.byKey(
+      const ValueKey('mac-launchpad-page-0'),
+      skipOffstage: false,
+    );
+    final secondPage = find.byKey(
+      const ValueKey('mac-launchpad-page-1'),
+      skipOffstage: false,
+    );
+    final beforeFirst = tester.widget<GridView>(firstPage);
+    Color dot(int page) {
+      final container = tester.widget<Container>(
+        find.descendant(
+          of: find.byKey(ValueKey('mac-launchpad-dot-$page')),
+          matching: find.byType(Container),
+        ),
+      );
+      return (container.decoration! as BoxDecoration).color!;
+    }
+
+    final unselected = dot(1);
+    await tester.tap(find.byKey(const ValueKey('mac-launchpad-dot-1')));
+    await tester.pumpAndSettle();
+
+    // The indicator follows the page while the grids keep their identity.
+    expect(dot(1), isNot(unselected));
+    expect(tester.widget<GridView>(firstPage), same(beforeFirst));
+    final beforeSecond = tester.widget<GridView>(secondPage);
+    await tester.tap(find.byKey(const ValueKey('mac-launchpad-dot-0')));
+    await tester.pumpAndSettle();
+    expect(tester.widget<GridView>(secondPage), same(beforeSecond));
+    expect(tester.widget<GridView>(firstPage), same(beforeFirst));
+    expect(pages, findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('large Launchpad uses one edit ticker and closing stops it', (
     tester,
   ) async {
