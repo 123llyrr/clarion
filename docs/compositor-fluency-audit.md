@@ -38,7 +38,8 @@ Late fixed-refresh presentations: 1083 / 20755
 
 ## 实测定位到的真实热点：主线程 scene-build
 
-`scripts/diagnose-latency.py --output <output> --seconds 8` 采样显示 CPU 峰值仅 8%，
+`scripts/diagnose-latency.py --output <output> --seconds 8` 采样显示 CPU 峰值仅 8%
+（该脚本把报告写到当前目录，请从仓库外或 `/tmp` 运行，别提交进项目）：
 但主线程出现超过诊断阈值的操作，其中反复出现的是场景组装：
 
 ```

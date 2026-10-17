@@ -26,16 +26,15 @@ flutter:
   # uncomments the fonts between the markers below.
   assets:
     - assets/icons/
-    - assets/shell/
   # BEGIN shell assets
-  fonts:
-    - family: ClarionSystem
-      fonts:
-        - asset: assets/shell/ui-text.ttf
-    - family: ClarionChinese
-      fonts:
-        - asset: assets/shell/cjk-regular.otf
-          weight: 400
-        - asset: assets/shell/cjk-semibold.otf
-          weight: 600
+  # fonts:
+  #   - family: ClarionSystem
+  #     fonts:
+  #       - asset: assets/shell/ui-text.ttf
+  #   - family: ClarionChinese
+  #     fonts:
+  #       - asset: assets/shell/cjk-regular.otf
+  #         weight: 400
+  #       - asset: assets/shell/cjk-semibold.otf
+  #         weight: 600
   # END shell assets
