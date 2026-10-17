@@ -88,6 +88,9 @@ class _MacLauncherPanelState extends State<MacLauncherPanel>
   List<String> _entryIds = const [];
   Timer? _wheelReset;
   Timer? _dragPageTimer;
+  Timer? _strokeSettle;
+  // 0 undecided, 1 horizontal paging, -1 vertical (belongs to no gesture).
+  int _strokeAxis = 0;
   double _wheelDelta = 0;
   int _wheelGestureSign = 0;
   bool _wheelPageConsumed = false;
@@ -214,6 +217,9 @@ class _MacLauncherPanelState extends State<MacLauncherPanel>
     _wheelDelta = 0;
     _wheelGestureSign = 0;
     _wheelPageConsumed = false;
+    _strokeSettle?.cancel();
+    _strokeSettle = null;
+    _strokeAxis = 0;
   }
 
   void _catalogChanged() {
@@ -339,6 +345,7 @@ class _MacLauncherPanelState extends State<MacLauncherPanel>
     _dots.dispose();
     _resetWheelState();
     _dragPageTimer?.cancel();
+    _strokeSettle?.cancel();
     super.dispose();
   }
 
@@ -390,6 +397,9 @@ class _MacLauncherPanelState extends State<MacLauncherPanel>
   }
 
   void _goPage(int page, {String? selected}) {
+    _strokeSettle?.cancel();
+    _strokeSettle = null;
+    _strokeAxis = 0;
     final target = page.clamp(0, _pageCount - 1);
     setState(() {
       _page = target;
@@ -548,9 +558,11 @@ class _MacLauncherPanelState extends State<MacLauncherPanel>
     final dx = event.scrollDelta.dx;
     final dy = event.scrollDelta.dy;
 
-    // In macOS Catalina NSPageController: trackpad vertical swipe is ignored for horizontal paging;
-    // mouse wheel vertical delta is translated to horizontal page turning.
-    if (event.kind == PointerDeviceKind.trackpad && dx.abs() <= dy.abs()) {
+    // A trackpad stroke tracks the finger; a wheel notch steps a page. The
+    // trackpad path below moves the page view directly, so the grid follows
+    // the gesture instead of jumping after a threshold.
+    if (event.kind == PointerDeviceKind.trackpad) {
+      _trackpadStroke(dx, dy);
       return;
     }
 
@@ -596,6 +608,48 @@ class _MacLauncherPanelState extends State<MacLauncherPanel>
     );
     _wheelDelta = 0;
     _goPage(target);
+  }
+
+  /// A trackpad stroke moves the page view with the fingers; on release the
+  /// view snaps to the page the stroke revealed. Horizontal travel owns the
+  /// gesture so a diagonal stroke cannot flip between paging and nothing.
+  void _trackpadStroke(double dx, double dy) {
+    if (!_pages.hasClients) return;
+    if (_strokeAxis == 0) {
+      if (dx.abs() < 0.5 && dy.abs() < 0.5) return;
+      _strokeAxis = dx.abs() > dy.abs() ? 1 : -1;
+    }
+    if (_strokeAxis < 0) return;
+    if (_pages.position.viewportDimension <= 0) return;
+    _pages.jumpTo(
+      (_pages.offset + dx).clamp(0.0, _pages.position.maxScrollExtent),
+    );
+    _strokeSettle?.cancel();
+    _strokeSettle = Timer(const Duration(milliseconds: 120), _settleStroke);
+  }
+
+  /// Past a third of a page the stroke commits to the next page; anything
+  /// shorter returns to the page it started from.
+  void _settleStroke() {
+    _strokeSettle = null;
+    _strokeAxis = 0;
+    if (!mounted || !_pages.hasClients) return;
+    final raw = _pages.page ?? 0;
+    final base = raw.floorToDouble();
+    final target = (raw - base >= 0.35 ? base + 1 : base)
+        .clamp(0, _pageCount - 1)
+        .toInt();
+    if (_reduced) {
+      _pages.jumpToPage(target);
+      return;
+    }
+    unawaited(
+      _pages.animateToPage(
+        target,
+        duration: const Duration(milliseconds: 220),
+        curve: _macPageCurve,
+      ),
+    );
   }
 
   bool get _canDrop =>
