@@ -12,7 +12,7 @@ To check that the integration works, verify that the clarion output says somethi
 ```sh
 $ journalctl --user-unit=clarion -b
 systemd[2338]: Starting clarion.service - A scrollable-tiling Wayland compositor...
-clarion[2474]: 2025-08-29T04:07:40.043402Z  INFO clarion: starting version 25.05.1 (0.0.git.2345.d9833fc1)
+clarion[2474]: 2025-08-29T04:07:40.043402Z  INFO clarion: starting version 0.1.0 (0.0.git.2345.d9833fc1)
 (...)
 clarion[2474]: 2025-08-29T04:07:40.690512Z  INFO clarion: listening on Wayland socket: wayland-1
 clarion[2474]: 2025-08-29T04:07:40.690520Z  INFO clarion: IPC listening on: $XDG_RUNTIME_DIR/clarion.wayland-1.2474.sock

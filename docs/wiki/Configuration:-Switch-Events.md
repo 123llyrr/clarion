@@ -1,7 +1,5 @@
 ### Overview
 
-<sup>Since: 0.1.10</sup>
-
 Switch event bindings are declared in the `switch-events {}` section of the config.
 
 Here are all the events that you can bind at a glance:

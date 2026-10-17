@@ -48,9 +48,9 @@ You can find all of these by running `clarion msg outputs`.
 
 Usually, the built-in monitor in laptops will be called `eDP-1`.
 
-<sup>Since: 0.1.6</sup> The output name is case-insensitive.
+The output name is case-insensitive.
 
-<sup>Since: 0.1.9</sup> Outputs can be matched by manufacturer, model, and serial.
+Outputs can be matched by manufacturer, model, and serial.
 Before, they could be matched only by the connector name.
 
 ### `off`
@@ -135,13 +135,13 @@ output "eDP-3" {
 
 Set the scale of the monitor.
 
-<sup>Since: 0.1.6</sup> If scale is unset, clarion will guess an appropriate scale based on the physical dimensions and the resolution of the monitor.
+If scale is unset, clarion will guess an appropriate scale based on the physical dimensions and the resolution of the monitor.
 
-<sup>Since: 0.1.7</sup> You can use fractional scale values, for example `scale 1.5` for 150% scale.
+You can use fractional scale values, for example `scale 1.5` for 150% scale.
 
-<sup>Since: 0.1.7</sup> Dot is no longer needed for integer scale, for example you can write `scale 2` instead of `scale 2.0`.
+Dot is no longer needed for integer scale, for example you can write `scale 2` instead of `scale 2.0`.
 
-<sup>Since: 0.1.7</sup> Scale below 0 and above 10 will now fail during config parsing. Scale was previously clamped to these values anyway.
+Scale below 0 and above 10 will now fail during config parsing. Scale was previously clamped to these values anyway.
 
 ```kdl
 output "eDP-1" {
@@ -192,8 +192,6 @@ The following algorithm is used for positioning outputs.
 
 ### `variable-refresh-rate`
 
-<sup>Since: 0.1.5</sup>
-
 This flag enables variable refresh rate (VRR, also known as adaptive sync, FreeSync, or G-Sync), if the output supports it.
 
 You can check whether an output supports VRR in `clarion msg outputs`.
@@ -210,7 +208,7 @@ output "HDMI-A-1" {
 }
 ```
 
-<sup>Since: 0.1.9</sup> You can also set the `on-demand=true` property, which will only enable VRR when this output shows a window matching the `variable-refresh-rate` window rule.
+You can also set the `on-demand=true` property, which will only enable VRR when this output shows a window matching the `variable-refresh-rate` window rule.
 This is helpful to avoid various issues with VRR, since it can be disabled most of the time, and only enabled for specific windows, like games or video players.
 
 ```kdl
@@ -241,12 +239,10 @@ output "DP-2" {
 
 ### `background-color`
 
-<sup>Since: 0.1.8</sup>
-
 Set the background color that clarion draws for workspaces on this output.
 This is visible when you're not using any background tools like swaybg.
 
-<sup>Until: 25.05</sup> The alpha channel for this color will be ignored.
+The alpha channel for this color will be ignored.
 
 This setting is deprecated, set `background-color` in the [output `layout {}` block](#layout-config-overrides) instead.
 
@@ -270,8 +266,6 @@ output "HDMI-A-1" {
 ```
 
 ### `hdr`
-
-<sup>Since: next release</sup>
 
 Enable experimental HDR10 output signaling for this output when the connector exposes
 `HDR_OUTPUT_METADATA` and `Colorspace`. This currently enables PQ/BT.2020 KMS metadata
@@ -300,8 +294,6 @@ clarion msg outputs   # shows "HDR: enabled" per output
 The settings app's 显示器 page shows the same HDR status.
 
 ### `max-bpc`
-
-<sup>Since: next release</sup>
 
 Set the maximum bits per channel (BPC) for this output.
 

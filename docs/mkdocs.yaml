@@ -48,7 +48,6 @@ markdown_extensions:
 plugins:
   - search
 hooks:
-  - hooks/shortcodes.py
   - hooks/remove-must-fail.py
 extra_css:
   - _assets/stylesheets/clarion.css

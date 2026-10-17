@@ -225,7 +225,7 @@ A few settings are common between `touchpad`, `mouse`, `trackpoint`, and `trackb
 - `accel-profile`: can be `adaptive` (the default) or `flat` (disables pointer acceleration).
 - `scroll-method`: when to generate scroll events instead of pointer motion events, can be `no-scroll`, `two-finger`, `edge`, or `on-button-down`.
   The default and supported methods vary depending on the device type.
-- `scroll-button`: <sup>Since: 0.1.10</sup> the button code used for the `on-button-down` scroll method. You can find it in `libinput debug-events`.
+- `scroll-button`: the button code used for the `on-button-down` scroll method. You can find it in `libinput debug-events`.
 - `scroll-button-lock`: when enabled, the button does not need to be held down. Pressing once engages scrolling, pressing a second time disengages it, and double click acts as single click of the the underlying button.
 - `left-handed`: if set, changes the device to left-handed mode.
 - `middle-emulation`: emulate a middle mouse click by pressing left and right mouse buttons at once.
@@ -243,7 +243,7 @@ Settings specific to `touchpad`s:
 
 Settings specific to `touchpad` and `mouse`:
 
-- `scroll-factor`: <sup>Since: 0.1.10</sup> scales the scrolling speed by this value.
+- `scroll-factor`: scales the scrolling speed by this value.
 
     You can also override horizontal and vertical scroll factor separately like so: `scroll-factor horizontal=2.0 vertical=-1.0`
 
@@ -269,13 +269,13 @@ input {
 
 Valid output names are the same as the ones used for output configuration.
 
-<sup>Since: 0.1.7</sup> When a tablet is not mapped to any output, it will map to the union of all connected outputs, without aspect ratio correction.
+When a tablet is not mapped to any output, it will map to the union of all connected outputs, without aspect ratio correction.
 
 Settings specific to `tablet`:
 
 - `map-to-focused-output`: will map the tablet to the focused output, takes precedence over `map-to-output`.
 
-- `map-to-focused-window`: <sup>Since: next release</sup> will map the tablet to the focused window's geometry, takes precedence over `map-to-focused-output` and `map-to-output`.
+- `map-to-focused-window`: will map the tablet to the focused window's geometry, takes precedence over `map-to-focused-output` and `map-to-output`.
 Falls back to those when no window is focused (for example, in the overview).
 
     When the tablet is also mapped to a specific output via `map-to-output`, the `map-to-focused-window` flag will map the tablet to the active window on that output.
@@ -333,7 +333,7 @@ input {
 }
 ```
 
-<sup>Since: 0.1.8</sup> You can optionally set `max-scroll-amount`.
+You can optionally set `max-scroll-amount`.
 Then, focus-follows-mouse won't focus a window if it will result in the view scrolling more than the set amount.
 The value is a percentage of the working area width.
 

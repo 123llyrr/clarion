@@ -126,11 +126,11 @@ layout {
 
 Set gaps around (inside and outside) windows in logical pixels.
 
-<sup>Since: 0.1.7</sup> You can use fractional values.
+You can use fractional values.
 The value will be rounded to physical pixels according to the scale factor of every output.
 For example, `gaps 0.5` on an output with `scale 2` will result in one physical-pixel wide gaps.
 
-<sup>Since: 0.1.8</sup> You can emulate "inner" vs. "outer" gaps with negative `struts` values (see the struts section below).
+You can emulate "inner" vs. "outer" gaps with negative `struts` values (see the struts section below).
 
 ```kdl
 layout {
@@ -154,8 +154,6 @@ layout {
 ```
 
 ### `always-center-single-column`
-
-<sup>Since: 0.1.9</sup>
 
 If set, clarion will always center a single column on a workspace, regardless of the `center-focused-column` option.
 
@@ -245,8 +243,6 @@ layout {
 
 ### `preset-window-heights`
 
-<sup>Since: 0.1.9</sup>
-
 Set the heights that the `switch-preset-window-height` action (Mod+Ctrl+Shift+R) toggles between.
 You can use the `switch-preset-window-height-back` action (not bound by default) to toggle in reverse.
 
@@ -314,7 +310,7 @@ layout {
 
 Set the thickness of the border in logical pixels.
 
-<sup>Since: 0.1.7</sup> You can use fractional values.
+You can use fractional values.
 The value will be rounded to physical pixels according to the scale factor of every output.
 For example, `width 0.5` on an output with `scale 2` will result in one physical-pixel thick borders.
 
@@ -374,7 +370,7 @@ layout {
 }
 ```
 
-<sup>Since: 0.1.8</sup> You can set the gradient interpolation color space using syntax like `in="srgb-linear"` or `in="oklch longer hue"`.
+You can set the gradient interpolation color space using syntax like `in="srgb-linear"` or `in="oklch longer hue"`.
 Supported color spaces are:
 
 - `srgb` (the default),
@@ -496,8 +492,6 @@ layout {
 
 ### `insert-hint`
 
-<sup>Since: 0.1.10</sup> 
-
 Settings for the window insert position hint during an interactive window move.
 
 `off` disables the insert hint altogether.
@@ -523,7 +517,7 @@ They are set in logical pixels.
 Left and right struts will cause the next window to the side to always peek out slightly.
 Top and bottom struts will simply add outer gaps in addition to the area occupied by layer-shell panels and regular gaps.
 
-<sup>Since: 0.1.7</sup> You can use fractional values.
+You can use fractional values.
 The value will be rounded to physical pixels according to the scale factor of every output.
 For example, `top 0.5` on an output with `scale 2` will result in one physical-pixel wide top strut.
 
@@ -540,7 +534,7 @@ layout {
 
 ![A screenshot illustrating the effects of struts, as explained in the second paragraph in this section](./img/struts.png)
 
-<sup>Since: 0.1.8</sup> You can use negative values.
+You can use negative values.
 They will push the windows outwards, even outside the edges of the screen.
 
 You can use negative struts with matching gaps value to emulate "inner" vs. "outer" gaps.

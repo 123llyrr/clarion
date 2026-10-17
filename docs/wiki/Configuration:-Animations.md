@@ -118,10 +118,10 @@ animations {
 Clarion supports the base curves plus several named cubic-Bezier presets.
 You can get a feel for them on pages like [easings.net](https://easings.net/).
 
-- `ease-out-quad` <sup>Since: 0.1.5</sup>
+- `ease-out-quad` 
 - `ease-out-cubic`
 - `ease-out-expo`
-- `linear` (aliases `macos-linear`, `ca-linear`) <sup>Since: 0.1.6</sup>
+- `linear` (aliases `macos-linear`, `ca-linear`) 
 - `smooth-out` (alias `smoothout`), equivalent to `cubic-bezier(0, 0, 0.58, 1)`
 - `overshot` (alias `overshoot`)
 - `quick`
@@ -267,8 +267,6 @@ a flat texture; select `reveal` or a custom shader to use Glide.
 
 ##### `custom-shader`
 
-<sup>Since: 0.1.6</sup>
-
 You can write a custom shader for drawing the window during an open animation.
 
 See [this example shader](./examples/open_custom_shader.frag) for a full documentation with several animations to experiment with.
@@ -309,8 +307,6 @@ animations {
 
 #### `window-close`
 
-<sup>Since: 0.1.5</sup>
-
 Window closing animation.
 
 This one uses an easing type by default.
@@ -344,8 +340,6 @@ the mesh settles using fixed simulation steps and stops requesting frames once s
 `animations { off; }` disables Cube, Glide, Wobble, and all other animations together.
 
 ##### `custom-shader`
-
-<sup>Since: 0.1.6</sup>
 
 You can write a custom shader for drawing the window during a close animation.
 
@@ -400,8 +394,6 @@ animations {
 
 #### `window-movement`
 
-<sup>Since: 0.1.5</sup>
-
 Movement of individual windows within a workspace.
 
 Includes:
@@ -423,8 +415,6 @@ animations {
 
 #### `window-resize`
 
-<sup>Since: 0.1.5</sup>
-
 Window resize animation.
 
 Only manual window resizes are animated, i.e. when you resize the window with `switch-preset-column-width` or `maximize-column`.
@@ -439,8 +429,6 @@ animations {
 ```
 
 ##### `custom-shader`
-
-<sup>Since: 0.1.6</sup>
 
 You can write a custom shader for drawing the window during a resize animation.
 
@@ -499,8 +487,6 @@ animations {
 
 #### `screenshot-ui-open`
 
-<sup>Since: 0.1.8</sup>
-
 The open (fade-in) animation of the screenshot UI.
 
 ```kdl
@@ -537,8 +523,6 @@ animations {
 ```
 
 ### Synchronized Animations
-
-<sup>Since: 0.1.5</sup>
 
 Sometimes, when two animations are meant to play together synchronized, clarion will drive them both with the same configuration.
 

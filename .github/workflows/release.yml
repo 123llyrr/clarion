@@ -35,15 +35,6 @@ jobs:
         with:
           show-progress: false
 
-      - name: Check for unreplaced "Since:" in the wiki
-        run: |
-          # Fail if a match is found (exit code 0)
-          grep --recursive 'Since: next release' docs/wiki && exit 1
-
-          # Fail if grep failed (exit code 2)
-          status=$?
-          if [ $status -ne 1 ]; then exit $status; fi
-
       - name: Install dependencies
         run: |
           sudo apt-get update -y

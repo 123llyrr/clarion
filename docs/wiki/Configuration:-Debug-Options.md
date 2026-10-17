@@ -195,8 +195,6 @@ debug {
 
 ### `disable-resize-throttling`
 
-<sup>Since: 0.1.9</sup>
-
 Disable throttling resize events sent to windows.
 
 By default, when resizing quickly (e.g. interactively), a window will only receive the next size once it has made a commit for the previously requested size.
@@ -211,8 +209,6 @@ debug {
 ```
 
 ### `disable-transactions`
-
-<sup>Since: 0.1.9</sup>
 
 Disable transactions (resize and close).
 
@@ -230,8 +226,6 @@ debug {
 
 ### `keep-laptop-panel-on-when-lid-is-closed`
 
-<sup>Since: 0.1.10</sup>
-
 By default, clarion will disable the internal laptop monitor when the laptop lid is closed.
 This flag turns off this behavior and will leave the internal laptop monitor on.
 
@@ -242,8 +236,6 @@ debug {
 ```
 
 ### `disable-monitor-names`
-
-<sup>Since: 0.1.10</sup>
 
 Disables the make/model/serial monitor names, as if clarion fails to read them from the EDID.
 
@@ -315,8 +307,6 @@ debug {
 
 ### `disable-10bit-output`
 
-<sup>Since: next release</sup>
-
 By default, clarion will try to output a 10-bit color format to the monitor (before falling back to 8-bit).
 However, this can currently cause problems on some Intel + NVIDIA mixed-GPU setups: the screen doesn't light up, or displays only white, etc.
 
@@ -346,8 +336,6 @@ binds {
 
 #### `debug-toggle-opaque-regions`
 
-<sup>Since: 0.1.6</sup>
-
 Tints regions marked as opaque with blue and the rest of the render elements with red.
 
 Useful to check how Wayland surfaces and internal render elements mark their parts as opaque, which is a rendering performance optimization.
@@ -359,8 +347,6 @@ binds {
 ```
 
 #### `debug-toggle-damage`
-
-<sup>Since: 0.1.6</sup>
 
 Tints damaged regions with red.
 

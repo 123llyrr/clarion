@@ -1,7 +1,7 @@
 This is a checklist of things to release a new clarion version.
 
-We'll use `26.04` as the example new version.
-When making a patch release, append the patch number like `26.04.1`.
+We'll use `0.2.0` as the example new version.
+When making a patch release, bump the patch number, like `0.2.1`.
 
 ## Prepare the release notes
 
@@ -9,18 +9,16 @@ Plan for a few days of work, this usually takes a while.
 
 During this process, also check:
 
-- that all additions are marked with "next release" on the wiki,
 - if anything needs updating in `README.md`.
 
 ## Bump version
 
-We use `year.month.patch` versioning.
-If the month contains a leading zero, drop it from the crate version (Cargo requirement).
+We use `major.minor.patch` versioning, matching the `version` field in Cargo.toml.
 
 You can use the command from [cargo-edit](https://github.com/killercup/cargo-edit):
 
 ```
-cargo set-version 26.4.0
+cargo set-version 0.2.0
 ```
 
 Then, manually update version in:
@@ -30,10 +28,6 @@ Then, manually update version in:
 - Dependency example in `clarion-ipc/src/lib.rs`
 
 Do a full text search for the old version to make sure there are no other places.
-
-## Replace all "Since: next release" mentions
-
-Do a full text search for `next release`, replace everything with the new version number.
 
 ## Build, test, push, and have the CI run
 
@@ -49,7 +43,7 @@ RUN_SLOW_TESTS=1 cargo test --release --all
 
 ## Trigger the "Prepare release" workflow on GitHub Actions
 
-Set the "Public version" input to a version like `26.04`.
+Set the "Public version" input to a version like `0.2.0`.
 
 This workflow will:
 
@@ -65,7 +59,7 @@ Make sure it succeeds and grab the vendored dependency archive that it produces.
 
 You can grab the previous spec from your package repository or the previous release.
 
-- Update version global to `26.04`.
+- Update version global to `0.2.0`.
 - Update commit global to the commit hash corresponding to the release commit.
 You can use `git rev-parse HEAD`.
 - Reset the `Release:` number to 1 if it was higher.
@@ -97,8 +91,8 @@ Revert any temporary changes that you did to the COPR spec for local testing.
 The tag starts with a `v`:
 
 ```
-git tag -am "v26.04 release" v26.04
-git push origin v26.04
+git tag -am "v0.2.0 release" v0.2.0
+git push origin v0.2.0
 ```
 
 While you can let GitHub create the tag automatically upon creating the release, this is not recommended.
@@ -107,8 +101,8 @@ GitHub creates a *lightweight* tag, but we want an annotated tag that plays bett
 ## Publish the release on GitHub
 
 - Either upload the vendored dependencies file to your draft release with the release notes, or move the release notes to the GitHub-created release (the difference is that it's attributed to github-actions).
-- Set the tag to `v26.04`.
-- Set the release title to `v26.04`.
+- Set the tag to `v0.2.0`.
+- Set the release title to `v0.2.0`.
 - Check "Create a discussion for this release".
 
 ## Publish the clarion-ipc crate
@@ -139,7 +133,7 @@ Chat rooms, social media, etc.
     wlprobe > ./src/data/compositors/clarion.json
     ```
 
-- Manually add `"version": "26.04"`, then clean up the diff from unrelated changes, for example:
+- Manually add `"version": "0.2.0"`, then clean up the diff from unrelated changes, for example:
     - The number of `wl_output`s will change depending on how many monitors you have connected.
     - The number of `wp_drm_lease_device_v1` will change depending on your number of GPUs.
     - `org_kde_kwin_server_decoration_manager` and `zxdg_decoration_manager_v1` will only appear with `prefer-no-csd`.

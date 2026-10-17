@@ -28,9 +28,5 @@ display capabilities determine which presentation and synchronization paths are
 available.
 
 These pages are maintained in the repository's `docs/wiki/` directory.
-
-The pages no longer carry the upstream release markers (`Since: 25.05` and so
-on) that they had before the fork. Those markers referred to another project's
-release train and had no counterpart here; every option documented on these
-pages is present in the current build. Options that are genuinely experimental
-say so in their own text.
+Every option documented here is present in the current build; options that are
+experimental say so in their own text.

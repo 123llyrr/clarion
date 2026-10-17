@@ -56,7 +56,7 @@ You can customize the `Mod` key [in the `input` section of the config](./Configu
 > When resolving latin keys, clarion will search for the *first* configured XKB layout that has the latin key.
 > So for example with US QWERTY and RU layouts configured, US QWERTY will be used for latin binds.
 
-<sup>Since: 0.1.8</sup> Binds will repeat by default (i.e. holding down a bind will make it trigger repeatedly).
+Binds will repeat by default (i.e. holding down a bind will make it trigger repeatedly).
 You can disable that for specific binds with `repeat=false`:
 
 ```kdl
@@ -199,7 +199,6 @@ binds {
 ```
 
 > [!TIP]
-> <sup>Since: 0.1.5</sup>
 > Spawn bindings have a special `allow-when-locked=true` property that makes them work even while the session is locked:
 > ```kdl
 > binds {
@@ -300,8 +299,6 @@ binds {
 ```
 
 #### `do-screen-transition`
-
-<sup>Since: 0.1.6</sup>
 
 Freeze the screen for a brief moment then crossfade to the new contents.
 

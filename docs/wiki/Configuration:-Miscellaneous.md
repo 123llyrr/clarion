@@ -107,7 +107,6 @@ With `prefer-no-csd` set, applications that negotiate server-side decorations th
 > Unlike most other options, changing `prefer-no-csd` will not entirely affect already running applications.
 > It will make some windows rectangular, but won't remove the title bars.
 > This mainly has to do with clarion working around a [bug in SDL2](https://github.com/libsdl-org/SDL/issues/8173) that prevents SDL2 applications from starting.
->
 > Restart applications after changing `prefer-no-csd` in the config to fully apply it.
 
 ```kdl
@@ -167,8 +166,6 @@ cursor {
 
 #### `hide-when-typing`
 
-<sup>Since: 0.1.10</sup>
-
 If set, hides the cursor when pressing a key on the keyboard.
 
 > [!NOTE]
@@ -182,8 +179,6 @@ cursor {
 ```
 
 #### `hide-after-inactive-ms`
-
-<sup>Since: 0.1.10</sup>
 
 If set, the cursor will automatically hide once this number of milliseconds passes since the last cursor movement.
 

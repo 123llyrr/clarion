@@ -234,8 +234,6 @@ window-rule {
 
 #### `is-active-in-column`
 
-<sup>Since: 0.1.6</sup>
-
 Can be `true` or `false`.
 Matches the window that is the "active" window in its column.
 
@@ -316,8 +314,6 @@ window-rule {
 
 #### `at-startup`
 
-<sup>Since: 0.1.6</sup>
-
 Can be `true` or `false`.
 Matches during the first 60 seconds after starting clarion.
 
@@ -393,12 +389,10 @@ window-rule {
 }
 ```
 
-<sup>Since: 0.1.9</sup> `open-on-output` can now use monitor manufacturer, model, and serial.
+`open-on-output` can now use monitor manufacturer, model, and serial.
 Before, it could only use the connector name.
 
 #### `open-on-workspace`
-
-<sup>Since: 0.1.6</sup>
 
 Make the window open on a specific [named workspace](./Configuration:-Named-Workspaces.md).
 
@@ -577,8 +571,6 @@ window-rule {
 
 #### `on-xdg-activate`
 
-<sup>Since: next release</sup>
-
 Set what clarion does when a window requests activation through [xdg-activation](https://wayland.app/protocols/xdg-activation-v1).
 
 Values:
@@ -628,8 +620,6 @@ window-rule {
 ```
 
 #### `variable-refresh-rate`
-
-<sup>Since: 0.1.9</sup>
 
 If set to true, whenever this window displays on an output with on-demand VRR, it will enable VRR on that output.
 
@@ -753,8 +743,6 @@ window-rule {
 
 #### `focus-ring` and `border`
 
-<sup>Since: 0.1.6</sup>
-
 Override the focus ring and border options for the window.
 
 These rules have the same options as the normal [`focus-ring` and `border` config in the layout section](./Configuration:-Layout.md#focus-ring-and-border), so check the documentation there.
@@ -817,8 +805,6 @@ window-rule {
 
 #### `geometry-corner-radius`
 
-<sup>Since: 0.1.6</sup>
-
 Set the corner radius of the window.
 
 On its own, this setting will only affect the border and the focus ring—they will round their corners to match the geometry corner radius.
@@ -848,8 +834,6 @@ This way, you can match GTK 3 applications which have square bottom corners:
 ![A screenshot showing a window with only the top corners rounded](./img/different-corner-radius.png)
 
 #### `clip-to-geometry`
-
-<sup>Since: 0.1.6</sup>
 
 Clips the window to its visual geometry.
 

@@ -79,7 +79,7 @@ The clarion version string includes its version and commit hash:
 
 ```
 $ clarion --version
-clarion 25.01 (e35c630)
+clarion 0.1.0 (e35c630)
 ```
 
 When building in a packaging system, there's usually no repository, so the commit hash is unavailable and the version will show "unknown commit".
@@ -93,7 +93,7 @@ $ export CLARION_BUILD_COMMIT="e35c630"
 You can also override the version string entirely, in this case please make sure the corresponding clarion version stays intact:
 
 ```
-$ export CLARION_BUILD_VERSION_STRING="25.01-1 (e35c630)"
+$ export CLARION_BUILD_VERSION_STRING="0.1.0-1 (e35c630)"
 ...proceed to build clarion
 ```
 

@@ -10,8 +10,6 @@ For example, `clarion msg --json outputs`.
 
 ### Event Stream
 
-<sup>Since: 0.1.9</sup>
-
 While most clarion IPC requests return a single response, the event stream request will make clarion continuously stream events into the IPC connection until it is closed.
 This is useful for implementing various bars and indicators that update as soon as something happens, without continuous polling.
 

@@ -32,7 +32,7 @@ Please report issues with X11 apps to xwayland-satellite instead of clarion: htt
 
 ### System Information
 
-<!-- Paste the output of `clarion -V`, e.g. clarion 25.02 (b94a5db) -->
+<!-- Paste the output of `clarion -V`, e.g. clarion 0.1.0 (b94a5db) -->
 * clarion version:
 
 <!-- Write your distribution, e.g. Fedora 40 Silverblue -->
