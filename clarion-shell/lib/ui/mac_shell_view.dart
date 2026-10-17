@@ -1312,12 +1312,13 @@ class _MacMenuBar extends StatelessWidget {
                               ? 'assets/shell/clarion-mark-white.png'
                               : 'assets/shell/clarion-mark-black.png',
                           key: const ValueKey('mac-apple-logo'),
-                          width: 16,
+                          width: 17,
                           height: 18,
+                          fit: BoxFit.contain,
                           filterQuality: FilterQuality.high,
                           excludeFromSemantics: true,
                           errorBuilder: (_, _, _) => ClarionMark(
-                            width: 16,
+                            width: 17,
                             size: 18,
                             color: dark ? Colors.white : Colors.black87,
                           ),

@@ -237,7 +237,7 @@ void main() {
         final logo = tester.getRect(
           find.byKey(const ValueKey('mac-apple-logo')),
         );
-        expect(logo.size, const Size(13, 16));
+        expect(logo.size, const Size(17, 18));
         expect(logo.center.dy, closeTo(bar.center.dy, .01));
         final app = tester.widget<Text>(
           find.byKey(const ValueKey('mac-active-app')),
