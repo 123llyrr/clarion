@@ -104,6 +104,31 @@ Future<void> _awaitCondition(bool Function() condition) async {
 }
 
 void main() {
+  test('desktop shortcut names skip empty locale overrides', () async {
+    final sandbox = await _sandbox();
+    final app = await sandbox.installedApp();
+    await File(app.desktopFile).copy('${sandbox.desktop}/browser.desktop');
+    for (final (locale, name) in [
+      ({'LC_ALL': '', 'LC_MESSAGES': ''}, '浏览器'),
+      ({'LC_ALL': '', 'LC_MESSAGES': 'zh_CN.UTF-8'}, '浏览器'),
+      ({'LC_ALL': 'C', 'LC_MESSAGES': 'zh_CN.UTF-8'}, 'Browser'),
+    ]) {
+      final service = DesktopService(
+        root: sandbox.desktop,
+        environment: {...sandbox.environment, ...locale},
+        command: sandbox.command,
+      );
+      try {
+        await service.start();
+        expect(service.error, isNull);
+        expect(service.entries.single.displayName, name);
+      } finally {
+        service.dispose();
+      }
+    }
+    expect(sandbox.commands, isEmpty);
+  });
+
   test(
     'bulk trash preflights every path before touching a valid selection',
     () async {

@@ -441,7 +441,7 @@ fn string_list(value: &str) -> Vec<String> {
 fn locale_candidates(environment: &CatalogEnvironment) -> Vec<String> {
     let raw = ["LC_ALL", "LC_MESSAGES", "LANG"]
         .iter()
-        .find_map(|key| environment.get(*key))
+        .find_map(|key| environment.get(*key).filter(|value| !value.is_empty()))
         .map(String::as_str)
         .unwrap_or_default();
     let (base, modifier) = raw
@@ -748,6 +748,39 @@ mod tests {
         assert_eq!(catalog.search("中文 missing").len(), 0);
         assert_eq!(catalog.search(" \t\n").len(), 1);
         assert_eq!(catalog.search("ignored").len(), 0);
+    }
+
+    #[test]
+    fn empty_locale_overrides_fall_back_without_losing_localized_search() {
+        let mut fixture = Fixture::new();
+        fixture.entry(
+            "user",
+            "browser.desktop",
+            "DBusActivatable=true\nName=Browser\nName[zh_CN]=浏览器\nName[en_US]=English Browser\nKeywords[zh_CN]=网页;\n",
+        );
+        for (all, messages, lang, name, query, matches) in [
+            ("", "", "zh_CN.UTF-8", "浏览器", "网页", 1),
+            ("", "zh_CN.UTF-8", "en_US.UTF-8", "浏览器", "网页", 1),
+            (
+                "en_US.UTF-8",
+                "zh_CN.UTF-8",
+                "zh_CN.UTF-8",
+                "English Browser",
+                "网页",
+                0,
+            ),
+        ] {
+            fixture.env.insert("LC_ALL".into(), all.into());
+            fixture.env.insert("LC_MESSAGES".into(), messages.into());
+            fixture.env.insert("LANG".into(), lang.into());
+            let catalog = fixture.load();
+            assert_eq!(
+                catalog.get("browser.desktop").unwrap().name,
+                name,
+                "LC_ALL={all:?}, LC_MESSAGES={messages:?}, LANG={lang:?}"
+            );
+            assert_eq!(catalog.search(query).len(), matches);
+        }
     }
 
     #[test]

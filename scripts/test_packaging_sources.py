@@ -48,6 +48,14 @@ class NixSourceClosureTests(unittest.TestCase):
             f"Nix source filter omits {path.relative_to(ROOT)}",
         )
 
+    def test_nix_source_paths_exist_in_checkout(self):
+        for source in self.sources:
+            with self.subTest(source=source.relative_to(ROOT)):
+                self.assertTrue(
+                    source.exists(),
+                    f"Nix source filter references a missing path: {source.relative_to(ROOT)}",
+                )
+
     def test_nix_source_contains_every_workspace_crate(self):
         for member in self.members:
             with self.subTest(member=member.relative_to(ROOT)):
