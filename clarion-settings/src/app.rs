@@ -69,6 +69,7 @@ pub struct ClarionSettingsApp {
     full_config: crate::full_config::FullConfig,
     command_palette: CommandPalette,
     pending_window_focus: Option<PendingWindowFocus>,
+    desktop_theme: crate::theme::DesktopThemeWatcher,
 }
 
 #[derive(Clone, Copy)]
@@ -128,6 +129,7 @@ impl ClarionSettingsApp {
             full_config: Default::default(),
             command_palette: Default::default(),
             pending_window_focus: None,
+            desktop_theme: Default::default(),
         };
 
         app.refresh_ipc_data();
@@ -710,6 +712,9 @@ impl ClarionSettingsApp {
 
 impl ClarionSettingsApp {
     fn update_ui(&mut self, ctx: &egui::Context) {
+        // A desktop light/dark switch applies to the settings window in place,
+        // without waiting for the next launch.
+        self.desktop_theme.poll(ctx);
         let previous_ui = (
             self.active_tab,
             self.show_hot_corners,
@@ -812,7 +817,9 @@ impl ClarionSettingsApp {
             self.refresh_ipc_data();
         }
 
-        ctx.request_repaint_after(Duration::from_secs(3));
+        // Check the desktop preference about once a second; IPC data still
+        // refreshes on its own 3-second schedule.
+        ctx.request_repaint_after(Duration::from_secs(1));
 
         // Consume palette keys before the editor; disable background widgets for
         // this whole frame even if Enter or Escape closes the foreground panel.
@@ -856,7 +863,7 @@ impl ClarionSettingsApp {
         egui::TopBottomPanel::bottom("config_actions")
             .frame(
                 Frame::none()
-                    .fill(palette::SIDEBAR)
+                    .fill(palette::sidebar())
                     .inner_margin(Margin::symmetric(14., 8.)),
             )
             .show(ctx, |ui| {
@@ -880,11 +887,11 @@ impl ClarionSettingsApp {
                         },
                         18.,
                         if invalid {
-                            palette::ERROR
+                            palette::error()
                         } else if dirty {
-                            palette::WARNING
+                            palette::warning()
                         } else {
-                            palette::MUTED
+                            palette::muted()
                         },
                     );
                     let summary_width = (ui.available_width() - 255.).max(70.);
@@ -900,11 +907,11 @@ impl ClarionSettingsApp {
                             })
                             .size(13.)
                             .color(if invalid {
-                                palette::ERROR
+                                palette::error()
                             } else if dirty {
-                                palette::WARNING
+                                palette::warning()
                             } else {
-                                palette::MUTED
+                                palette::muted()
                             }),
                         );
                         ui.add(
@@ -917,7 +924,7 @@ impl ClarionSettingsApp {
                                         .to_string_lossy(),
                                 )
                                 .size(11.)
-                                .color(palette::MUTED),
+                                .color(palette::muted()),
                             )
                             .truncate(),
                         )
@@ -943,7 +950,7 @@ impl ClarionSettingsApp {
         egui::CentralPanel::default()
             .frame(
                 Frame::none()
-                    .fill(palette::BACKGROUND)
+                    .fill(palette::background())
                     .inner_margin(Margin::same(20.)),
             )
             .show(ctx, |ui| {
@@ -953,13 +960,13 @@ impl ClarionSettingsApp {
                 if let Some((ref message, is_error, time)) = self.status_message {
                     if time.elapsed() < Duration::from_secs(6) {
                         Frame::none()
-                            .fill(palette::SURFACE)
+                            .fill(palette::surface())
                             .stroke(Stroke::new(
                                 1.0_f32,
                                 if is_error {
-                                    palette::ERROR
+                                    palette::error()
                                 } else {
-                                    palette::SUCCESS
+                                    palette::success()
                                 },
                             ))
                             .rounding(Rounding::same(8.))
@@ -971,9 +978,9 @@ impl ClarionSettingsApp {
                                         if is_error { Icon::Warning } else { Icon::Check },
                                         18.,
                                         if is_error {
-                                            palette::ERROR
+                                            palette::error()
                                         } else {
-                                            palette::SUCCESS
+                                            palette::success()
                                         },
                                     );
                                     ui.add(egui::Label::new(message).wrap());
@@ -1125,7 +1132,7 @@ impl ClarionSettingsApp {
         egui::TopBottomPanel::top("preferences_titlebar")
             .exact_height(30.)
             .show_separator_line(false)
-            .frame(Frame::none().fill(egui::Color32::from_rgb(230, 230, 230)))
+            .frame(Frame::none().fill(palette::sidebar()))
             .show(ctx, |ui| {
                 let (rect, _) =
                     ui.allocate_exact_size(egui::vec2(ui.available_width(), 30.), Sense::hover());
@@ -1149,6 +1156,8 @@ impl ClarionSettingsApp {
                     );
                     let fill = if focused || show_symbols {
                         color
+                    } else if palette::is_dark() {
+                        egui::Color32::from_gray(90)
                     } else {
                         egui::Color32::from_gray(202)
                     };
@@ -1220,9 +1229,9 @@ impl ClarionSettingsApp {
                     preferences_home::title(self.active_tab),
                     egui::FontId::proportional(13.),
                     if focused {
-                        palette::TEXT
+                        palette::text()
                     } else {
-                        palette::MUTED
+                        palette::muted()
                     },
                 );
             });
@@ -1238,7 +1247,7 @@ impl ClarionSettingsApp {
             .exact_height(42.)
             .frame(
                 Frame::none()
-                    .fill(egui::Color32::from_rgb(230, 230, 230))
+                    .fill(palette::sidebar())
                     .inner_margin(Margin::symmetric(14., 8.)),
             )
             .show(ctx, |ui| {
@@ -1460,12 +1469,17 @@ impl ClarionSettingsApp {
                 Icon::Appearance => icons::preference_icon(ui, icons::PreferenceIcon::General, 32.),
                 Icon::Display => icons::preference_icon(ui, icons::PreferenceIcon::Displays, 32.),
                 Icon::Input => icons::preference_icon(ui, icons::PreferenceIcon::Keyboard, 32.),
-                _ => icons::icon(ui, icon, 20., palette::MUTED),
+                _ => icons::icon(ui, icon, 20., palette::muted()),
             };
-            ui.label(RichText::new(title).size(20.).strong().color(palette::TEXT));
+            ui.label(
+                RichText::new(title)
+                    .size(20.)
+                    .strong()
+                    .color(palette::text()),
+            );
         });
         ui.add_space(5.);
-        ui.add(egui::Label::new(RichText::new(detail).color(palette::MUTED).size(13.)).wrap());
+        ui.add(egui::Label::new(RichText::new(detail).color(palette::muted()).size(13.)).wrap());
         ui.add_space(16.);
     }
 
@@ -1482,7 +1496,7 @@ impl ClarionSettingsApp {
         for output in outputs {
             ui.add_space(8.0);
             Frame::none()
-                .fill(palette::SURFACE)
+                .fill(palette::surface())
                 .rounding(Rounding::same(8.0))
                 .inner_margin(Margin::same(14.0))
                 .show(ui, |ui| {
@@ -1522,9 +1536,9 @@ impl ClarionSettingsApp {
                         if let Some(interval) = output.refresh_interval_ms.filter(|v| *v > 0.) {
                             let fraction = samples.p95 / interval;
                             let color = if fraction >= 1. {
-                                palette::ERROR
+                                palette::error()
                             } else {
-                                palette::ACCENT
+                                palette::accent()
                             };
                             ui.add(egui::ProgressBar::new(fraction.clamp(0., 1.) as f32)
                                 .fill(color)
@@ -1622,7 +1636,7 @@ impl ClarionSettingsApp {
             // Gaps
             ui.label(
                 RichText::new("窗口间距 (Gaps)")
-                    .color(palette::TEXT)
+                    .color(palette::text())
                     .strong(),
             );
             ui.horizontal(|ui| {
@@ -1636,14 +1650,14 @@ impl ClarionSettingsApp {
             ui.label(
                 RichText::new("控制平铺窗口与屏幕边缘及窗口之间的留白间距。")
                     .size(11.5)
-                    .color(palette::MUTED),
+                    .color(palette::muted()),
             );
             ui.add_space(14.0);
 
             // Center focused column
             ui.label(
                 RichText::new("居中聚焦列 (Center Focused Column)")
-                    .color(palette::TEXT)
+                    .color(palette::text())
                     .strong(),
             );
             let current = &mut self.config_mgr.visual_settings_mut().center_focused_column;
@@ -1723,7 +1737,7 @@ impl ClarionSettingsApp {
             ui.add_space(16.0);
 
             // Border & Focus Ring Width
-            ui.label(RichText::new("边框宽度设置").color(palette::TEXT).strong());
+            ui.label(RichText::new("边框宽度设置").color(palette::text()).strong());
             ui.horizontal(|ui| {
                 let s = &mut self.config_mgr.visual_settings_mut().border_width;
                 ui.add(egui::Slider::new(s, 0.0..=12.0).clamping(egui::SliderClamping::Edits).text("边框宽度 (px)"));
@@ -1739,14 +1753,14 @@ impl ClarionSettingsApp {
             egui::CollapsingHeader::new("窗口关闭效果").show(ui, |ui| self.ui_close_effect(ui));
             egui::CollapsingHeader::new("窗口与工作区动效").show(ui, |ui| {
             Frame::none()
-                .fill(palette::SURFACE)
-                .stroke(Stroke::new(1.0_f32, palette::BORDER))
+                .fill(palette::surface())
+                .stroke(Stroke::new(1.0_f32, palette::border()))
                 .rounding(Rounding::same(6.0))
                 .inner_margin(Margin::same(12.0))
                 .show(ui, |ui| {
                     ui.label(
                         RichText::new("窗口与工作区动效")
-                            .color(palette::ACCENT)
+                            .color(palette::accent())
                             .strong(),
                     );
                     ui.label("运行时快捷开关不改配置；这里保存后会通过 IPC 热重载。");
@@ -1849,13 +1863,13 @@ impl ClarionSettingsApp {
             egui::CollapsingHeader::new("动态渐变边框").show(ui, |ui| {
             // Clarion special feature: Animated gradient borders
             Frame::none()
-                .fill(palette::SURFACE)
+                .fill(palette::surface())
                 .rounding(Rounding::same(6.0))
                 .inner_margin(Margin::same(12.0))
                 .show(ui, |ui| {
                     ui.label(
                         RichText::new("动态渐变边框")
-                            .color(palette::ACCENT)
+                            .color(palette::accent())
                             .strong(),
                     );
                     ui.label(
@@ -1891,7 +1905,7 @@ impl ClarionSettingsApp {
             ) {
                 Ok(style) => style,
                 Err(error) => {
-                    ui.colored_label(palette::WARNING, error.to_string());
+                    ui.colored_label(palette::warning(), error.to_string());
                     return;
                 }
             };
@@ -1908,7 +1922,7 @@ impl ClarionSettingsApp {
                     ));
                 }
                 Err(error) => {
-                    ui.colored_label(palette::WARNING, format!("请先修正配置：{error}"));
+                    ui.colored_label(palette::warning(), format!("请先修正配置：{error}"));
                 }
             }
             let mut selected = local;
@@ -1947,12 +1961,12 @@ impl ClarionSettingsApp {
             let state = match CloseState::read(self.config_mgr.raw_content()) {
                 Ok(state) => state,
                 Err(error) => {
-                    ui.colored_label(palette::WARNING, error.to_string());
+                    ui.colored_label(palette::warning(), error.to_string());
                     return;
                 }
             };
             if state.custom_shader {
-                ui.colored_label(palette::WARNING, "当前文件保留了自定义关闭着色器。");
+                ui.colored_label(palette::warning(), "当前文件保留了自定义关闭着色器。");
             } else if state.selected.is_none() {
                 ui.weak("本文件尚未指定关闭效果；包含文件和桌面会话的默认值可能提供效果。");
             }
@@ -1983,7 +1997,7 @@ impl ClarionSettingsApp {
             let before = match BlurOverrides::read(self.config_mgr.raw_content()) {
                 Ok(overrides) => overrides,
                 Err(error) => {
-                    ui.colored_label(palette::WARNING, error.to_string());
+                    ui.colored_label(palette::warning(), error.to_string());
                     return;
                 }
             };
@@ -2169,7 +2183,7 @@ impl ClarionSettingsApp {
                         fonts.layout_no_wrap(
                             (*label).into(),
                             egui::FontId::proportional(13.),
-                            palette::TEXT,
+                            palette::text(),
                         )
                     })
                     .size()
@@ -2188,21 +2202,21 @@ impl ClarionSettingsApp {
                 };
                 let response = ui.add(
                     Button::new(RichText::new(*label).color(if active {
-                        palette::ON_ACCENT
+                        palette::on_accent()
                     } else {
-                        palette::TEXT
+                        palette::text()
                     }))
                     .fill(if active {
-                        palette::ACCENT
+                        palette::accent()
                     } else {
-                        palette::SURFACE
+                        palette::surface()
                     })
                     .stroke(Stroke::new(
                         1.0_f32,
                         if active {
-                            palette::ACCENT
+                            palette::accent()
                         } else {
-                            palette::BORDER
+                            palette::border()
                         },
                     ))
                     .rounding(rounding)
@@ -2269,15 +2283,15 @@ impl ClarionSettingsApp {
                 ui.painter().rect(
                     monitor,
                     4.,
-                    palette::SURFACE_HOVER,
-                    Stroke::new(1.0_f32, palette::BORDER),
+                    palette::surface_hover(),
+                    Stroke::new(1.0_f32, palette::border()),
                 );
                 ui.painter().text(
                     monitor.center(),
                     Align2::CENTER_CENTER,
                     "屏幕",
                     egui::FontId::proportional(13.),
-                    palette::MUTED,
+                    palette::muted(),
                 );
                 let settings = self.config_mgr.visual_settings_mut();
                 for (label, value, action, right, bottom) in [
@@ -2345,8 +2359,8 @@ impl ClarionSettingsApp {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     done = ui
                         .add(
-                            Button::new(RichText::new("好").color(palette::ON_ACCENT))
-                                .fill(palette::ACCENT)
+                            Button::new(RichText::new("好").color(palette::on_accent()))
+                                .fill(palette::accent())
                                 .min_size(egui::vec2(80., 22.)),
                         )
                         .clicked();
@@ -2493,7 +2507,7 @@ impl ClarionSettingsApp {
                         .current_mode
                         .and_then(|idx| self.cached_outputs[i].modes.get(idx).cloned());
                     Frame::none()
-                        .fill(palette::BACKGROUND)
+                        .fill(palette::background())
                         .rounding(Rounding::same(4.0))
                         .inner_margin(Margin::same(12.0))
                         .show(ui, |ui| {
@@ -2502,7 +2516,7 @@ impl ClarionSettingsApp {
                                 ui.label(
                                     RichText::new(&name)
                                         .size(16.0)
-                                        .color(palette::ACCENT)
+                                        .color(palette::accent())
                                         .strong(),
                                 );
                                 ui.label(format!("(制造商: {}, 型号: {})", make, model));
@@ -2599,8 +2613,8 @@ impl ClarionSettingsApp {
         ui.painter().rect(
             rect,
             4.,
-            palette::SURFACE_HOVER,
-            Stroke::new(1.0_f32, palette::BORDER),
+            palette::surface_hover(),
+            Stroke::new(1.0_f32, palette::border()),
         );
         if logical.is_empty() {
             return;
@@ -2635,18 +2649,18 @@ impl ClarionSettingsApp {
                 monitor.shrink(1.),
                 2.,
                 if selected {
-                    palette::ACCENT
+                    palette::accent()
                 } else {
-                    palette::MUTED
+                    palette::muted()
                 },
-                Stroke::new(1.0_f32, palette::BORDER),
+                Stroke::new(1.0_f32, palette::border()),
             );
             ui.painter().text(
                 monitor.center(),
                 Align2::CENTER_CENTER,
                 &name,
                 egui::FontId::proportional(12.),
-                palette::ON_ACCENT,
+                palette::on_accent(),
             );
             if response.clicked() {
                 self.selected_output = Some(name);
@@ -2697,11 +2711,11 @@ impl ClarionSettingsApp {
                 });
                 match self.config_mgr.validation_status() {
                     ValidationStatus::Valid => {
-                        ui.colored_label(palette::SUCCESS, "配置校验通过");
+                        ui.colored_label(palette::success(), "配置校验通过");
                     }
                     ValidationStatus::Error(error) => {
                         egui::CollapsingHeader::new("配置校验失败（无法保存）").show(ui, |ui| {
-                            ui.colored_label(palette::ERROR, error);
+                            ui.colored_label(palette::error(), error);
                         });
                     }
                     ValidationStatus::NotChecked => {
@@ -2746,14 +2760,14 @@ impl ClarionSettingsApp {
             match self.config_mgr.validation_status() {
                 ValidationStatus::Valid => {
                     Frame::none()
-                        .fill(palette::SUCCESS_SOFT)
+                        .fill(palette::success_soft())
                         .rounding(Rounding::same(6.0))
                         .inner_margin(Margin::symmetric(10.0, 6.0))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 ui.label(
                                     RichText::new("配置检查通过")
-                                        .color(palette::SUCCESS)
+                                        .color(palette::success())
                                         .size(12.5),
                                 );
                             });
@@ -2761,21 +2775,21 @@ impl ClarionSettingsApp {
                 }
                 ValidationStatus::Error(err) => {
                     Frame::none()
-                        .fill(palette::ERROR_SOFT)
-                        .stroke(Stroke::new(1.0_f32, palette::ERROR))
+                        .fill(palette::error_soft())
+                        .stroke(Stroke::new(1.0_f32, palette::error()))
                         .rounding(Rounding::same(6.0))
                         .inner_margin(Margin::symmetric(10.0, 6.0))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 ui.label(
                                     RichText::new("配置检查未通过：")
-                                        .color(palette::ERROR)
+                                        .color(palette::error())
                                         .strong()
                                         .size(12.5),
                                 );
                                 ui.label(
                                     RichText::new(err)
-                                        .color(palette::TEXT)
+                                        .color(palette::text())
                                         .size(12.0)
                                         .monospace(),
                                 );
@@ -2785,7 +2799,7 @@ impl ClarionSettingsApp {
                 ValidationStatus::NotChecked => {
                     ui.label(
                         RichText::new("正在等待输入完成后校验…")
-                            .color(palette::MUTED)
+                            .color(palette::muted())
                             .size(12.5),
                     );
                 }
@@ -2798,7 +2812,7 @@ impl ClarionSettingsApp {
                 ui.label(
                     RichText::new("插入配置示例：")
                         .size(12.0)
-                        .color(palette::MUTED),
+                        .color(palette::muted()),
                 );
                 if ui.button("+ 热区定义").clicked() {
                     let current = self.config_mgr.raw_content().to_string();
@@ -2924,6 +2938,7 @@ mod tests {
             full_config: Default::default(),
             command_palette: Default::default(),
             pending_window_focus: None,
+            desktop_theme: Default::default(),
         }
     }
     fn close(app: &mut ClarionSettingsApp) -> egui::FullOutput {

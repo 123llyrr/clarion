@@ -156,6 +156,7 @@
     "PNG assets retain original 80x80 pixel canvas and alpha; decoded/uploaded once per egui context.",
     "Fonts use the original shell SFNS face and extracted PingFang SC regular face. SFNS Latin and PingFang Chinese parse, glyph presence, atlas raster coverage, and tessellation are validated headlessly at 1x, 1.25x, and 2x.",
     "egui/ab_glyph rendering is not CoreText; using the source fonts does not establish pixel-identical macOS text rasterization.",
-    "Settings theme is explicitly Catalina light; no complete dark-theme fidelity is claimed."
+    "The removed Apple bitmaps are replaced by Clarion's own pane artwork in ../icons/; this file remains the removal record for the old directory.",
+    "The settings window follows the desktop's saved theme (light/dark) and applies a change made in preferences.json without a restart; the dark palette is Clarion's own, not a claim of Catalina dark-theme fidelity."
   ]
 }

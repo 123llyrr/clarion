@@ -13,7 +13,7 @@ fn fixture(tab: ActiveTab) -> (tempfile::TempDir, ClarionSettingsApp, egui::Cont
     app.config_mgr = ConfigManager::from_path(&path).unwrap();
     app.active_tab = tab;
     let context = egui::Context::default();
-    crate::theme::setup_custom_fonts_and_styles(&context);
+    crate::theme::setup_custom_fonts_and_styles(&context, false);
     (directory, app, context)
 }
 
@@ -263,7 +263,7 @@ fn arrow_selection_highlight_and_enter_open_the_same_search_result() {
             .shapes
             .iter()
             .any(|shape| matches!(&shape.shape, Shape::Rect(rect)
-        if rect.rect.contains(result.center()) && rect.fill == crate::theme::colors::ACCENT_SOFT)),
+        if rect.rect.contains(result.center()) && rect.fill == crate::theme::colors::accent_soft())),
         "ArrowDown must highlight the result it will open: selected={} result={result:?} rectangles={:?}",
         app.preferences_search_selected,
         output.shapes.iter().filter_map(|shape| match &shape.shape {

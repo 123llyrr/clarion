@@ -517,6 +517,55 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('Hiding the Dock releases its reserved strip', (tester) async {
+    final controller = _OwnedController()..setShellStyle(ShellStyle.macos);
+    addTearDown(controller.dispose);
+    final calls = <MethodCall>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(window, (
+      call,
+    ) async {
+      calls.add(call);
+      return null;
+    });
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        window,
+        null,
+      ),
+    );
+    await tester.pumpWidget(
+      DockApplication(
+        controller: controller,
+        preferences: const ShellPreferences(),
+        availableWidth: 800,
+      ),
+    );
+    await tester.pumpAndSettle();
+    final visible = calls
+        .where((call) => call.method == 'setDockGeometry')
+        .toList();
+    expect(visible, isNotEmpty);
+    expect(
+      (visible.last.arguments as Map)['reservedSize'],
+      controller.macPreferences.dockSize + 16,
+    );
+
+    controller.setMacPreferences(
+      controller.macPreferences.copyWith(dockHidden: true),
+    );
+    await tester.pumpAndSettle();
+    final hidden = calls
+        .where((call) => call.method == 'setDockGeometry')
+        .last;
+    expect(
+      (hidden.arguments as Map)['reservedSize'],
+      0,
+      reason: 'a hidden Dock must not keep an exclusive zone along the edge',
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('Dock magnification updates regions without resizing GTK', (
     tester,
   ) async {

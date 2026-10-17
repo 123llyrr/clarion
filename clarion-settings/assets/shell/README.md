@@ -2,17 +2,19 @@
 
 The Apple preference-pane bitmaps that used to live here were removed on
 2026-10-17. Clarion is distributed under GPL-3.0-or-later and Apple's licence
-does not permit redistributing its artwork, so no bitmap can ship in this tree.
+does not permit redistributing its artwork, so no Apple bitmap can ship in this
+tree.
 
 `provenance.json` is kept as the extraction record: source package paths,
 SHA-256 values and conversion method for each removed file. It documents what
 was removed, not a right to redistribute it.
 
-## What the app does instead
+## What the app uses instead
 
-Every preference pane draws `PreferenceIcon::vector_fallback()` — an original
-vector icon in `src/icons.rs`. `PreferenceIcon::asset()` returns `None`, and
-`paint_preference` falls back to the vector painter at any DPI.
+The preference home draws the eight Clarion pane icons in
+`../icons/` (`PreferenceIcon::asset()` embeds them with `include_bytes!`).
+A pane whose bitmap is missing falls back to `PreferenceIcon::vector_fallback()`
+— an original vector icon in `src/icons.rs` — so the grid always renders.
 
 ## Restoring Apple bitmaps locally
 
@@ -23,9 +25,9 @@ The script verifies each file against
 directory. Imported files are git-ignored.
 
 The settings binary only compiles a bitmap that is referenced by
-`include_bytes!`; after an import those five entries have to be restored in
-`src/icons.rs` by hand. Until then the app keeps drawing vector icons, which is
-the shipped default.
+`include_bytes!`; after an import those five entries would have to be restored
+in `src/icons.rs` by hand. The shipped icons live in `../icons/` and are not
+affected by this local import path.
 
 Text rendering never depends on these files: `theme::font_definitions()` resolves
 SF Pro Text / PingFang SC through fontconfig and otherwise uses the configured

@@ -557,7 +557,7 @@ impl FullConfig {
                 action = Some(EditAction::Redo);
             }
             if pending {
-                ui.colored_label(colors::WARNING, "本项有修改");
+                ui.colored_label(colors::warning(), "本项有修改");
                 // Keep recovery visible even when the invalid field is in a closed advanced group.
                 if ui.small_button("放弃本项修改").clicked() {
                     action = Some(EditAction::DiscardForm);
@@ -576,13 +576,13 @@ impl FullConfig {
                 for group in ["桌面与外观", "设备与操作", "应用与工作区", "高级设置"]
                 {
                     ui.add_space(6.);
-                    ui.colored_label(colors::MUTED, group);
+                    ui.colored_label(colors::muted(), group);
                     for section in schema::SECTIONS
                         .iter()
                         .filter(|s| section_group(s.name) == group)
                     {
                         ui.horizontal(|ui| {
-                            icons::icon(ui, section_icon(section.name), 16., colors::MUTED);
+                            icons::icon(ui, section_icon(section.name), 16., colors::muted());
                             if ui
                                 .selectable_label(self.section == section.name, section.title)
                                 .on_hover_text(section.name)
@@ -596,7 +596,7 @@ impl FullConfig {
             });
         ui.add_space(6.);
         ui.horizontal(|ui| {
-            icons::icon(ui, Icon::Search, 16., colors::MUTED);
+            icons::icon(ui, Icon::Search, 16., colors::muted());
             let width =
                 (ui.available_width() - if self.search.is_empty() { 0. } else { 64. }).max(40.);
             ui.add_sized(
@@ -611,13 +611,13 @@ impl FullConfig {
         ui.small("切换项目自动保留修改，点击底部“保存并应用”后生效。");
         if let Some(error) = &self.parse_error {
             ui.colored_label(
-                colors::ERROR,
+                colors::error(),
                 format!("配置暂时无法读取，请在“配置文件”页面修复：{error}"),
             );
             return None;
         }
         if let Some(error) = &self.error {
-            ui.colored_label(colors::ERROR, error);
+            ui.colored_label(colors::error(), error);
         }
         let editor = self.editor.as_ref()?;
         if self.selected.is_empty() {
@@ -637,7 +637,7 @@ impl FullConfig {
             if !exists {
                 ui.add_space(8.);
                 ui.colored_label(
-                    colors::MUTED,
+                    colors::muted(),
                     "本文件尚未设置此分类，沿用默认值或导入文件中的设置。",
                 );
             }
@@ -771,7 +771,7 @@ fn config_tree(
             }
             if !found {
                 ui.colored_label(
-                    colors::MUTED,
+                    colors::muted(),
                     if search.is_empty() {
                         "此分类还没有写入配置"
                     } else {
@@ -804,7 +804,7 @@ fn inspector(
             let Some(draft) = draft else {
                 ui.strong("选择要调整的项目");
                 ui.colored_label(
-                    colors::MUTED,
+                    colors::muted(),
                     "从已配置项目进入编辑，或添加需要覆盖默认值的设置。导入文件保持独立。",
                 );
                 return;
@@ -818,7 +818,7 @@ fn inspector(
                             if ui.small_button(friendly_label(&node.node_name)).clicked() {
                                 *action = Some(EditAction::Select(selected[..depth].to_vec()));
                             }
-                            icons::icon(ui, Icon::ChevronRight, 12., colors::MUTED);
+                            icons::icon(ui, Icon::ChevronRight, 12., colors::muted());
                         }
                     }
                 });
@@ -830,7 +830,7 @@ fn inspector(
                     friendly_label(&draft.name)
                 };
                 ui.heading(title);
-                ui.colored_label(colors::MUTED, "已设置 · 当前配置文件")
+                ui.colored_label(colors::muted(), "已设置 · 当前配置文件")
                     .on_hover_text(format!("原配置名：{}", draft.name));
                 ui.add_space(10.);
                 if ty == "Bind" || ty == "EnvironmentVariable" {
@@ -870,7 +870,7 @@ fn inspector(
                     value_ui(ui, ("prop", i), value, &label, &module, value_ty);
                 }
                 if draft.arguments.is_empty() && draft.properties.iter().all(|v| v.removed) {
-                    ui.colored_label(colors::MUTED, "此设置已写入当前文件。");
+                    ui.colored_label(colors::muted(), "此设置已写入当前文件。");
                 }
                 if fields.iter().any(|f| {
                     f.kind == "property"
@@ -951,7 +951,7 @@ fn inspector(
                                     path.push(index);
                                     *action = Some(EditAction::Select(path));
                                 }
-                                ui.colored_label(colors::MUTED, "已设置");
+                                ui.colored_label(colors::muted(), "已设置");
                             });
                         } else {
                             ui.horizontal_wrapped(|ui| {
@@ -966,7 +966,7 @@ fn inspector(
                                     ));
                                 }
                                 ui.colored_label(
-                                    colors::MUTED,
+                                    colors::muted(),
                                     if field.repeated {
                                         "可添加多项"
                                     } else {
@@ -978,7 +978,7 @@ fn inspector(
                         shown += 1;
                     }
                     if shown == 0 && !draft.field_search.is_empty() {
-                        ui.colored_label(colors::MUTED, "没有匹配的选项");
+                        ui.colored_label(colors::muted(), "没有匹配的选项");
                     }
                     if ty == "Binds" && ui.button("＋ 添加快捷键").clicked() {
                         *action = Some(EditAction::Append(
@@ -1057,7 +1057,7 @@ fn inspector(
                     }
                     if remove_confirmation.as_deref() == Some(selected) {
                         ui.colored_label(
-                            colors::WARNING,
+                            colors::warning(),
                             "移除此配置及其所有子项？导入文件不会改变。",
                         );
                         ui.horizontal_wrapped(|ui| {
@@ -1069,7 +1069,7 @@ fn inspector(
                             }
                         });
                     } else if ui
-                        .button(egui::RichText::new("移除此配置项…").color(colors::ERROR))
+                        .button(egui::RichText::new("移除此配置项…").color(colors::error()))
                         .clicked()
                     {
                         *remove_confirmation = Some(selected.to_vec());
@@ -1097,7 +1097,7 @@ fn value_ui(
             .on_hover_text(format!("原参数：{parameter}\n值类型：{ty}"));
         if value.removed {
             ui.horizontal_wrapped(|ui| {
-                ui.colored_label(colors::MUTED, "此值将从当前文件移除");
+                ui.colored_label(colors::muted(), "此值将从当前文件移除");
                 if ui.small_button("恢复").clicked() {
                     value.removed = false;
                 }
@@ -1121,7 +1121,7 @@ fn value_ui(
                     }
                 }
                 Kind::Null => {
-                    ui.colored_label(colors::MUTED, "显式空值（null）");
+                    ui.colored_label(colors::muted(), "显式空值（null）");
                 }
                 Kind::String if !choices.is_empty() => {
                     ComboBox::from_id_salt("choices")
@@ -1249,7 +1249,7 @@ fn tree(
 
 fn tree_header(ui: &mut Ui, title: &str, raw: &str, icon: Option<Icon>, selected: bool) -> bool {
     if let Some(icon) = icon {
-        icons::icon(ui, icon, 16., colors::MUTED);
+        icons::icon(ui, icon, 16., colors::muted());
     }
     ui.add(
         egui::Button::new(title)

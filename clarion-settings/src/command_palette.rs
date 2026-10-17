@@ -500,7 +500,7 @@ impl CommandPalette {
             .fixed_pos(screen.min)
             .show(ctx, |ui| {
                 let (rect, response) = ui.allocate_exact_size(screen.size(), egui::Sense::click());
-                ui.painter().rect_filled(rect, 0.0, palette::SCRIM);
+                ui.painter().rect_filled(rect, 0.0, palette::scrim());
                 if response.clicked() {
                     self.close(ctx);
                 }
@@ -657,7 +657,7 @@ impl CommandPalette {
                     }
                 }
                 if let Some(error) = &self.error {
-                    ui.colored_label(palette::ERROR, error);
+                    ui.colored_label(palette::error(), error);
                 }
                 ui.separator();
                 ui.small(format!(

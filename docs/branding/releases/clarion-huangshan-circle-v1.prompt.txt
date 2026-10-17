@@ -1,0 +1,2 @@
+Tool: built-in image_gen.
+Prompt: Clarion release identity inspired by Huangshan, China. One circular photorealistic scenic image, transparent outside circle. Dramatic pale granite pinnacles rising above cloud sea, windswept pine on left foreground ledge, layered blue distant mountains, golden sunrise with peach/lavender sky, realistic rock/pine textures and elegant cinematic light. Entire circular interior filled with landscape, no rim, text, C mark, watermark, buildings or people. AI-created scenic interpretation, not a documentary photograph.

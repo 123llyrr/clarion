@@ -30,6 +30,31 @@ struct Cli {
     /// Open the searchable settings and desktop command center.
     #[arg(long)]
     command_palette: bool,
+    /// Initial appearance for this window; later desktop changes are followed.
+    #[arg(long, value_enum, default_value_t = ThemeChoice::System)]
+    theme: ThemeChoice,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum ThemeChoice {
+    System,
+    Light,
+    Dark,
+}
+
+impl ThemeChoice {
+    fn is_dark(self, ctx: &eframe::egui::Context) -> bool {
+        match self {
+            Self::Light => false,
+            Self::Dark => true,
+            Self::System => theme::desktop_dark()
+                .or_else(|| {
+                    ctx.system_theme()
+                        .map(|theme| theme == eframe::egui::Theme::Dark)
+                })
+                .unwrap_or(false),
+        }
+    }
 }
 
 use app::ClarionSettingsApp;
@@ -97,6 +122,7 @@ fn get_single_instance_socket_path() -> PathBuf {
 fn main() -> eframe::Result<()> {
     // Parse help/version before touching sockets or initializing the GUI.
     let args = Cli::parse();
+    let appearance = args.theme;
     let path = get_single_instance_socket_path();
     let instance = match take_instance(&path, args.toggle, args.command_palette) {
         Ok(None) => return Ok(()),
@@ -119,7 +145,7 @@ fn main() -> eframe::Result<()> {
         "Clarion Settings",
         native_options,
         Box::new(|cc| {
-            theme::setup_custom_fonts_and_styles(&cc.egui_ctx);
+            theme::setup_custom_fonts_and_styles(&cc.egui_ctx, appearance.is_dark(&cc.egui_ctx));
             let toggle_flag = Some(instance.start(cc.egui_ctx.clone())?);
             let mut app = ClarionSettingsApp::new(cc, toggle_flag);
             if args.command_palette {
