@@ -2131,9 +2131,11 @@ fn builtin_opening_releases_its_tile_transition_after_visible_spring_motion() {
 
             clock.set_unadjusted(visible_end);
             tile.advance_animations();
+            // A damped built-in reveal keeps its bounded rebound until the
+            // spring settles; an undamped one stops at first arrival.
             assert_eq!(
                 tile.are_transitions_ongoing(),
-                custom,
+                custom || damping_ratio > 0.,
                 "damping={damping_ratio}, custom={custom}"
             );
 

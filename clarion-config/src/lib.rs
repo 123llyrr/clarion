@@ -976,8 +976,8 @@ mod tests {
         assert_eq!(
             defaults.animations.window_open.anim.kind,
             animations::Kind::Spring(animations::SpringParams {
-                damping_ratio: 0.62,
-                stiffness: 600,
+                damping_ratio: 0.66,
+                stiffness: 420,
                 epsilon: 0.0015,
             })
         );
@@ -2010,8 +2010,8 @@ mod tests {
                         off: true,
                         kind: Spring(
                             SpringParams {
-                                damping_ratio: 0.62,
-                                stiffness: 600,
+                                damping_ratio: 0.66,
+                                stiffness: 420,
                                 epsilon: 0.0015,
                             },
                         ),
@@ -3041,7 +3041,7 @@ mod tests {
 
         -            popin_ratio: None,
         +            popin_ratio: Some(
-        +                0.94,
+        +                0.9,
         +            ),
 
         -                        duration_ms: 400,
@@ -3064,61 +3064,6 @@ mod tests {
         -            top_right: false,
         +            top_left: true,
         +            top_right: true,
-
-        -    layer_rules: [],
-        +    layer_rules: [
-        +        LayerRule {
-        +            matches: [
-        +                Match {
-        +                    namespace: Some(
-        +                        RegexEq(
-        +                            Regex(
-        +                                "^clarion-shell(-dock)?$",
-        +                            ),
-        +                        ),
-        +                    ),
-        +                    at_startup: None,
-        +                    layer: None,
-        +                },
-        +            ],
-        +            excludes: [],
-        +            opacity: None,
-        +            block_out_from: None,
-        +            shadow: ShadowRule {
-        +                off: false,
-        +                on: false,
-        +                offset: None,
-        +                softness: None,
-        +                spread: None,
-        +                draw_behind_window: None,
-        +                color: None,
-        +                inactive_color: None,
-        +            },
-        +            geometry_corner_radius: None,
-        +            place_within_backdrop: None,
-        +            baba_is_float: None,
-        +            background_effect: BackgroundEffectRule {
-        +                liquid_glass: Some(
-        +                    true,
-        +                ),
-        +                xray: None,
-        +                blur: None,
-        +                noise: None,
-        +                saturation: None,
-        +            },
-        +            popups: PopupsRule {
-        +                opacity: None,
-        +                geometry_corner_radius: None,
-        +                background_effect: BackgroundEffectRule {
-        +                    liquid_glass: None,
-        +                    xray: None,
-        +                    blur: None,
-        +                    noise: None,
-        +                    saturation: None,
-        +                },
-        +            },
-        +        },
-        +    ],
         "#,
         );
     }

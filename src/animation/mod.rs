@@ -200,10 +200,6 @@ impl Animation {
         }
     }
 
-    pub(crate) fn has_fixed_duration(&self) -> bool {
-        self.trajectory.has_fixed_duration()
-    }
-
     pub fn is_done(&self) -> bool {
         self.trajectory
             .is_done_at(self.clock.now(), self.clock.should_complete_instantly())

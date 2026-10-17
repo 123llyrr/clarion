@@ -75,7 +75,7 @@ impl OpenAnimation {
     pub fn popin_ratio(&self) -> f64 {
         self.popin_ratio
             .unwrap_or(if self.lightweight {
-                0.94
+                0.90
             } else if self.denial_reveal {
                 1.
             } else {
@@ -85,7 +85,12 @@ impl OpenAnimation {
     }
 
     fn keeps_scale_tail(&self) -> bool {
-        self.lightweight && self.popin_ratio() < 1. && self.anim.has_fixed_duration()
+        // A bounded trajectory (fixed curve or damped spring) settles, so its
+        // clamped rebound stays visible instead of being cut at first arrival.
+        // An undamped spring never settles and must stop at arrival.
+        self.lightweight
+            && self.popin_ratio() < 1.
+            && self.anim.duration() != std::time::Duration::MAX
     }
 
     /// Capture the output's already-projected animation time once. The scene
@@ -147,7 +152,7 @@ mod tests {
     use crate::animation::{Clock, Spring, SpringParams};
 
     #[test]
-    fn builtin_reveal_stops_when_visible_motion_finishes_with_a_spring() {
+    fn builtin_reveal_keeps_a_damped_spring_rebound_and_stops_undamped_at_arrival() {
         for damping_ratio in [0., 0.4] {
             let mut clock = Clock::with_time(Duration::ZERO);
             let spring = Spring {
@@ -158,7 +163,6 @@ mod tests {
             };
             let visible_end = spring.clamped_duration().unwrap();
             let anim = Animation::spring(clock.clone(), spring);
-            assert!(visible_end < anim.duration());
             let builtin = OpenAnimation::new(
                 anim.clone(),
                 None,
@@ -180,20 +184,30 @@ mod tests {
 
             clock.set_unadjusted(visible_end);
             assert_eq!(builtin.progress(), 1.);
-            assert!(builtin.is_done());
-            assert!(
-                !custom.is_done(),
-                "custom shaders retain their spring overshoot"
-            );
-
-            // Undamped custom shaders deliberately keep their full, unbounded trajectory.
             if damping_ratio == 0. {
+                // An undamped spring never settles: the reveal must stop at
+                // first arrival instead of redrawing its snapshot forever.
+                assert!(builtin.is_done());
                 assert_eq!(anim.duration(), Duration::MAX);
                 clock.set_unadjusted(Duration::from_secs(10));
                 assert!(!custom.is_done());
             } else {
+                // A damped spring settles, so its bounded rebound renders.
+                assert!(
+                    !builtin.is_done(),
+                    "the bounded rebound still has to settle"
+                );
+                let peak = (0..=400)
+                    .map(|millis| {
+                        clock.set_unadjusted(Duration::from_millis(millis));
+                        builtin.pose().scale
+                    })
+                    .fold(1.0_f64, f64::max);
+                assert!(peak > 1.0005, "the rebound never renders: {peak}");
+                assert!(peak < 1.12, "the rebound must stay bounded: {peak}");
                 clock.set_unadjusted(anim.end_time());
-                assert!(custom.is_done());
+                assert!(builtin.is_done());
+                assert!(custom.is_done(), "custom shaders retain their overshoot");
             }
         }
     }
@@ -278,10 +292,26 @@ mod tests {
                 "hz={hz}: first refresh has no feedback"
             );
             assert!(!open.is_done());
-            clock.set_unadjusted(Duration::from_millis(199));
-            assert!(!open.is_done());
-            clock.set_unadjusted(Duration::from_millis(200));
-            assert!(open.is_done());
+            clock.set_unadjusted(Duration::from_millis(50));
+            assert!(
+                open.progress() < 1.,
+                "hz={hz}: the reveal skipped its motion"
+            );
+            // The default spring owns its schedule: no refresh may skip ahead of
+            // it, and the reveal must finish on the spring's own arrival.
+            let mut settled_at = None;
+            for millis in 51..2000 {
+                clock.set_unadjusted(Duration::from_millis(millis));
+                if open.is_done() {
+                    settled_at = Some(millis);
+                    break;
+                }
+            }
+            let settled_at = settled_at.expect("the spring settles within a second");
+            assert!(
+                (200..=800).contains(&settled_at),
+                "hz={hz}: a soft open settles in {settled_at}ms"
+            );
             assert_eq!(open.progress(), 1.);
             assert_eq!(open.pose().scale, 1.);
         }
@@ -298,10 +328,11 @@ mod tests {
             true,
             config.effect,
         );
-        assert_eq!(open.pose().scale, 0.94);
+        assert_eq!(open.pose().scale, 0.90);
         let mut previous_opacity = 0.;
         let mut peak_scale = 1.;
-        for millis in 0..=200 {
+        let mut settled_at = None;
+        for millis in 0..=2000 {
             clock.set_unadjusted(Duration::from_millis(millis));
             let opacity = open.progress();
             assert!(
@@ -310,24 +341,31 @@ mod tests {
             );
             previous_opacity = opacity;
             peak_scale = f64::max(peak_scale, open.pose().scale);
-            assert_eq!(open.is_done(), millis == 200);
+            if open.is_done() {
+                settled_at = Some(millis);
+                break;
+            }
         }
-        assert!((1.002..1.005).contains(&peak_scale));
-        clock.set_unadjusted(Duration::from_millis(50));
-        assert!(open.progress() < 1.);
-        clock.set_unadjusted(Duration::from_millis(60));
-        assert_eq!(open.progress(), 1.);
+        let settled_at = settled_at.expect("the spring settles");
+        // The reveal rebounds past its resting size before settling.
         assert!(
-            !open.is_done(),
-            "the geometry still needs its settling frame"
+            peak_scale > 1.0005,
+            "no visible rebound: peak {peak_scale} at {settled_at}ms"
         );
-        clock.set_unadjusted(Duration::from_millis(90));
-        assert!(open.pose().scale > 1.);
-        clock.set_unadjusted(Duration::from_millis(199));
-        assert!((open.pose().scale - 1.).abs() < 0.00001);
-        clock.set_unadjusted(Duration::from_millis(200));
+        assert!(peak_scale < 1.02, "rebound too large: {peak_scale}");
         assert_eq!(open.pose().scale, 1.);
-        assert_eq!(open.anim.velocity(), 0.);
+        assert!(open.anim.velocity().abs() < 0.01);
+        // Opacity reaches full strength before the geometry finishes settling.
+        let arrival = (0..=settled_at)
+            .find(|millis| {
+                clock.set_unadjusted(Duration::from_millis(*millis));
+                open.progress() >= 1.
+            })
+            .expect("opacity arrives");
+        assert!(
+            arrival < settled_at,
+            "opacity still rising after the geometry settled"
+        );
     }
 
     #[test]
@@ -341,7 +379,10 @@ mod tests {
             true,
             config.effect,
         );
-        clock.set_unadjusted(Duration::from_millis(60));
+        clock.set_unadjusted(Duration::from_millis(20));
+        assert!(open.progress() > 0.);
+        assert!(!open.is_done());
+        clock.set_unadjusted(Duration::from_millis(1000));
         assert_eq!(open.progress(), 1.);
         assert_eq!(open.pose().scale, 1.);
         assert!(open.is_done());
@@ -386,8 +427,15 @@ mod tests {
         );
         clock.set_unadjusted(Duration::from_millis(16));
         let event_pose = open.pose();
+        // Find the spring's own overshoot instead of assuming a fixed-time peak.
+        let overshoot_ms = (17..900)
+            .find(|millis| {
+                let _projection = clock.project_to(Duration::from_millis(*millis));
+                open.pose().scale > 1.
+            })
+            .expect("the default spring passes its resting size");
         let presented_pose = {
-            let _projection = clock.project_to(Duration::from_millis(90));
+            let _projection = clock.project_to(Duration::from_millis(overshoot_ms));
             let projected = open.pose();
             assert!(projected.clamped_progress > event_pose.clamped_progress);
             assert!(projected.scale > 1.);
