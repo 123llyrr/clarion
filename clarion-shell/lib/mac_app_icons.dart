@@ -12,6 +12,13 @@ class MacAppIcons {
 
   static const genericApplication = 'assets/icons/generic-application.svg';
 
+  // flutter_svg cannot render these upstream SVGs: each one uses a <filter>,
+  // so the shipped form is a librsvg-rasterized PNG (see assets/icons).
+  static const _rasterIcons = {'activity-monitor', 'preview', 'screenshot'};
+
+  static String _assetPath(String icon) =>
+      'assets/icons/$icon.${_rasterIcons.contains(icon) ? 'png' : 'svg'}';
+
   static const _desktopIds = <String, String>{
     'files': 'home',
     'finder': 'home',
@@ -155,11 +162,11 @@ class MacAppIcons {
   static String? assetFor(DesktopApp app) {
     final id = _desktopId(app.id);
     final desktopIcon = _desktopIds[id];
-    if (desktopIcon != null) return 'assets/icons/$desktopIcon.svg';
+    if (desktopIcon != null) return _assetPath(desktopIcon);
     if (_preservedBrands.contains(id)) return null;
     final iconName = app.iconName?.trim().toLowerCase();
     final icon = _desktopIds[iconName] ?? _iconNames[iconName];
-    return icon == null ? null : 'assets/icons/$icon.svg';
+    return icon == null ? null : _assetPath(icon);
   }
 
   /// Dock ordering uses the same exact identity rules as its presentation.
