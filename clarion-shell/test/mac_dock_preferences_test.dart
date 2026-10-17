@@ -574,6 +574,38 @@ void main() {
     );
 
     testWidgets(
+      '$position hidden dock leaves no icons, sensor or input region',
+      (tester) async {
+        final f = await _fixture(tester);
+        await _mount(tester, f);
+        expect(find.byKey(const ValueKey('dock-launcher')), findsOneWidget);
+
+        // Hiding through preferences removes the dock: no panel, no icons, and
+        // no edge sensor left behind to reveal them.
+        f.controller.setMacPreferences(
+          f.controller.macPreferences.copyWith(dockHidden: true),
+        );
+        await tester.pumpAndSettle();
+        expect(f.presentation.last.$1.isEmpty, isTrue);
+        expect(f.presentation.last.$2, isEmpty);
+        expect(
+          find.byKey(const ValueKey('mac-dock-edge-sensor')),
+          findsNothing,
+        );
+        expect(find.byKey(const ValueKey('dock-launcher')), findsNothing);
+        expect(find.byKey(const ValueKey('dock-trash')), findsNothing);
+
+        // Restoring visibility brings the dock back.
+        f.controller.setMacPreferences(
+          f.controller.macPreferences.copyWith(dockHidden: false),
+        );
+        await tester.pumpAndSettle();
+        expect(find.byKey(const ValueKey('dock-launcher')), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets(
       '$position auto-hide retains edge input, clears hidden targets and restores safely',
       (tester) async {
         final f = await _fixture(

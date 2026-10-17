@@ -39,7 +39,7 @@ abstract final class ShellGeometry {
       final top = macPreferences.menuBarAutoHide
           ? 0.0
           : macPreferences.menuBarHeight;
-      final dock = macPreferences.dockAutoHide
+      final dock = macPreferences.dockAutoHide || macPreferences.dockHidden
           ? 0.0
           : macPreferences.dockSize + 16;
       return switch (macPreferences.dockPosition) {
