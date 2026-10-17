@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import 'package:flutter/material.dart';
+import 'font_fallback.dart';
 
 /// Genuine ChromeOS Material You (Jelly) design tokens extracted from
 /// ChromeOS / FydeOS root filesystem (res_57941.html & sys tokens).
@@ -110,7 +111,7 @@ ThemeData buildShellTheme(
     scaffoldBackgroundColor: Colors.transparent,
     visualDensity: VisualDensity.standard,
     materialTapTargetSize: MaterialTapTargetSize.padded,
-    fontFamilyFallback: const ['Noto Sans CJK SC', 'Source Han Sans CN'],
+    fontFamilyFallback: shellFontFallback,
     cardTheme: CardThemeData(
       color: colors.surfaceContainerLow,
       elevation: 0,

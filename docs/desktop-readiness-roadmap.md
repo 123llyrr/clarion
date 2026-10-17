@@ -121,4 +121,8 @@ fcitx5 fcitx5-chinese-addons fcitx5-gtk fcitx5-qt
 grim slurp
 # 可访问性（可选）
 orca
+# 字体（必需：缺中文族会让界面文字变成方块）
+noto-fonts-cjk ttf-dejavu
+# 图标主题（应用图标由合成器按主题解析）
+hicolor-icon-theme adwaita-icon-theme
 ```

@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../theme/font_fallback.dart';
 
 import '../mac_notification_view.dart';
 import '../models.dart';
@@ -162,8 +163,8 @@ class _MacNotificationCenterState extends State<MacNotificationCenter> {
                                       borderRadius: BorderRadius.circular(4),
                                     ),
                                     textStyle: const TextStyle(
-                                      fontFamily: 'ClarionSystem',
-                                      fontFamilyFallback: ['ClarionChinese'],
+                                      fontFamily: shellFontFamily,
+                                      fontFamilyFallback: shellFontFallback,
                                       fontSize: 13,
                                     ),
                                   ),

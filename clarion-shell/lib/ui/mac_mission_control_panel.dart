@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import 'optional_asset_icon.dart';
 import 'package:flutter/services.dart';
+import '../theme/font_fallback.dart';
 
 import '../models.dart';
 import '../state/shell_controller.dart';
@@ -343,8 +344,8 @@ class _SpaceCardState extends State<_SpaceCard> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontFamily: 'ClarionSystem',
-                        fontFamilyFallback: const ['ClarionChinese'],
+                        fontFamily: shellFontFamily,
+                        fontFamilyFallback: shellFontFallback,
                         fontSize: 11,
                         fontWeight: FontWeight.w500,
                         color: widget.isActive
@@ -726,8 +727,8 @@ class _WindowSpreadArea extends StatelessWidget {
               Text(
                 '调度中心',
                 style: TextStyle(
-                  fontFamily: 'ClarionSystem',
-                  fontFamilyFallback: const ['ClarionChinese'],
+                  fontFamily: shellFontFamily,
+                  fontFamilyFallback: shellFontFallback,
                   fontSize: 15,
                   fontWeight: FontWeight.w600,
                   color: dark ? Colors.white : Colors.black87,
@@ -737,8 +738,8 @@ class _WindowSpreadArea extends StatelessWidget {
               Text(
                 '此桌面无打开的窗口',
                 style: TextStyle(
-                  fontFamily: 'ClarionSystem',
-                  fontFamilyFallback: const ['ClarionChinese'],
+                  fontFamily: shellFontFamily,
+                  fontFamilyFallback: shellFontFallback,
                   fontSize: 12,
                   color: dark ? Colors.white60 : Colors.black54,
                 ),
@@ -933,8 +934,8 @@ class _SpreadWindowCardState extends State<_SpreadWindowCard> {
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                      fontFamily: 'ClarionSystem',
-                      fontFamilyFallback: const ['ClarionChinese'],
+                      fontFamily: shellFontFamily,
+                      fontFamilyFallback: shellFontFallback,
                       fontSize: 11,
                       fontWeight: FontWeight.w500,
                       color: widget.dark ? Colors.white70 : Colors.black87,
@@ -1068,8 +1069,8 @@ class _SpreadWindowCardState extends State<_SpreadWindowCard> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontFamily: 'ClarionSystem',
-                        fontFamilyFallback: const ['ClarionChinese'],
+                        fontFamily: shellFontFamily,
+                        fontFamilyFallback: shellFontFallback,
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
                         color: widget.dark ? Colors.white : Colors.black87,
@@ -1162,8 +1163,8 @@ class _SpreadWindowCardState extends State<_SpreadWindowCard> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      fontFamily: 'ClarionSystem',
-                      fontFamilyFallback: const ['ClarionChinese'],
+                      fontFamily: shellFontFamily,
+                      fontFamilyFallback: shellFontFallback,
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
                       color: widget.dark ? Colors.white : Colors.black87,
@@ -1179,8 +1180,8 @@ class _SpreadWindowCardState extends State<_SpreadWindowCard> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontFamily: 'ClarionSystem',
-                        fontFamilyFallback: const ['ClarionChinese'],
+                        fontFamily: shellFontFamily,
+                        fontFamilyFallback: shellFontFallback,
                         fontSize: 11,
                         color: widget.dark ? Colors.white60 : Colors.black54,
                       ),
