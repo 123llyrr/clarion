@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import 'dart:convert';
 import 'dart:io';
-import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:clarion_shell/mac_app_icons.dart';
 import 'package:clarion_shell/models.dart';
@@ -28,47 +28,30 @@ Future<void> _paint(
   double? rasterSize,
   double devicePixelRatio = 1,
   bool useOriginalIcons = true,
-}) => tester.pumpWidget(
-  MaterialApp(
-    home: MediaQuery(
-      data: MediaQueryData(devicePixelRatio: devicePixelRatio),
-      child: Center(
-        child: MacAppIcon(
-          app: app,
-          size: size,
-          rasterSize: rasterSize,
-          useOriginalIcons: useOriginalIcons,
+}) async {
+  await tester.pumpWidget(
+    MaterialApp(
+      home: MediaQuery(
+        data: MediaQueryData(devicePixelRatio: devicePixelRatio),
+        child: Center(
+          child: MacAppIcon(
+            app: app,
+            size: size,
+            rasterSize: rasterSize,
+            useOriginalIcons: useOriginalIcons,
+          ),
         ),
       ),
     ),
-  ),
-);
-
-ui.Image? _decodedImage(WidgetTester tester) => tester
-    .widgetList<RawImage>(find.byType(RawImage))
-    .map((image) => image.image)
-    .whereType<ui.Image>()
-    .firstOrNull;
-
-Future<void> _waitForImage(WidgetTester tester, {int? width}) async {
-  final elapsed = Stopwatch()..start();
-  for (var turn = 0; turn < 200; turn++) {
-    await tester.pump();
-    final decoded = _decodedImage(tester);
-    if (decoded != null && (width == null || decoded.width == width)) return;
-    if (elapsed.elapsed >= const Duration(seconds: 3)) break;
-    await tester.runAsync(() async {
-      await Future<void>.delayed(const Duration(milliseconds: 10));
-    });
-  }
-  fail('The original application icon did not decode within 3 seconds.');
+  );
+  await tester.pumpAndSettle();
 }
 
-ResizeImage _assetProvider(WidgetTester tester) => tester
-    .widgetList<Image>(find.byType(Image))
-    .map((image) => image.image)
-    .whereType<ResizeImage>()
-    .firstWhere((image) => image.imageProvider is AssetImage);
+SvgAssetLoader _svgLoader(WidgetTester tester) => tester
+    .widgetList<SvgPicture>(find.byType(SvgPicture))
+    .map((picture) => picture.bytesLoader)
+    .whereType<SvgAssetLoader>()
+    .first;
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -82,76 +65,30 @@ void main() {
         .setMockMethodCallHandler(_channel, null);
   });
 
-  for (final ratio in [1.0, 1.25, 1.5, 2.0]) {
-    testWidgets('original Finder texture uses physical pixels at DPR $ratio', (
-      tester,
-    ) async {
-      var nativeCalls = 0;
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(_channel, (_) async {
-            nativeCalls++;
-            return null;
-          });
-      await _paint(tester, _finder, devicePixelRatio: ratio);
-      final provider = _assetProvider(tester);
-      expect(
-        (provider.imageProvider as AssetImage).assetName,
-        'assets/shell/finder.png',
-      );
-      expect(provider.width, (48 * ratio).ceil());
-      expect(provider.height, (48 * ratio).ceil());
-      expect(provider.policy, ResizeImagePolicy.fit);
-      expect(provider.allowUpscaling, isFalse);
-      await _waitForImage(tester, width: (48 * ratio).ceil());
-      final image = tester.widget<Image>(find.byType(Image).first);
-      expect(image.width, 48);
-      expect(image.height, 48);
-      expect(image.filterQuality, FilterQuality.medium);
-      expect(image.gaplessPlayback, isTrue);
-      expect(find.byType(AppIcon), findsNothing);
-      expect(nativeCalls, 0);
-      expect(tester.takeException(), isNull);
-      await tester.pumpWidget(const SizedBox.shrink());
-    });
-  }
-
-  testWidgets(
-    'magnification reserves a larger texture without growing layout',
-    (tester) async {
-      await _paint(
-        tester,
-        _finder,
-        size: 48,
-        rasterSize: 128,
-        devicePixelRatio: 2,
-      );
-      final originalElement = tester.element(find.byType(Image).first);
-      expect(_assetProvider(tester).width, 256);
-      expect(tester.getSize(find.byType(Image).first), const Size(48, 48));
-      await _waitForImage(tester, width: 256);
-      await _paint(
-        tester,
-        _finder,
-        size: 48,
-        rasterSize: 128,
-        devicePixelRatio: 2,
-      );
-      expect(tester.element(find.byType(Image).first), same(originalElement));
-      expect(_decodedImage(tester)?.width, 256);
-      expect(tester.takeException(), isNull);
-      await tester.pumpWidget(const SizedBox.shrink());
-    },
-  );
-
-  testWidgets('oversized physical requests are bounded and never upscale', (
+  testWidgets('theme role icons render the bundled svg without a native call', (
     tester,
   ) async {
-    await _paint(tester, _finder, rasterSize: 320, devicePixelRatio: 2);
-    expect(_assetProvider(tester).width, 512);
-    expect(_assetProvider(tester).height, 512);
-    expect(_assetProvider(tester).allowUpscaling, isFalse);
-    await _waitForImage(tester);
-    expect(_decodedImage(tester)!.width, lessThanOrEqualTo(512));
+    var nativeCalls = 0;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(_channel, (_) async {
+          nativeCalls++;
+          return null;
+        });
+    await _paint(tester, _finder);
+    expect(_svgLoader(tester).assetName, 'assets/icons/home.svg');
+    expect(tester.getSize(find.byType(SvgPicture).first), const Size(48, 48));
+    expect(find.byType(AppIcon), findsNothing);
+    expect(nativeCalls, 0);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('svg role icons keep their layout extent for magnification', (
+    tester,
+  ) async {
+    await _paint(tester, _finder, rasterSize: 128, devicePixelRatio: 2);
+    expect(tester.getSize(find.byType(SvgPicture).first), const Size(48, 48));
+    expect(_svgLoader(tester).assetName, 'assets/icons/home.svg');
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
@@ -173,7 +110,6 @@ void main() {
           return null;
         });
     await _paint(tester, app, rasterSize: 100, devicePixelRatio: 1.5);
-    await _waitForImage(tester);
     expect(calls, isEmpty);
     await _paint(
       tester,
@@ -218,17 +154,12 @@ void main() {
       expect(native.app, same(app));
       expect(native.rasterSize, 128);
       expect(native.fallbackAssetPath, MacAppIcons.genericApplication);
-      final image = tester.widget<Image>(find.byType(Image).first);
-      final provider = image.image as ResizeImage;
-      expect(provider.imageProvider, isA<FileImage>());
-      expect(provider.width, 256);
-      await _waitForImage(tester, width: 1);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
     },
   );
 
-  testWidgets('a missing native icon uses the original generic application', (
+  testWidgets('a missing native icon uses the bundled generic application', (
     tester,
   ) async {
     await _paint(
@@ -241,11 +172,7 @@ void main() {
       devicePixelRatio: 2,
     );
     expect(find.byType(AppIcon), findsOneWidget);
-    expect(
-      (_assetProvider(tester).imageProvider as AssetImage).assetName,
-      MacAppIcons.genericApplication,
-    );
-    await _waitForImage(tester, width: 96);
+    expect(_svgLoader(tester).assetName, 'assets/icons/generic-application.svg');
     expect(find.byIcon(Icons.apps_rounded), findsNothing);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
@@ -253,7 +180,7 @@ void main() {
 
   for (final brokenFile in [false, true]) {
     testWidgets(
-      'native ${brokenFile ? 'corrupt files' : 'missing theme names'} use the original fallback',
+      'native ${brokenFile ? 'corrupt files' : 'missing theme names'} use the bundled fallback',
       (tester) async {
         final fixtures = Directory.systemTemp.createTempSync(
           'clarion-mac-icon-fallback-',
@@ -278,11 +205,16 @@ void main() {
           ),
           devicePixelRatio: 2,
         );
-        await _waitForImage(tester, width: 96);
-        expect(
-          (_assetProvider(tester).imageProvider as AssetImage).assetName,
-          MacAppIcons.genericApplication,
-        );
+        // A corrupt native file only surfaces its error through real file IO,
+        // which widget-test FakeAsync does not drive by itself.
+        await tester.runAsync(() async {
+          for (var turn = 0; turn < 50; turn++) {
+            await Future<void>.delayed(const Duration(milliseconds: 20));
+            await tester.pump();
+            if (find.byType(SvgPicture).evaluate().isNotEmpty) return;
+          }
+        });
+        expect(_svgLoader(tester).assetName, 'assets/icons/generic-application.svg');
         expect(nativeCalls, brokenFile ? 0 : 1);
         expect(find.byIcon(Icons.apps_rounded), findsNothing);
         expect(tester.takeException(), isNull);

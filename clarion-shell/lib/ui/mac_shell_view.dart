@@ -887,10 +887,10 @@ class _MacGlassPanel extends StatelessWidget {
         color: dark
             ? const Color(
                 0xff29292d,
-              ).withValues(alpha: controlCenter ? .58 : .70)
+              ).withValues(alpha: controlCenter ? .86 : .90)
             : const Color(
                 0xfff2f2f5,
-              ).withValues(alpha: controlCenter ? .56 : .68),
+              ).withValues(alpha: controlCenter ? .84 : .88),
         borderRadius: radius,
         border: Border.all(
           color: dark
@@ -930,11 +930,11 @@ class _MacMenuBar extends StatelessWidget {
 
   String get _activeAppName {
     final focused = controller.menuFocusedWindow;
-    if (focused == null) return '访达';
+    if (focused == null) return 'Home';
     for (final app in controller.dockApps) {
       if (app.windows.any((window) => window.id == focused.id)) return app.name;
     }
-    return focused.appId.isEmpty ? '访达' : focused.appId;
+    return focused.appId.isEmpty ? 'Home' : focused.appId;
   }
 
   static String _weekdayName(int weekday) {
@@ -954,7 +954,7 @@ class _MacMenuBar extends StatelessWidget {
           children: [
             GlobalMenuItem(
               id: 'finder-new-window',
-              label: '新建访达窗口',
+              label: '新建Home窗口',
               shortcut: '⌘N',
               onAction: () => controller.openHomeFolder(),
             ),

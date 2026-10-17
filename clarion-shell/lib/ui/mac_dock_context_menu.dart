@@ -224,7 +224,7 @@ class MacDockFinderMenu extends StatelessWidget {
             for (final window in windows)
               _DockMenuRow(
                 actionKey: 'dock-window-${window.id}',
-                label: window.title.isEmpty ? '访达' : window.title,
+                label: window.title.isEmpty ? 'Home' : window.title,
                 indicator: window.isFocused
                     ? Icons.check
                     : window.isMinimized
@@ -238,7 +238,7 @@ class MacDockFinderMenu extends StatelessWidget {
             if (windows.isNotEmpty) const _DockMenuSeparator(),
             _DockMenuRow(
               actionKey: 'dock-finder-new-window',
-              label: '新建访达窗口',
+              label: '新建Home窗口',
               autofocus: windows.isEmpty,
               onPressed: () {
                 controller.closePanel();
@@ -431,7 +431,7 @@ class MacDockDownloadsMenu extends StatelessWidget {
             const _DockMenuSeparator(),
             _DockMenuRow(
               actionKey: 'dock-downloads-reveal',
-              label: '在访达中显示',
+              label: '在Home中显示',
               onPressed: () {
                 controller.openDownloadsFolder();
                 controller.closePanel();

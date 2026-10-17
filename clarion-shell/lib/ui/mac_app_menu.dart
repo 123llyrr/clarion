@@ -21,8 +21,8 @@ class MacAppMenu extends StatelessWidget {
               .firstOrNull
         : null;
     final appName = isFinder
-        ? '访达'
-        : (app?.name ?? (focused.appId.isNotEmpty ? focused.appId : '访达'));
+        ? 'Home'
+        : (app?.name ?? (focused.appId.isNotEmpty ? focused.appId : 'Home'));
     final appId = focused?.appId ?? 'finder';
 
     final hasMinimized = controller.windows.any((w) => w.isMinimized);

@@ -102,7 +102,7 @@ void main() {
     expect(about.center.dy, closeTo(300, 1));
     expect(about.width, greaterThan(280));
     expect(find.text('版本  review-build'), findsOneWidget);
-    await tester.tap(find.text('好'));
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
     await tester.tap(row('shutdown'));
     await tester.pumpAndSettle();
@@ -119,7 +119,7 @@ void main() {
     await mount(tester, output: const Size(480, 240), menuHeight: 196);
     await tester.tap(row('about'));
     await tester.pumpAndSettle();
-    expect(find.text('好').hitTestable(), findsOneWidget);
+    expect(find.text('Clarion').hitTestable(), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

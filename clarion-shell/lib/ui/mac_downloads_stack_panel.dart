@@ -40,7 +40,7 @@ class MacDownloadsStackIcon extends StatelessWidget {
           items.isEmpty) {
         return OptionalAssetIcon(
           key: const ValueKey('downloads-folder-icon'),
-          asset: 'assets/shell/downloads.png',
+          asset: 'assets/icons/downloads.svg',
           fallback: Icons.folder_special_rounded,
           rasterSize:
               ((rasterSize ?? size) * MediaQuery.devicePixelRatioOf(context))
@@ -939,5 +939,5 @@ Widget _entryIcon(
       ? Icons.folder_rounded
       : Icons.insert_drive_file_rounded,
   fallbackAssetPath:
-      'assets/shell/${entry.isDirectory ? 'generic-folder' : 'generic-document'}.png',
+      'assets/icons/${entry.isDirectory ? 'generic-folder' : 'generic-document'}.svg',
 );

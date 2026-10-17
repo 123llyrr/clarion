@@ -736,7 +736,21 @@ class _MacDockViewState extends State<MacDockView> {
   }
 
   Widget _asset(String name, int pixelSize) => OptionalAssetIcon(
-    asset: 'assets/shell/$name.png',
+    // The three dock utilities prefer a locally imported original kept out
+    // of the tree; the committed WhiteSur icon is the shared fallback.
+    preferredAsset: switch (name) {
+      'finder' => 'assets/shell/finder.png',
+      'launchpad' => 'assets/shell/launchpad.png',
+      'mission-control' => 'assets/shell/mission-control.png',
+      _ => null,
+    },
+    asset: switch (name) {
+      'finder' => 'assets/icons/home.svg',
+      'launchpad' => 'assets/icons/launchpad.svg',
+      'mission-control' => 'assets/icons/mission-control.svg',
+      'trash-full' => 'assets/icons/trash-full.svg',
+      _ => 'assets/icons/trash-empty.svg',
+    },
     fallback: switch (name) {
       'finder' => Icons.folder_rounded,
       'launchpad' => Icons.apps_rounded,
@@ -828,7 +842,7 @@ class _MacDockViewState extends State<MacDockView> {
         slots.add(
           _DockSlot(
             id: finderId,
-            label: '访达',
+            label: 'Home',
             icon: _asset('finder', pixelSize),
             onTap: () {
               if (finderApp != null) {
@@ -2123,12 +2137,12 @@ class _DockGlass extends StatelessWidget {
             end: Alignment.bottomCenter,
             colors: dark
                 ? [
-                    const Color(0xff2a2a2e).withValues(alpha: .48),
-                    const Color(0xff161618).withValues(alpha: .36),
+                    const Color(0xff2a2a2e).withValues(alpha: .72),
+                    const Color(0xff161618).withValues(alpha: .60),
                   ]
                 : [
-                    const Color(0xffffffff).withValues(alpha: .50),
-                    const Color(0xffe8e8ec).withValues(alpha: .34),
+                    const Color(0xffffffff).withValues(alpha: .76),
+                    const Color(0xffe8e8ec).withValues(alpha: .62),
                   ],
           ),
           borderRadius: BorderRadius.circular(22),

@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:clarion_shell/models.dart';
 import 'package:clarion_shell/ui/app_icon.dart';
@@ -144,7 +145,7 @@ void main() {
     await tester.pumpWidget(
       const MaterialApp(home: Center(child: ClarionMark(size: 64))),
     );
-    expect(find.text('R'), findsOneWidget);
+    expect(find.text('C'), findsOneWidget);
     expect(find.byType(Image), findsNothing);
     expect(tester.getSize(find.byType(ClarionMark)), const Size(64, 64));
     expect(tester.takeException(), isNull);
@@ -161,7 +162,7 @@ void main() {
     }
   });
 
-  testWidgets('missing appearance bundle ultimately uses the native fallback', (
+  testWidgets('a missing imported bundle still renders the shipped icons', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -182,8 +183,8 @@ void main() {
       ),
     );
     await _finishImages(tester);
-    expect(find.byType(AppIcon), findsOneWidget);
-    expect(find.byIcon(Icons.apps_rounded), findsOneWidget);
+    expect(find.byType(SvgPicture), findsOneWidget);
+    expect(find.byType(AppIcon), findsNothing);
     expect(tester.takeException(), isNull);
   });
   testWidgets('disabling optional artwork keeps native mode available', (

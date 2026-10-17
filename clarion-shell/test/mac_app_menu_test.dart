@@ -36,11 +36,11 @@ void main() {
     await controller.minimizeWindow(1);
     await mountMenu(tester);
 
-    expect(find.text('关于“访达”'), findsOneWidget);
+    expect(find.text('关于“Home”'), findsOneWidget);
     expect(find.text('偏好设置…'), findsOneWidget);
     expect(find.text('清倒废纸篓…'), findsOneWidget);
     expect(find.text('服务'), findsOneWidget);
-    expect(find.text('隐藏“访达”'), findsOneWidget);
+    expect(find.text('隐藏“Home”'), findsOneWidget);
     expect(find.text('隐藏其他'), findsOneWidget);
     expect(find.text('显示全部'), findsOneWidget);
     // Finder has no Quit option
@@ -102,7 +102,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('mac-active-app-button')));
       await tester.pumpAndSettle();
       expect(controller.panel, ShellPanel.appMenu);
-      expect(find.text('关于“访达”'), findsOneWidget);
+      expect(find.text('关于“Home”'), findsOneWidget);
 
       // Moving hover to Apple system menu switches to ShellPanel.systemMenu
       final appleGesture = await tester.createGesture(

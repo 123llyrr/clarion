@@ -183,11 +183,12 @@ end = "  # END shell assets\n"
 start = text.find(begin)
 stop = text.find(end)
 if start == -1 or stop == -1 or stop < start:
-    print("pubspec.yaml: macOS asset markers not found; add the declarations manually", file=sys.stderr)
+    print("pubspec.yaml: shell asset markers not found; add the declarations manually", file=sys.stderr)
     raise SystemExit(1)
-block = """  assets:
-    - assets/shell/
-  fonts:
+# The assets list stays live (the shipped icons always apply); an import only
+# appends the shell line to it and uncomments the fonts. Replacing the block
+# with another assets: key would duplicate the YAML mapping key.
+block = """  fonts:
     - family: ClarionSystem
       fonts:
         - asset: assets/shell/ui-text.ttf
@@ -198,7 +199,13 @@ block = """  assets:
         - asset: assets/shell/cjk-semibold.otf
           weight: 600
 """
-path.write_text(text[:start] + begin + block + text[stop:], encoding="utf-8")
+text = text[:start] + begin + block + text[stop:]
+if "    - assets/shell/\n" not in text:
+    text = text.replace(
+        "    - assets/icons/\n",
+        "    - assets/icons/\n    - assets/shell/\n",
+    )
+path.write_text(text, encoding="utf-8")
 print("pubspec.yaml: assets/shell/ and both font families re-enabled")
 PY
 

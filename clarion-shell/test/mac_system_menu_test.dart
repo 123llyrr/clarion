@@ -2,6 +2,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:clarion_shell/models.dart';
 import 'package:clarion_shell/services/session_service.dart';
@@ -208,7 +209,7 @@ void main() {
       await tester.tap(row('about'));
       await tester.pumpAndSettle();
       expect(find.text('版本  active-build'), findsOneWidget);
-      await tester.tap(find.text('好'));
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
       await tester.drag(
         find.byType(SingleChildScrollView).first,

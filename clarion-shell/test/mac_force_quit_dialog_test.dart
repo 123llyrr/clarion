@@ -44,7 +44,7 @@ void main() {
       expect(find.text('强制退出应用程序'), findsOneWidget);
       expect(find.text('如果某个应用程序没有响应，请在列表中将其选中，然后点按“强制退出”。'), findsOneWidget);
       expect(find.text('您可以按住“Option-Command-Esc”来直接打开此窗口。'), findsOneWidget);
-      expect(find.text('访达'), findsOneWidget);
+      expect(find.text('Home'), findsOneWidget);
 
       // Cancel button works
       await tester.tap(find.byKey(const ValueKey('force-quit-cancel')));
@@ -62,7 +62,7 @@ void main() {
       expect(find.text('强制退出应用程序'), findsOneWidget);
 
       // Select Finder
-      await tester.tap(find.text('访达'));
+      await tester.tap(find.text('Home'));
       await tester.pumpAndSettle();
       expect(find.text('重新开启'), findsOneWidget);
 

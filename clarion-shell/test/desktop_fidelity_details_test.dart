@@ -400,8 +400,8 @@ void main() {
         rootBundle,
       )).listAssets();
       for (final asset in [
-        'assets/shell/generic-folder.png',
-        'assets/shell/generic-document.png',
+        'assets/icons/generic-folder.svg',
+        'assets/icons/generic-document.svg',
       ]) {
         if (assets.contains(asset)) {
           await precacheImage(AssetImage(asset), desktopContext);

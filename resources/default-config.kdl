@@ -794,9 +794,3 @@ gestures {
 //     render-drm-device "/dev/dri/renderD128" // replace with a path on your machine
 // }
 
-// Bounded liquid glass for macOS Shell surfaces which request a blur mask.
-// An empty mask (including Launchpad) remains clear. Material is unaffected.
-layer-rule {
-    match namespace="^clarion-shell(-dock)?$"
-    background-effect { liquid-glass true; }
-}
