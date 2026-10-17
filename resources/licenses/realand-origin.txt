@@ -23,3 +23,18 @@ sources are recorded separately in this directory.
 The Catalina analysis records evidence for selected mechanisms. Realand does
 not embed Apple's analyzed executable code; unknown animation parameters are
 identified as Realand parameters rather than verified macOS curves.
+
+Independence note, 2026-10-17
+-----------------------------
+This repository no longer tracks the niri upstream. Measured against
+niri-wm/niri at 45739bc: of the 122 Rust files under src/ that share a path
+with upstream, 112 no longer share an implementation, 3 differ only by the
+project rename, and 7 are unchanged generic helpers. Another 160 Rust files
+exist only here. The wiki has diverged similarly.
+
+Maintenance is independent of upstream release cadence. Individual fixes may
+be taken from niri, but there is no sync and upstream behaviour is not the
+reference for Clarion behaviour.
+
+This note records a maintenance decision. It does not reduce or replace the
+attribution that GPL-3.0-or-later requires for the derived code.

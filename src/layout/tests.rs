@@ -2596,7 +2596,7 @@ fn auto_stack_disabled_opens_new_columns() {
     let ws = &monitors[0].workspaces[monitors[0].active_workspace_idx()];
     let columns: Vec<_> = ws.scrolling().columns().collect();
 
-    // With auto-stack disabled, every window opens as its own column (niri behavior).
+    // With auto-stack disabled, every window opens as its own column.
     let counts: Vec<usize> = columns.iter().map(|col| col.tile_count()).collect();
     assert_eq!(counts, vec![1, 1, 1]);
 }
