@@ -429,11 +429,12 @@ impl Default for WindowOpenAnim {
             anim: Animation {
                 off: false,
                 // A lightly underdamped spring: one visible overshoot, then a
-                // short settle. Duration comes from the spring rather than a
-                // fixed timeline, so interrupts keep their velocity.
+                // soft settle. Softer than a snappy timeline so the reveal
+                // reads as growth rather than a pop; duration comes from the
+                // spring, so interrupts keep their velocity.
                 kind: Kind::Spring(SpringParams {
-                    damping_ratio: 0.62,
-                    stiffness: 600,
+                    damping_ratio: 0.66,
+                    stiffness: 420,
                     epsilon: 0.0015,
                 }),
             },
@@ -1318,8 +1319,8 @@ mod tests {
         assert_eq!(
             reference.anim.kind,
             Kind::Spring(SpringParams {
-                damping_ratio: 0.62,
-                stiffness: 600,
+                damping_ratio: 0.66,
+                stiffness: 420,
                 epsilon: 0.0015,
             })
         );

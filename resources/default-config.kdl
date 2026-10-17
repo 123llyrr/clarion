@@ -336,13 +336,14 @@ animations {
         }
     }
 
-    // Lively reveal from 94% size. A lightly underdamped spring overshoots a
-    // few percent, then settles; an interrupted open keeps its velocity.
+    // Reveal grows from 90% size. The spring is deliberately soft: a gentle
+    // overshoot then a settling rise reads as growth instead of a pop, and an
+    // interrupted open keeps its velocity.
     window-open {
         // Reveal starts with the first mapped buffer; no extra fixed warm-up delay.
-        spring damping-ratio=0.62 stiffness=600 epsilon=0.0015
+        spring damping-ratio=0.66 stiffness=420 epsilon=0.0015
         effect "fade"
-        popin 0.94
+        popin 0.90
 
         glide {
             off
