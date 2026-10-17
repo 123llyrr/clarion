@@ -18,12 +18,12 @@ use crate::render_helpers::background_effect::RenderParams;
 use crate::render_helpers::blur::{Blur, BlurOptions};
 use crate::render_helpers::renderer::AsGlesFrame as _;
 use crate::render_helpers::shaders::{mat3_uniform, Shaders};
-use crate::render_helpers::vulkan::{
-    blur::NativeBlur,
-    native::{NativeError, NativeFrame, NativeRenderer, Postprocess},
-    pipeline::TextureClip,
-    VulkanTexture,
+use crate::render_helpers::vulkan::blur::NativeBlur;
+use crate::render_helpers::vulkan::native::{
+    NativeError, NativeFrame, NativeRenderer, Postprocess,
 };
+use crate::render_helpers::vulkan::pipeline::TextureClip;
+use crate::render_helpers::vulkan::VulkanTexture;
 use crate::utils::region::TransformedRegion;
 
 #[derive(Debug)]
@@ -711,7 +711,8 @@ impl RenderElement<NativeRenderer> for FramebufferEffectElement {
 
         if let Some(options) = self.blur_options {
             // Release the previous intermediate reference before preparing the blur job so that
-            // NativeBlur's output texture has strong_count == 1, avoiding reallocation in create_buffer.
+            // NativeBlur's output texture has strong_count == 1, avoiding reallocation in
+            // create_buffer.
             inner.intermediate = None;
             let mut blur = inner.blur.take().unwrap_or_default();
             let job = blur.prepare_in_native_frame(frame, &framebuffer, options)?;
@@ -840,21 +841,25 @@ impl RenderElement<NativeRenderer> for FramebufferEffectElement {
 
 #[cfg(test)]
 mod recovery_tests {
-    use super::{FramebufferEffect, FramebufferEffectElement, NativeInner};
-    use crate::render_helpers::{
-        background_effect::RenderParams,
-        blur::BlurOptions,
-        solid_color::{SolidColorBuffer, SolidColorRenderElement},
-        vulkan::{hardware_tests::setup, native::NativeRenderer, VulkanTexture},
-    };
+    use std::cell::RefCell;
+    use std::sync::Arc;
+
     use smithay::backend::allocator::Fourcc;
     use smithay::backend::renderer::damage::OutputDamageTracker;
     use smithay::backend::renderer::element::{Element, Kind, RenderElement};
     use smithay::backend::renderer::{
         Bind, Color32F, ExportMem, Frame, Offscreen, Renderer, Texture,
     };
-    use smithay::utils::{user_data::UserDataMap, Physical, Rectangle, Scale, Size, Transform};
-    use std::{cell::RefCell, sync::Arc};
+    use smithay::utils::user_data::UserDataMap;
+    use smithay::utils::{Physical, Rectangle, Scale, Size, Transform};
+
+    use super::{FramebufferEffect, FramebufferEffectElement, NativeInner};
+    use crate::render_helpers::background_effect::RenderParams;
+    use crate::render_helpers::blur::BlurOptions;
+    use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
+    use crate::render_helpers::vulkan::hardware_tests::setup;
+    use crate::render_helpers::vulkan::native::NativeRenderer;
+    use crate::render_helpers::vulkan::VulkanTexture;
 
     crate::clarion_render_elements! {
         RecoveryElement => {

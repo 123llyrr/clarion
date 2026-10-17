@@ -20,11 +20,12 @@ use smithay::backend::renderer::Texture;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Size, Transform};
 use smithay::wayland::compositor::{Blocker, BlockerState};
 
+use super::retained::{ResourceAllocator, ResourceHandle};
 use crate::animation::Animation;
 use crate::clarion_render_elements;
 use crate::render_helpers::particles::{ParticleRenderElement, ParticleVertex};
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
-use crate::render_helpers::renderer::ClarionRenderer;
+use crate::render_helpers::renderer::{AnyRenderer, ClarionRenderer};
 use crate::render_helpers::shader_element::ShaderRenderElement;
 use crate::render_helpers::shaders::{mat3_uniform, ProgramType, Shaders};
 use crate::render_helpers::snapshot::RenderSnapshot;
@@ -87,21 +88,20 @@ impl ClosingBuffer {
     }
 }
 
+/// GPU payload retained by the scene owner, never by a layout registration.
 #[derive(Debug)]
-pub struct ClosingWindow {
-    /// Contents of the window.
+pub(crate) struct ClosingResources {
     buffer: ClosingBuffer,
     native_capture_buffers: Option<[(ClosingBuffer, Point<f64, Logical>); 2]>,
-    native_shader_source: Option<String>,
-
-    /// Contents that are not blocked out, but the background is blocked out.
-    ///
-    /// If `None` then the background doesn't have any blocked-out surfaces, and normal `buffer`
-    /// can be used instead.
     buffer_with_blocked_out_bg: Option<ClosingBuffer>,
-
-    /// Blocked-out contents of the window.
     blocked_out_buffer: ClosingBuffer,
+    dmabuf: Option<smithay::backend::allocator::dmabuf::Dmabuf>,
+}
+
+#[derive(Debug)]
+pub struct ClosingWindow {
+    resources: ResourceHandle<ClosingResources>,
+    native_shader_source: Option<String>,
 
     /// Where the window should be blocked out from.
     block_out_from: Option<BlockOutFrom>,
@@ -136,8 +136,6 @@ pub struct ClosingWindow {
 
     /// Whether Vulkan renderer backend is active.
     is_vulkan: bool,
-    /// Cloned DMA-BUF of the closing window, if available.
-    dmabuf: Option<smithay::backend::allocator::dmabuf::Dmabuf>,
 
     /// Denial's stable 11 by 8 particle grid, generated once for this closing window.
     particles: Vec<ExplosionParticle>,
@@ -189,7 +187,7 @@ impl AnimationState {
 
 impl ClosingWindow {
     pub(crate) fn uses_native_renderer(&self) -> bool {
-        matches!(self.buffer, ClosingBuffer::Vulkan(_))
+        matches!(self.resources.lease().buffer, ClosingBuffer::Vulkan(_))
     }
 
     pub fn translate(&mut self, delta: Point<f64, Logical>) {
@@ -197,7 +195,7 @@ impl ClosingWindow {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn new<E: RenderElement<GlesRenderer>>(
+    pub(crate) fn new<E: RenderElement<GlesRenderer>>(
         renderer: &mut GlesRenderer,
         snapshot: RenderSnapshot<E, E>,
         scale: Scale<f64>,
@@ -210,6 +208,7 @@ impl ClosingWindow {
         has_custom_shader: bool,
         is_vulkan: bool,
         dmabuf: Option<smithay::backend::allocator::dmabuf::Dmabuf>,
+        resources: ResourceAllocator<ClosingResources>,
     ) -> anyhow::Result<Self> {
         let _span = clarion_tracy_span!("ClosingWindow::new");
 
@@ -261,11 +260,14 @@ impl ClosingWindow {
         };
 
         Ok(Self {
-            buffer,
-            buffer_with_blocked_out_bg,
-            blocked_out_buffer,
+            resources: resources.register(ClosingResources {
+                buffer,
+                buffer_with_blocked_out_bg,
+                blocked_out_buffer,
+                native_capture_buffers: None,
+                dmabuf,
+            }),
             block_out_from: snapshot.block_out_from,
-            native_capture_buffers: None,
             native_shader_source: None,
             geo_size,
             pos,
@@ -278,7 +280,6 @@ impl ClosingWindow {
             effect,
             built_in_effect: !has_custom_shader,
             is_vulkan,
-            dmabuf,
             particles,
             particle_id: Id::new(),
             particle_commit: Cell::new(CommitCounter::default()),
@@ -286,7 +287,7 @@ impl ClosingWindow {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn new_native(
+    pub(crate) fn new_native(
         renderer: &mut NativeRenderer,
         scale: Scale<f64>,
         geo_size: Size<f64, Logical>,
@@ -296,11 +297,13 @@ impl ClosingWindow {
         glide: clarion_config::Glide,
         effect: WindowCloseEffect,
         custom_shader: Option<&str>,
-        snapshot: Option<super::tile::NativeTileSnapshot>,
-        dmabuf: Option<smithay::backend::allocator::dmabuf::Dmabuf>,
+        snapshot: Option<crate::scene::window_resources::NativeTileSnapshot>,
+        source: Option<crate::scene::window_resources::NativeCloseSource>,
+        resources: ResourceAllocator<ClosingResources>,
     ) -> anyhow::Result<Self> {
         let _span = clarion_tracy_span!("ClosingWindow::new_native");
         let has_custom_shader = custom_shader.is_some();
+        let dmabuf = source.as_ref().map(|source| source.dmabuf().clone());
 
         // A failed snapshot must never expose an unfiltered DMA-BUF to captures.
         // Omit the animation on captures when there is no trusted snapshot.
@@ -327,15 +330,19 @@ impl ClosingWindow {
                 Vec::new(),
             );
             (ClosingBuffer::Vulkan(buf), offset)
-        } else if let Some(ref dmabuf) = dmabuf {
+        } else if let Some(source) = source.as_ref() {
             use smithay::backend::renderer::ImportDma;
-            let imported = renderer
-                .import_dmabuf(dmabuf, None)
-                .context("error importing dmabuf in native closing window")?;
-            // The client may reuse its wl_buffer as soon as the close transaction releases it.
-            // Keep an independent image for the entire animation, just like NativeTileSnapshot
-            // does. Rendering the imported DMA-BUF into an offscreen texture also waits for the
-            // external sample to finish before the client can overwrite the source.
+
+            use crate::scene::window_resources::NativeCloseSource;
+            let imported = match source {
+                NativeCloseSource::Owned(source) => renderer.import_owned_dmabuf(source),
+                NativeCloseSource::Unowned(dmabuf) => renderer.import_dmabuf(dmabuf, None),
+            }
+            .context("error importing dmabuf in native closing window")?;
+            // Copy to independent storage for the animation. With an exact source
+            // lease, completion retains the old attachment until this copy finishes
+            // and later scene submissions are ordered on the same graphics queue.
+            // Raw sources retain NativeRenderer's synchronous safety fallback.
             let size = imported.size();
             let source = TextureBuffer::from_texture(
                 renderer,
@@ -412,11 +419,14 @@ impl ClosingWindow {
         };
 
         Ok(Self {
-            blocked_out_buffer: buffer.clone(),
-            buffer_with_blocked_out_bg: None,
-            buffer,
+            resources: resources.register(ClosingResources {
+                blocked_out_buffer: buffer.clone(),
+                buffer_with_blocked_out_bg: None,
+                buffer,
+                native_capture_buffers,
+                dmabuf,
+            }),
             block_out_from: None,
-            native_capture_buffers,
             native_shader_source: Some(crate::render_helpers::shaders::animation_source(
                 ProgramType::Close,
                 crate::render_helpers::shaders::resolve_close_shader(custom_shader, effect),
@@ -432,11 +442,79 @@ impl ClosingWindow {
             effect,
             built_in_effect: !has_custom_shader,
             is_vulkan: true,
-            dmabuf,
             particles,
             particle_id: Id::new(),
             particle_commit: Cell::new(CommitCounter::default()),
         })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_any<W: crate::layout::LayoutElement>(
+        renderer: &mut AnyRenderer<'_>,
+        scene: &crate::scene::tile::TileScene<'_, W>,
+        resources: &crate::scene::window_resources::WindowResourceHandle,
+        scale: Scale<f64>,
+        geo_size: Size<f64, Logical>,
+        pos: Point<f64, Logical>,
+        blocker: TransactionBlocker,
+        anim: Animation,
+        glide: clarion_config::Glide,
+        effect: WindowCloseEffect,
+        custom_shader: Option<&str>,
+        closing_resources: ResourceAllocator<ClosingResources>,
+    ) -> anyhow::Result<Self> {
+        match renderer {
+            AnyRenderer::Gles(gles) => {
+                let snapshot = crate::scene::window_snapshot::take_unmap_snapshot(resources)
+                    .unwrap_or_else(|| {
+                        crate::scene::window_snapshot::capture_gles(
+                            scene,
+                            gles,
+                            None,
+                            false,
+                            crate::render_helpers::xray::XrayPos::default(),
+                        )
+                    });
+                let dmabuf = scene.window().dmabuf();
+                Self::new(
+                    gles,
+                    snapshot,
+                    scale,
+                    geo_size,
+                    pos,
+                    blocker,
+                    anim,
+                    glide,
+                    effect,
+                    custom_shader.is_some(),
+                    false,
+                    dmabuf,
+                    closing_resources,
+                )
+            }
+            AnyRenderer::Native(native) => {
+                let source = crate::scene::window_snapshot::take_native_close_source(
+                    scene.window(),
+                    resources,
+                );
+                let snapshot =
+                    crate::scene::window_snapshot::snapshot_native(scene, resources, native).ok();
+                Self::new_native(
+                    native,
+                    scale,
+                    geo_size,
+                    pos,
+                    blocker,
+                    anim,
+                    glide,
+                    effect,
+                    custom_shader,
+                    snapshot,
+                    source,
+                    closing_resources,
+                )
+            }
+        }
     }
 
     pub fn advance_animations(&mut self) {
@@ -480,8 +558,8 @@ impl ClosingWindow {
     }
 
     #[inline]
-    pub fn dmabuf(&self) -> Option<&smithay::backend::allocator::dmabuf::Dmabuf> {
-        self.dmabuf.as_ref()
+    pub fn dmabuf(&self) -> Option<smithay::backend::allocator::dmabuf::Dmabuf> {
+        self.resources.lease().dmabuf.clone()
     }
 
     #[inline]
@@ -498,10 +576,10 @@ impl ClosingWindow {
         view_rect: Rectangle<f64, Logical>,
         scale: Scale<f64>,
     ) -> Vec<ClosingWindowRenderElement> {
-        let _ = (self.is_vulkan, &self.dmabuf);
+        let resources = self.resources.lease();
 
         let capture = if self.is_vulkan && ctx.target != RenderTarget::Output {
-            let Some(buffers) = &self.native_capture_buffers else {
+            let Some(buffers) = &resources.native_capture_buffers else {
                 return Vec::new();
             };
             Some(&buffers[ctx.target as usize - 1])
@@ -511,14 +589,19 @@ impl ClosingWindow {
         let (buffer, offset) = if let Some((buffer, offset)) = capture {
             (buffer, *offset)
         } else if ctx.target.should_block_out(self.block_out_from) {
-            (&self.blocked_out_buffer, self.blocked_out_buffer_offset)
-        } else if ctx.target != RenderTarget::Output && self.buffer_with_blocked_out_bg.is_some() {
             (
-                self.buffer_with_blocked_out_bg.as_ref().unwrap(),
+                &resources.blocked_out_buffer,
+                self.blocked_out_buffer_offset,
+            )
+        } else if ctx.target != RenderTarget::Output
+            && resources.buffer_with_blocked_out_bg.is_some()
+        {
+            (
+                resources.buffer_with_blocked_out_bg.as_ref().unwrap(),
                 self.buffer_with_blocked_out_bg_offset,
             )
         } else {
-            (&self.buffer, self.buffer_offset)
+            (&resources.buffer, self.buffer_offset)
         };
 
         let anim = match &self.anim_state {
@@ -568,8 +651,8 @@ impl ClosingWindow {
                     .program(ProgramType::Close)
                     .is_some()
                 {
-                    // Round to physical pixels relative to the view position. This is similar to what
-                    // happens when rendering normal windows.
+                    // Round to physical pixels relative to the view position. This is similar to
+                    // what happens when rendering normal windows.
                     let relative = self.pos - view_rect.loc;
                     let pos =
                         view_rect.loc + relative.to_physical_precise_round(scale).to_logical(scale);
@@ -616,8 +699,8 @@ impl ClosingWindow {
                         let element_location = area.loc - view_rect.loc;
                         (area, element_location)
                     } else {
-                        // Custom close shaders historically receive the entire view and may intentionally
-                        // draw far outside the window.
+                        // Custom close shaders historically receive the entire view and may
+                        // intentionally draw far outside the window.
                         (view_rect, Point::from((0., 0.)))
                     };
 
@@ -684,8 +767,9 @@ impl ClosingWindow {
                             effect_rect.size,
                             scale,
                         ) {
-                            // Render-element vectors are front-to-back. Denial paints particles in the
-                            // foreground and the flash/window body underneath them.
+                            // Render-element vectors are front-to-back. Denial paints particles in
+                            // the foreground and the flash/window body
+                            // underneath them.
                             elements.push(particles.into());
                         }
                     }
@@ -747,8 +831,8 @@ impl ClosingWindow {
                     let element_location = area.loc - view_rect.loc;
                     (area, element_location)
                 } else {
-                    // Custom close shaders historically receive the entire view and may intentionally
-                    // draw far outside the window.
+                    // Custom close shaders historically receive the entire view and may
+                    // intentionally draw far outside the window.
                     (view_rect, Point::from((0., 0.)))
                 };
 
@@ -1152,10 +1236,11 @@ fn build_particles(seed: u64) -> Vec<ExplosionParticle> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
     use crate::animation::{Clock, Spring, SpringParams};
     use crate::utils::transaction::Transaction;
-    use std::time::Duration;
 
     #[test]
     fn builtin_close_releases_its_snapshot_after_the_last_visible_spring_frame() {

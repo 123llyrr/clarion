@@ -6,11 +6,10 @@ use smithay::output::Output;
 use smithay::utils::{Physical, Size};
 use smithay::wayland::dmabuf::DmabufFeedbackBuilder;
 
-use crate::compositor::{Clarion, State};
-use crate::render_helpers::{resources, shaders};
-
 use crate::backend::winit::native_window::{NativeDevice, NativeWindowEvent};
 use crate::backend::winit::*;
+use crate::compositor::{Clarion, State};
+use crate::render_helpers::{resources, shaders};
 
 impl crate::input::backend_ext::ClarionInputDevice for NativeDevice {
     fn output(&self, _: &State) -> Option<Output> {
@@ -62,11 +61,47 @@ impl Winit {
             let WinitBackend::Native(native) = &mut self.backend else {
                 unreachable!()
             };
-            self.dmabuf_global =
-                Some(clarion.dmabuf_state.create_global::<State>(
-                    &clarion.display_handle,
-                    native.renderer.dmabuf_formats(),
-                ));
+            // Native Vulkan has no EGL display to bind to wl_display. Supply
+            // the actual selected GPU through v4 feedback so EGL clients can
+            // discover its render node without the legacy wl_drm global.
+            let default_feedback = || {
+                let context = native
+                    .renderer
+                    .vulkan()
+                    .ctx
+                    .as_ref()
+                    .context("missing native Vulkan context")?;
+                let device = context
+                    .drm_render_device_id()
+                    .context("error querying Vulkan DRM render-device identity")?
+                    .context("Vulkan device has no valid DRM render-device identity")?;
+                let formats = native.renderer.dmabuf_formats();
+                anyhow::ensure!(
+                    formats.iter().next().is_some(),
+                    "Vulkan renderer has no supported DMA-BUF import formats"
+                );
+                DmabufFeedbackBuilder::new(device, formats)
+                    .build()
+                    .context("error building native Vulkan dmabuf feedback")
+            };
+            let dmabuf_global = match default_feedback() {
+                Ok(feedback) => clarion
+                    .dmabuf_state
+                    .create_global_with_default_feedback::<State>(
+                        &clarion.display_handle,
+                        &feedback,
+                    ),
+                Err(err) => {
+                    debug!(
+                        "failed building native Vulkan dmabuf feedback, falling back to v3: {err:?}"
+                    );
+                    clarion.dmabuf_state.create_global::<State>(
+                        &clarion.display_handle,
+                        native.renderer.dmabuf_formats(),
+                    )
+                }
+            };
+            assert!(self.dmabuf_global.replace(dmabuf_global).is_none());
             return;
         };
         let renderer = backend.renderer();

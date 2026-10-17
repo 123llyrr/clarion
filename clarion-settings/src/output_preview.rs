@@ -1,6 +1,7 @@
-use clarion_ipc::Response;
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
+
+use clarion_ipc::Response;
 
 pub type Reply = Receiver<Result<Response, String>>;
 

@@ -2,18 +2,18 @@
 //! State transitions and frame prediction live in clarion-core. This adapter owns
 //! only platform timer removal, diagnostics, and conversion of backend outcomes.
 
-use clarion_timing::scheduling::{OutputScheduler, RenderOutcome, VblankTransition};
-use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
 #[cfg(test)]
 use std::mem;
 use std::time::Duration;
+
+pub use clarion_timing::scheduling::EstimatedVblankAction;
+use clarion_timing::scheduling::{OutputScheduler, RenderOutcome, VblankTransition};
+use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
 
 use crate::backend::RenderResult;
 use crate::frame_clock::FrameClock;
 use crate::frame_stats::FrameStats;
 use crate::render_helpers::vulkan::timing::{GpuTimingSample, GpuTimingTag};
-
-pub use clarion_timing::scheduling::EstimatedVblankAction;
 pub type RedrawState = clarion_timing::scheduling::RedrawState<RegistrationToken>;
 
 /// Thread CPU time excludes blocking and scheduler preemption. Called only
@@ -131,6 +131,11 @@ impl OutputSchedule {
         );
         self.core.presented(actual, target);
     }
+    pub(crate) fn freeze_timings(&self, name: String) -> crate::frame_stats::FrozenFrameStats {
+        self.stats
+            .freeze(name, self.core.clock(), self.core.latch_enabled())
+    }
+    #[cfg(test)]
     pub(crate) fn timings(&self, name: String) -> clarion_ipc::diagnostics::OutputFrameTimings {
         self.stats
             .snapshot(name, self.core.clock(), self.core.latch_enabled())

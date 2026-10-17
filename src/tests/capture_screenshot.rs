@@ -60,7 +60,8 @@ fn fixture(native: bool) -> Fixture {
     let mut f = Fixture::with_config(config);
     if native {
         use crate::backend::headless::HeadlessRenderer;
-        use crate::render_helpers::vulkan::{native::NativeRenderer, VulkanRenderer};
+        use crate::render_helpers::vulkan::native::NativeRenderer;
+        use crate::render_helpers::vulkan::VulkanRenderer;
         let path =
             std::env::var_os("CLARION_VULKAN_TEST_NODE").expect("set CLARION_VULKAN_TEST_NODE");
         let node = smithay::backend::drm::DrmNode::from_path(&path).unwrap();

@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use calloop::channel::{Channel, Event};
 use calloop::LoopHandle;
-
 use smithay::output::Output;
 use smithay::reexports::wayland_protocols_wlr;
 use smithay::reexports::wayland_server::backend::ClientId;
@@ -293,13 +292,16 @@ where
 
 #[cfg(test)]
 mod delivery_tests {
-    use super::*;
-    use smithay::output::{PhysicalProperties, Subpixel};
-    use smithay::reexports::wayland_server::{backend::ClientData, Display};
     use std::io::Write;
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     use std::os::unix::net::UnixStream;
     use std::time::{Duration, Instant};
+
+    use smithay::output::{PhysicalProperties, Subpixel};
+    use smithay::reexports::wayland_server::backend::ClientData;
+    use smithay::reexports::wayland_server::Display;
+
+    use super::*;
 
     struct TestState {
         manager: GammaControlManagerState,

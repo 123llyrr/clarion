@@ -93,9 +93,10 @@ impl Fixture {
     /// display registry otherwise races a final display drop against a new
     /// surfaceless display lookup during dense mode-transition matrices.
     pub fn init_gles_renderer(&mut self) {
+        use std::sync::OnceLock;
+
         use smithay::backend::egl::native::EGLSurfacelessDisplay;
         use smithay::backend::egl::EGLDisplay;
-        use std::sync::OnceLock;
 
         static DISPLAY: OnceLock<EGLDisplay> = OnceLock::new();
         DISPLAY.get_or_init(|| unsafe { EGLDisplay::new(EGLSurfacelessDisplay).unwrap() });
@@ -158,10 +159,10 @@ impl Fixture {
     /// For some reason, when running tests on many threads at once, a single roundtrip is
     /// sometimes not sufficient to get the configure events to the client.
     ///
-    /// I suspect that this is because these configure events are sent from the clarion loop callback,
-    /// so they arrive after the sync done event and don't get processed in that client dispatch
-    /// cycle. I'm not sure why this would be dependent on multithreading. But if this is indeed
-    /// the issue, then a double roundtrip fixes it.
+    /// I suspect that this is because these configure events are sent from the clarion loop
+    /// callback, so they arrive after the sync done event and don't get processed in that
+    /// client dispatch cycle. I'm not sure why this would be dependent on multithreading. But
+    /// if this is indeed the issue, then a double roundtrip fixes it.
     pub fn double_roundtrip(&mut self, id: ClientId) {
         self.roundtrip(id);
         self.roundtrip(id);

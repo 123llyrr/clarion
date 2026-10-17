@@ -18,6 +18,7 @@ mod canvas;
 mod coalesced_move;
 mod core_ownership;
 mod core_protocol_focus;
+mod cube_scene_source;
 mod dnd_hold;
 mod dwindle_core;
 mod expo;
@@ -29,8 +30,10 @@ mod output_affinity;
 mod renderer_recovery;
 mod scene_source;
 mod spread;
+mod spread_composition;
 mod stage;
 mod stage_drag;
+mod stage_scene_source;
 mod struts;
 mod viewport;
 mod workspace_names;
@@ -366,20 +369,23 @@ fn dwindle_hidden_panes_remain_addressable_by_explicit_id() {
 
 #[test]
 fn dwindle_many_windows_keep_session_serializable() {
-    use super::dwindle::DwindleSpace;
     use clarion_ipc::management::{
         SessionLayout, SessionTree, SessionWindow, SessionWorkspace, MAX_SESSION_TREE_DEPTH,
     };
 
+    use super::dwindle::DwindleSpace;
+
     let view_size = Size::from((1920., 1080.));
     let clock = Clock::with_time(Duration::ZERO);
     let options = Rc::new(Options::default());
+    let scene_resources = crate::scene::resources::SceneResources::new();
     let mut space = DwindleSpace::new(
         view_size,
         Rectangle::from_size(view_size),
         1.,
         clock.clone(),
         options.clone(),
+        scene_resources.allocator(),
     );
     // Every newly focused window becomes the next split target. This previously
     // made a 95-deep tree that could be saved but never loaded by serde_json.
@@ -391,6 +397,7 @@ fn dwindle_many_windows_keep_session_serializable() {
                 1.,
                 clock.clone(),
                 options.clone(),
+                scene_resources.allocator().windows.allocate(),
             ),
             ActivateWindow::Yes,
         );
@@ -453,6 +460,8 @@ struct TestWindowInner {
     id: usize,
     /// Opt-in geometry reads for traversal regressions; disabled in timing fixtures.
     size_reads: Cell<Option<usize>>,
+    /// Only presentation lifecycle regressions collect feedback writes.
+    offscreen_writes: RefCell<Option<Vec<Option<OffscreenData>>>>,
     parent_id: Cell<Option<usize>>,
     bbox: Cell<Rectangle<i32, Logical>>,
     initial_bbox: Rectangle<i32, Logical>,
@@ -510,6 +519,7 @@ impl TestWindow {
         Self(Rc::new(TestWindowInner {
             id: params.id,
             size_reads: Cell::new(None),
+            offscreen_writes: RefCell::new(None),
             parent_id: Cell::new(params.parent_id),
             bbox: Cell::new(params.bbox),
             initial_bbox: params.bbox,
@@ -653,7 +663,11 @@ impl LayoutElement for TestWindow {
 
     fn output_leave(&self, _output: &Output) {}
 
-    fn set_offscreen_data(&self, _data: Option<OffscreenData>) {}
+    fn set_offscreen_data(&self, data: Option<OffscreenData>) {
+        if let Some(writes) = self.0.offscreen_writes.borrow_mut().as_mut() {
+            writes.push(data);
+        }
+    }
 
     fn set_activated(&mut self, active: bool) {
         self.0.pending_activated.set(active);

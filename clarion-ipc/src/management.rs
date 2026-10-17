@@ -1,7 +1,8 @@
 //! Versioned, application-independent layout persistence. No application commands are stored.
 #![allow(missing_docs)]
-use crate::TilingMode;
 use serde::{Deserialize, Serialize};
+
+use crate::TilingMode;
 
 /// Maximum split-tree depth accepted by layout restoration and live insertion.
 pub const MAX_SESSION_TREE_DEPTH: usize = 32;

@@ -4,16 +4,15 @@
 //! wakes it in the driver; an idle compositor needs neither another redraw nor
 //! a periodic timer to release client buffers and upload storage.
 
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    mpsc, Arc, Mutex,
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
 
 use ash::vk;
 use smithay::backend::renderer::sync::{Fence, Interrupted, SyncPoint};
 use smithay::reexports::calloop::ping::Ping;
 
-use super::{frame::GpuCompletion, memory::PendingUpload};
+use super::frame::GpuCompletion;
+use super::memory::PendingUpload;
 
 /// A shared retirement slot, separate from the independent native sync file.
 /// Both the renderer and idle worker can retire it. An empty slot means GPU
@@ -154,6 +153,31 @@ impl FrameCompletion {
 
 #[derive(Debug)]
 struct FrameFence(Arc<FrameCompletion>);
+
+/// Query our own completion without waiting or collapsing a device failure into
+/// an indefinitely pending generic Smithay fence.
+pub(crate) fn poll_native_sync(sync: &SyncPoint) -> Option<Result<bool, vk::Result>> {
+    let fence = sync.get::<FrameFence>()?;
+    let resources = match fence.0.resources.try_lock() {
+        Ok(resources) => resources,
+        Err(std::sync::TryLockError::WouldBlock) => return Some(Ok(false)),
+        Err(error) => panic!("poisoned Vulkan retirement slot: {error}"),
+    };
+    Some(match resources.as_ref() {
+        Ok(Some(frame)) => frame.status(),
+        Ok(None) => Ok(true),
+        Err(error) => Err(*error),
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn failed_sync_for_test(error: vk::Result) -> SyncPoint {
+    SyncPoint::from(FrameFence(Arc::new(FrameCompletion {
+        resources: Mutex::new(Err(error)),
+        sync: SyncPoint::signaled(),
+        fd: None,
+    })))
+}
 
 impl Fence for FrameFence {
     fn is_signaled(&self) -> bool {
@@ -375,9 +399,11 @@ impl CompletionQueue {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::render_helpers::vulkan::{allocate_texture, hardware_tests::setup};
     use smithay::backend::renderer::sync::Fence;
+
+    use super::*;
+    use crate::render_helpers::vulkan::allocate_texture;
+    use crate::render_helpers::vulkan::hardware_tests::setup;
 
     #[test]
     fn admission_stays_bounded_until_every_outstanding_owner_retires() {

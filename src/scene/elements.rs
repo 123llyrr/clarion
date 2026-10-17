@@ -1,4 +1,12 @@
 //! Render-element ownership and coordinate transforms for output snapshots.
+use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
+use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
+use smithay::backend::renderer::element::utils::{
+    CropRenderElement, Relocate, RelocateRenderElement, RescaleRenderElement,
+};
+use smithay::backend::renderer::element::Element;
+use smithay::utils::{Logical, Point, Rectangle, Scale};
+
 use crate::clarion_render_elements;
 use crate::layer::mapped::LayerSurfaceRenderElement;
 use crate::layout::tile::TileRenderElement;
@@ -8,13 +16,6 @@ use crate::render_helpers::solid_color::SolidColorRenderElement;
 use crate::ui::exit_confirm_dialog::ExitConfirmDialogRenderElement;
 use crate::ui::mru::WindowMruUiRenderElement;
 use crate::ui::screenshot_ui::ScreenshotUiRenderElement;
-use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
-use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
-use smithay::backend::renderer::element::utils::{
-    CropRenderElement, Relocate, RelocateRenderElement, RescaleRenderElement,
-};
-use smithay::backend::renderer::element::Element;
-use smithay::utils::{Logical, Point, Rectangle, Scale};
 
 pub(super) fn scale_relocate_crop<E: Element>(
     elem: E,

@@ -54,8 +54,8 @@ pub enum Sub {
     Validate {
         /// Path to config file (default: `$XDG_CONFIG_HOME/clarion/config.kdl`).
         ///
-        /// This can also be set with the `CLARION_CONFIG` environment variable. If both are set, the
-        /// command line argument takes precedence. Existing `REALAND_CONFIG` and
+        /// This can also be set with the `CLARION_CONFIG` environment variable. If both are set,
+        /// the command line argument takes precedence. Existing `REALAND_CONFIG` and
         /// `$XDG_CONFIG_HOME/realand/config.kdl` are used when the Clarion equivalent is absent.
         #[arg(short, long)]
         config: Option<PathBuf>,

@@ -15,10 +15,8 @@ use smithay::reexports::wayland_server::{
 use smithay::wayland::compositor::with_states;
 
 use crate::compositor::State;
-use crate::protocols::raw::gtk_shell::server::{
-    gtk_shell1::{self, GtkShell1},
-    gtk_surface1::{self, GtkSurface1},
-};
+use crate::protocols::raw::gtk_shell::server::gtk_shell1::{self, GtkShell1};
+use crate::protocols::raw::gtk_shell::server::gtk_surface1::{self, GtkSurface1};
 
 pub struct GtkShellState {
     _global: GlobalId,

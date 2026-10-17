@@ -13,22 +13,22 @@ use clarion_core::scrolling::{
 pub use clarion_core::scrolling::{ColumnWidth, WindowHeight};
 use clarion_ipc::{ColumnDisplay as IpcColumnDisplay, SizeChange, WindowLayout};
 use ordered_float::NotNan;
-use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size};
 
-use super::closing_window::{ClosingWindow, ClosingWindowRenderElement};
 use super::monitor::InsertPosition;
-use super::tab_indicator::{TabIndicator, TabIndicatorRenderElement, TabInfo};
-use super::tile::{Tile, TileRenderElement, TileRenderSnapshot};
+use super::tile::{Tile, TileRenderElement};
 use super::wobble::WobbleAnchor;
 use super::workspace::ResolvedSize;
 use super::{ConfigureIntent, HitType, InteractiveResizeData, LayoutElement, Options, RemovedTile};
 use crate::animation::{Animation, Clock};
 use crate::clarion_render_elements;
 use crate::layout::{RenderLayer, SizingMode};
-use crate::render_helpers::renderer::ClarionRenderer;
+use crate::render_helpers::renderer::{AnyRenderer, ClarionRenderer};
 use crate::render_helpers::xray::XrayPos;
 use crate::render_helpers::RenderCtx;
+use crate::scene::closing_window::{ClosingWindow, ClosingWindowRenderElement};
+use crate::scene::resources::SceneResourceAllocator;
+use crate::scene::tab_indicator::{TabIndicator, TabIndicatorRenderElement, TabInfo};
 use crate::utils::transaction::{Transaction, TransactionBlocker};
 use crate::utils::ResizeEdge;
 use crate::window::ResolvedWindowRules;
@@ -36,6 +36,7 @@ use crate::window::ResolvedWindowRules;
 /// A scrollable-tiling space for windows.
 #[derive(Debug)]
 pub struct ScrollingSpace<W: LayoutElement> {
+    scene_resources: SceneResourceAllocator,
     /// Columns of windows on this space.
     columns: Vec<Column<W>>,
 
@@ -250,10 +251,12 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         scale: f64,
         clock: Clock,
         options: Rc<Options>,
+        scene_resources: SceneResourceAllocator,
     ) -> Self {
         let working_area = compute_working_area(parent_area, scale, options.layout.struts);
 
         Self {
+            scene_resources,
             columns: Vec::new(),
             data: Vec::new(),
             order: ColumnOrder::default(),
@@ -399,8 +402,9 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         tiles: Vec<Tile<W>>,
         active: Option<u64>,
     ) {
-        use clarion_core::policy_memory::{ColumnDisplay as Display, Height, Width};
         use std::collections::{HashMap, HashSet};
+
+        use clarion_core::policy_memory::{ColumnDisplay as Display, Height, Width};
         let order: Vec<_> = tiles.iter().map(|tile| tile.window().core_id()).collect();
         let snapshot = snapshot.retain(&order.iter().cloned().collect::<HashSet<_>>());
         let mut available: HashMap<_, _> = tiles
@@ -1585,225 +1589,138 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
     pub fn start_close_animation_for_window(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut AnyRenderer<'_>,
         window: &W::Id,
         blocker: TransactionBlocker,
     ) {
-        let (tile, mut tile_pos) = self
-            .tiles_with_render_positions_mut(false)
-            .find(|(tile, _)| tile.window().id() == window)
-            .unwrap();
-
-        let Some(snapshot) = tile.take_unmap_snapshot() else {
-            return;
-        };
-
-        let dmabuf = tile.window().dmabuf();
-        let tile_size = tile.tile_size();
-
-        let (col_idx, tile_idx) = self
-            .columns
-            .iter()
-            .enumerate()
-            .find_map(|(col_idx, col)| {
-                col.tiles
-                    .iter()
-                    .position(|tile| tile.window().id() == window)
-                    .map(move |tile_idx| (col_idx, tile_idx))
-            })
-            .unwrap();
-
-        let col = &self.columns[col_idx];
-        let removing_last = col.tiles.len() == 1;
-
-        // Skip closing animation for invisible tiles in a tabbed column.
-        if col.policy.display_mode == ColumnDisplay::Tabbed && tile_idx != col.policy.active_index()
-        {
-            return;
-        }
-
-        tile_pos.x += self.view_pos();
-
-        if col_idx < self.order.active_index() {
-            let offset = if removing_last {
-                self.column_x(col_idx + 1) - self.column_x(col_idx)
-            } else {
-                self.data[col_idx].width
-                    - col
-                        .data
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(idx, data)| {
-                            (idx != tile_idx).then_some(NotNan::new(data.size.w).unwrap())
-                        })
-                        .max()
-                        .map(NotNan::into_inner)
-                        .unwrap()
+        let closing_res = {
+            let Some((tile, mut tile_pos, _)) = self
+                .tiles_with_render_positions()
+                .find(|(tile, _, _)| tile.window().id() == window)
+            else {
+                return;
             };
-            tile_pos.x -= offset;
-        }
 
-        self.start_close_animation_for_tile(
-            renderer, snapshot, tile_size, tile_pos, blocker, dmabuf,
-        );
-    }
-
-    pub fn start_close_animation_for_window_native(
-        &mut self,
-        renderer: &mut crate::render_helpers::vulkan::native::NativeRenderer,
-        window: &W::Id,
-        blocker: TransactionBlocker,
-    ) {
-        let (col_idx, tile_idx) = self
-            .columns
-            .iter()
-            .enumerate()
-            .find_map(|(col_idx, col)| {
-                col.tiles
-                    .iter()
-                    .position(|tile| tile.window().id() == window)
-                    .map(move |tile_idx| (col_idx, tile_idx))
-            })
-            .unwrap();
-
-        let col = &self.columns[col_idx];
-        let removing_last = col.tiles.len() == 1;
-
-        // Skip closing animation for invisible tiles in a tabbed column.
-        if col.policy.display_mode == ColumnDisplay::Tabbed && tile_idx != col.policy.active_index()
-        {
-            return;
-        }
-
-        let x_offset = if col_idx < self.order.active_index() {
-            if removing_last {
-                self.column_x(col_idx + 1) - self.column_x(col_idx)
-            } else {
-                self.data[col_idx].width
-                    - col
-                        .data
+            let Some((col_idx, tile_idx)) =
+                self.columns.iter().enumerate().find_map(|(col_idx, col)| {
+                    col.tiles
                         .iter()
-                        .enumerate()
-                        .filter_map(|(idx, data)| {
-                            (idx != tile_idx).then_some(NotNan::new(data.size.w).unwrap())
-                        })
-                        .max()
-                        .map(NotNan::into_inner)
-                        .unwrap()
+                        .position(|tile| tile.window().id() == window)
+                        .map(move |tile_idx| (col_idx, tile_idx))
+                })
+            else {
+                return;
+            };
+
+            let col = &self.columns[col_idx];
+            let removing_last = col.tiles.len() == 1;
+
+            // Skip closing animation for invisible tiles in a tabbed column.
+            if col.policy.display_mode == ColumnDisplay::Tabbed
+                && tile_idx != col.policy.active_index()
+            {
+                return;
             }
-        } else {
-            0.
+
+            tile_pos.x += self.view_pos();
+
+            if col_idx < self.order.active_index() {
+                let offset = if removing_last {
+                    self.column_x(col_idx + 1) - self.column_x(col_idx)
+                } else {
+                    self.data[col_idx].width
+                        - col
+                            .data
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(idx, data)| {
+                                (idx != tile_idx).then_some(NotNan::new(data.size.w).unwrap())
+                            })
+                            .max()
+                            .map(NotNan::into_inner)
+                            .unwrap()
+                };
+                tile_pos.x -= offset;
+            }
+
+            let anim = Animation::new(
+                self.clock.clone(),
+                0.,
+                1.,
+                0.,
+                self.options.animations.window_close.anim,
+            );
+
+            let blocker = if self.options.disable_transactions {
+                TransactionBlocker::completed()
+            } else {
+                blocker
+            };
+
+            let scale = Scale::from(self.scale);
+            tile.create_closing_window(
+                renderer,
+                scale,
+                tile_pos,
+                blocker,
+                anim,
+                &self.options.animations.window_close,
+                self.scene_resources.closing.clone(),
+            )
         };
-        let view_pos = self.view_pos();
 
-        // A native snapshot can render three offscreen targets and wait for the GPU. Do not
-        // capture one for a tab that will not receive a closing animation.
-        let (tile, mut tile_pos) = self
-            .tiles_with_render_positions_mut(false)
-            .find(|(tile, _)| tile.window().id() == window)
-            .unwrap();
-        let dmabuf = tile.window().dmabuf();
-        let tile_size = tile.tile_size();
-        let snapshot = tile.snapshot_native(renderer).ok();
-
-        tile_pos.x += view_pos - x_offset;
-
-        self.start_close_animation_for_tile_native(
-            renderer, tile_size, tile_pos, blocker, snapshot, dmabuf,
-        );
-    }
-
-    pub fn start_close_animation_for_tile_native(
-        &mut self,
-        renderer: &mut crate::render_helpers::vulkan::native::NativeRenderer,
-        tile_size: Size<f64, Logical>,
-        tile_pos: Point<f64, Logical>,
-        blocker: TransactionBlocker,
-        snapshot: Option<super::tile::NativeTileSnapshot>,
-        dmabuf: Option<smithay::backend::allocator::dmabuf::Dmabuf>,
-    ) {
-        let anim = Animation::new(
-            self.clock.clone(),
-            0.,
-            1.,
-            0.,
-            self.options.animations.window_close.anim,
-        );
-
-        let blocker = if self.options.disable_transactions {
-            TransactionBlocker::completed()
-        } else {
-            blocker
-        };
-
-        let scale = Scale::from(self.scale);
-        let res = ClosingWindow::new_native(
-            renderer,
-            scale,
-            tile_size,
-            tile_pos,
-            blocker,
-            anim,
-            self.options.animations.window_close.glide,
-            self.options.animations.window_close.effect,
-            self.options
-                .animations
-                .window_close
-                .custom_shader
-                .as_deref(),
-            snapshot,
-            dmabuf,
-        );
-        match res {
+        match closing_res {
             Ok(closing) => {
                 self.closing_windows.push(closing);
             }
             Err(err) => {
-                warn!("error creating a native closing window animation: {err:?}");
+                warn!("error creating a closing window animation: {err:?}");
             }
         }
     }
 
-    fn start_close_animation_for_tile(
+    pub fn start_close_animation_for_window_at(
         &mut self,
-        renderer: &mut GlesRenderer,
-        snapshot: TileRenderSnapshot,
-        tile_size: Size<f64, Logical>,
+        renderer: &mut AnyRenderer<'_>,
+        window: &W::Id,
         tile_pos: Point<f64, Logical>,
         blocker: TransactionBlocker,
-        dmabuf: Option<smithay::backend::allocator::dmabuf::Dmabuf>,
     ) {
-        let anim = Animation::new(
-            self.clock.clone(),
-            0.,
-            1.,
-            0.,
-            self.options.animations.window_close.anim,
-        );
+        let closing_res = {
+            let Some((tile, _, _)) = self
+                .tiles_with_render_positions()
+                .find(|(tile, _, _)| tile.window().id() == window)
+            else {
+                return;
+            };
 
-        let blocker = if self.options.disable_transactions {
-            TransactionBlocker::completed()
-        } else {
-            blocker
+            let anim = Animation::new(
+                self.clock.clone(),
+                0.,
+                1.,
+                0.,
+                self.options.animations.window_close.anim,
+            );
+
+            let blocker = if self.options.disable_transactions {
+                TransactionBlocker::completed()
+            } else {
+                blocker
+            };
+
+            let scale = Scale::from(self.scale);
+            tile.create_closing_window(
+                renderer,
+                scale,
+                tile_pos,
+                blocker,
+                anim,
+                &self.options.animations.window_close,
+                self.scene_resources.closing.clone(),
+            )
         };
 
-        let scale = Scale::from(self.scale);
-        let is_vulkan = self.options.renderer.is_vulkan();
-        let res = ClosingWindow::new(
-            renderer,
-            snapshot,
-            scale,
-            tile_size,
-            tile_pos,
-            blocker,
-            anim,
-            self.options.animations.window_close.glide,
-            self.options.animations.window_close.effect,
-            self.options.animations.window_close.custom_shader.is_some(),
-            is_vulkan,
-            dmabuf,
-        );
-        match res {
+        match closing_res {
             Ok(closing) => {
                 self.closing_windows.push(closing);
             }
@@ -3297,6 +3214,75 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             .is_fullscreen()
     }
 
+    pub(crate) fn scene_items<'a>(
+        &'a self,
+        normal_visible: bool,
+        focus: bool,
+        items: &mut Vec<crate::scene::workspace_composition::OrderedItem<'a, W>>,
+    ) {
+        use crate::layout::scene_source::{ClosingRenderSource, TabRenderSource, TileRenderSource};
+        use crate::scene::workspace_composition::{Channel, Item, OrderedItem, TileSpace};
+        let scale = Scale::from(self.scale);
+        if normal_visible {
+            let view = Rectangle::new(Point::from((self.view_pos(), 0.)), self.view_size);
+            for closing in self.closing_windows.iter().rev() {
+                items.push(OrderedItem {
+                    channel: Channel::TilingNormal,
+                    item: Item::Closing {
+                        source: ClosingRenderSource::new(closing),
+                        view,
+                        scale,
+                        space: TileSpace::Scrolling,
+                    },
+                });
+            }
+        }
+        let mut first_normal = true;
+        let mut first_moving = true;
+        for (column, column_position) in self.columns_with_render_positions() {
+            let moving = column.is_moving_between_workspaces();
+            let (channel, first) = if moving {
+                first_normal = false;
+                (Channel::TilingMoving, &mut first_moving)
+            } else {
+                first_moving = false;
+                (Channel::TilingNormal, &mut first_normal)
+            };
+            if !moving && !normal_visible {
+                continue;
+            }
+            items.push(OrderedItem {
+                channel,
+                item: Item::Tab {
+                    source: TabRenderSource::new(&column.tab_indicator),
+                    position: column_position
+                        .to_physical_precise_round(scale)
+                        .to_logical(scale),
+                },
+            });
+            for (tile, tile_offset, visible) in column.tiles_in_render_order() {
+                let focused = focus && *first;
+                *first = false;
+                // Hidden tabs remain present while their alpha is animated.
+                if !visible && tile.presentation.alpha_animation.is_none() {
+                    continue;
+                }
+                let position = (column_position + tile_offset + tile.render_offset())
+                    .to_physical_precise_round(scale)
+                    .to_logical(scale);
+                items.push(OrderedItem {
+                    channel,
+                    item: Item::Tile {
+                        source: TileRenderSource::new(tile),
+                        position,
+                        focused,
+                        space: TileSpace::Scrolling,
+                    },
+                });
+            }
+        }
+    }
+
     pub fn render<R: ClarionRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
@@ -3354,15 +3340,16 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 // mode, so we don't want to apply "visible" immediately. However, "visible" is
                 // also used for input handling, and there we *do* want to apply it immediately.
                 // So, let's just selectively ignore "visible" here when animating alpha.
-                let visible = visible || tile.alpha_animation.is_some();
+                let visible = visible || tile.presentation.alpha_animation.is_some();
                 if !visible {
                     continue;
                 }
 
                 let xray_pos = xray_pos.offset(tile_pos);
-                tile.render(ctx.r(), tile_pos, xray_pos, focus_ring, &mut |elem| {
-                    push(elem.into())
-                });
+                tile.scene()
+                    .render(ctx.r(), tile_pos, xray_pos, focus_ring, &mut |elem| {
+                        push(elem.into())
+                    });
             }
         }
     }
@@ -3988,7 +3975,7 @@ impl<W: LayoutElement> Column<W> {
         width: ColumnWidth,
         is_full_width: bool,
     ) -> Self {
-        let options = tile.options.clone();
+        let options = tile.presentation.options.clone();
 
         let display_mode = column_display_from_ipc(
             tile.window()
@@ -4031,7 +4018,7 @@ impl<W: LayoutElement> Column<W> {
             working_area,
             parent_area,
             scale,
-            clock: tile.clock.clone(),
+            clock: tile.presentation.clock.clone(),
             options,
         };
 
@@ -4210,7 +4197,16 @@ impl<W: LayoutElement> Column<W> {
                 let is_active = tile_idx == active_idx;
                 let is_urgent = tile.window().is_urgent();
                 let tile_pos = tile_off + tile.render_offset();
-                TabInfo::from_tile(tile, tile_pos, is_active, is_urgent, &config)
+                let geometry = Rectangle::new(tile_pos, tile.animated_tile_size());
+                TabInfo::new(
+                    &tile.window().rules().tab_indicator,
+                    *tile.focus_ring_config(),
+                    *tile.border_config(),
+                    geometry,
+                    is_active,
+                    is_urgent,
+                    &config,
+                )
             });
 
         // Hide the tab indicator in fullscreen. If you have it configured to overlap the window,
@@ -4806,8 +4802,8 @@ impl<W: LayoutElement> Column<W> {
 
     /// 2D directional focus navigation horizontally between tiles of a dwindle column.
     ///
-    /// Finds the nearest tile whose center lies strictly to the left (left=true) or right (left=false)
-    /// of the active tile's center.
+    /// Finds the nearest tile whose center lies strictly to the left (left=true) or right
+    /// (left=false) of the active tile's center.
     pub fn focus_dwindle_horizontal(&mut self, left: bool) -> bool {
         match self.dwindle_neighbor_idx(false, !left) {
             Some(idx) => self.activate_idx(idx),
@@ -5059,7 +5055,8 @@ impl<W: LayoutElement> Column<W> {
             return;
         }
 
-        // Capture exact previous 2D positions of all tiles using SmallVec on the stack (zero heap allocation).
+        // Capture exact previous 2D positions of all tiles using SmallVec on the stack (zero heap
+        // allocation).
         let prev_positions: smallvec::SmallVec<[Point<f64, Logical>; 8]> =
             self.tile_offsets().collect();
 
@@ -5334,8 +5331,8 @@ impl<W: LayoutElement> Column<W> {
         assert_eq!(self.tiles.len(), self.policy.rows().len());
         for ((tile, data), row) in zip(zip(&self.tiles, &self.data), self.policy.rows()) {
             assert_eq!(tile.window().core_id(), *row.id());
-            assert!(Rc::ptr_eq(&self.options, &tile.options));
-            assert_eq!(self.clock, tile.clock);
+            assert!(Rc::ptr_eq(&self.options, &tile.presentation.options));
+            assert_eq!(self.clock, tile.presentation.clock);
             assert_eq!(self.scale, tile.scale());
             assert_eq!(
                 self.pending_sizing_mode(),

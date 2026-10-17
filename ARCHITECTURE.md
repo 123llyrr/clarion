@@ -1,4 +1,4 @@
-# 澄境 / Clarion architecture
+# Clarion architecture
 
 Clarion is a modular Wayland compositor. Desktop decisions, animation mathematics,
 presentation scheduling and composition policy are independently compiled Rust
@@ -43,20 +43,68 @@ transactions; keeping a `Tile` or `WlSurface` there does not create another core
 
 The frame coordinator captures scheduling policy and projects only the references
 needed by an output scene. `layout::scene_source` captures the selected output's
-composition flags, matching moving tile and its transform. `MonitorScene` keeps
-its monitor reference private and exposes only render operations and frozen
-workspace descriptors; ordinary popup/background passes reuse one inline
-workspace descriptor list rather than rebuilding geometry independently. MRU
+composition flags, matching moving tile and its transform. `MonitorScene` stores
+one mutually exclusive inline ordinary, Stage, Spread or Cube composition,
+without retaining a complete monitor or unused parallel composition storage. Popup/background passes
+reuse the captured workspace descriptors rather than rebuilding geometry. MRU
 receives only an ID-to-window lookup capability. Effect lifecycle updates consume
 geometry/color values. Scene code cannot borrow `Layout`, `Monitor`, `Workspace`
 or the core, and cannot recover the complete compositor or event loop. Locked
 and screenshot-selection routes acquire an empty desktop source. A detached
 source keeps shell/background passes without requesting workspace renderers.
-These are renderer-dependent read views; retained tile/card rendering caches
-remain in the layout runtime, and this does not claim a complete GPU-neutral
-retained scene graph. Backends consume a frozen element slice through a
+These are renderer-dependent read views. Strong retained rendering resources
+belong to scene registries; layout holds weak registrations. Stage, Spread and
+Cube composition, target cleanup and renderer cache invalidation live in scene
+modules. Window drawing, opening, minimization, elastic prediction and snapshot
+execution live in scene modules. Compatibility entries in layout delegate to the
+same implementation. These borrowed preparation capabilities are not a fully
+detached GPU-neutral retained scene graph. The specialized migration
+and launcher work is documented in
+[the scene migration note](docs/clarion-specialized-scenes-20261016.md).
+Backends consume a frozen element slice through a
 restricted frame port. Display, capture and headless rendering share the same
 composition implementation and privacy routes.
+
+## Window presentation boundary
+
+`Tile` retains window identity, placement and a `WindowPresentationState` with
+numeric trajectories and immutable style values. The scene receives a window
+render capability, a borrowed numeric state and one temporary resource lease;
+neither ordinary composition nor moving-window composition retains `&Tile`.
+The scene registry owns borders, focus rings, shadows, fullscreen and rounded
+corner buffers, offscreen animation images, mesh identities and forecast caches.
+Initial style configures the registered decoration set without replacing it or
+allocating another set of IDs.
+
+Opening models produce a copyable numeric pose. Shared GLES/Vulkan shader geometry
+consumes that pose, including fractional scale, negative decoration offsets and
+the used prefix of a pooled texture. Genie trajectories retain reversal and
+reflow continuity; a separate scene cache keys the complete numeric pose and
+texture commit. Wobble advances only at owner event time. Scene prediction uses
+an independent numeric copy and never writes predicted nodes back to the owner.
+Its mesh identity, damage revision and cached vertices belong to the scene.
+
+Render failures enqueue coalesced effect-retirement requests rather than changing
+numeric animation state. The owner consumes them during its next animation
+update. A scene-owned wakeup bit requests one owner frame on all outputs, including
+previously sampled cross-output bounds, even after a static render; scene code receives no event loop. Busy preserves the current pose,
+retained images and existing requests. Parked windows keep their exclusive Genie
+route until the owner retires it.
+
+Snapshot and interrupted-resize capture accept the same restricted scene view
+or a numeric blend pose. Native closing pins the exact client attachment before
+fallible capture, and preserves separate Output, Screencast and ScreenCapture
+images. A capture-local deferred scope restores inherited retry state on return,
+error or unwind. Any deferred target aborts the whole capture with typed Busy;
+partial results are not cached as complete snapshots. GLES temporarily redirects
+private backgrounds through an unwind-safe Xray slot guard. Renderer replacement
+retires native images while preserving the attachment lease needed by closing.
+
+Layout still orchestrates some close/configure transactions through compatibility
+entries. Workspace and Expo retain other presentation objects. Cold exact-size
+allocation, unowned DMA-BUF synchronization and GLES snapshot freezing retain
+their documented compatibility contracts. This boundary does not assert that
+all inherited runtime code or every synchronous driver operation was removed.
 
 Animation time projection is output-local. Real interaction state advances once;
 rendering a prediction or capture must not advance another output's canonical

@@ -36,8 +36,9 @@ impl<I: Clone + Eq + std::hash::Hash> CanvasPolicyMemory<I> {
     pub fn preserve_runtime(self, current: &Self) -> Self {
         match (self, current) {
             (Self::Scrolling(mut saved), Self::Scrolling(current)) => {
-                use crate::policy_memory::{ColumnSnapshot, Height};
                 use std::collections::{HashMap, HashSet};
+
+                use crate::policy_memory::{ColumnSnapshot, Height};
                 let current_columns: HashMap<_, _> = current
                     .columns
                     .iter()

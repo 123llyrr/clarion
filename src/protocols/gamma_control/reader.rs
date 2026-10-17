@@ -209,9 +209,10 @@ fn read(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::Write;
     use std::os::fd::{AsFd, FromRawFd};
+
+    use super::*;
     fn pipe() -> (OwnedFd, File) {
         let mut pair = [0; 2];
         // SAFETY: pipe2 writes exactly two descriptors into pair; both become owned below.

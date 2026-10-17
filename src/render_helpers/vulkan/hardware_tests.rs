@@ -1,17 +1,19 @@
 //! Opt-in real GPU regression tests. No display master or running session is required.
 
 mod lifecycle;
+mod window_snapshot;
 mod yuv_cold;
 
 #[cfg(test)]
 mod resize_capture_regressions {
-    use super::*;
-    use crate::render_helpers::resize::{capture_resize_texture, ResizeRenderElement};
-    use crate::render_helpers::{render_to_vec, RenderTarget};
     use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement};
     use smithay::backend::renderer::element::RenderElement;
     use smithay::backend::renderer::{ImportMem, RendererSuper, Texture};
     use smithay::utils::{Logical, Physical, Scale, Size};
+
+    use super::*;
+    use crate::render_helpers::resize::{capture_resize_texture, ResizeRenderElement};
+    use crate::render_helpers::{render_to_vec, RenderTarget};
 
     type Input<T> = ((T, Rectangle<i32, Physical>), Size<f64, Logical>);
 
@@ -254,6 +256,20 @@ mod resize_capture_regressions {
     fn native_resize_capture_retargets_without_pixel_jump() {
         let (vk, _gles, _) = setup();
         let mut renderer = native::NativeRenderer::new(vk).unwrap();
+        // This fixture asserts pixels/lifetimes after bounded format preparation.
+        let resize_source = crate::render_helpers::shaders::animation_source(
+            crate::render_helpers::shaders::ProgramType::Resize,
+            None,
+        );
+        renderer
+            .wait_for_animation_program_for_test(
+                crate::render_helpers::shaders::ProgramType::Resize,
+                &resize_source,
+            )
+            .unwrap();
+        renderer
+            .prepare_output_format_for_test(Fourcc::Abgr8888)
+            .unwrap();
         exercise_capture(
             &mut renderer,
             |renderer, area, scale, (prev, size_prev), (next, size_next), progress| {
@@ -280,14 +296,15 @@ mod resize_capture_regressions {
     #[test]
     #[ignore = "requires real DRM render node, Vulkan and GLES DMA-BUF producer"]
     fn frozen_resize_snapshot_survives_client_reuse_and_scale_change() {
+        use clarion_config::BlockOutFrom;
+        use smithay::backend::renderer::element::Kind;
+        use smithay::backend::renderer::ImportDma;
+
         use crate::layout::LayoutElementRenderSnapshot;
         use crate::render_helpers::snapshot::RenderSnapshot;
         use crate::render_helpers::solid_color::SolidColorBuffer;
         use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
         use crate::render_helpers::{BakedBuffer, RenderCtx};
-        use clarion_config::BlockOutFrom;
-        use smithay::backend::renderer::element::Kind;
-        use smithay::backend::renderer::ImportDma;
 
         let (vk, mut gles, mut allocator) = setup();
         let mods = modifiers(&vk, &gles, Fourcc::Argb8888);
@@ -308,6 +325,10 @@ mod resize_capture_regressions {
         };
         repaint(&mut gles, &mut source, [1., 0., 0., 1.]);
         let mut native = native::NativeRenderer::new(vk).unwrap();
+        // This fixture asserts pixels/lifetimes after bounded format preparation.
+        native
+            .prepare_output_format_for_test(Fourcc::Abgr8888)
+            .unwrap();
 
         macro_rules! freeze {
             ($renderer:expr, $method:ident) => {{
@@ -378,7 +399,6 @@ mod resize_capture_regressions {
     }
 }
 
-use super::*;
 use smithay::backend::allocator::dmabuf::AsDmabuf;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
 use smithay::backend::allocator::{Allocator, Buffer, Fourcc, Modifier};
@@ -388,6 +408,8 @@ use smithay::backend::renderer::{
     Bind, Blit, Color32F, ExportMem, Frame, Offscreen, Renderer, TextureFilter,
 };
 use smithay::utils::{Rectangle, Transform};
+
+use super::*;
 
 pub(crate) fn setup() -> (
     VulkanRenderer,
@@ -404,6 +426,11 @@ pub(crate) fn setup() -> (
     let node = DrmNode::from_file(&file).unwrap();
     let mut vk = VulkanRenderer::new();
     vk.init_from_drm_node(Some(&node)).unwrap();
+    // Client device discovery must describe the selected GPU, including the
+    // NVIDIA row of the matrix; a valid-looking primary or other render node
+    // would silently force EGL clients onto a different path.
+    let advertised_device = vk.ctx.as_ref().unwrap().drm_render_device_id().unwrap();
+    assert_eq!(advertised_device, Some(node.dev_id()));
     eprintln!("HARDWARE: {} ({path})", vk.info.device_name);
     let gbm = GbmDevice::new(Arc::new(file)).unwrap();
     let display = unsafe { EGLDisplay::new(gbm.clone()).unwrap() };
@@ -746,8 +773,9 @@ fn native_renderer_teardown_preserves_and_releases_in_flight_resources() {
 }
 
 fn native_idle_gpu_completion(teardown_before_completion: bool) {
-    use super::native::NativeRenderer;
     use std::time::{Duration, Instant};
+
+    use super::native::NativeRenderer;
 
     let (vk, _gles, _allocator) = setup();
     let ctx = vk.ctx.as_ref().unwrap().clone();
@@ -1397,8 +1425,9 @@ fn native_frame_scissor_and_ordered_transparent_clear() {
 #[test]
 #[ignore = "requires real DRM render node, EGL reference and Vulkan"]
 fn native_smithay_renderer_matches_gles_transforms() {
-    use super::native::NativeRenderer;
     use smithay::backend::renderer::ImportMem;
+
+    use super::native::NativeRenderer;
     let (vk, mut reference, mut allocator) = setup();
     let source = [
         255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255, 0, 255, 255, 255, 255, 0,
@@ -1603,9 +1632,11 @@ fn native_smithay_offscreen_and_overlapping_damage() {
 #[test]
 #[ignore = "requires real DRM render node, native producer fences and Vulkan"]
 fn native_frame_multiple_gpu_producers_and_abort() {
-    use super::native::NativeRenderer;
-    use smithay::backend::renderer::sync::{Fence, Interrupted, SyncPoint};
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use smithay::backend::renderer::sync::{Fence, Interrupted, SyncPoint};
+
+    use super::native::NativeRenderer;
     #[derive(Debug)]
     struct Producer {
         sync: SyncPoint,
@@ -2233,9 +2264,10 @@ fn final_pass_warm_cache_timing() {
 #[test]
 #[ignore = "requires real DRM render node, EGL and Vulkan"]
 fn nourish_damage_and_gpu_acquire() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use smithay::backend::renderer::sync::{Fence, Interrupted, SyncPoint};
     use smithay::backend::renderer::utils::DamageBag;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     #[derive(Debug)]
     struct Producer {
         sync: SyncPoint,
@@ -2371,9 +2403,10 @@ fn nourish_damage_and_gpu_acquire() {
 #[test]
 #[ignore = "requires real DRM render node, EGL and Vulkan"]
 fn interrupted_producer_preserves_damage_and_allows_retry() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
     use smithay::backend::renderer::sync::{Fence, Interrupted, SyncPoint};
     use smithay::backend::renderer::utils::DamageBag;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     #[derive(Debug)]
     struct Producer {
@@ -2549,8 +2582,9 @@ fn rejects_invalid_dmabuf_extents_before_image_creation() {
 #[test]
 #[ignore = "requires real DRM render node, GBM and Vulkan"]
 fn native_dma_format_negotiation_and_import() {
-    use super::native::NativeRenderer;
     use smithay::backend::renderer::ImportDma;
+
+    use super::native::NativeRenderer;
     let (vk, mut oracle, mut allocator) = setup();
     let mut renderer = NativeRenderer::new(vk).unwrap();
     let samples = renderer.dmabuf_formats();
@@ -2639,12 +2673,13 @@ fn native_dma_format_negotiation_and_import() {
 #[test]
 #[ignore = "requires Intel DRM render node with linear NV12, GBM CPU producer and Vulkan"]
 fn nv12_dmabuf_immutable_ycbcr_sampler_pixels() {
+    use std::os::fd::{AsFd, BorrowedFd};
+
     use drm::buffer::Buffer as _;
     use drm::control::Device as _;
     use smithay::backend::allocator::dmabuf::{Dmabuf, DmabufFlags};
     use smithay::backend::renderer::ImportDma;
     use smithay::reexports::drm;
-    use std::os::fd::{AsFd, BorrowedFd};
     struct Card(std::fs::File);
     impl AsFd for Card {
         fn as_fd(&self) -> BorrowedFd<'_> {
@@ -2751,11 +2786,12 @@ fn nv12_dmabuf_immutable_ycbcr_sampler_pixels() {
 #[test]
 #[ignore = "requires Intel DRM node with disjoint linear NV12 Vulkan import"]
 fn nv12_distinct_plane_fds_bind_and_sample() {
+    use std::os::fd::{AsFd, BorrowedFd};
+
     use drm::buffer::Buffer as _;
     use drm::control::Device as _;
     use smithay::backend::allocator::dmabuf::{Dmabuf, DmabufFlags};
     use smithay::reexports::drm;
-    use std::os::fd::{AsFd, BorrowedFd};
     struct Card(std::fs::File);
     impl AsFd for Card {
         fn as_fd(&self) -> BorrowedFd<'_> {
@@ -3149,8 +3185,9 @@ fn deferred_shm_uploads_preserve_queue_order_and_texture_lifetime() {
 #[test]
 #[ignore = "requires real DRM render node, Vulkan and timeline semaphores"]
 fn native_idle_upload_completion_releases_storage_and_stops_waking() {
-    use super::native::NativeRenderer;
     use std::time::{Duration, Instant};
+
+    use super::native::NativeRenderer;
 
     for teardown in [false, true] {
         let (vk, _gles, _allocator) = setup();
@@ -3212,26 +3249,24 @@ fn deferred_shm_upload_timeout_keeps_resources_alive() {
 }
 
 mod shm_protocol {
+    use std::os::fd::{AsFd, FromRawFd};
+    use std::os::unix::fs::FileExt;
+    use std::os::unix::net::UnixStream;
+
+    use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
+    use smithay::reexports::wayland_server::{self as server, Resource};
+    use smithay::wayland::buffer::BufferHandler;
+    use smithay::wayland::compositor::{
+        with_states, CompositorClientState, CompositorHandler, CompositorState,
+    };
+    use smithay::wayland::shm::{ShmHandler, ShmState};
+    use wayland_client::protocol::{
+        wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_subcompositor,
+        wl_subsurface, wl_surface,
+    };
+    use wayland_client::{self as client, Proxy};
+
     use super::*;
-    use smithay::reexports::wayland_server::Resource;
-    use smithay::reexports::wayland_server::{self as server, protocol::wl_buffer::WlBuffer};
-    use smithay::wayland::{
-        buffer::BufferHandler,
-        compositor::{with_states, CompositorClientState, CompositorHandler, CompositorState},
-        shm::{ShmHandler, ShmState},
-    };
-    use std::os::{
-        fd::{AsFd, FromRawFd},
-        unix::{fs::FileExt, net::UnixStream},
-    };
-    use wayland_client::{
-        self as client,
-        protocol::{
-            wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_subcompositor,
-            wl_subsurface, wl_surface,
-        },
-        Proxy,
-    };
     struct ServerState {
         shm: ShmState,
         compositor: CompositorState,
@@ -3373,8 +3408,9 @@ mod shm_protocol {
     #[test]
     #[ignore = "requires real DRM render node, native Vulkan and Wayland SHM"]
     fn native_wayland_shm_rotating_buffers_and_format_change() {
-        use super::super::native::NativeRenderer;
         use smithay::backend::renderer::ImportAll;
+
+        use super::super::native::NativeRenderer;
         let (vk, mut oracle, mut allocator) = setup();
         let mut output = allocator
             .create_buffer(
@@ -3555,10 +3591,10 @@ mod shm_protocol {
         client_surface.commit();
         connection.flush().unwrap();
         display.dispatch_clients(&mut state).unwrap();
-        use smithay::backend::renderer::element::{
-            surface::{render_elements_from_surface_tree, WaylandSurfaceRenderElement},
-            Element, Kind, RenderElement,
+        use smithay::backend::renderer::element::surface::{
+            render_elements_from_surface_tree, WaylandSurfaceRenderElement,
         };
+        use smithay::backend::renderer::element::{Element, Kind, RenderElement};
         let elements: Vec<WaylandSurfaceRenderElement<NativeRenderer>> =
             render_elements_from_surface_tree(
                 &mut renderer,
@@ -3610,9 +3646,8 @@ mod shm_protocol {
         }
         // Exercise the real rounded surface wrapper on both backends, including
         // a child crossing the parent's clip rectangle.
-        use crate::render_helpers::{
-            clipped_surface::ClippedSurfaceRenderElement, render_to_vec, resources, shaders,
-        };
+        use crate::render_helpers::clipped_surface::ClippedSurfaceRenderElement;
+        use crate::render_helpers::{render_to_vec, resources, shaders};
         resources::init(&mut oracle);
         shaders::init(&mut oracle);
         use client::protocol::wl_output::Transform as ClientTransform;
@@ -3779,13 +3814,11 @@ mod shm_protocol {
                 "native snapshot after surface destruction: {i}"
             );
         }
-        use crate::render_helpers::{
-            render_to_shm,
-            solid_color::{SolidColorBuffer, SolidColorRenderElement},
-        };
-        use smithay::backend::renderer::{
-            damage::OutputDamageTracker, element::RenderElementStates,
-        };
+        use smithay::backend::renderer::damage::OutputDamageTracker;
+        use smithay::backend::renderer::element::RenderElementStates;
+
+        use crate::render_helpers::render_to_shm;
+        use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
         let blue = SolidColorBuffer::new((8., 4.), [0., 0., 1., 1.]);
         // Asymmetric rows catch accidental readback inversion; a solid fill cannot.
         let red = SolidColorBuffer::new((8., 1.), [1., 0., 0., 1.]);
@@ -3929,8 +3962,9 @@ fn native_opaque_offscreen_attachment_and_sampling_views() {
 #[test]
 #[ignore = "requires real DRM render node, native Vulkan and EGL pixel oracle"]
 fn native_export_memory_formats_regions_and_reuse() {
-    use super::native::NativeRenderer;
     use smithay::backend::renderer::{ImportMem, Texture, TextureMapping};
+
+    use super::native::NativeRenderer;
     let (vk, mut oracle, mut allocator) = setup();
     let mut output = allocator
         .create_buffer(
@@ -4168,10 +4202,9 @@ fn native_texture_cross_thread_descriptors_and_last_drop() {
 #[ignore = "requires real DRM render node and native Vulkan"]
 fn native_lazy_snapshot_composition_and_privacy_branches() {
     use super::native::NativeRenderer;
-    use crate::render_helpers::{
-        snapshot::RenderSnapshot, solid_color::SolidColorBuffer, BakedBuffer, RenderCtx,
-        RenderTarget,
-    };
+    use crate::render_helpers::snapshot::RenderSnapshot;
+    use crate::render_helpers::solid_color::SolidColorBuffer;
+    use crate::render_helpers::{BakedBuffer, RenderCtx, RenderTarget};
     let (vk, _oracle, _allocator) = setup();
     let mut renderer = NativeRenderer::new(vk).unwrap();
     // This fixture exercises prepared rendering; wait on the bounded test-only
@@ -4270,12 +4303,11 @@ fn native_lazy_snapshot_composition_and_privacy_branches() {
 #[test]
 #[ignore = "requires real DRM render node, Vulkan and GLES reference"]
 fn native_render_and_download_matches_gles() {
-    use super::native::NativeRenderer;
-    use crate::render_helpers::{
-        render_to_vec,
-        solid_color::{SolidColorBuffer, SolidColorRenderElement},
-    };
     use smithay::backend::renderer::element::Kind;
+
+    use super::native::NativeRenderer;
+    use crate::render_helpers::render_to_vec;
+    use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
     let (vk, mut reference, _allocator) = setup();
     let mut native = NativeRenderer::new(vk).unwrap();
     let background = SolidColorBuffer::new((6., 6.), [0.25, 0., 0.5, 0.5]);
@@ -4328,15 +4360,12 @@ fn native_render_and_download_matches_gles() {
 #[test]
 #[ignore = "requires real DRM render node, Vulkan and GLES reference"]
 fn native_damage_tracker_dmabuf_updates_and_idle_frames() {
+    use smithay::backend::renderer::damage::OutputDamageTracker;
+    use smithay::backend::renderer::element::{Kind, RenderElementStates};
+
     use super::native::NativeRenderer;
-    use crate::render_helpers::{
-        clear_dmabuf, render_to_dmabuf,
-        solid_color::{SolidColorBuffer, SolidColorRenderElement},
-    };
-    use smithay::backend::renderer::{
-        damage::OutputDamageTracker,
-        element::{Kind, RenderElementStates},
-    };
+    use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
+    use crate::render_helpers::{clear_dmabuf, render_to_dmabuf};
     let (vk, mut reference, mut allocator) = setup();
     let mods = modifiers(&vk, &reference, Fourcc::Argb8888);
     let mut native = NativeRenderer::new(vk).unwrap();
@@ -4451,12 +4480,13 @@ fn native_damage_tracker_dmabuf_updates_and_idle_frames() {
 #[test]
 #[ignore = "requires real DRM render node and native fence export"]
 fn native_frozen_snapshot_queues_copies_and_draws_without_cpu_wait() {
-    use crate::layout::LayoutElementRenderSnapshot;
-    use crate::render_helpers::{
-        snapshot::RenderSnapshot, solid_color::SolidColorBuffer, texture::TextureBuffer,
-        BakedBuffer, RenderCtx, RenderTarget,
-    };
     use smithay::backend::renderer::ImportMem;
+
+    use crate::layout::LayoutElementRenderSnapshot;
+    use crate::render_helpers::snapshot::RenderSnapshot;
+    use crate::render_helpers::solid_color::SolidColorBuffer;
+    use crate::render_helpers::texture::TextureBuffer;
+    use crate::render_helpers::{BakedBuffer, RenderCtx, RenderTarget};
 
     let (vk, _oracle, _) = setup();
     let ctx = vk.ctx.as_ref().unwrap().clone();
@@ -4604,9 +4634,11 @@ fn native_frozen_snapshot_queues_copies_and_draws_without_cpu_wait() {
 #[test]
 #[ignore = "requires real DRM render node and native fence export"]
 fn native_async_finish_returns_before_gpu_and_exports_sync_file() {
-    use super::native::NativeRenderer;
-    use smithay::backend::renderer::sync::{Fence, Interrupted, SyncPoint};
     use std::os::fd::{AsRawFd, OwnedFd};
+
+    use smithay::backend::renderer::sync::{Fence, Interrupted, SyncPoint};
+
+    use super::native::NativeRenderer;
     #[derive(Debug)]
     struct Producer(OwnedFd);
     impl Fence for Producer {
@@ -4705,9 +4737,11 @@ fn native_async_finish_returns_before_gpu_and_exports_sync_file() {
 #[test]
 #[ignore = "requires real DRM render node, Vulkan native fences and GLES"]
 fn native_external_source_waits_before_offscreen_and_kms_finish() {
-    use super::native::NativeRenderer;
-    use smithay::backend::renderer::ImportDma as _;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    use smithay::backend::renderer::ImportDma as _;
+
+    use super::native::NativeRenderer;
 
     let (vk, mut gles, mut allocator) = setup();
     let ctx = vk.ctx.as_ref().unwrap().clone();
@@ -4732,6 +4766,13 @@ fn native_external_source_waits_before_offscreen_and_kms_finish() {
         frame.finish().unwrap().wait().unwrap();
     }
     let mut native = NativeRenderer::new(vk).unwrap();
+    // This fixture asserts pixels/lifetimes after bounded format preparation.
+    native
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
+    native
+        .prepare_output_format_for_test(Fourcc::Argb8888)
+        .unwrap();
     let external = native.import_dmabuf(&source_dmabuf, None).unwrap();
     let mut offscreen = native
         .create_buffer(Fourcc::Abgr8888, (8, 8).into())
@@ -4796,12 +4837,16 @@ fn native_external_source_waits_before_offscreen_and_kms_finish() {
 #[test]
 #[ignore = "requires real DRM render node, Vulkan and GLES reference"]
 fn native_config_notification_matches_gles() {
+    use std::cell::RefCell;
+    use std::path::Path;
+    use std::rc::Rc;
+
+    use smithay::backend::renderer::element::Element;
+    use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
+
     use crate::animation::Clock;
     use crate::render_helpers::render_to_vec;
     use crate::ui::config_error_notification::ConfigErrorNotification;
-    use smithay::backend::renderer::element::Element;
-    use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
-    use std::{cell::RefCell, path::Path, rc::Rc};
 
     let (vk, mut reference, _) = setup();
     let mut native = native::NativeRenderer::new(vk).unwrap();
@@ -4885,12 +4930,17 @@ fn native_config_notification_matches_gles() {
 #[test]
 #[ignore = "requires real DRM render node, Vulkan and GLES reference"]
 fn native_hotkeys_and_exit_dialog_match_gles() {
-    use crate::animation::Clock;
-    use crate::render_helpers::render_to_vec;
-    use crate::ui::{exit_confirm_dialog::ExitConfirmDialog, hotkey_overlay::HotkeyOverlay};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::time::Duration;
+
     use smithay::backend::renderer::element::Element;
     use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
-    use std::{cell::RefCell, rc::Rc, time::Duration};
+
+    use crate::animation::Clock;
+    use crate::render_helpers::render_to_vec;
+    use crate::ui::exit_confirm_dialog::ExitConfirmDialog;
+    use crate::ui::hotkey_overlay::HotkeyOverlay;
 
     let (vk, mut reference, _) = setup();
     let mut native = native::NativeRenderer::new(vk).unwrap();
@@ -5017,11 +5067,13 @@ fn native_hotkeys_and_exit_dialog_match_gles() {
 #[test]
 #[ignore = "requires real DRM render node, Vulkan and GLES reference"]
 fn native_border_element_gradients_crop_and_transforms() {
-    use crate::render_helpers::{border::BorderRenderElement, render_to_vec, resources, shaders};
     use clarion_config::{
         Color, CornerRadius, GradientColorSpace, GradientInterpolation, HueInterpolation,
     };
     use smithay::backend::renderer::element::{Element, RenderElement};
+
+    use crate::render_helpers::border::BorderRenderElement;
+    use crate::render_helpers::{render_to_vec, resources, shaders};
     let (vk, mut reference, _) = setup();
     let mut native = native::NativeRenderer::new(vk).unwrap();
     resources::init(&mut reference);
@@ -5179,9 +5231,11 @@ fn native_border_element_gradients_crop_and_transforms() {
 #[test]
 #[ignore = "requires real DRM render node, Vulkan and GLES reference"]
 fn native_shadow_element_blur_cutout_and_transforms() {
-    use crate::render_helpers::{render_to_vec, resources, shaders, shadow::ShadowRenderElement};
     use clarion_config::{Color, CornerRadius};
     use smithay::backend::renderer::element::{Element, RenderElement};
+
+    use crate::render_helpers::shadow::ShadowRenderElement;
+    use crate::render_helpers::{render_to_vec, resources, shaders};
     let (vk, mut reference, _) = setup();
     let mut native = native::NativeRenderer::new(vk).unwrap();
     resources::init(&mut reference);
@@ -5345,13 +5399,13 @@ fn native_shadow_element_blur_cutout_and_transforms() {
 #[test]
 #[ignore = "requires real DRM render node, Vulkan and GLES reference"]
 fn native_layout_decorations_match_gles() {
-    use crate::layout::{
-        focus_ring::{FocusRing, FocusRingRenderElement},
-        shadow::Shadow,
-    };
-    use crate::render_helpers::{render_to_vec, resources, shaders};
-    use clarion_config::{Color, CornerRadius, Gradient, GradientRelativeTo};
     use std::time::Duration;
+
+    use clarion_config::{Color, CornerRadius, Gradient, GradientRelativeTo};
+
+    use crate::render_helpers::{render_to_vec, resources, shaders};
+    use crate::scene::focus_ring::{FocusRing, FocusRingRenderElement};
+    use crate::scene::shadow::Shadow;
     let (vk, mut reference, _) = setup();
     let mut native = native::NativeRenderer::new(vk).unwrap();
     resources::init(&mut reference);
@@ -5497,14 +5551,14 @@ fn native_layout_decorations_match_gles() {
 #[test]
 #[ignore = "requires real DRM render node, Vulkan and GLES reference"]
 fn native_tabs_and_insert_hints_match_gles() {
-    use crate::animation::Clock;
-    use crate::layout::{
-        insert_hint_element::InsertHintElement,
-        tab_indicator::{TabIndicator, TabInfo},
-    };
-    use crate::render_helpers::{render_to_vec, resources, shaders};
-    use clarion_config::{Color, CornerRadius, Gradient, GradientRelativeTo, TabIndicatorPosition};
     use std::time::Duration;
+
+    use clarion_config::{Color, CornerRadius, Gradient, GradientRelativeTo, TabIndicatorPosition};
+
+    use crate::animation::Clock;
+    use crate::render_helpers::{render_to_vec, resources, shaders};
+    use crate::scene::insert_hint_element::InsertHintElement;
+    use crate::scene::tab_indicator::{TabIndicator, TabInfo};
     let (vk, mut reference, _) = setup();
     let mut native = native::NativeRenderer::new(vk).unwrap();
     resources::init(&mut reference);
@@ -5652,11 +5706,10 @@ fn native_tabs_and_insert_hints_match_gles() {
 #[test]
 #[ignore = "requires real DRM render node, Vulkan and GLES reference"]
 fn native_dual_kawase_blur_matches_gles_and_preserves_results() {
-    use crate::render_helpers::{
-        blur::{Blur, BlurOptions},
-        resources, shaders,
-    };
     use smithay::backend::renderer::{ImportMem, Texture};
+
+    use crate::render_helpers::blur::{Blur, BlurOptions};
+    use crate::render_helpers::{resources, shaders};
     let (vk, mut reference, _) = setup();
     let mut native = native::NativeRenderer::new(vk).unwrap();
     let mut blur = blur::NativeBlur::default();
@@ -5856,8 +5909,10 @@ fn native_dual_kawase_blur_matches_gles_and_preserves_results() {
 #[test]
 #[ignore = "requires real DRM render node and Vulkan native fences"]
 fn native_blur_rotates_outputs_without_overwriting_pending_or_retained_results() {
+    use smithay::backend::renderer::sync::SyncPoint;
+    use smithay::backend::renderer::{ImportMem, Texture};
+
     use crate::render_helpers::blur::BlurOptions;
-    use smithay::backend::renderer::{sync::SyncPoint, ImportMem, Texture};
 
     fn render(
         native: &mut native::NativeRenderer,
@@ -6349,16 +6404,17 @@ fn native_scaled_capture_matches_gles_blit() {
 #[test]
 #[ignore = "requires real DRM render node, Vulkan and GLES reference"]
 fn native_framebuffer_effect_blur_noise_saturation_and_opaque_capture() {
-    use crate::render_helpers::{
-        background_effect::RenderParams,
-        blur::BlurOptions,
-        framebuffer_effect::{FramebufferEffect, FramebufferEffectElement, NativeInner},
-        resources, shaders,
-    };
     use clarion_config::CornerRadius;
     use smithay::backend::renderer::element::{Element, RenderElement};
     use smithay::backend::renderer::{Frame, ImportMem, Texture};
     use smithay::utils::user_data::UserDataMap;
+
+    use crate::render_helpers::background_effect::RenderParams;
+    use crate::render_helpers::blur::BlurOptions;
+    use crate::render_helpers::framebuffer_effect::{
+        FramebufferEffect, FramebufferEffectElement, NativeInner,
+    };
+    use crate::render_helpers::{resources, shaders};
 
     let (vk, mut reference, mut allocator) = setup();
     resources::init(&mut reference);
@@ -6569,10 +6625,11 @@ fn native_framebuffer_effect_blur_noise_saturation_and_opaque_capture() {
 #[test]
 #[ignore = "requires real DRM render node and Vulkan"]
 fn native_noise_keeps_transparent_pixels_premultiplied() {
-    use super::native::{NativeRenderer, Postprocess};
     use smithay::backend::renderer::{
         Bind, Color32F, ExportMem, Frame, ImportMem, Offscreen, Renderer,
     };
+
+    use super::native::{NativeRenderer, Postprocess};
 
     let (vk, _gles, _allocator) = setup();
     let mut renderer = NativeRenderer::new(vk).unwrap();
@@ -6623,14 +6680,6 @@ fn native_noise_keeps_transparent_pixels_premultiplied() {
 #[test]
 #[ignore = "requires real DRM render node, Vulkan"]
 fn native_scene_full_desktop_migration() {
-    use crate::render_helpers::{
-        primary_gpu_texture::PrimaryGpuTextureRenderElement,
-        render_to_dmabuf,
-        solid_color::{SolidColorBuffer, SolidColorRenderElement},
-        texture::{TextureBuffer, TextureRenderElement},
-        vulkan::native,
-    };
-    use crate::scene::OutputRenderElements;
     use smithay::backend::allocator::dmabuf::Dmabuf;
     use smithay::backend::renderer::damage::OutputDamageTracker;
     use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
@@ -6639,6 +6688,13 @@ fn native_scene_full_desktop_migration() {
     use smithay::backend::renderer::{Bind, ExportMem, ImportDma};
     use smithay::reexports::gbm::Format as Fourcc;
     use smithay::utils::{Point, Rectangle, Transform};
+
+    use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
+    use crate::render_helpers::render_to_dmabuf;
+    use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
+    use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
+    use crate::render_helpers::vulkan::native;
+    use crate::scene::OutputRenderElements;
 
     let (vk, reference, mut allocator) = setup();
     // Drop GLES reference to prove 100% GLES absence
@@ -6817,12 +6873,8 @@ fn native_scene_full_desktop_migration() {
 #[test]
 #[ignore = "requires real DRM render node, KMS sync export and Vulkan"]
 fn native_dmabuf_sync_export_and_renderer_recreation() {
-    use super::native;
-    use crate::render_helpers::{
-        render_to_dmabuf,
-        solid_color::{SolidColorBuffer, SolidColorRenderElement},
-    };
-    use crate::scene::OutputRenderElements;
+    use std::os::fd::AsRawFd;
+
     use smithay::backend::allocator::dmabuf::Dmabuf;
     use smithay::backend::renderer::damage::OutputDamageTracker;
     use smithay::backend::renderer::element::{Kind, RenderElementStates};
@@ -6830,7 +6882,11 @@ fn native_dmabuf_sync_export_and_renderer_recreation() {
     use smithay::backend::renderer::{Bind, ExportMem, ImportDma};
     use smithay::reexports::gbm::Format as Fourcc;
     use smithay::utils::{Point, Rectangle, Transform};
-    use std::os::fd::AsRawFd;
+
+    use super::native;
+    use crate::render_helpers::render_to_dmabuf;
+    use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
+    use crate::scene::OutputRenderElements;
 
     let (vk, reference, mut allocator) = setup();
     drop(reference);
@@ -6950,21 +7006,20 @@ fn native_dmabuf_sync_export_and_renderer_recreation() {
 #[test]
 #[ignore = "requires real DRM render node and Vulkan"]
 fn native_offscreen_multioutput_scaling_rotation_and_readback() {
-    use crate::render_helpers::{
-        primary_gpu_texture::PrimaryGpuTextureRenderElement,
-        render_to_dmabuf,
-        renderer::AsGlesRenderer,
-        solid_color::{SolidColorBuffer, SolidColorRenderElement},
-        texture::{TextureBuffer, TextureRenderElement},
-        vulkan::native,
-    };
-    use crate::scene::OutputRenderElements;
     use smithay::backend::allocator::dmabuf::Dmabuf;
     use smithay::backend::renderer::damage::OutputDamageTracker;
     use smithay::backend::renderer::element::{Kind, RenderElementStates};
     use smithay::backend::renderer::{Bind, ExportMem, ImportDma};
     use smithay::reexports::gbm::Format as Fourcc;
     use smithay::utils::{Point, Rectangle, Transform};
+
+    use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
+    use crate::render_helpers::render_to_dmabuf;
+    use crate::render_helpers::renderer::AsGlesRenderer;
+    use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
+    use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
+    use crate::render_helpers::vulkan::native;
+    use crate::scene::OutputRenderElements;
 
     let (vk, reference, mut allocator) = setup();
     // 1. Verify 100% GLES absence: completely drop GLES reference context
@@ -7164,7 +7219,8 @@ fn native_offscreen_multioutput_scaling_rotation_and_readback() {
     rec_sync.wait().expect("Recording sync wait must succeed");
 
     // 5. Short offscreen reuse check; does not exercise suspend/resume or long-term stability.
-    // Render 10 continuous frames through Output C to verify scratch buffer pooling and memory stability
+    // Render 10 continuous frames through Output C to verify scratch buffer pooling and memory
+    // stability
     for frame_idx in 0..10 {
         let dynamic_color = [0.1 * (frame_idx as f32), 0.2, 0.3, 1.0];
         let frame_buf = SolidColorBuffer::new((w_c as f64, h_c as f64), dynamic_color);
@@ -7194,11 +7250,15 @@ fn native_offscreen_multioutput_scaling_rotation_and_readback() {
 #[test]
 #[ignore = "requires real DRM render node, EGL readback and Vulkan"]
 fn native_screenshot_selection_pixels_and_pointer() {
-    use crate::animation::Clock;
-    use crate::ui::screenshot_ui::{OutputScreenshot, ScreenshotUi};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::rc::Rc;
+
     use smithay::backend::renderer::ImportMem;
     use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
-    use std::{cell::RefCell, collections::HashMap, rc::Rc};
+
+    use crate::animation::Clock;
+    use crate::ui::screenshot_ui::{OutputScreenshot, ScreenshotUi};
 
     let (vk, reference, _) = setup();
     drop(reference);
@@ -7280,11 +7340,15 @@ fn native_screenshot_selection_pixels_and_pointer() {
 #[test]
 #[ignore = "requires real DRM render node, EGL readback and Vulkan"]
 fn native_screenshot_selection_survives_output_changes() {
-    use crate::animation::Clock;
-    use crate::ui::screenshot_ui::{OutputScreenshot, ScreenshotUi};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::rc::Rc;
+
     use smithay::backend::renderer::ImportMem;
     use smithay::output::{Mode, Output, PhysicalProperties, Subpixel};
-    use std::{cell::RefCell, collections::HashMap, rc::Rc};
+
+    use crate::animation::Clock;
+    use crate::ui::screenshot_ui::{OutputScreenshot, ScreenshotUi};
 
     let (vk, reference, _) = setup();
     drop(reference);
@@ -7421,11 +7485,13 @@ fn native_offscreen_recycle_preserves_live_images_and_alpha() {
 #[test]
 #[ignore = "requires real DRM render node, EGL readback and Vulkan"]
 fn native_pooled_snapshots_sample_without_cpu_wait() {
+    use std::time::Instant;
+
+    use smithay::backend::renderer::element::Kind;
+
     use crate::render_helpers::render_to_vec;
     use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
     use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
-    use smithay::backend::renderer::element::Kind;
-    use std::time::Instant;
 
     let (vk, _reference, _) = setup();
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
@@ -7527,10 +7593,11 @@ fn native_pooled_snapshots_sample_without_cpu_wait() {
 #[test]
 #[ignore = "requires DRM, Vulkan and glslc"]
 fn native_animation_glsl_interface_and_crossfade() {
+    use smithay::backend::renderer::ImportMem;
+
     use crate::render_helpers::render_to_vec;
     use crate::render_helpers::resize::ResizeRenderElement;
     use crate::render_helpers::shaders::{animation_source, ProgramType};
-    use smithay::backend::renderer::ImportMem;
     let (vk, _gles, _) = setup();
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
     for kind in [ProgramType::Resize, ProgramType::Open, ProgramType::Close] {
@@ -7606,11 +7673,16 @@ fn native_animation_glsl_interface_and_crossfade() {
 #[test]
 #[ignore = "requires DRM, Vulkan and glslc"]
 fn native_animation_three_sampled_textures() {
+    use std::collections::HashMap;
+    use std::rc::Rc;
+
+    use smithay::backend::renderer::element::Kind;
+    use smithay::backend::renderer::gles::Uniform;
+    use smithay::backend::renderer::ImportMem;
+
     use crate::render_helpers::render_to_vec;
     use crate::render_helpers::shader_element::ShaderRenderElement;
     use crate::render_helpers::shaders::{animation_source, mat3_uniform, ProgramType};
-    use smithay::backend::renderer::{element::Kind, gles::Uniform, ImportMem};
-    use std::{collections::HashMap, rc::Rc};
 
     let (vk, _gles, _) = setup();
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
@@ -7764,13 +7836,15 @@ fn native_output_prewarm_builds_standard_formats_before_first_draw() {
 #[test]
 #[ignore = "requires real DRM render node and Vulkan"]
 fn native_animation_prewarm_keeps_old_and_new_close_programs() {
+    use std::collections::HashMap;
+    use std::rc::Rc;
+
+    use smithay::backend::renderer::element::Kind;
+    use smithay::backend::renderer::ImportMem;
+
     use crate::render_helpers::render_to_vec;
     use crate::render_helpers::shader_element::ShaderRenderElement;
     use crate::render_helpers::shaders::{animation_source, ProgramType, DENIAL_EXPLOSION_SHADER};
-    use smithay::backend::renderer::element::Kind;
-    use smithay::backend::renderer::ImportMem;
-    use std::collections::HashMap;
-    use std::rc::Rc;
     let (vk, _gles, _allocator) = setup();
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
     let default_source = animation_source(ProgramType::Close, None);
@@ -7866,10 +7940,15 @@ fn native_animation_prewarm_keeps_old_and_new_close_programs() {
 #[test]
 #[ignore = "requires DRM, Vulkan and GLES"]
 fn native_animation_shaders_match_gles() {
+    use std::collections::HashMap;
+    use std::rc::Rc;
+
+    use smithay::backend::renderer::element::Kind;
+    use smithay::backend::renderer::gles::Uniform;
+    use smithay::backend::renderer::ImportMem;
+
     use crate::render_helpers::shader_element::ShaderRenderElement;
     use crate::render_helpers::{render_to_vec, shaders};
-    use smithay::backend::renderer::{element::Kind, gles::Uniform, ImportMem};
-    use std::{collections::HashMap, rc::Rc};
     let (vk, mut reference, _) = setup();
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
     renderer
@@ -8015,17 +8094,16 @@ fn native_animation_shaders_match_gles() {
 #[test]
 #[ignore = "requires DRM and Vulkan"]
 fn native_custom_shader_compiler_completion_prepares_on_idle_owner() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::time::{Duration, Instant};
+
     use crate::backend::headless::HeadlessRenderer;
     use crate::render_helpers::renderer::AnyRenderer;
     use crate::render_helpers::shaders::{
         animation_source, ProgramType, DENIAL_EXPLOSION_SHADER, DENIAL_IMPLODE_SHADER,
     };
     use crate::tests::Fixture;
-    use std::{
-        cell::RefCell,
-        rc::Rc,
-        time::{Duration, Instant},
-    };
     #[derive(Clone)]
     struct Identity {
         renderer: u64,
@@ -8258,11 +8336,12 @@ fn native_custom_shader_compiler_completion_prepares_on_idle_owner() {
 #[test]
 #[ignore = "requires DRM and Vulkan"]
 fn native_xray_background_cache_and_target_isolation() {
+    use smithay::backend::renderer::element::Kind;
+
     use crate::render_helpers::background_effect::RenderParams;
     use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
     use crate::render_helpers::xray::{Xray, XrayPos};
     use crate::render_helpers::{render_to_vec, RenderCtx, RenderTarget};
-    use smithay::backend::renderer::element::Kind;
     let (vk, _gles, _) = setup();
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
     // This fixture exercises prepared rendering; wait on the bounded test-only
@@ -8377,9 +8456,10 @@ fn native_xray_background_cache_and_target_isolation() {
 #[test]
 #[ignore = "requires DRM and Vulkan"]
 fn native_effect_buffer_keeps_unchanged_shared_background() {
+    use smithay::backend::renderer::element::Kind;
+
     use crate::render_helpers::effect_buffer::EffectBuffer;
     use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
-    use smithay::backend::renderer::element::Kind;
 
     let (vk, _gles, _) = setup();
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
@@ -8465,11 +8545,13 @@ fn native_effect_buffer_keeps_unchanged_shared_background() {
 #[test]
 #[ignore = "requires DRM and Vulkan"]
 fn native_animation_target_growth_reuses_capacity_and_clears_shrink() {
-    use crate::render_helpers::offscreen::NativeOffscreenBuffer;
-    use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
+    use std::collections::HashSet;
+
     use smithay::backend::renderer::element::Kind;
     use smithay::backend::renderer::Texture as _;
-    use std::collections::HashSet;
+
+    use crate::render_helpers::offscreen::NativeOffscreenBuffer;
+    use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 
     let (vk, _gles, _) = setup();
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
@@ -8519,14 +8601,17 @@ fn native_animation_target_growth_reuses_capacity_and_clears_shrink() {
 #[test]
 #[ignore = "requires DRM and Vulkan"]
 fn native_transition_and_closing_capture_targets() {
+    use std::time::Duration;
+
+    use smithay::backend::renderer::ImportMem;
+
     use crate::animation::{Animation, Clock};
-    use crate::layout::{closing_window::ClosingWindow, tile::NativeTileSnapshot};
+    use crate::layout::tile::NativeTileSnapshot;
     use crate::render_helpers::texture::TextureBuffer;
     use crate::render_helpers::{render_to_vec, RenderCtx, RenderTarget};
+    use crate::scene::closing_window::ClosingWindow;
     use crate::ui::screen_transition::{ScreenTransition, DURATION};
     use crate::utils::transaction::Transaction;
-    use smithay::backend::renderer::ImportMem;
-    use std::time::Duration;
     let (vk, _gles, _) = setup();
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
     // This fixture exercises prepared rendering; wait on the bounded test-only
@@ -8577,6 +8662,7 @@ fn native_transition_and_closing_capture_targets() {
         }
     }
     let transaction = Transaction::new();
+    let scene_resources = crate::scene::resources::SceneResources::new();
     let closing = ClosingWindow::new_native(
         &mut renderer,
         1.0.into(),
@@ -8597,6 +8683,7 @@ fn native_transition_and_closing_capture_targets() {
             targets: textures.map(|t| (t, (0., 0.).into())),
         }),
         None,
+        scene_resources.allocator().closing,
     )
     .unwrap();
     for (i, target) in [
@@ -8635,11 +8722,12 @@ fn native_transition_and_closing_capture_targets() {
 #[test]
 #[ignore = "requires real DRM render node, Vulkan and GLES DMA-BUF producer"]
 fn native_closing_animation_owns_a_stable_dmabuf_snapshot() {
-    use crate::animation::{Animation, Clock};
-    use crate::layout::closing_window::ClosingWindow;
-    use crate::render_helpers::{render_to_vec, RenderCtx, RenderTarget};
-    use crate::utils::transaction::Transaction;
     use std::time::Duration;
+
+    use crate::animation::{Animation, Clock};
+    use crate::render_helpers::{render_to_vec, RenderCtx, RenderTarget};
+    use crate::scene::closing_window::ClosingWindow;
+    use crate::utils::transaction::Transaction;
 
     let (vk, mut gles, mut allocator) = setup();
     let mods = modifiers(&vk, &gles, Fourcc::Argb8888);
@@ -8661,6 +8749,7 @@ fn native_closing_animation_owns_a_stable_dmabuf_snapshot() {
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
     let clock = Clock::with_time(Duration::ZERO);
     let transaction = Transaction::new();
+    let scene_resources = crate::scene::resources::SceneResources::new();
     let closing = ClosingWindow::new_native(
         &mut renderer,
         1.0.into(),
@@ -8678,7 +8767,10 @@ fn native_closing_animation_owns_a_stable_dmabuf_snapshot() {
         clarion_config::WindowCloseEffect::Fade,
         None,
         None,
-        Some(source.clone()),
+        Some(crate::scene::window_resources::NativeCloseSource::Unowned(
+            source.clone(),
+        )),
+        scene_resources.allocator().closing,
     )
     .unwrap();
 
@@ -8716,12 +8808,15 @@ fn native_closing_animation_owns_a_stable_dmabuf_snapshot() {
 #[test]
 #[ignore = "requires real DRM render node and Vulkan"]
 fn native_explosion_close_does_not_tint_pixels_outside_the_window_area() {
-    use crate::animation::{Animation, Clock};
-    use crate::layout::{closing_window::ClosingWindow, tile::NativeTileSnapshot};
-    use crate::render_helpers::{render_to_vec, RenderCtx, RenderTarget};
-    use crate::utils::transaction::Transaction;
-    use smithay::backend::renderer::ImportMem;
     use std::time::Duration;
+
+    use smithay::backend::renderer::ImportMem;
+
+    use crate::animation::{Animation, Clock};
+    use crate::layout::tile::NativeTileSnapshot;
+    use crate::render_helpers::{render_to_vec, RenderCtx, RenderTarget};
+    use crate::scene::closing_window::ClosingWindow;
+    use crate::utils::transaction::Transaction;
 
     let (vk, _gles, _) = setup();
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
@@ -8735,6 +8830,7 @@ fn native_explosion_close_does_not_tint_pixels_outside_the_window_area() {
         .unwrap();
     let mut clock = Clock::with_time(Duration::ZERO);
     let transaction = Transaction::new();
+    let scene_resources = crate::scene::resources::SceneResources::new();
     let mut closing = ClosingWindow::new_native(
         &mut renderer,
         1.0.into(),
@@ -8756,6 +8852,7 @@ fn native_explosion_close_does_not_tint_pixels_outside_the_window_area() {
             targets: std::array::from_fn(|_| (texture.clone(), (0., 0.).into())),
         }),
         None,
+        scene_resources.allocator().closing,
     )
     .unwrap();
 
@@ -8806,7 +8903,7 @@ fn native_explosion_close_does_not_tint_pixels_outside_the_window_area() {
             assert!(
                 matches!(
                     elements[0],
-                    crate::layout::closing_window::ClosingWindowRenderElement::Particles(_)
+                    crate::scene::closing_window::ClosingWindowRenderElement::Particles(_)
                 ),
                 "the transparent body must not be submitted during the particle tail"
             );
@@ -8837,10 +8934,15 @@ fn native_explosion_close_does_not_tint_pixels_outside_the_window_area() {
 #[test]
 #[ignore = "requires DRM, Vulkan and GLES"]
 fn explosion_transparent_snapshot_has_no_flash_or_ring() {
+    use std::collections::HashMap;
+    use std::rc::Rc;
+
+    use smithay::backend::renderer::element::Kind;
+    use smithay::backend::renderer::gles::Uniform;
+    use smithay::backend::renderer::ImportMem;
+
     use crate::render_helpers::shader_element::ShaderRenderElement;
     use crate::render_helpers::{render_to_vec, shaders};
-    use smithay::backend::renderer::{element::Kind, gles::Uniform, ImportMem};
-    use std::{collections::HashMap, rc::Rc};
 
     let (vk, mut gles, _) = setup();
     let mut native = native::NativeRenderer::new(vk).unwrap();
@@ -8923,8 +9025,9 @@ fn explosion_transparent_snapshot_has_no_flash_or_ring() {
 #[test]
 #[ignore = "requires DRM and GLES"]
 fn gles_particle_overlapping_damage_blends_once() {
-    use crate::render_helpers::particles::{ParticleRenderElement, ParticleVertex};
     use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement};
+
+    use crate::render_helpers::particles::{ParticleRenderElement, ParticleVertex};
 
     let (_vk, mut gles, _) = setup();
     crate::render_helpers::shaders::init(&mut gles);
@@ -8999,10 +9102,12 @@ fn gles_particle_overlapping_damage_blends_once() {
 #[test]
 #[ignore = "requires DRM, Vulkan and GLES"]
 fn native_particle_batches_match_gles_with_perspective_and_meshes() {
+    use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement};
+    use smithay::backend::renderer::gles::GlesTexture;
+    use smithay::backend::renderer::ImportMem;
+
     use crate::render_helpers::mesh::{MeshRenderElement, MeshVertex};
     use crate::render_helpers::particles::{ParticleRenderElement, ParticleVertex};
-    use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement};
-    use smithay::backend::renderer::{gles::GlesTexture, ImportMem};
 
     let (vk, mut gles, _) = setup();
     let mut native = native::NativeRenderer::new(vk).unwrap();
@@ -9187,13 +9292,14 @@ fn native_particle_batches_match_gles_with_perspective_and_meshes() {
 
 #[cfg(test)]
 mod resize_capture_bounds_regressions {
-    use super::*;
-    use crate::render_helpers::render_to_vec;
-    use crate::render_helpers::resize::{capture_resize_texture, ResizeRenderElement};
     use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement};
     use smithay::backend::renderer::element::RenderElement;
     use smithay::backend::renderer::{ImportMem, RendererSuper, Texture};
     use smithay::utils::{Logical, Physical, Scale, Size};
+
+    use super::*;
+    use crate::render_helpers::render_to_vec;
+    use crate::render_helpers::resize::{capture_resize_texture, ResizeRenderElement};
 
     type Input<T> = ((T, Rectangle<i32, Physical>), Size<f64, Logical>);
 
@@ -9404,18 +9510,20 @@ mod resize_capture_bounds_regressions {
 #[test]
 #[ignore = "requires real DRM render node and Vulkan; no DRM display master"]
 fn native_regional_framebuffer_blur_matches_full_pass_pixels() {
-    use crate::render_helpers::{
-        background_effect::RenderParams,
-        blur::BlurOptions,
-        framebuffer_effect::{FramebufferEffect, FramebufferEffectElement, NativeInner},
-    };
-    use crate::utils::region::TransformedRegion;
+    use std::cell::RefCell;
+
     use clarion_config::CornerRadius;
     use smithay::backend::renderer::element::{Element, RenderElement};
     use smithay::backend::renderer::ImportMem;
     use smithay::utils::user_data::UserDataMap;
     use smithay::utils::{Buffer, Logical, Scale, Size};
-    use std::cell::RefCell;
+
+    use crate::render_helpers::background_effect::RenderParams;
+    use crate::render_helpers::blur::BlurOptions;
+    use crate::render_helpers::framebuffer_effect::{
+        FramebufferEffect, FramebufferEffectElement, NativeInner,
+    };
+    use crate::utils::region::TransformedRegion;
 
     let (vk, _gles, _allocator) = setup();
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
@@ -9621,11 +9729,12 @@ fn native_regional_framebuffer_blur_matches_full_pass_pixels() {
 #[test]
 #[ignore = "requires DRM and Vulkan"]
 fn native_transition_batch_reuses_equal_pixels_without_mutating_private_snapshots() {
+    use smithay::backend::renderer::element::Kind;
+    use smithay::utils::{Physical, Scale, Size};
+
     use crate::render_helpers::render_to_vec;
     use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
     use crate::render_helpers::transition_capture::TransitionCapture;
-    use smithay::backend::renderer::element::Kind;
-    use smithay::utils::{Physical, Scale, Size};
 
     let (vk, _gles, _) = setup();
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
@@ -9735,15 +9844,14 @@ fn native_transition_batch_reuses_equal_pixels_without_mutating_private_snapshot
 #[test]
 #[ignore = "requires DRM and Vulkan"]
 fn native_transition_batch_preserves_live_backdrop_pixels() {
-    use crate::render_helpers::{
-        background_effect::RenderParams,
-        blur::BlurOptions,
-        framebuffer_effect::{FramebufferEffect, FramebufferEffectElement},
-        render_to_vec,
-        solid_color::{SolidColorBuffer, SolidColorRenderElement},
-        transition_capture::TransitionCapture,
-    };
     use smithay::backend::renderer::element::Kind;
+
+    use crate::render_helpers::background_effect::RenderParams;
+    use crate::render_helpers::blur::BlurOptions;
+    use crate::render_helpers::framebuffer_effect::{FramebufferEffect, FramebufferEffectElement};
+    use crate::render_helpers::render_to_vec;
+    use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
+    use crate::render_helpers::transition_capture::TransitionCapture;
     crate::clarion_render_elements! {
         CaptureTestElement => {
             Solid = SolidColorRenderElement,
@@ -9826,13 +9934,13 @@ fn native_transition_batch_preserves_live_backdrop_pixels() {
 #[test]
 #[ignore = "requires DRM and Vulkan; reports controlled capture timings, not desktop FPS"]
 fn native_transition_batch_reports_4k_capture_cost() {
-    use crate::render_helpers::{
-        render_to_texture,
-        solid_color::{SolidColorBuffer, SolidColorRenderElement},
-        transition_capture::TransitionCapture,
-    };
-    use smithay::backend::renderer::element::Kind;
     use std::time::Instant;
+
+    use smithay::backend::renderer::element::Kind;
+
+    use crate::render_helpers::render_to_texture;
+    use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
+    use crate::render_helpers::transition_capture::TransitionCapture;
     let (vk, _gles, _) = setup();
     let mut renderer = native::NativeRenderer::new(vk).unwrap();
     let buffers: Vec<_> = (0..24)
@@ -9915,12 +10023,17 @@ fn native_transition_batch_reports_4k_capture_cost() {
 #[test]
 #[ignore = "requires DRM, Vulkan and GLES"]
 fn lightweight_window_open_matches_gles_and_preserves_group_opacity() {
+    use std::time::Duration;
+
+    use smithay::backend::renderer::element::{Element, Kind};
+
     use crate::animation::{Animation, Clock};
-    use crate::layout::opening_window::{OpenAnimation, OpeningWindowRenderElement};
+    use crate::layout::opening_window::OpenAnimation;
     use crate::render_helpers::render_to_vec;
     use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
-    use smithay::backend::renderer::element::{Element, Kind};
-    use std::time::Duration;
+    use crate::scene::opening_window::{
+        render_opening_window_gles, render_opening_window_native, OpeningWindowRenderElement,
+    };
 
     let (vk, mut gles, _) = setup();
     let mut native = native::NativeRenderer::new(vk).unwrap();
@@ -9941,6 +10054,8 @@ fn lightweight_window_open_matches_gles_and_preserves_group_opacity() {
         };
         let native_open = make();
         let gles_open = make();
+        let native_buffers = crate::scene::window_resources::AnimationBuffers::default();
+        let gles_buffers = crate::scene::window_resources::AnimationBuffers::default();
         let under = SolidColorBuffer::new((48., 32.), [1., 0., 0., 1.]);
         let mut over = SolidColorBuffer::new((20., 16.), [0., 1., 0., 1.]);
         for millis in [0, 16, 60, 90, 135, 180, 200] {
@@ -9953,27 +10068,29 @@ fn lightweight_window_open_matches_gles_and_preserves_group_opacity() {
                 SolidColorRenderElement::from_buffer(&over, (8., 6.), 1., Kind::Unspecified),
                 SolidColorRenderElement::from_buffer(&under, (-4., -6.), 1., Kind::Unspecified),
             ];
-            let (actual, native_data) = native_open
-                .render_native(
-                    &mut native,
-                    None,
-                    &elements,
-                    (40., 24.).into(),
-                    (16., 16.).into(),
-                    scale.into(),
-                    0.75,
-                )
-                .unwrap();
-            let (expected, gles_data) = gles_open
-                .render(
-                    &mut gles,
-                    &elements,
-                    (40., 24.).into(),
-                    (16., 16.).into(),
-                    scale.into(),
-                    0.75,
-                )
-                .unwrap();
+            let (actual, native_data) = render_opening_window_native(
+                &native_open.pose(),
+                &mut native,
+                &native_buffers,
+                None,
+                &elements,
+                (40., 24.).into(),
+                (16., 16.).into(),
+                scale.into(),
+                0.75,
+            )
+            .unwrap();
+            let (expected, gles_data) = render_opening_window_gles(
+                &gles_open.pose(),
+                &mut gles,
+                &gles_buffers,
+                &elements,
+                (40., 24.).into(),
+                (16., 16.).into(),
+                scale.into(),
+                0.75,
+            )
+            .unwrap();
             assert!(matches!(actual, OpeningWindowRenderElement::Texture(_)));
             assert!(matches!(expected, OpeningWindowRenderElement::Offscreen(_)));
             assert_eq!(&native_data.id, actual.id());
@@ -10035,17 +10152,17 @@ fn lightweight_window_open_matches_gles_and_preserves_group_opacity() {
 #[test]
 #[ignore = "requires DRM, Vulkan and GLES"]
 fn liquid_glass_matches_gles_preserves_masks_and_restores_state() {
-    use crate::render_helpers::{
-        background_effect::RenderParams,
-        framebuffer_effect::{FramebufferEffect, FramebufferEffectElement},
-        render_to_vec, resources, shaders,
-        solid_color::SolidColorRenderElement,
-        texture::{TextureBuffer, TextureRenderElement},
-    };
-    use crate::utils::region::TransformedRegion;
+    use std::sync::Arc;
+
     use smithay::backend::renderer::element::Kind;
     use smithay::backend::renderer::{ImportMem, RendererSuper};
-    use std::sync::Arc;
+
+    use crate::render_helpers::background_effect::RenderParams;
+    use crate::render_helpers::framebuffer_effect::{FramebufferEffect, FramebufferEffectElement};
+    use crate::render_helpers::solid_color::SolidColorRenderElement;
+    use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
+    use crate::render_helpers::{render_to_vec, resources, shaders};
+    use crate::utils::region::TransformedRegion;
 
     crate::clarion_render_elements! {
         GlassTestElement<R> => {
@@ -10206,13 +10323,13 @@ fn liquid_glass_matches_gles_preserves_masks_and_restores_state() {
 #[test]
 #[ignore = "requires real DRM render node and Vulkan"]
 fn native_panel_glass_removal_repaints_old_bounds() {
-    use crate::render_helpers::{
-        background_effect::RenderParams,
-        blur::BlurOptions,
-        framebuffer_effect::{FramebufferEffect, FramebufferEffectElement},
-        solid_color::{SolidColorBuffer, SolidColorRenderElement},
-    };
-    use smithay::backend::renderer::{damage::OutputDamageTracker, element::Kind};
+    use smithay::backend::renderer::damage::OutputDamageTracker;
+    use smithay::backend::renderer::element::Kind;
+
+    use crate::render_helpers::background_effect::RenderParams;
+    use crate::render_helpers::blur::BlurOptions;
+    use crate::render_helpers::framebuffer_effect::{FramebufferEffect, FramebufferEffectElement};
+    use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
     crate::clarion_render_elements! {
         PanelTestElement => {
             Solid = SolidColorRenderElement,

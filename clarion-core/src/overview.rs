@@ -4,10 +4,10 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use crate::SpaceId;
+use clarion_motion::rubber_band::RubberBand;
 
 use crate::gestures::swipe_tracker::SwipeTracker;
-use clarion_motion::rubber_band::RubberBand;
+use crate::SpaceId;
 
 // Retained Clarion gesture parameters, not verified Apple measurements.
 const MOVEMENT: f64 = 300.;

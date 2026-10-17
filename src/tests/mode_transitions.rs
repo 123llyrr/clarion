@@ -102,8 +102,9 @@ fn pixels(f: &mut Fixture, target: RenderTarget) -> Vec<u8> {
 
 #[test]
 fn actions_and_hot_corners_share_the_composed_frame_handoff() {
-    use crate::compositor::HotCornerKind;
     use clarion_config::{Action, OverviewStyle};
+
+    use crate::compositor::HotCornerKind;
 
     for (style, expected, corner) in [
         (
@@ -299,9 +300,8 @@ fn overview_handoff_respects_disabled_animations_and_output_changes() {
 #[test]
 fn layer_privacy_changes_clear_handoff_pixels_without_rearming_hot_corners() {
     use clarion_config::{BlockOutFrom, LayerRule};
-    use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::{
-        zwlr_layer_shell_v1::Layer, zwlr_layer_surface_v1::Anchor,
-    };
+    use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer;
+    use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::Anchor;
 
     use super::client::LayerConfigureProps;
     use crate::compositor::HotCornerKind;
@@ -1083,7 +1083,6 @@ fn request_session_lock(f: &mut Fixture) -> ExtSessionLockV1 {
 
 #[test]
 fn session_lock_and_mode_actions_cancel_all_compositor_grabs_before_any_final_motion() {
-    use crate::input::{move_grab::MoveGrab, touch_overview_grab::TouchOverviewGrab, AnyStartData};
     use smithay::backend::input::{
         ButtonState, TabletToolCapabilities, TabletToolDescriptor, TabletToolType,
     };
@@ -1091,6 +1090,10 @@ fn session_lock_and_mode_actions_cancel_all_compositor_grabs_before_any_final_mo
     use smithay::input::tablet::{tool, TabletDescriptor, TabletSeatTrait};
     use smithay::input::touch::{DownEvent, UpEvent};
     use smithay::utils::SERIAL_COUNTER;
+
+    use crate::input::move_grab::MoveGrab;
+    use crate::input::touch_overview_grab::TouchOverviewGrab;
+    use crate::input::AnyStartData;
 
     for (mode_switch, moving) in [(false, false), (false, true), (true, false), (true, true)] {
         let mut f = setup();

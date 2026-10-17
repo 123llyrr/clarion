@@ -26,7 +26,6 @@ use smithay::utils::{Logical, Point, Rectangle, Scale, Size, Transform};
 use crate::animation::{Animation, Clock};
 use crate::clarion_render_elements;
 use crate::compositor::Clarion;
-use crate::layout::focus_ring::{FocusRing, FocusRingRenderElement};
 use crate::layout::scene_source::WindowLookup;
 use crate::layout::{Layout, LayoutElement as _, LayoutElementRenderElement};
 use crate::render_helpers::border::BorderRenderElement;
@@ -41,6 +40,7 @@ use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderEleme
 use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
 use crate::render_helpers::vulkan::VulkanTexture;
 use crate::render_helpers::{RenderCtx, RenderTarget};
+use crate::scene::focus_ring::{FocusRing, FocusRingRenderElement};
 use crate::utils::{
     baba_is_float_offset, output_size, round_logical_in_physical, to_physical_precise_round,
     with_toplevel_role,

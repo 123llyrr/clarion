@@ -4,7 +4,6 @@ use std::time::{Duration, Instant};
 
 use calloop::timer::{TimeoutAction, Timer};
 use calloop::{LoopHandle, RegistrationToken};
-
 use smithay::desktop::Window;
 use smithay::input::pointer::{CursorIcon, CursorImageStatus};
 use smithay::input::tablet::tool::{TabletToolGrab, TabletToolInnerHandle};

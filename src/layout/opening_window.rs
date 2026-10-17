@@ -1,29 +1,9 @@
 //! Denial-derived reveal geometry and timing: Copyright (C) 2026 Doctor Logix.
 //! GPL-3.0-or-later; see resources/licenses/denial-GPL-3.0-or-later.txt.
 
-use std::collections::HashMap;
-use std::rc::Rc;
-
-use anyhow::Context as _;
-use glam::{Mat3, Vec2};
-use smithay::backend::renderer::element::utils::{
-    Relocate, RelocateRenderElement, RescaleRenderElement,
-};
-use smithay::backend::renderer::element::{Element, Kind, RenderElement};
-use smithay::backend::renderer::gles::{GlesRenderer, Uniform};
-use smithay::backend::renderer::Texture;
-use smithay::utils::{Logical, Point, Rectangle, Scale, Size};
+//! Renderer-independent opening trajectory and per-presentation numeric pose.
 
 use crate::animation::Animation;
-use crate::clarion_render_elements;
-use crate::render_helpers::offscreen::{
-    NativeOffscreenBuffer, OffscreenBuffer, OffscreenData, OffscreenRenderElement,
-};
-use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
-use crate::render_helpers::shader_element::ShaderRenderElement;
-use crate::render_helpers::shaders::{mat3_uniform, ProgramType, Shaders};
-use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
-use crate::render_helpers::vulkan::native::NativeRenderer;
 
 #[derive(Debug)]
 pub struct OpenAnimation {
@@ -33,19 +13,25 @@ pub struct OpenAnimation {
     denial_reveal: bool,
     lightweight: bool,
     random_seed: f32,
-    buffer: OffscreenBuffer,
-    /// Vulkan counterpart of `buffer`: the snapshot target and its damage history
-    /// are reused across every reveal frame, so a still window is composited to the
-    /// offscreen once and only client commits redraw the changed parts.
-    native_buffer: NativeOffscreenBuffer,
 }
 
-clarion_render_elements! {
-    OpeningWindowRenderElement => {
-        Offscreen = RelocateRenderElement<RescaleRenderElement<OffscreenRenderElement>>,
-        Texture = RelocateRenderElement<RescaleRenderElement<PrimaryGpuTextureRenderElement>>,
-        Shader = ShaderRenderElement,
-    }
+/// Immutable values captured for one output presentation. Contains neither a
+/// clock nor a renderer resource, so rendering cannot advance animation state.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct OpeningWindowPose {
+    pub(crate) progress: f64,
+    pub(crate) clamped_progress: f64,
+    /// Geometry for the built-in fade and renderer-independent fallback.
+    pub(crate) scale: f64,
+    /// Legacy GLES texture fallback has a distinct custom-shader scale policy.
+    pub(crate) texture_scale: f64,
+    pub(crate) shader_popin_ratio: f32,
+    pub(crate) denial_reveal: bool,
+    pub(crate) lightweight: bool,
+    pub(crate) random_seed: f32,
+    pub(crate) glide_enabled: bool,
+    pub(crate) glide_tilt: f32,
+    pub(crate) glide_depth: f32,
 }
 
 impl OpenAnimation {
@@ -67,14 +53,7 @@ impl OpenAnimation {
             lightweight: denial_reveal
                 && effect == clarion_config::animations::WindowOpenEffect::Fade,
             random_seed: fastrand::f32(),
-            buffer: OffscreenBuffer::default(),
-            native_buffer: NativeOffscreenBuffer::default(),
         }
-    }
-
-    /// Device replacement invalidates GPU pixels, not the animation trajectory.
-    pub(crate) fn clear_native_cache(&self) {
-        self.native_buffer.clear();
     }
 
     pub fn is_done(&self) -> bool {
@@ -109,334 +88,63 @@ impl OpenAnimation {
         self.lightweight && self.popin_ratio() < 1. && self.anim.has_fixed_duration()
     }
 
-    pub(crate) fn scale(&self) -> f64 {
-        if self.is_done() {
-            return 1.;
-        }
-        let progress = if self.keeps_scale_tail() {
+    /// Capture the output's already-projected animation time once. The scene
+    /// receives only this value and never reaches back into the shared clock.
+    pub(crate) fn pose(&self) -> OpeningWindowPose {
+        let progress = self.anim.value();
+        let clamped_progress = self.anim.clamped_value().clamp(0., 1.);
+        let popin_ratio = self.popin_ratio();
+        let scale_progress = if self.keeps_scale_tail() {
             // Opacity stops at first arrival, while geometry can briefly pass its
             // resting size. Bound user curves without extending the texture canvas.
-            self.anim.value().clamp(0., 1.12)
+            progress.clamp(0., 1.12)
         } else {
-            f64::from(self.progress())
+            f64::from(clamped_progress as f32)
         };
-        self.popin_ratio() + (1. - self.popin_ratio()) * progress
-    }
-
-    // We can't depend on view_rect here, because the result of window opening can be snapshot and
-    // then rendered elsewhere.
-    pub fn render(
-        &self,
-        renderer: &mut GlesRenderer,
-        elements: &[impl RenderElement<GlesRenderer>],
-        geo_size: Size<f64, Logical>,
-        location: Point<f64, Logical>,
-        scale: Scale<f64>,
-        alpha: f32,
-    ) -> anyhow::Result<(OpeningWindowRenderElement, OffscreenData)> {
-        let progress = self.anim.value();
-        let clamped_progress = self.anim.clamped_value().clamp(0., 1.);
-
-        let (elem, _sync_point, mut data) = self
-            .buffer
-            .render(renderer, scale, elements)
-            .context("error rendering to offscreen buffer")?;
-
-        if !self.lightweight && Shaders::get(renderer).program(ProgramType::Open).is_some() {
-            // OffscreenBuffer renders with Transform::Normal and the scale that we passed, so we
-            // can assume that below.
-            let offset = elem.offset();
-            let texture = elem.texture();
-            let texture_size = elem.logical_size();
-
-            let effect_rect = if self.denial_reveal {
-                // Denial clips the complete child RepaintBoundary, including decorations and
-                // shadow, rather than only the client's logical geometry.
-                Rectangle::new(location + offset, texture_size)
+        let scale = if self.is_done() {
+            1.
+        } else {
+            popin_ratio + (1. - popin_ratio) * scale_progress
+        };
+        let texture_scale = if self.lightweight {
+            scale
+        } else {
+            // Custom shaders historically use the unbounded configured ratio
+            // when GLES falls back to a texture. Keep that separate from the
+            // shader ratio's clamp and the layout fallback's bounded geometry.
+            let start_ratio = self.popin_ratio.unwrap_or(0.8);
+            let progress = if self.denial_reveal {
+                clamped_progress
             } else {
-                Rectangle::new(location, geo_size)
+                progress
             };
-            let mut area = Rectangle::new(location + offset, texture_size);
-
-            if self.denial_reveal {
-                // The squircle never leaves the window. Only optional Glide can extend a corner a
-                // little, so reserve a small, bounded margin instead of shading most of a 4K
-                // output for every opening frame.
-                if !self.glide.off {
-                    let padding = (area.size.w.max(area.size.h) * 0.08).max(2.);
-                    let diff = Point::from((padding, padding))
-                        .to_physical_precise_round(scale)
-                        .to_logical(scale);
-                    area.loc -= diff;
-                    area.size += diff.upscale(2.).to_size();
-                }
-            } else {
-                // Preserve the historical generous canvas for user-supplied shaders.
-                let mut target_size = area.size.upscale(1.5);
-                target_size.w = f64::max(area.size.w + 1000., target_size.w);
-                target_size.h = f64::max(area.size.h + 1000., target_size.h);
-                let diff = (target_size.to_point() - area.size.to_point()).downscale(2.);
-                let diff = diff.to_physical_precise_round(scale).to_logical(scale);
-                area.loc -= diff;
-                area.size += diff.upscale(2.).to_size();
-            }
-
-            let area_loc = Vec2::new(area.loc.x as f32, area.loc.y as f32);
-            let area_size = Vec2::new(area.size.w as f32, area.size.h as f32);
-
-            let effect_loc = Vec2::new(effect_rect.loc.x as f32, effect_rect.loc.y as f32);
-            let effect_size = Vec2::new(effect_rect.size.w as f32, effect_rect.size.h as f32);
-
-            let input_to_geo = Mat3::from_scale(area_size / effect_size)
-                * Mat3::from_translation((area_loc - effect_loc) / area_size);
-
-            let tex_scale = Vec2::new(scale.x as f32, scale.y as f32);
-            let tex_loc = Vec2::new(offset.x as f32, offset.y as f32);
-            let tex_size = Vec2::new(texture.width() as f32, texture.height() as f32) / tex_scale;
-
-            let geo_to_tex = if self.denial_reveal {
-                // OffscreenBuffer may reuse a larger allocation after the snapshot shrinks; only
-                // the current used prefix belongs to this window.
-                Mat3::from_scale(effect_size / tex_size)
-            } else {
-                Mat3::from_translation(-tex_loc / tex_size)
-                    * Mat3::from_scale(effect_size / tex_size)
-            };
-
-            let elem = ShaderRenderElement::new(
-                ProgramType::Open,
-                area.size,
-                None,
-                scale.x as f32,
-                alpha,
-                Rc::new([
-                    mat3_uniform("clarion_input_to_geo", input_to_geo),
-                    Uniform::new("clarion_geo_size", effect_size.to_array()),
-                    mat3_uniform("clarion_geo_to_tex", geo_to_tex),
-                    Uniform::new("clarion_progress", progress as f32),
-                    Uniform::new("clarion_clamped_progress", clamped_progress as f32),
-                    Uniform::new("clarion_random_seed", self.random_seed),
-                    Uniform::new(
-                        "clarion_glide_enabled",
-                        if self.glide.off { 0. } else { 1. },
-                    ),
-                    Uniform::new(
-                        "clarion_glide_tilt",
-                        (self.glide.tilt_deg.to_radians()) as f32,
-                    ),
-                    Uniform::new("clarion_glide_depth", self.glide.depth as f32),
-                    Uniform::new(
-                        "clarion_popin_ratio",
-                        self.popin_ratio
-                            .unwrap_or(if self.denial_reveal { 1. } else { 0.8 })
-                            .clamp(0.01, 1.) as f32,
-                    ),
-                ]),
-                HashMap::from([(String::from("clarion_tex"), texture.clone())]),
-                Kind::Unspecified,
-            )
-            .with_location(area.loc);
-
-            // We're drawing the shader, not the offscreen itself.
-            data.id = elem.id().clone();
-
-            return Ok((elem.into(), data));
+            (start_ratio + (1. - start_ratio) * progress).max(0.)
+        };
+        OpeningWindowPose {
+            progress,
+            clamped_progress,
+            scale,
+            texture_scale,
+            shader_popin_ratio: self
+                .popin_ratio
+                .unwrap_or(if self.denial_reveal { 1. } else { 0.8 })
+                .clamp(0.01, 1.) as f32,
+            denial_reveal: self.denial_reveal,
+            lightweight: self.lightweight,
+            random_seed: self.random_seed,
+            glide_enabled: !self.glide.off,
+            glide_tilt: self.glide.tilt_deg.to_radians() as f32,
+            glide_depth: self.glide.depth as f32,
         }
-
-        let elem = elem.with_alpha(clamped_progress as f32 * alpha);
-
-        let start_ratio = if self.lightweight {
-            self.popin_ratio()
-        } else {
-            self.popin_ratio.unwrap_or(0.8)
-        };
-        let scale_progress = if self.denial_reveal {
-            clamped_progress
-        } else {
-            progress
-        };
-        let current_scale = if self.lightweight {
-            self.scale()
-        } else {
-            (start_ratio + (1.0 - start_ratio) * scale_progress).max(0.0)
-        };
-
-        let center = geo_size.to_point().downscale(2.);
-        let elem = RescaleRenderElement::from_element(
-            elem,
-            center.to_physical_precise_round(scale),
-            current_scale,
-        );
-
-        let elem = RelocateRenderElement::from_element(
-            elem,
-            location.to_physical_precise_round(scale),
-            Relocate::Relative,
-        );
-
-        Ok((elem.into(), data))
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn render_native(
-        &self,
-        renderer: &mut NativeRenderer,
-        custom: Option<&str>,
-        elements: &[impl RenderElement<NativeRenderer>],
-        geo_size: Size<f64, Logical>,
-        location: Point<f64, Logical>,
-        scale: Scale<f64>,
-        alpha: f32,
-    ) -> anyhow::Result<(OpeningWindowRenderElement, OffscreenData)> {
-        let progress = self.anim.value();
-        let clamped_progress = self.anim.clamped_value().clamp(0., 1.);
-        let (texture, _sync, geo, states, _commit) = self
-            .native_buffer
-            .render(renderer, scale, elements)
-            .context("error rendering opening window to Vulkan texture")?;
-        // The persistent target stays across frames; the native queue and sampling
-        // barriers order each re-render against the previous frame's sampling.
-
-        let offset = geo.loc.to_f64().to_logical(scale);
-        // The used region is the current encompassing geometry: the pooled allocation
-        // may keep a larger size after a shrink, and only its [0, geo.size) prefix
-        // belongs to this window.
-        let texture_size = Size::from((
-            f64::from(geo.size.w) / scale.x,
-            f64::from(geo.size.h) / scale.y,
-        ));
-        if self.lightweight {
-            // Keep group opacity correct for overlapping decorations/subsurfaces.
-            // The persistent snapshot only redraws on client damage; each animation
-            // frame then uses the ordinary texture pipeline, without a reveal shader.
-            let buffer = TextureBuffer::from_texture(
-                renderer,
-                texture,
-                scale,
-                smithay::utils::Transform::Normal,
-                Vec::new(),
-            );
-            let elem = TextureRenderElement::from_texture_buffer(
-                buffer,
-                offset,
-                self.progress() * alpha,
-                Some(Rectangle::from_size(texture_size)),
-                Some(texture_size),
-                Kind::Unspecified,
-            );
-            let elem = RescaleRenderElement::from_element(
-                PrimaryGpuTextureRenderElement::from(elem),
-                geo_size
-                    .to_point()
-                    .downscale(2.)
-                    .to_physical_precise_round(scale),
-                self.scale(),
-            );
-            let elem = RelocateRenderElement::from_element(
-                elem,
-                location.to_physical_precise_round(scale),
-                Relocate::Relative,
-            );
-            let data = OffscreenData {
-                id: elem.id().clone(),
-                states,
-            };
-            return Ok((elem.into(), data));
-        }
-        let effect_rect = if self.denial_reveal {
-            Rectangle::new(location + offset, texture_size)
-        } else {
-            Rectangle::new(location, geo_size)
-        };
-        let mut area = Rectangle::new(location + offset, texture_size);
-        if self.denial_reveal {
-            if !self.glide.off {
-                let padding = (area.size.w.max(area.size.h) * 0.08).max(2.);
-                let diff = Point::from((padding, padding))
-                    .to_physical_precise_round(scale)
-                    .to_logical(scale);
-                area.loc -= diff;
-                area.size += diff.upscale(2.).to_size();
-            }
-        } else {
-            let mut target_size = area.size.upscale(1.5);
-            target_size.w = f64::max(area.size.w + 1000., target_size.w);
-            target_size.h = f64::max(area.size.h + 1000., target_size.h);
-            let diff = (target_size.to_point() - area.size.to_point()).downscale(2.);
-            let diff = diff.to_physical_precise_round(scale).to_logical(scale);
-            area.loc -= diff;
-            area.size += diff.upscale(2.).to_size();
-        }
-
-        let area_loc = Vec2::new(area.loc.x as f32, area.loc.y as f32);
-        let area_size = Vec2::new(area.size.w as f32, area.size.h as f32);
-
-        let effect_loc = Vec2::new(effect_rect.loc.x as f32, effect_rect.loc.y as f32);
-        let effect_size = Vec2::new(effect_rect.size.w as f32, effect_rect.size.h as f32);
-
-        let input_to_geo = Mat3::from_scale(area_size / effect_size)
-            * Mat3::from_translation((area_loc - effect_loc) / area_size);
-
-        let tex_scale = Vec2::new(scale.x as f32, scale.y as f32);
-        let tex_loc = Vec2::new(offset.x as f32, offset.y as f32);
-        let tex_size = Vec2::new(texture.width() as f32, texture.height() as f32) / tex_scale;
-
-        let geo_to_tex = if self.denial_reveal {
-            // OffscreenBuffer may reuse a larger allocation after the snapshot shrinks; only
-            // the current used prefix belongs to this window.
-            Mat3::from_scale(effect_size / tex_size)
-        } else {
-            Mat3::from_translation(-tex_loc / tex_size) * Mat3::from_scale(effect_size / tex_size)
-        };
-
-        let elem = ShaderRenderElement::new_native(
-            renderer,
-            ProgramType::Open,
-            &crate::render_helpers::shaders::animation_source(ProgramType::Open, custom),
-            area.size,
-            scale.x as f32,
-            alpha,
-            Rc::new([
-                mat3_uniform("clarion_input_to_geo", input_to_geo),
-                Uniform::new("clarion_geo_size", effect_size.to_array()),
-                mat3_uniform("clarion_geo_to_tex", geo_to_tex),
-                Uniform::new("clarion_progress", progress as f32),
-                Uniform::new("clarion_clamped_progress", clamped_progress as f32),
-                Uniform::new("clarion_random_seed", self.random_seed),
-                Uniform::new(
-                    "clarion_glide_enabled",
-                    if self.glide.off { 0. } else { 1. },
-                ),
-                Uniform::new(
-                    "clarion_glide_tilt",
-                    (self.glide.tilt_deg.to_radians()) as f32,
-                ),
-                Uniform::new("clarion_glide_depth", self.glide.depth as f32),
-                Uniform::new(
-                    "clarion_popin_ratio",
-                    self.popin_ratio
-                        .unwrap_or(if self.denial_reveal { 1. } else { 0.8 })
-                        .clamp(0.01, 1.) as f32,
-                ),
-            ]),
-            HashMap::from([(String::from("clarion_tex"), texture.clone())]),
-            Kind::Unspecified,
-        )?
-        .with_location(area.loc);
-
-        let data = OffscreenData {
-            id: elem.id().clone(),
-            states,
-        };
-        Ok((elem.into(), data))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
     use crate::animation::{Clock, Spring, SpringParams};
-    use std::time::Duration;
 
     #[test]
     fn builtin_reveal_stops_when_visible_motion_finishes_with_a_spring() {
@@ -575,7 +283,7 @@ mod tests {
             clock.set_unadjusted(Duration::from_millis(200));
             assert!(open.is_done());
             assert_eq!(open.progress(), 1.);
-            assert_eq!(open.scale(), 1.);
+            assert_eq!(open.pose().scale, 1.);
         }
     }
 
@@ -590,7 +298,7 @@ mod tests {
             true,
             config.effect,
         );
-        assert_eq!(open.scale(), 0.94);
+        assert_eq!(open.pose().scale, 0.94);
         let mut previous_opacity = 0.;
         let mut peak_scale = 1.;
         for millis in 0..=200 {
@@ -601,7 +309,7 @@ mod tests {
                 "opacity reversed at {millis}ms"
             );
             previous_opacity = opacity;
-            peak_scale = f64::max(peak_scale, open.scale());
+            peak_scale = f64::max(peak_scale, open.pose().scale);
             assert_eq!(open.is_done(), millis == 200);
         }
         assert!((1.002..1.005).contains(&peak_scale));
@@ -614,11 +322,11 @@ mod tests {
             "the geometry still needs its settling frame"
         );
         clock.set_unadjusted(Duration::from_millis(90));
-        assert!(open.scale() > 1.);
+        assert!(open.pose().scale > 1.);
         clock.set_unadjusted(Duration::from_millis(199));
-        assert!((open.scale() - 1.).abs() < 0.00001);
+        assert!((open.pose().scale - 1.).abs() < 0.00001);
         clock.set_unadjusted(Duration::from_millis(200));
-        assert_eq!(open.scale(), 1.);
+        assert_eq!(open.pose().scale, 1.);
         assert_eq!(open.anim.velocity(), 0.);
     }
 
@@ -635,7 +343,7 @@ mod tests {
         );
         clock.set_unadjusted(Duration::from_millis(60));
         assert_eq!(open.progress(), 1.);
-        assert_eq!(open.scale(), 1.);
+        assert_eq!(open.pose().scale, 1.);
         assert!(open.is_done());
     }
 
@@ -659,7 +367,74 @@ mod tests {
             }
             assert!(open.is_done());
             assert_eq!(open.progress(), 1.);
-            assert_eq!(open.scale(), 1.);
+            assert_eq!(open.pose().scale, 1.);
+        }
+    }
+
+    #[test]
+    fn opening_pose_freezes_projected_time_and_restores_event_time() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<OpeningWindowPose>();
+        let mut clock = Clock::with_time(Duration::ZERO);
+        let config = clarion_config::animations::WindowOpenAnim::default();
+        let open = OpenAnimation::new(
+            Animation::new(clock.clone(), 0., 1., 0., config.anim),
+            config.popin_ratio,
+            config.glide,
+            true,
+            config.effect,
+        );
+        clock.set_unadjusted(Duration::from_millis(16));
+        let event_pose = open.pose();
+        let presented_pose = {
+            let _projection = clock.project_to(Duration::from_millis(90));
+            let projected = open.pose();
+            assert!(projected.clamped_progress > event_pose.clamped_progress);
+            assert!(projected.scale > 1.);
+            projected
+        };
+        assert_eq!(open.pose(), event_pose);
+        assert_eq!(presented_pose.random_seed, event_pose.random_seed);
+        assert_eq!(event_pose.clamped_progress as f32, open.progress());
+        clock.set_complete_instantly(true);
+        assert_eq!(open.pose().clamped_progress, 1.);
+        assert_eq!(open.pose().scale, 1.);
+        // No shared clock or model reference is retained by a captured pose.
+        drop(open);
+        drop(clock);
+        assert!(event_pose.clamped_progress < 1.);
+        assert!(presented_pose.scale > 1.);
+    }
+
+    #[test]
+    fn custom_shader_pose_retains_separate_fallback_scale_and_shader_ratio() {
+        for (ratio, scale, texture_scale, shader_ratio) in [
+            (None, 0.8, 0.8, 0.8),
+            (Some(-0.5), 0.01, 0., 0.01),
+            (Some(1.5), 1., 1.5, 1.),
+        ] {
+            let clock = Clock::with_time(Duration::ZERO);
+            let config = clarion_config::animations::WindowOpenAnim::default();
+            let open = OpenAnimation::new(
+                Animation::new(clock, 0., 1., 0., config.anim),
+                ratio,
+                clarion_config::Glide {
+                    off: false,
+                    tilt_deg: -17.,
+                    depth: 0.12,
+                },
+                false,
+                config.effect,
+            );
+            let pose = open.pose();
+            assert!(!pose.lightweight);
+            assert!(!pose.denial_reveal);
+            assert_eq!(pose.scale, scale);
+            assert_eq!(pose.texture_scale, texture_scale);
+            assert_eq!(pose.shader_popin_ratio, shader_ratio);
+            assert!(pose.glide_enabled);
+            assert_eq!(pose.glide_tilt, (-17_f64).to_radians() as f32);
+            assert_eq!(pose.glide_depth, 0.12_f32);
         }
     }
 }

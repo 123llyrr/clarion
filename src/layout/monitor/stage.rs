@@ -4,22 +4,12 @@
 //! window dragging. Workspace IDs keep selection and captured poses stable when
 //! empty workspaces disappear or the workspace order changes.
 use super::*;
-use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
-use crate::render_helpers::texture::TextureRenderElement;
 
 pub(super) type StageGeometryCache = Option<(
     [u64; 14],
     Vec<WorkspaceId>,
     Rc<Vec<Rectangle<f64, Logical>>>,
 )>;
-
-type StageLayerRenderer<'a, R> = dyn FnMut(
-        RenderCtx<R>,
-        WorkspaceId,
-        Rectangle<f64, Logical>,
-        bool,
-        &mut dyn FnMut(crate::layer::mapped::LayerSurfaceRenderElement<R>),
-    ) + 'a;
 
 #[derive(Debug)]
 struct StageCapture {
@@ -1027,312 +1017,107 @@ impl<W: LayoutElement> Monitor<W> {
             .max(0.01)
     }
 
+    /// Capture card geometry and source ordering without entering a renderer.
+    /// The returned scene owns composition and can access only retained pixels
+    /// and the individual projected window/effect capabilities.
+    pub(crate) fn stage_composition(
+        &self,
+    ) -> crate::scene::stage_composition::StageComposition<'_, W> {
+        use crate::layout::scene_source::InsertHintRenderSource;
+        use crate::scene::stage_composition::{StageCard, StageComposition, StageRailItem};
+
+        let cards = self
+            .workspaces_with_render_geo()
+            .map(|(workspace, geometry)| {
+                let id = workspace.id();
+                let highlight = self
+                    .insert_hint
+                    .as_ref()
+                    .and_then(|hint| hint.workspace.existing_id())
+                    .map_or_else(|| self.stage_highlight(id), |hint| f64::from(hint == id));
+                StageCard {
+                    id,
+                    workspace_index: self.idx_of_ws(id).unwrap(),
+                    geometry,
+                    zoom: self.workspace_render_zoom(geometry),
+                    crop: Rectangle::from_size(
+                        workspace
+                            .view_size()
+                            .to_physical_precise_round(self.scale.fractional_scale()),
+                    ),
+                    highlight,
+                    sources: workspace.scene_sources(true),
+                }
+            })
+            .collect();
+        let rail = self
+            .stage_rail_items()
+            .into_iter()
+            .map(|item| StageRailItem {
+                geometry: item.geo,
+                clip: item.clip,
+                text: item.text,
+                subtitle: item.subtitle,
+                navigation: item.navigation.is_some(),
+                enabled: item.enabled,
+                highlight: if self
+                    .insert_hint
+                    .as_ref()
+                    .is_some_and(|hint| Some(hint.workspace) == item.target)
+                {
+                    1.
+                } else {
+                    item.highlight as f32
+                },
+            })
+            .collect();
+        let insert_hint = self.insert_hint_render_loc.and_then(|location| {
+            if let InsertWorkspace::Existing(id) = location.workspace {
+                Some((
+                    id,
+                    InsertHintRenderSource::new(self.resources.lease()),
+                    location.location,
+                ))
+            } else {
+                None
+            }
+        });
+        StageComposition {
+            cards,
+            rail,
+            scale: self.scale.fractional_scale(),
+            alpha: self.overview_backdrop_progress() as f32,
+            active_color: self
+                .options
+                .layout
+                .focus_ring
+                .active_color
+                .to_array_premul(),
+            workspace_count: self.workspaces.len(),
+            insert_hint,
+            resources: self.resources.lease(),
+        }
+    }
+
     pub(super) fn render_stage<R: ClarionRenderer>(
         &self,
         ctx: RenderCtx<R>,
         focus_ring: bool,
         push: &mut dyn FnMut(MonitorRenderElement<R>),
     ) {
-        self.render_stage_with_layers(ctx, focus_ring, &mut |_, _, _, _, _| {}, push);
+        self.stage_composition()
+            .render(ctx, focus_ring, &mut |_, _, _, _, _| {}, push);
     }
 
-    /// Compose each complete card before proceeding to the card behind it.
-    /// Bottom/background layer-shell content uses the card's exact transform and
-    /// the same privacy render target as its windows.
+    /// Compatibility entry shares the scene implementation with output capture.
     pub fn render_stage_with_layers<R: ClarionRenderer>(
         &self,
-        mut ctx: RenderCtx<R>,
-        focus_ring: bool,
-        layers: &mut StageLayerRenderer<'_, R>,
-        push: &mut dyn FnMut(MonitorRenderElement<R>),
-    ) {
-        let scale = self.scale.fractional_scale();
-        let progress = self.overview_backdrop_progress() as f32;
-        self.render_stage_rail(ctx.r(), push);
-        // Finish each card before emitting the next card: a rear floating window
-        // must never draw above the selected card's tiling window or background.
-        for (ws, geo) in self.workspaces_with_render_geo() {
-            let zoom = self.workspace_render_zoom(geo);
-            let offset = geo.loc.to_physical_precise_round(scale);
-            let crop = Rectangle::from_size(ws.view_size().to_physical_precise_round(scale));
-            let xray = XrayPos::new(geo.loc, zoom);
-            self.render_stage_border(ws.id(), geo, progress, push);
-            macro_rules! card_push {
-                () => {
-                    &mut |elem| {
-                        if let Some(elem) = CropRenderElement::from_element(elem, scale, crop) {
-                            let elem = MonitorInnerRenderElement::from(elem);
-                            push(RelocateRenderElement::from_element(
-                                RescaleRenderElement::from_element(elem, Point::default(), zoom),
-                                offset,
-                                Relocate::Relative,
-                            ));
-                        }
-                    }
-                };
-            }
-            let layer_push = &mut |element| {
-                if let Some(element) = CropRenderElement::from_element(element, scale, crop) {
-                    let inner = MonitorInnerRenderElement::StageLayer(element);
-                    push(RelocateRenderElement::from_element(
-                        RescaleRenderElement::from_element(inner, Point::default(), zoom),
-                        offset,
-                        Relocate::Relative,
-                    ));
-                }
-            };
-            layers(ctx.r(), ws.id(), geo, true, layer_push);
-            ws.render_floating(
-                ctx.r(),
-                xray,
-                focus_ring,
-                RenderLayer::MovingBetweenWorkspaces,
-                card_push!(),
-            );
-            ws.render_floating(ctx.r(), xray, focus_ring, RenderLayer::Normal, card_push!());
-            if let Some(loc) = self.insert_hint_render_loc {
-                if loc.workspace == InsertWorkspace::Existing(ws.id()) {
-                    self.insert_hint_element
-                        .render(ctx.renderer, loc.location, card_push!());
-                }
-            }
-            ws.render_scrolling(
-                ctx.r(),
-                xray,
-                focus_ring,
-                RenderLayer::MovingBetweenWorkspaces,
-                card_push!(),
-            );
-            ws.render_scrolling(ctx.r(), xray, focus_ring, RenderLayer::Normal, card_push!());
-            let layer_push = &mut |element| {
-                if let Some(element) = CropRenderElement::from_element(element, scale, crop) {
-                    let inner = MonitorInnerRenderElement::StageLayer(element);
-                    push(RelocateRenderElement::from_element(
-                        RescaleRenderElement::from_element(inner, Point::default(), zoom),
-                        offset,
-                        Relocate::Relative,
-                    ));
-                }
-            };
-            layers(ctx.r(), ws.id(), geo, false, layer_push);
-            let background = ws.render_background();
-            let element = MonitorInnerRenderElement::SolidColor(background);
-            push(RelocateRenderElement::from_element(
-                RescaleRenderElement::from_element(element, Point::default(), zoom),
-                offset,
-                Relocate::Relative,
-            ));
-            ws.render_shadow(ctx.renderer, &mut |element| {
-                let element = MonitorInnerRenderElement::Shadow(element.with_alpha(progress));
-                push(RelocateRenderElement::from_element(
-                    RescaleRenderElement::from_element(element, Point::default(), zoom),
-                    offset,
-                    Relocate::Relative,
-                ));
-            });
-        }
-    }
-
-    fn render_stage_border<R: ClarionRenderer>(
-        &self,
-        id: WorkspaceId,
-        geo: Rectangle<f64, Logical>,
-        alpha: f32,
-        push: &mut dyn FnMut(MonitorRenderElement<R>),
-    ) {
-        let idx = self.idx_of_ws(id).unwrap();
-        let highlight = self
-            .insert_hint
-            .as_ref()
-            .and_then(|hint| hint.workspace.existing_id())
-            .map_or_else(|| self.stage_highlight(id), |hint| f64::from(hint == id));
-        let width = 1. + 2. * highlight;
-        if geo.size.w <= width * 2. || geo.size.h <= width * 2. {
-            return;
-        }
-        let active_color = self
-            .options
-            .layout
-            .focus_ring
-            .active_color
-            .to_array_premul();
-        let passive_color = [0.25, 0.25, 0.30, 0.8];
-        let color = std::array::from_fn(|idx| {
-            passive_color[idx] + (active_color[idx] - passive_color[idx]) * highlight as f32
-        });
-        let mut cache = self.expo_borders.borrow_mut();
-        cache.resize_with(self.workspaces.len(), || {
-            std::array::from_fn(|_| SolidColorBuffer::new(Size::from((0., 0.)), [0.; 4]))
-        });
-        let positions = [
-            (geo.loc, Size::from((geo.size.w, width))),
-            (
-                geo.loc + Point::from((0., geo.size.h - width)),
-                Size::from((geo.size.w, width)),
-            ),
-            (
-                geo.loc + Point::from((0., width)),
-                Size::from((width, geo.size.h - width * 2.)),
-            ),
-            (
-                geo.loc + Point::from((geo.size.w - width, width)),
-                Size::from((width, geo.size.h - width * 2.)),
-            ),
-        ];
-        for (buffer, (loc, size)) in cache[idx].iter_mut().zip(positions) {
-            buffer.update(size, color);
-            let inner = MonitorInnerRenderElement::SolidColor(
-                SolidColorRenderElement::from_buffer(buffer, loc, alpha, Kind::Unspecified),
-            );
-            push(RelocateRenderElement::from_element(
-                RescaleRenderElement::from_element(inner, Point::default(), 1.),
-                Point::default(),
-                Relocate::Relative,
-            ));
-        }
-    }
-
-    fn render_stage_rail<R: ClarionRenderer>(
-        &self,
         ctx: RenderCtx<R>,
+        focus_ring: bool,
+        layers: &mut crate::layout::scene_source::StageLayers<'_, R>,
         push: &mut dyn FnMut(MonitorRenderElement<R>),
     ) {
-        let scale = self.scale.fractional_scale();
-        let alpha = self.overview_backdrop_progress() as f32;
-        if alpha <= 0. {
-            return;
-        }
-        let items = self.stage_rail_items();
-        let mut texts = self.stage_rail_text.borrow_mut();
-        let mut buffers = self.stage_rail_buffers.borrow_mut();
-        texts.resize_with(items.len() * 2, || None);
-        buffers.resize_with(items.len(), || {
-            SolidColorBuffer::new(Size::from((0., 0.)), [0.; 4])
-        });
-        let renderer_context = ctx.renderer.context_id().erased();
-        for (idx, item) in items.iter().enumerate() {
-            let alpha = alpha * if item.enabled { 1. } else { 0.4 };
-            // Give the count its own line so a long custom workspace name cannot
-            // push it beyond the card's clip. Each line retains its GPU texture.
-            for (line, text) in [Some(&item.text), item.subtitle.as_ref()]
-                .into_iter()
-                .enumerate()
-            {
-                let Some(text) = text else {
-                    continue;
-                };
-                let cache = &mut texts[idx * 2 + line];
-                if cache.as_ref().is_none_or(|(old, s, context, _)| {
-                    old != text || *s != scale.to_bits() || context != &renderer_context
-                }) {
-                    *cache = None;
-                    if let Ok(texture) =
-                        crate::ui::mru::generate_title_texture(ctx.renderer, text, scale)
-                    {
-                        *cache = Some((
-                            text.clone(),
-                            scale.to_bits(),
-                            renderer_context.clone(),
-                            texture,
-                        ));
-                    }
-                }
-                let Some((_, _, _, texture)) = cache else {
-                    continue;
-                };
-                let text_size = match texture {
-                    crate::ui::mru::MruTexture::Gles(buffer) => buffer.logical_size(),
-                    crate::ui::mru::MruTexture::Vulkan(buffer) => buffer.logical_size(),
-                }
-                .upscale(if line == 0 { 1. } else { 0.85 });
-                let y = if item.subtitle.is_some() {
-                    7. + line as f64 * 22.
-                } else {
-                    (item.geo.size.h - text_size.h) / 2.
-                };
-                let x = if item.navigation.is_some() {
-                    (item.geo.size.w - text_size.w) / 2.
-                } else {
-                    10.
-                };
-                let loc = item.geo.loc + Point::from((x, y));
-                let text_alpha = alpha * if line == 0 { 1. } else { 0.72 };
-                let element = match texture {
-                    crate::ui::mru::MruTexture::Gles(buffer) => {
-                        PrimaryGpuTextureRenderElement::from(
-                            TextureRenderElement::from_texture_buffer(
-                                buffer.clone(),
-                                loc,
-                                text_alpha,
-                                None,
-                                Some(text_size),
-                                Kind::Unspecified,
-                            ),
-                        )
-                    }
-                    crate::ui::mru::MruTexture::Vulkan(buffer) => {
-                        PrimaryGpuTextureRenderElement::from(
-                            TextureRenderElement::from_texture_buffer(
-                                buffer.clone(),
-                                loc,
-                                text_alpha,
-                                None,
-                                Some(text_size),
-                                Kind::Unspecified,
-                            ),
-                        )
-                    }
-                };
-                let crop = Rectangle::new(
-                    item.geo.loc + Point::from((4., 0.)),
-                    Size::from(((item.geo.size.w - 8.).max(0.), item.geo.size.h)),
-                )
-                .intersection(item.clip)
-                .unwrap_or_default()
-                .to_physical_precise_round(scale);
-                if let Some(element) = CropRenderElement::from_element(element, scale, crop) {
-                    let inner = MonitorInnerRenderElement::StageText(element);
-                    push(RelocateRenderElement::from_element(
-                        RescaleRenderElement::from_element(inner, Point::default(), 1.),
-                        Point::default(),
-                        Relocate::Relative,
-                    ));
-                }
-            }
-            let highlight = if self
-                .insert_hint
-                .as_ref()
-                .is_some_and(|hint| Some(hint.workspace) == item.target)
-            {
-                1.
-            } else {
-                item.highlight as f32
-            };
-            let active_color = [0.12, 0.25, 0.40, 0.95];
-            let passive_color = [0.06, 0.07, 0.09, 0.9];
-            let color = std::array::from_fn(|idx| {
-                passive_color[idx] + (active_color[idx] - passive_color[idx]) * highlight
-            });
-            let Some(background) = Rectangle::new(
-                item.geo.loc + Point::from((2., 0.)),
-                Size::from(((item.geo.size.w - 4.).max(0.), item.geo.size.h)),
-            )
-            .intersection(item.clip) else {
-                continue;
-            };
-            buffers[idx].update(background.size, color);
-            let element = SolidColorRenderElement::from_buffer(
-                &buffers[idx],
-                background.loc,
-                alpha,
-                Kind::Unspecified,
-            );
-            let inner = MonitorInnerRenderElement::SolidColor(element);
-            push(RelocateRenderElement::from_element(
-                RescaleRenderElement::from_element(inner, Point::default(), 1.),
-                Point::default(),
-                Relocate::Relative,
-            ));
-        }
+        self.stage_composition()
+            .render(ctx, focus_ring, layers, push);
     }
 }

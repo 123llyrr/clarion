@@ -1079,8 +1079,8 @@ pub struct BackgroundEffect {
     pub liquid_glass: Option<bool>,
     /// Whether to render with xray effect (see through).
     ///
-    /// - `None`: blur the actual background for protocol regions; use xray for
-    ///   effects enabled only by compositor rules
+    /// - `None`: blur the actual background for protocol regions; use xray for effects enabled
+    ///   only by compositor rules
     /// - `Some(false)`: no xray
     /// - `Some(true)`: xray even if no other background effect is active
     pub xray: Option<bool>,

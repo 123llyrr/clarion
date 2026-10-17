@@ -1,20 +1,15 @@
-//! Real mapped-window minimization and the shared GLES/Vulkan Genie mesh.
+//! Renderer-independent mapped-window minimization trajectory and geometry.
 //!
 //! A minimized Tile remains owned by its workspace, so commits, output changes,
 //! toplevel destruction and IPC keep their normal lifetime. It is detached from
 //! the visible layout and input until activation restores it. The animation only
 //! deforms its presentation; it never unmaps a client's wl_surface.
 
-use std::rc::Rc;
-
+use clarion_core::deformation::smoothstep;
 use clarion_ipc::{DockEdge, MinimizeEffect};
-
-use smithay::backend::renderer::element::Id;
-use smithay::backend::renderer::utils::CommitCounter;
-use smithay::utils::{Logical, Point, Rectangle, Size};
+use smithay::utils::{Logical, Rectangle};
 
 use crate::animation::{Animation, Clock, Curve};
-use crate::render_helpers::mesh::MeshVertex;
 
 fn duration_ms(effect: MinimizeEffect) -> u64 {
     // Reference-profile timings from the project design, not recovered
@@ -25,8 +20,6 @@ fn duration_ms(effect: MinimizeEffect) -> u64 {
         MinimizeEffect::Scale => 300,
     }
 }
-#[cfg(test)]
-use clarion_core::deformation::{COLUMNS, ROWS};
 
 #[derive(Debug)]
 pub struct Genie {
@@ -37,28 +30,17 @@ pub struct Genie {
     edge: DockEdge,
     effect: MinimizeEffect,
     destination: Option<(Rectangle<f64, Logical>, f64)>,
-    id: Id,
-    commit: CommitCounter,
-    last_frame: Option<GenieFrameKey>,
-    cached: Option<GenieMesh>,
 }
 
+/// A frozen output-presentation pose. Render caches and texture identities are
+/// scene-owned and never mutate the event-time minimization trajectory.
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct GenieFrameKey {
-    progress: f64,
-    texture_area: Rectangle<f64, Logical>,
-    tile_size: Size<f64, Logical>,
-    source_commit: CommitCounter,
-    source_texture: u64,
-}
-
-#[derive(Debug, Clone)]
-pub struct GenieMesh {
-    pub id: Id,
-    pub commit: CommitCounter,
-    pub area: Rectangle<f64, Logical>,
-    pub vertices: Rc<[MeshVertex]>,
-    pub alpha: f32,
+pub(crate) struct GeniePose {
+    pub(crate) progress: f64,
+    pub(crate) source: Rectangle<f64, Logical>,
+    pub(crate) target: Rectangle<f64, Logical>,
+    pub(crate) edge: DockEdge,
+    pub(crate) effect: MinimizeEffect,
 }
 
 impl Genie {
@@ -95,10 +77,6 @@ impl Genie {
             edge,
             effect,
             destination: None,
-            id: Id::new(),
-            commit: CommitCounter::default(),
-            last_frame: None,
-            cached: None,
         }
     }
 
@@ -116,7 +94,6 @@ impl Genie {
         };
         self.animation = Animation::continuous_ease(clock, from, to, velocity, duration);
         self.minimizing = minimizing;
-        self.last_frame = None;
     }
 
     pub fn progress(&self) -> f64 {
@@ -157,107 +134,90 @@ impl Genie {
         let p = self.progress();
         self.source = self.source_at(p);
         self.destination = Some((destination, p));
-        self.last_frame = None;
     }
 
-    /// Sample an output's presentation time. Only resource-cache identity and
-    /// damage commits change here; source, destination and trajectory remain
-    /// event-owned even when a later output is sampled before an earlier one.
-    pub fn mesh(
-        &mut self,
-        texture_area: Rectangle<f64, Logical>,
-        tile_size: Size<f64, Logical>,
-        source_commit: CommitCounter,
-        source_texture: u64,
-    ) -> GenieMesh {
-        let p = self.progress();
-        let frame = GenieFrameKey {
-            progress: p,
-            texture_area,
-            tile_size,
-            source_commit,
-            source_texture,
-        };
-        if self.last_frame == Some(frame) {
-            return self.cached.clone().unwrap();
+    /// Sample only numerical presentation values. Reversals and retargeting
+    /// remain owner-thread operations even when outputs forecast out of order.
+    pub(crate) fn pose(&self) -> GeniePose {
+        let progress = self.progress();
+        GeniePose {
+            progress,
+            source: self.source_at(progress),
+            target: self.target,
+            edge: self.edge,
+            effect: self.effect,
         }
-        self.last_frame = Some(frame);
-        self.commit.increment();
-        let (area, vertices) = self.sample_geometry(p, texture_area, tile_size);
-        let mesh = GenieMesh {
-            id: self.id.clone(),
-            commit: self.commit,
-            area,
-            vertices: vertices.into(),
-            // The final small rectangle disappears into its icon without a flash.
-            alpha: (1. - smoothstep((p - 0.90) / 0.10)) as f32,
-        };
-        self.cached = Some(mesh.clone());
-        mesh
     }
-
-    fn sample_geometry(
-        &self,
-        progress: f64,
-        texture_area: Rectangle<f64, Logical>,
-        tile_size: Size<f64, Logical>,
-    ) -> (Rectangle<f64, Logical>, Vec<MeshVertex>) {
-        // Include CSD shadows at both ends. All geometry comes from the
-        // immutable owner pose and this sample, never a previous output sample.
-        let base = self.source_at(progress);
-        let sx = base.size.w / tile_size.w.max(1.);
-        let sy = base.size.h / tile_size.h.max(1.);
-        let source = Rectangle::new(
-            base.loc + Point::from((texture_area.loc.x * sx, texture_area.loc.y * sy)),
-            (texture_area.size.w * sx, texture_area.size.h * sy).into(),
-        );
-        minimize_vertices(source, self.target, progress, self.edge, self.effect)
-    }
-}
-
-use clarion_core::deformation::smoothstep;
-
-/// Dock-facing rows finish narrowing first; the remaining body follows.
-/// Keep the trajectory continuous through the phase boundary. These splines
-/// are our implementation, rather than a recovered SkyLight formula.
-pub fn minimize_vertices(
-    source: Rectangle<f64, Logical>,
-    target: Rectangle<f64, Logical>,
-    progress: f64,
-    edge: DockEdge,
-    effect: MinimizeEffect,
-) -> (Rectangle<f64, Logical>, Vec<MeshVertex>) {
-    use clarion_core::deformation::{Edge, Effect};
-    let convert = |rect: Rectangle<f64, Logical>| {
-        clarion_core::Rect::new(rect.loc.x, rect.loc.y, rect.size.w, rect.size.h)
-    };
-    let edge = match edge {
-        DockEdge::Top => Edge::Top,
-        DockEdge::Bottom => Edge::Bottom,
-        DockEdge::Left => Edge::Left,
-        DockEdge::Right => Edge::Right,
-    };
-    let effect = match effect {
-        MinimizeEffect::Genie => Effect::Genie,
-        MinimizeEffect::Scale => Effect::Scale,
-    };
-    let (area, vertices) = clarion_core::deformation::minimize_vertices(
-        convert(source),
-        convert(target),
-        progress,
-        edge,
-        effect,
-    );
-    (
-        Rectangle::new((area.x, area.y).into(), (area.width, area.height).into()),
-        vertices,
-    )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::time::Duration;
+
+    use clarion_core::deformation::{COLUMNS, ROWS};
+    use smithay::backend::renderer::utils::CommitCounter;
+    use smithay::utils::Size;
+
+    use super::*;
+    use crate::scene::genie::{minimize_vertices, GenieCache, GenieMesh};
+
+    struct SampledGenie {
+        model: Genie,
+        cache: GenieCache,
+    }
+
+    impl std::ops::Deref for SampledGenie {
+        type Target = Genie;
+        fn deref(&self) -> &Genie {
+            &self.model
+        }
+    }
+    impl std::ops::DerefMut for SampledGenie {
+        fn deref_mut(&mut self) -> &mut Genie {
+            &mut self.model
+        }
+    }
+    impl SampledGenie {
+        fn new(
+            clock: Clock,
+            source: Rectangle<f64, Logical>,
+            target: Rectangle<f64, Logical>,
+            minimizing: bool,
+        ) -> Self {
+            Self {
+                model: Genie::new(clock, source, target, minimizing),
+                cache: GenieCache::default(),
+            }
+        }
+        fn with_style(
+            clock: Clock,
+            source: Rectangle<f64, Logical>,
+            target: Rectangle<f64, Logical>,
+            minimizing: bool,
+            edge: DockEdge,
+            effect: MinimizeEffect,
+        ) -> Self {
+            Self {
+                model: Genie::with_style(clock, source, target, minimizing, edge, effect),
+                cache: GenieCache::default(),
+            }
+        }
+        fn mesh(
+            &mut self,
+            texture_area: Rectangle<f64, Logical>,
+            tile_size: Size<f64, Logical>,
+            source_commit: CommitCounter,
+            source_texture: u64,
+        ) -> GenieMesh {
+            self.cache.sample(
+                &self.model.pose(),
+                texture_area,
+                tile_size,
+                source_commit,
+                source_texture,
+            )
+        }
+    }
 
     #[test]
     fn endpoints_bounds_and_nonfolding_are_exact_at_all_scales_and_edges() {
@@ -465,7 +425,7 @@ mod tests {
             for effect in [MinimizeEffect::Genie, MinimizeEffect::Scale] {
                 let mut clock = Clock::with_time(Duration::ZERO);
                 let mut genie =
-                    Genie::with_style(clock.clone(), source, target, true, edge, effect);
+                    SampledGenie::with_style(clock.clone(), source, target, true, edge, effect);
                 clock.set_unadjusted(Duration::from_millis(170));
                 let before = genie.mesh(
                     Rectangle::from_size(source.size),
@@ -504,7 +464,7 @@ mod tests {
             clock.set_rate(rate);
             let source = Rectangle::new((20., 20.).into(), (640., 480.).into());
             let target = Rectangle::new((300., 680.).into(), (48., 48.).into());
-            let mut genie = Genie::new(clock.clone(), source, target, true);
+            let mut genie = SampledGenie::new(clock.clone(), source, target, true);
             clock.set_unadjusted(Duration::from_millis(190));
             let velocity = genie.animation.velocity();
             let position = genie.progress();
@@ -523,7 +483,7 @@ mod tests {
         let mut clock = Clock::with_time(Duration::ZERO);
         let source = Rectangle::new((20., 20.).into(), (640., 480.).into());
         let target = Rectangle::new((300., 680.).into(), (48., 48.).into());
-        let mut genie = Genie::new(clock.clone(), source, target, true);
+        let mut genie = SampledGenie::new(clock.clone(), source, target, true);
         clock.set_unadjusted(Duration::from_millis(190));
         let before = genie.progress();
         genie.reverse(clock.clone(), false);
@@ -542,7 +502,7 @@ mod tests {
         let source = Rectangle::new((20., 20.).into(), (640., 480.).into());
         let target = Rectangle::new((300., 680.).into(), (48., 48.).into());
         let destination = Rectangle::new((120., 80.).into(), (800., 600.).into());
-        let mut genie = Genie::new(clock.clone(), source, target, true);
+        let mut genie = SampledGenie::new(clock.clone(), source, target, true);
         let texture_area = Rectangle::from_size(source.size);
         clock.set_unadjusted(Duration::from_millis(200));
         let before = genie.mesh(texture_area, source.size, CommitCounter::default(), 1);
@@ -563,11 +523,11 @@ mod tests {
         rate: f64,
         effect: MinimizeEffect,
         edge: DockEdge,
-    ) -> Genie {
+    ) -> SampledGenie {
         clock.set_rate(rate);
         let source = Rectangle::new((20., 20.).into(), (640., 480.).into());
         let target = Rectangle::new((300., 680.).into(), (48., 48.).into());
-        let mut genie = Genie::with_style(clock.clone(), source, target, true, edge, effect);
+        let mut genie = SampledGenie::with_style(clock.clone(), source, target, true, edge, effect);
         clock.set_unadjusted(Duration::from_millis(190));
         genie.reverse(clock.clone(), false);
         clock.set_unadjusted(Duration::from_millis(200));
@@ -599,10 +559,10 @@ mod tests {
                         genie.progress(),
                         genie.animation.velocity(),
                     );
-                    let id = genie.id.clone();
+                    let mut id = None;
                     let texture_area = Rectangle::new((-10., -14.).into(), (660., 504.).into());
                     let tile_size = Size::from((640., 480.));
-                    let mut last_commit = genie.commit;
+                    let mut last_commit = CommitCounter::default();
                     // A slow 60 Hz output, faster 120 Hz output, event sample,
                     // and a sample beyond completion arrive in unrelated order.
                     for at in [256, 248, 1000, 240, 256, 248] {
@@ -621,7 +581,7 @@ mod tests {
                         assert!(!genie.minimizing);
                         assert_eq!(genie.edge, edge);
                         assert_eq!(genie.effect, effect);
-                        assert_eq!(genie.id, id);
+                        assert_eq!(sample.id, *id.get_or_insert_with(|| sample.id.clone()));
                         assert!(!genie.is_done());
                         assert_eq!(
                             (

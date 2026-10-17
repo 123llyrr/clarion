@@ -1,10 +1,13 @@
 //! Output-local workspace gesture policy. Stable space identities survive
 //! topology edits; presentation animations remain in the scene adapter.
 
-use crate::{gestures::swipe_tracker::SwipeTracker, SpaceId};
-use clarion_motion::rubber_band::RubberBand;
 use std::collections::HashMap;
 use std::time::Duration;
+
+use clarion_motion::rubber_band::RubberBand;
+
+use crate::gestures::swipe_tracker::SwipeTracker;
+use crate::SpaceId;
 
 // Retained Clarion parameters, not measured Apple trajectories.
 const TOUCHPAD_MOVEMENT: f64 = 300.;

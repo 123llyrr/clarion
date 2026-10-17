@@ -1,12 +1,11 @@
-use std::rc::Rc;
+//! Event-owned, renderer-independent fixed-step window deformation simulation.
+//! Scene forecasts copy this numerical state and never advance the owner.
+
 use std::time::Duration;
 
 use clarion_config::WindowWobble;
-use smithay::backend::renderer::element::Id;
-use smithay::backend::renderer::utils::CommitCounter;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
-use crate::render_helpers::mesh::MeshVertex;
 use crate::utils::ResizeEdge;
 
 const STEP: f64 = 1. / 120.;
@@ -36,21 +35,16 @@ impl WobbleAnchor {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
-struct Node {
-    offset: [f64; 2],
+pub(crate) struct Node {
+    pub(crate) offset: [f64; 2],
     velocity: [f64; 2],
 }
 
 #[derive(Debug)]
 pub struct WobbleState {
-    id: Id,
-    commit: CommitCounter,
+    revision: u64,
     nodes: Vec<Node>,
     scratch: Vec<Node>,
-    /// Reusable render-only state for the remainder of a fixed physics step.
-    projected: Vec<Node>,
-    points: Vec<(Point<f64, Logical>, [f32; 2])>,
-    cached_mesh: Option<CachedMesh>,
     mesh: usize,
     anchor: Option<WobbleAnchor>,
     active: bool,
@@ -65,19 +59,14 @@ pub struct WobbleState {
     last_update: Option<Duration>,
     accumulator: f64,
     settle_elapsed: f64,
-    source_state: Option<(CommitCounter, u64)>,
 }
 
 impl Default for WobbleState {
     fn default() -> Self {
         Self {
-            id: Id::new(),
-            commit: CommitCounter::default(),
+            revision: 0,
             nodes: Vec::new(),
             scratch: Vec::new(),
-            projected: Vec::new(),
-            points: Vec::new(),
-            cached_mesh: None,
             mesh: 0,
             anchor: None,
             active: false,
@@ -87,87 +76,7 @@ impl Default for WobbleState {
             last_update: None,
             accumulator: 0.,
             settle_elapsed: 0.,
-            source_state: None,
         }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct WobbleMesh {
-    pub id: Id,
-    pub commit: CommitCounter,
-    pub area: Rectangle<f64, Logical>,
-    pub vertices: Rc<[MeshVertex]>,
-}
-
-#[derive(Debug)]
-struct CachedMesh {
-    source_area: Rectangle<f64, Logical>,
-    area: Rectangle<f64, Logical>,
-    vertices: Rc<[MeshVertex]>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct ForecastKey {
-    owner_commit: CommitCounter,
-    area: Rectangle<f64, Logical>,
-    config: WindowWobble,
-    now: Duration,
-    source_commit: CommitCounter,
-    source_texture: u64,
-}
-
-/// Renderer-owned bounded scratch and damage cache. Forecast integration never
-/// changes the owner-thread event simulation, including its settled deadline.
-#[derive(Debug, Default)]
-pub struct WobbleForecast {
-    state: WobbleState,
-    key: Option<ForecastKey>,
-    cached: Option<WobbleMesh>,
-    commit: CommitCounter,
-}
-
-impl WobbleForecast {
-    pub fn clear(&mut self) {
-        self.state.cancel();
-        self.key = None;
-        self.cached = None;
-    }
-
-    pub fn sample(
-        &mut self,
-        owner: &WobbleState,
-        area: Rectangle<f64, Logical>,
-        config: WindowWobble,
-        now: Duration,
-        source_commit: CommitCounter,
-        source_texture: u64,
-    ) -> Option<WobbleMesh> {
-        let key = ForecastKey {
-            owner_commit: owner.commit,
-            area,
-            config,
-            now,
-            source_commit,
-            source_texture,
-        };
-        if self.key == Some(key) {
-            return self.cached.clone();
-        }
-        self.state.copy_simulation_from(owner);
-        // Translation, output-local rebases and texture/CSD padding are presentation
-        // geometry. The actual movement/resize was already applied at event time.
-        self.state.last_area = owner.last_area.map(|_| area);
-        self.key = Some(key);
-        self.commit.increment();
-        self.cached = self
-            .state
-            .update(area, config, now, source_commit, source_texture)
-            .map(|mut mesh| {
-                mesh.commit = self.commit;
-                mesh
-            });
-        self.cached.clone()
     }
 }
 
@@ -187,23 +96,20 @@ impl WobbleState {
         self.last_update = Some(now);
         self.accumulator = 0.;
         self.settle_elapsed = 0.;
-        self.source_state = None;
-        self.commit.increment();
+        self.revision = self.revision.wrapping_add(1);
     }
 
     pub fn finish(&mut self) {
         if self.active {
             self.anchor = None;
             self.dynamic = true;
-            self.commit.increment();
+            self.revision = self.revision.wrapping_add(1);
         }
     }
 
     pub fn cancel(&mut self) {
         self.nodes.clear();
         self.scratch.clear();
-        self.projected.clear();
-        self.cached_mesh = None;
         self.anchor = None;
         self.active = false;
         self.dynamic = false;
@@ -212,8 +118,7 @@ impl WobbleState {
         self.last_update = None;
         self.accumulator = 0.;
         self.settle_elapsed = 0.;
-        self.source_state = None;
-        self.commit.increment();
+        self.revision = self.revision.wrapping_add(1);
     }
 
     pub fn is_active(&self) -> bool {
@@ -228,51 +133,34 @@ impl WobbleState {
     pub fn add_pending_displacement(&mut self, delta: Point<f64, Logical>) {
         if self.active && self.last_area.is_none() && delta.x.is_finite() && delta.y.is_finite() {
             self.pending_displacement += delta;
-        }
-    }
-
-    pub fn update(
-        &mut self,
-        area: Rectangle<f64, Logical>,
-        config: WindowWobble,
-        now: Duration,
-        source_commit: CommitCounter,
-        source_texture: u64,
-    ) -> Option<WobbleMesh> {
-        let render_changed =
-            self.advance_simulation(area, config, now, source_commit, source_texture)?;
-        if render_changed && self.dynamic && self.accumulator > 0. {
-            // Fractional-step projection is render-only even inside a forecast copy.
-            self.projected.copy_from_slice(&self.nodes);
-            std::mem::swap(&mut self.nodes, &mut self.projected);
-            self.integrate(self.accumulator, config);
-            self.pin_anchor();
-            self.constrain_offsets(area.size);
-            let mesh = self.mesh_vertices(area, true);
-            std::mem::swap(&mut self.nodes, &mut self.projected);
-            Some(mesh)
-        } else {
-            Some(self.mesh_vertices(area, render_changed))
+            if delta.x != 0. || delta.y != 0. {
+                self.revision = self.revision.wrapping_add(1);
+            }
         }
     }
 
     /// Advance only from an actual owner-thread pose/time, before any output
-    /// presentation clock projection. No texture vertices are allocated here.
+    /// presentation clock projection. No vertices or texture metadata live here.
     pub fn advance(&mut self, area: Rectangle<f64, Logical>, config: WindowWobble, now: Duration) {
-        let (commit, texture) = self.source_state.unwrap_or_default();
-        if self.advance_simulation(area, config, now, commit, texture) == Some(true) {
-            self.cached_mesh = None;
-        }
+        self.advance_simulation(area, config, now);
     }
 
-    fn copy_simulation_from(&mut self, owner: &Self) {
-        self.id.clone_from(&owner.id);
-        self.commit = owner.commit;
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+    pub(crate) fn mesh_side(&self) -> usize {
+        self.mesh
+    }
+    pub(crate) fn nodes(&self) -> &[Node] {
+        &self.nodes
+    }
+
+    /// Reuse a scene-owned forecast's bounded numerical scratch. This does not
+    /// borrow, write or retain any field of the event-time owner.
+    pub(crate) fn copy_simulation_from(&mut self, owner: &Self) {
+        self.revision = owner.revision;
         self.nodes.clone_from(&owner.nodes);
         self.scratch.clone_from(&owner.scratch);
-        self.projected.clone_from(&owner.projected);
-        self.points.clear();
-        self.cached_mesh = None;
         self.mesh = owner.mesh;
         self.anchor = owner.anchor;
         self.active = owner.active;
@@ -282,7 +170,36 @@ impl WobbleState {
         self.last_update = owner.last_update;
         self.accumulator = owner.accumulator;
         self.settle_elapsed = owner.settle_elapsed;
-        self.source_state = owner.source_state;
+    }
+
+    /// Interpret output-local translation and CSD padding as presentation
+    /// geometry, rather than injecting a second event-time movement impulse.
+    pub(crate) fn rebase_forecast(&mut self, area: Rectangle<f64, Logical>) {
+        self.last_area = self.last_area.map(|_| area);
+    }
+
+    /// Predict a scene-owned copy through the fractional fixed-step remainder.
+    /// The caller must refresh this copy from the event state for every sample;
+    /// predicted nodes are deliberately never committed back to the owner.
+    pub(crate) fn predict(
+        &mut self,
+        area: Rectangle<f64, Logical>,
+        config: WindowWobble,
+        now: Duration,
+    ) -> bool {
+        let Some(_) = self.advance_simulation(area, config, now) else {
+            return false;
+        };
+        // The owner may already have advanced to this same timestamp. Its
+        // remainder still belongs to this presentation, even with no new whole
+        // step in the forecast copy. Repeating the sample never reuses this
+        // mutated copy; the scene cache either returns it or copies the owner.
+        if self.dynamic && self.accumulator > 0. {
+            self.integrate(self.accumulator, config);
+            self.pin_anchor();
+            self.constrain_offsets(area.size);
+        }
+        true
     }
 
     fn advance_simulation(
@@ -290,8 +207,6 @@ impl WobbleState {
         area: Rectangle<f64, Logical>,
         config: WindowWobble,
         now: Duration,
-        source_commit: CommitCounter,
-        source_texture: u64,
     ) -> Option<bool> {
         if !self.active {
             return None;
@@ -304,9 +219,6 @@ impl WobbleState {
         self.ensure_mesh(config.mesh as usize);
         let geometry_changed = self.last_area != Some(area);
 
-        let source_state = (source_commit, source_texture);
-        let mut changed = self.source_state != Some(source_state);
-        self.source_state = Some(source_state);
         if self.last_area.is_none() {
             let displacement =
                 std::mem::replace(&mut self.pending_displacement, Point::from((0., 0.)));
@@ -317,7 +229,6 @@ impl WobbleState {
                 }
                 self.constrain_offsets(area.size);
                 self.dynamic = true;
-                changed = true;
             }
         }
         if let Some(previous) = self.last_area {
@@ -352,7 +263,6 @@ impl WobbleState {
                     self.constrain_offsets(area.size);
                 }
                 self.dynamic = true;
-                changed = true;
             }
         }
         self.last_area = Some(area);
@@ -412,8 +322,8 @@ impl WobbleState {
             }
         }
         let render_changed = geometry_changed || stepped || (self.dynamic && elapsed > 0.);
-        if changed || render_changed {
-            self.commit.increment();
+        if render_changed {
+            self.revision = self.revision.wrapping_add(1);
         }
 
         Some(render_changed)
@@ -427,15 +337,11 @@ impl WobbleState {
         self.mesh = mesh;
         self.nodes = vec![Node::default(); mesh * mesh];
         self.scratch = vec![Node::default(); mesh * mesh];
-        self.projected = vec![Node::default(); mesh * mesh];
-        self.points = Vec::with_capacity(mesh * mesh);
-        self.cached_mesh = None;
         self.last_area = None;
         self.pending_displacement = Point::from((0., 0.));
         self.accumulator = 0.;
         self.settle_elapsed = 0.;
-        self.source_state = None;
-        self.commit.increment();
+        self.revision = self.revision.wrapping_add(1);
     }
 
     fn pin_anchor(&mut self) {
@@ -607,79 +513,6 @@ impl WobbleState {
                 && node.velocity[1].abs() <= config.velocity_epsilon
         })
     }
-
-    fn mesh_vertices(
-        &mut self,
-        source_area: Rectangle<f64, Logical>,
-        geometry_changed: bool,
-    ) -> WobbleMesh {
-        if geometry_changed || self.cached_mesh.is_none() {
-            self.rebuild_mesh_vertices(source_area);
-        }
-        let cached = self.cached_mesh.as_ref().unwrap();
-        debug_assert_eq!(cached.source_area, source_area);
-        WobbleMesh {
-            id: self.id.clone(),
-            commit: self.commit,
-            area: cached.area,
-            vertices: cached.vertices.clone(),
-        }
-    }
-
-    fn rebuild_mesh_vertices(&mut self, source_area: Rectangle<f64, Logical>) {
-        let denom = (self.mesh - 1) as f64;
-        let points = &mut self.points;
-        points.clear();
-        let mut min = Point::from((f64::INFINITY, f64::INFINITY));
-        let mut max = Point::from((f64::NEG_INFINITY, f64::NEG_INFINITY));
-
-        for y in 0..self.mesh {
-            for x in 0..self.mesh {
-                let u = x as f64 / denom;
-                let v = y as f64 / denom;
-                let node = self.nodes[y * self.mesh + x];
-                let point = Point::from((
-                    source_area.loc.x + source_area.size.w * u + node.offset[0],
-                    source_area.loc.y + source_area.size.h * v + node.offset[1],
-                ));
-                min.x = min.x.min(point.x);
-                min.y = min.y.min(point.y);
-                max.x = max.x.max(point.x);
-                max.y = max.y.max(point.y);
-                points.push((point, [u as f32, v as f32]));
-            }
-        }
-
-        let area = Rectangle::from_extremities(min, max);
-        let normalize = |point: Point<f64, Logical>| {
-            [
-                ((point.x - area.loc.x) / area.size.w.max(f64::EPSILON)) as f32,
-                ((point.y - area.loc.y) / area.size.h.max(f64::EPSILON)) as f32,
-            ]
-        };
-        let mut vertices = Vec::with_capacity((self.mesh - 1) * (self.mesh - 1) * 6);
-        for y in 0..self.mesh - 1 {
-            for x in 0..self.mesh - 1 {
-                let tl = y * self.mesh + x;
-                let tr = tl + 1;
-                let bl = (y + 1) * self.mesh + x;
-                let br = bl + 1;
-                for idx in [tl, bl, br, tl, br, tr] {
-                    let (point, uv) = points[idx];
-                    vertices.push(MeshVertex {
-                        position: normalize(point),
-                        uv,
-                    });
-                }
-            }
-        }
-
-        self.cached_mesh = Some(CachedMesh {
-            source_area,
-            area,
-            vertices: vertices.into(),
-        });
-    }
 }
 
 fn is_coordinate_discontinuity(
@@ -694,12 +527,54 @@ fn is_coordinate_discontinuity(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::rc::Rc;
+
+    use smithay::backend::renderer::utils::CommitCounter;
     use smithay::utils::Size;
 
-    fn simulate(frame_ms: u64) -> WobbleState {
+    use super::*;
+    use crate::scene::wobble::{WobbleForecast, WobbleMesh};
+
+    #[derive(Default)]
+    struct SampledWobble {
+        model: WobbleState,
+        render: WobbleForecast,
+    }
+    impl std::ops::Deref for SampledWobble {
+        type Target = WobbleState;
+        fn deref(&self) -> &WobbleState {
+            &self.model
+        }
+    }
+    impl std::ops::DerefMut for SampledWobble {
+        fn deref_mut(&mut self) -> &mut WobbleState {
+            &mut self.model
+        }
+    }
+    impl SampledWobble {
+        fn update(
+            &mut self,
+            area: Rectangle<f64, Logical>,
+            config: WindowWobble,
+            now: Duration,
+            source_commit: CommitCounter,
+            source_texture: u64,
+        ) -> Option<WobbleMesh> {
+            self.model.advance(area, config, now);
+            self.render.sample(
+                &self.model,
+                area,
+                config,
+                now,
+                source_commit,
+                source_texture,
+            )
+        }
+    }
+
+    fn simulate(frame_ms: u64) -> SampledWobble {
         let config = WindowWobble::default();
-        let mut state = WobbleState::default();
+        let mut state = SampledWobble::default();
         state.begin(WobbleAnchor::Point((0.5, 0.5)), config, Duration::ZERO);
         let mut now = Duration::ZERO;
         let mut area = Rectangle::new(Point::from((0., 0.)), Size::from((800., 600.)));
@@ -730,9 +605,9 @@ mod tests {
         assert!(!simulate(33).is_active());
     }
 
-    fn moving_state() -> (WobbleState, Rectangle<f64, Logical>, WindowWobble) {
+    fn moving_state() -> (SampledWobble, Rectangle<f64, Logical>, WindowWobble) {
         let config = WindowWobble::default();
-        let mut state = WobbleState::default();
+        let mut state = SampledWobble::default();
         state.begin(WobbleAnchor::Point((0.5, 0.5)), config, Duration::ZERO);
         state.add_pending_displacement((40., -20.).into());
         let area = Rectangle::new((40., 0.).into(), (800., 600.).into());
@@ -760,7 +635,7 @@ mod tests {
         let last_update = owner.last_update;
         let accumulator = owner.accumulator;
         let settle_elapsed = owner.settle_elapsed;
-        let owner_commit = owner.commit;
+        let owner_revision = owner.revision;
         let short = Duration::from_millis(20) + Duration::from_secs_f64(1. / 120.);
         let long = Duration::from_millis(20) + Duration::from_secs_f64(1. / 60.);
         let mut forward = WobbleForecast::default();
@@ -787,7 +662,7 @@ mod tests {
         assert_eq!(owner.last_update, last_update);
         assert_eq!(owner.accumulator, accumulator);
         assert_eq!(owner.settle_elapsed, settle_elapsed);
-        assert_eq!(owner.commit, owner_commit);
+        assert_eq!(owner.revision, owner_revision);
         assert_ne!(first_short.commit, first_long.commit);
         let repeated = reverse
             .sample(&owner, area, config, short, CommitCounter::default(), 1)
@@ -862,7 +737,8 @@ mod tests {
                     "repeated frame {frame} at {rate} Hz"
                 );
                 assert_ne!(previous.commit, current.commit);
-                // Capturing the same presentation must reuse geometry and never advance physics twice.
+                // Capturing the same presentation must reuse geometry and never advance physics
+                // twice.
                 let nodes = state.nodes.clone();
                 let repeated = state
                     .update(area, config, now, CommitCounter::default(), 1)
@@ -963,7 +839,7 @@ mod tests {
 
     #[test]
     fn point_and_edge_anchors_pin_only_the_selected_nodes() {
-        let mut state = WobbleState::default();
+        let mut state = SampledWobble::default();
         state.ensure_mesh(8);
         let moving = Node {
             offset: [4., -3.],
@@ -1010,12 +886,12 @@ mod tests {
             mesh: 32,
             ..WindowWobble::default()
         };
-        let mut state = WobbleState::default();
+        let mut state = SampledWobble::default();
         state.begin(WobbleAnchor::Point((0.5, 0.5)), config, Duration::ZERO);
-        let points_storage = state.points.as_ptr();
         let mut area = Rectangle::new(Point::from((0., 0.)), Size::from((800., 600.)));
         let source_commit = CommitCounter::default();
         state.update(area, config, Duration::ZERO, source_commit, 1);
+        let points_storage = state.render.points_ptr_for_test();
         area.loc.x = 160.;
         let mut now = Duration::from_millis(16);
         state.update(area, config, now, source_commit, 1);
@@ -1026,7 +902,7 @@ mod tests {
             if state.update(area, config, now, source_commit, 1).is_none() {
                 break;
             }
-            assert_eq!(state.points.as_ptr(), points_storage);
+            assert_eq!(state.render.points_ptr_for_test(), points_storage);
             assert!(state.mesh_triangles_are_valid(area.size));
         }
         assert!(!state.is_active());
@@ -1035,7 +911,7 @@ mod tests {
     #[test]
     fn source_damage_updates_mesh_commit_while_geometry_is_stable() {
         let config = WindowWobble::default();
-        let mut state = WobbleState::default();
+        let mut state = SampledWobble::default();
         state.begin(WobbleAnchor::Point((0.5, 0.5)), config, Duration::ZERO);
         let area = Rectangle::new(Point::from((0., 0.)), Size::from((800., 600.)));
         let mut source_commit = CommitCounter::default();
@@ -1062,7 +938,7 @@ mod tests {
     #[test]
     fn motion_mesh_change_and_cancel_invalidate_cached_vertices() {
         let config = WindowWobble::default();
-        let mut state = WobbleState::default();
+        let mut state = SampledWobble::default();
         state.begin(WobbleAnchor::Point((0.5, 0.5)), config, Duration::ZERO);
         let mut area = Rectangle::new(Point::from((0., 0.)), Size::from((800., 600.)));
         let source_commit = CommitCounter::default();
@@ -1120,7 +996,7 @@ mod tests {
                 mesh,
                 ..WindowWobble::default()
             };
-            let mut state = WobbleState::default();
+            let mut state = SampledWobble::default();
             state.begin(WobbleAnchor::Point((0.5, 0.5)), config, Duration::ZERO);
             let area = Rectangle::new(Point::from((0., 0.)), Size::from((800., 600.)));
             state.update(area, config, Duration::ZERO, CommitCounter::default(), 1);
@@ -1128,15 +1004,18 @@ mod tests {
             for repeat in 0..5 {
                 let start = Instant::now();
                 for _ in 0..frames {
-                    state.rebuild_mesh_vertices(black_box(area));
-                    let vertices = &state.cached_mesh.as_ref().unwrap().vertices;
+                    state.render.rebuild_for_test(&state.model, black_box(area));
+                    let vertices = &state.render.cached_for_test().unwrap().vertices;
                     black_box(&**vertices);
                 }
                 let rebuild = start.elapsed();
 
                 let start = Instant::now();
                 for _ in 0..frames {
-                    let cached = state.mesh_vertices(black_box(area), false);
+                    let cached = {
+                        black_box(area);
+                        state.render.cached_for_test().unwrap().clone()
+                    };
                     black_box(&*cached.vertices);
                 }
                 let cached = start.elapsed();
@@ -1159,7 +1038,7 @@ mod tests {
                     mesh,
                     ..WindowWobble::default()
                 };
-                let mut state = WobbleState::default();
+                let mut state = SampledWobble::default();
                 state.begin(WobbleAnchor::Point((0.5, 0.5)), config, Duration::ZERO);
                 let mut costs = Vec::with_capacity(1000);
                 for frame in 0..1120 {
@@ -1189,7 +1068,7 @@ mod tests {
     #[test]
     fn motion_before_first_render_deforms_the_first_frame() {
         let config = WindowWobble::default();
-        let mut state = WobbleState::default();
+        let mut state = SampledWobble::default();
         state.begin(WobbleAnchor::Point((0.5, 0.5)), config, Duration::ZERO);
         state.add_pending_displacement(Point::from((60., -30.)));
         state.add_pending_displacement(Point::from((40., 10.)));
@@ -1216,7 +1095,7 @@ mod tests {
             velocity_epsilon: 0.,
             ..WindowWobble::default()
         };
-        let mut state = WobbleState::default();
+        let mut state = SampledWobble::default();
         state.begin(WobbleAnchor::Point((0.5, 0.5)), config, Duration::ZERO);
         let source_commit = CommitCounter::default();
         let mut area = Rectangle::new(Point::from((0., 0.)), Size::from((800., 600.)));
@@ -1239,7 +1118,7 @@ mod tests {
     #[test]
     fn fast_drag_cannot_fold_mesh_cells() {
         let config = WindowWobble::default();
-        let mut state = WobbleState::default();
+        let mut state = SampledWobble::default();
         state.begin(WobbleAnchor::Point((0.5, 0.5)), config, Duration::ZERO);
         let source_commit = CommitCounter::default();
         let mut area = Rectangle::new(Point::from((0., 0.)), Size::from((800., 600.)));
@@ -1272,7 +1151,7 @@ mod tests {
     #[test]
     fn diagonal_shear_is_reduced_before_rendering() {
         let config = WindowWobble::default();
-        let mut state = WobbleState::default();
+        let mut state = SampledWobble::default();
         state.ensure_mesh(config.mesh as usize);
         let area = Rectangle::new(Point::from((0., 0.)), Size::from((800., 600.)));
         let cell_w = area.size.w / (state.mesh - 1) as f64;
@@ -1296,7 +1175,7 @@ mod tests {
     #[test]
     fn output_local_coordinate_jump_rebases_without_deformation() {
         let config = WindowWobble::default();
-        let mut state = WobbleState::default();
+        let mut state = SampledWobble::default();
         state.begin(WobbleAnchor::Point((0.5, 0.5)), config, Duration::ZERO);
         let source_commit = CommitCounter::default();
         let mut area = Rectangle::new(Point::from((0., 0.)), Size::from((400., 300.)));

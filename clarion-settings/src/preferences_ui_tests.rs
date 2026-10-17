@@ -1,6 +1,7 @@
 //! Actual application regressions. All configuration and IPC state is isolated.
-use super::*;
 use eframe::egui::{Color32, Event, Id, ImeEvent, Key, Modifiers, Pos2, RawInput, Rect, Shape};
+
+use super::*;
 
 const SOURCE: &str = "// preserve this comment\nlayout { gaps 8; }\n";
 

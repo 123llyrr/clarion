@@ -1,8 +1,9 @@
 //! Device-independent exact scene regions. Surface adapters supply only
 //! integer rectangles; no surface, renderer or output handles are stored here.
 
-use smallvec::SmallVec;
 use std::collections::BTreeSet;
+
+use smallvec::SmallVec;
 
 pub trait PixelRectangle {
     type Rect: Copy + PartialEq;

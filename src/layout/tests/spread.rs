@@ -307,17 +307,22 @@ fn spread_motion_geometry_update_cost_for_128_windows() {
 #[test]
 #[ignore = "requires real DRM render node, EGL and Vulkan"]
 fn spread_motion_pixels_match_gles_and_preserve_desktop_endpoints() {
-    use crate::layout::monitor::MonitorInnerRenderElement;
-    use crate::render_helpers::vulkan::{hardware_tests::setup, native::NativeRenderer};
-    use crate::render_helpers::{render_to_vec, shaders, RenderTarget};
     use smithay::backend::allocator::Fourcc;
     use smithay::backend::renderer::element::utils::{
         Relocate, RelocateRenderElement, RescaleRenderElement,
     };
     use smithay::input::keyboard::Keysym;
+
+    use crate::layout::monitor::MonitorInnerRenderElement;
+    use crate::render_helpers::vulkan::hardware_tests::setup;
+    use crate::render_helpers::vulkan::native::NativeRenderer;
+    use crate::render_helpers::{render_to_vec, shaders, RenderTarget};
     let (vk, mut gles, _) = setup();
     shaders::init(&mut gles);
     let mut native = NativeRenderer::new(vk).unwrap();
+    native
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     for scale in [1., 1.25, 1.5, 2.] {
         let mut layout = moving_spread(scale);
         let mut options = Options::clone(&layout.options);
@@ -449,15 +454,28 @@ fn spread_motion_pixels_match_gles_and_preserve_desktop_endpoints() {
 #[test]
 #[ignore = "requires real DRM render node, EGL and Vulkan"]
 fn spread_filtered_returning_window_closes_at_preview_geometry_on_both_renderers() {
-    use crate::render_helpers::vulkan::{hardware_tests::setup, native::NativeRenderer};
-    use crate::render_helpers::{render_to_vec, shaders, RenderTarget};
-    use crate::utils::transaction::TransactionBlocker;
     use smithay::backend::allocator::Fourcc;
     use smithay::input::keyboard::Keysym;
+
+    use crate::render_helpers::vulkan::hardware_tests::setup;
+    use crate::render_helpers::vulkan::native::NativeRenderer;
+    use crate::render_helpers::{render_to_vec, shaders, RenderTarget};
+    use crate::utils::transaction::TransactionBlocker;
     let (vk, mut gles, _) = setup();
     shaders::init(&mut gles);
     crate::render_helpers::resources::init(&mut gles);
     let mut native = NativeRenderer::new(vk).unwrap();
+    native
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
+    // The fixture selects Fade below; prepare that exact Close source before
+    // the first close element registers an additional asynchronous pipeline.
+    native
+        .wait_for_animation_program_for_test(
+            shaders::ProgramType::Close,
+            &shaders::animation_source(shaders::ProgramType::Close, None),
+        )
+        .unwrap();
     macro_rules! exercise {
         ($renderer:expr, $store:ident, $close:ident, $native:expr, $name:literal) => {{
             let renderer = &mut $renderer;
@@ -494,8 +512,8 @@ fn spread_filtered_returning_window_closes_at_preview_geometry_on_both_renderers
                 .find(|(id, _, _)| *id == 1)
                 .unwrap();
             assert!(zoom > 0. && zoom < 1.);
-            layout.$store(renderer, None, false, &1);
-            layout.$close(renderer, &1, TransactionBlocker::completed());
+            layout.$store(&mut *renderer, None, false, &1);
+            layout.$close(&mut *renderer, &1, TransactionBlocker::completed());
             let mon = layout.active_monitor_ref().unwrap();
             let closing = mon
                 .workspaces
@@ -775,11 +793,9 @@ fn spread_static_decorations_keep_damage_counters() {
         let mut result = Vec::new();
         for (_, _, ws) in layout.workspaces() {
             for tile in ws.tiles() {
-                for ring in [tile.border(), tile.focus_ring()] {
-                    ring.render(renderer, Point::default(), &mut |elem| {
-                        result.push((elem.id().clone(), elem.current_commit()));
-                    });
-                }
+                tile.render_decoration_rings(renderer, &mut |elem| {
+                    result.push((elem.id().clone(), elem.current_commit()));
+                });
             }
         }
         result
@@ -1009,14 +1025,19 @@ fn spread_arrow_keys_follow_visible_grid_without_crossing_row_edges() {
 #[test]
 #[ignore = "requires real DRM render node, EGL and Vulkan"]
 fn spread_highlight_pixels_match_gles_on_fractional_outputs() {
-    use crate::render_helpers::vulkan::{hardware_tests::setup, native::NativeRenderer};
-    use crate::render_helpers::{render_to_vec, shaders, RenderTarget};
     use smithay::backend::allocator::Fourcc;
     use smithay::input::keyboard::Keysym;
+
+    use crate::render_helpers::vulkan::hardware_tests::setup;
+    use crate::render_helpers::vulkan::native::NativeRenderer;
+    use crate::render_helpers::{render_to_vec, shaders, RenderTarget};
 
     let (vk, mut gles, _) = setup();
     shaders::init(&mut gles);
     let mut native = NativeRenderer::new(vk).unwrap();
+    native
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     for scale in [1., 1.25, 1.5, 2.] {
         let mut options = Options::default();
         options.layout.auto_stack_new_windows = false;

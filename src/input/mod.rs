@@ -68,9 +68,9 @@ pub mod pick_window_grab;
 pub mod resize_grab;
 pub mod spatial_movement_grab;
 pub mod touch_overview_grab;
-pub use crate::gestures::{scroll_swipe_gesture, scroll_tracker, swipe_tracker};
-
 use backend_ext::{ClarionInputBackend as InputBackend, ClarionInputDevice as _};
+
+pub use crate::gestures::{scroll_swipe_gesture, scroll_tracker, swipe_tracker};
 
 pub const DOUBLE_CLICK_TIME: Duration = Duration::from_millis(400);
 
@@ -775,9 +775,9 @@ impl State {
             return;
         }
 
-        // clarion keeps this set only while actively using a tablet, which means the cursor position
-        // is likely to change almost immediately, causing pointer_visibility to just flicker back
-        // and forth.
+        // clarion keeps this set only while actively using a tablet, which means the cursor
+        // position is likely to change almost immediately, causing pointer_visibility to
+        // just flicker back and forth.
         if self.clarion.tablet_cursor_location.is_some() {
             return;
         }

@@ -1,4 +1,4 @@
-# 澄境 / Clarion
+# Clarion
 
 **A modern Wayland desktop with a native Vulkan backend.**
 
@@ -97,7 +97,7 @@ sudo bash scripts/install-session.sh
 systemctl --user daemon-reload
 ```
 
-保存工作后，在下次登录时选择 **澄境 / Clarion**。安装入口不会自动重启当前桌面。
+保存工作后，在下次登录时选择 **Clarion**。安装入口不会自动重启当前桌面。
 
 已有 Realand 配置、Shell 偏好和旧命令通过兼容入口继续使用，迁移规则见 [名称与配置迁移](docs/clarion-migration.md)。
 依赖、嵌套运行和登录管理器说明见 [Getting Started](docs/wiki/Getting-Started.md)。

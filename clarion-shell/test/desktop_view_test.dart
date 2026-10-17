@@ -319,6 +319,78 @@ Future<void> _context(WidgetTester tester, [Finder? entry]) async {
   await tester.pumpAndSettle();
 }
 
+Finder get _selectionRectangle =>
+    find.byKey(const ValueKey('desktop-selection-rectangle'));
+
+Future<TestGesture> _mouseMarquee(
+  WidgetTester tester,
+  Offset start,
+  Offset end, {
+  int? pointer,
+}) async {
+  final gesture = await tester.startGesture(
+    start,
+    pointer: pointer,
+    kind: PointerDeviceKind.mouse,
+    buttons: kPrimaryMouseButton,
+    view: tester.view,
+  );
+  await gesture.moveTo(end, view: tester.view);
+  await tester.pump();
+  expect(_selectionRectangle, findsOneWidget);
+  return gesture;
+}
+
+Future<void> _expectMarqueeInterruption(
+  WidgetTester tester,
+  VoidCallback interrupt,
+) async {
+  final fixture = _Fixture();
+  addTearDown(fixture.dispose);
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+  final root = fixture.root.path;
+  File('$root/c.txt').writeAsStringSync('keep the original selection');
+  await _mount(tester, fixture, style: ShellStyle.macos);
+  final a = _entry(root, 'a.txt');
+  final b = _entry(root, 'b.txt');
+  final c = _entry(root, 'c.txt');
+  await _selectClick(tester, c);
+  final gesture = await _mouseMarquee(
+    tester,
+    tester.getTopLeft(a) - const Offset(2, 2),
+    tester.getBottomRight(b) + const Offset(2, 2),
+  );
+  expect(_isSelected(tester, a), isTrue);
+  expect(_isSelected(tester, b), isTrue);
+  expect(_isSelected(tester, c), isFalse);
+
+  interrupt();
+  // FocusManager applies unfocus in a microtask after the current frame. Drive
+  // its scheduled focus/frame work before inspecting the cancellation paint.
+  await tester.pumpAndSettle();
+  expect(_selectionRectangle, findsNothing);
+  expect(_isSelected(tester, a), isFalse);
+  expect(_isSelected(tester, b), isFalse);
+  expect(_isSelected(tester, c), isTrue);
+  await tester.pump(const Duration(seconds: 3));
+  expect(_selectionRectangle, findsNothing);
+  expect(_isSelected(tester, c), isTrue);
+
+  // A still-held drag must not recreate the cancelled rectangle or commit its
+  // temporary selection when movement/release eventually reaches the view.
+  await gesture.moveBy(const Offset(-12, -12), view: tester.view);
+  await tester.pump();
+  expect(_selectionRectangle, findsNothing);
+  await gesture.up(view: tester.view);
+  await tester.pump();
+  expect(_selectionRectangle, findsNothing);
+  expect(_isSelected(tester, a), isFalse);
+  expect(_isSelected(tester, b), isFalse);
+  expect(_isSelected(tester, c), isTrue);
+  await tester.pumpWidget(const SizedBox.shrink());
+}
+
 void main() {
   setUp(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -413,6 +485,10 @@ void main() {
       await rectangle.moveTo(b.bottomRight + const Offset(2, 2));
       await rectangle.up();
       await tester.pumpAndSettle();
+      expect(_selectionRectangle, findsNothing);
+      expect(_isSelected(tester, _entry(root, 'a.txt')), isTrue);
+      expect(_isSelected(tester, _entry(root, 'b.txt')), isTrue);
+      expect(_isSelected(tester, _entry(root, 'c.txt')), isFalse);
       await tester.tap(
         _entry(root, 'a.txt'),
         buttons: kSecondaryMouseButton,
@@ -433,6 +509,345 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
     },
   );
+
+  testWidgets(
+    'Mac mouse marquee release clears transparent pixels without further input',
+    (tester) async {
+      final fixture = _Fixture();
+      addTearDown(fixture.dispose);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      File('${fixture.root.path}/a.txt').deleteSync();
+      File('${fixture.root.path}/b.txt').deleteSync();
+      await _mount(tester, fixture, style: ShellStyle.macos);
+      expect(fixture.service.entries, isEmpty);
+      expect(await _paintedPixels(tester), 0);
+
+      final gesture = await _mouseMarquee(
+        tester,
+        const Offset(320, 220),
+        const Offset(620, 420),
+      );
+      expect(await _paintedPixels(tester), greaterThan(0));
+      await gesture.up(view: tester.view);
+      // No click, hover or extra pointer event is allowed to clear the frame.
+      await tester.pump();
+      expect(_selectionRectangle, findsNothing);
+      expect(await _paintedPixels(tester), 0);
+      await tester.pump(const Duration(seconds: 3));
+      expect(_selectionRectangle, findsNothing);
+      expect(await _paintedPixels(tester), 0);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'Mac marquee native view focus loss restores the prior selection',
+    (tester) async {
+      await _expectMarqueeInterruption(tester, () {
+        tester.binding.handleViewFocusChanged(
+          ui.ViewFocusEvent(
+            viewId: tester.view.viewId,
+            state: ui.ViewFocusState.unfocused,
+            direction: ui.ViewFocusDirection.undefined,
+          ),
+        );
+      });
+    },
+  );
+
+  testWidgets('Mac marquee keyboard focus loss restores the prior selection', (
+    tester,
+  ) async {
+    await _expectMarqueeInterruption(tester, () {
+      expect(FocusManager.instance.primaryFocus, isNotNull);
+      FocusManager.instance.primaryFocus!.unfocus();
+    });
+  });
+
+  testWidgets(
+    'Mac marquee pointer cancellation restores selection and retires routes for the next drag',
+    (tester) async {
+      final fixture = _Fixture();
+      addTearDown(fixture.dispose);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final root = fixture.root.path;
+      File('$root/c.txt').writeAsStringSync('keep the original selection');
+      await _mount(tester, fixture, style: ShellStyle.macos);
+      final a = _entry(root, 'a.txt');
+      final b = _entry(root, 'b.txt');
+      final c = _entry(root, 'c.txt');
+      await _selectClick(tester, c);
+      final start = tester.getTopLeft(a) - const Offset(2, 2);
+      final end = tester.getBottomRight(b) + const Offset(2, 2);
+      final router = tester.binding.pointerRouter;
+      final idleRoutes = router.debugGlobalRouteCount;
+      final cancelled = await _mouseMarquee(tester, start, end);
+      expect(router.debugGlobalRouteCount, idleRoutes + 1);
+      expect(_isSelected(tester, a), isTrue);
+      expect(_isSelected(tester, c), isFalse);
+
+      // Use an actual PointerCancel, not Escape/focus loss followed by Up.
+      await cancelled.cancel();
+      await tester.pumpAndSettle();
+      expect(_selectionRectangle, findsNothing);
+      expect(_isSelected(tester, a), isFalse);
+      expect(_isSelected(tester, b), isFalse);
+      expect(_isSelected(tester, c), isTrue);
+      expect(router.debugGlobalRouteCount, idleRoutes);
+
+      // A press that never crosses the drag threshold also owns a temporary
+      // route; cancelling it must leave the original selection untouched.
+      final candidate = await tester.startGesture(
+        start,
+        kind: PointerDeviceKind.mouse,
+        buttons: kPrimaryMouseButton,
+        view: tester.view,
+      );
+      expect(router.debugGlobalRouteCount, idleRoutes + 1);
+      expect(_selectionRectangle, findsNothing);
+      await candidate.cancel();
+      await tester.pumpAndSettle();
+      expect(router.debugGlobalRouteCount, idleRoutes);
+      expect(_isSelected(tester, c), isTrue);
+
+      final completed = await _mouseMarquee(tester, start, end);
+      expect(router.debugGlobalRouteCount, idleRoutes + 1);
+      await completed.up(view: tester.view);
+      await tester.pump();
+      expect(_selectionRectangle, findsNothing);
+      expect(_isSelected(tester, a), isTrue);
+      expect(_isSelected(tester, b), isTrue);
+      expect(_isSelected(tester, c), isFalse);
+      expect(router.debugGlobalRouteCount, idleRoutes);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'Mac marquee ignores movement and terminal events from another device',
+    (tester) async {
+      final fixture = _Fixture();
+      addTearDown(fixture.dispose);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final root = fixture.root.path;
+      await _mount(tester, fixture, style: ShellStyle.macos);
+      final a = _entry(root, 'a.txt');
+      final b = _entry(root, 'b.txt');
+      final router = tester.binding.pointerRouter;
+      final idleRoutes = router.debugGlobalRouteCount;
+      final owner = await _mouseMarquee(
+        tester,
+        tester.getTopLeft(a) - const Offset(2, 2),
+        tester.getBottomRight(b) + const Offset(2, 2),
+        pointer: 19102,
+      );
+      final rectangle = tester.getRect(_selectionRectangle);
+      final unrelated = <PointerEvent>[
+        PointerMoveEvent(
+          viewId: tester.view.viewId,
+          pointer: 19103,
+          device: 2,
+          kind: PointerDeviceKind.mouse,
+          buttons: kPrimaryMouseButton,
+          position: const Offset(100, 600),
+          delta: const Offset(-100, 100),
+        ),
+        PointerUpEvent(
+          viewId: tester.view.viewId,
+          pointer: 19103,
+          device: 2,
+          kind: PointerDeviceKind.mouse,
+        ),
+        PointerCancelEvent(
+          viewId: tester.view.viewId,
+          pointer: 19103,
+          device: 2,
+          kind: PointerDeviceKind.mouse,
+        ),
+        PointerRemovedEvent(
+          viewId: tester.view.viewId,
+          device: 2,
+          kind: PointerDeviceKind.mouse,
+        ),
+        PointerHoverEvent(
+          viewId: tester.view.viewId,
+          device: 2,
+          kind: PointerDeviceKind.mouse,
+        ),
+      ];
+      for (final event in unrelated) {
+        // These events belong to an independent device without this view's
+        // hit-test path. They still reach every registered global route.
+        router.route(event);
+        await tester.pump();
+        expect(_selectionRectangle, findsOneWidget);
+        expect(tester.getRect(_selectionRectangle), rectangle);
+        expect(_isSelected(tester, a), isTrue);
+        expect(_isSelected(tester, b), isTrue);
+        expect(router.debugGlobalRouteCount, idleRoutes + 1);
+      }
+      await owner.up(view: tester.view);
+      await tester.pump();
+      expect(_selectionRectangle, findsNothing);
+      expect(_isSelected(tester, a), isTrue);
+      expect(_isSelected(tester, b), isTrue);
+      expect(router.debugGlobalRouteCount, idleRoutes);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'Mac marquee lost release clears pixels and restores selection without leaking routes',
+    (tester) async {
+      final fixture = _Fixture();
+      addTearDown(fixture.dispose);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await _mount(tester, fixture, style: ShellStyle.macos);
+      final a = _entry(fixture.root.path, 'a.txt');
+      final b = _entry(fixture.root.path, 'b.txt');
+      await _selectClick(tester, a);
+      final baselinePixels = await _paintedPixels(tester);
+      final router = tester.binding.pointerRouter;
+      final idleRoutes = router.debugGlobalRouteCount;
+      const pointer = 19104;
+      final gesture = await _mouseMarquee(
+        tester,
+        const Offset(320, 220),
+        const Offset(620, 420),
+        pointer: pointer,
+      );
+      expect(_isSelected(tester, a), isFalse);
+      expect(_isSelected(tester, b), isFalse);
+      expect(await _paintedPixels(tester), greaterThan(baselinePixels));
+      expect(router.debugGlobalRouteCount, idleRoutes + 1);
+
+      // Model a lost Up: this is still a Move packet for the owner, but its
+      // primary button is no longer held. No Hover/Cancel/Up clears the frame.
+      router.route(
+        PointerMoveEvent(
+          viewId: tester.view.viewId,
+          pointer: pointer,
+          device: 1,
+          kind: PointerDeviceKind.mouse,
+          buttons: 0,
+          position: const Offset(640, 440),
+          delta: const Offset(20, 20),
+        ),
+      );
+      await tester.pump();
+      expect(_selectionRectangle, findsNothing);
+      expect(_isSelected(tester, a), isTrue);
+      expect(_isSelected(tester, b), isFalse);
+      expect(await _paintedPixels(tester), baselinePixels);
+      expect(router.debugGlobalRouteCount, idleRoutes);
+      await tester.pump(const Duration(seconds: 3));
+      expect(_selectionRectangle, findsNothing);
+      expect(await _paintedPixels(tester), baselinePixels);
+      expect(router.debugGlobalRouteCount, idleRoutes);
+
+      await gesture.up(view: tester.view);
+      await tester.pump();
+      expect(_isSelected(tester, a), isTrue);
+      expect(router.debugGlobalRouteCount, idleRoutes);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'Mac marquee pointer removal clears pixels without a cancel event',
+    (tester) async {
+      final fixture = _Fixture();
+      addTearDown(fixture.dispose);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      File('${fixture.root.path}/a.txt').deleteSync();
+      File('${fixture.root.path}/b.txt').deleteSync();
+      await _mount(tester, fixture, style: ShellStyle.macos);
+      const pointer = 19101;
+      const end = Offset(620, 420);
+      final gesture = await _mouseMarquee(
+        tester,
+        const Offset(320, 220),
+        end,
+        pointer: pointer,
+      );
+      expect(await _paintedPixels(tester), greaterThan(0));
+      // Deliberately route device disappearance without PointerCancel/Up and
+      // without a hit-test delivery to the desktop's Listener.
+      tester.binding.pointerRouter.route(
+        PointerRemovedEvent(
+          viewId: tester.view.viewId,
+          pointer: pointer,
+          kind: PointerDeviceKind.mouse,
+          device: 1,
+          position: end,
+        ),
+      );
+      await tester.pump();
+      expect(_selectionRectangle, findsNothing);
+      expect(await _paintedPixels(tester), 0);
+      await tester.pump(const Duration(seconds: 3));
+      expect(_selectionRectangle, findsNothing);
+      expect(await _paintedPixels(tester), 0);
+      // Release only after proving removal alone cleared the idle frame.
+      await gesture.up(view: tester.view);
+      await tester.pump();
+      expect(_selectionRectangle, findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets('Mac marquee app inactivity restores the prior selection', (
+    tester,
+  ) async {
+    addTearDown(() {
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    });
+    await _expectMarqueeInterruption(tester, () {
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    });
+  });
+
+  testWidgets('Mac marquee ignores native focus changes for another view', (
+    tester,
+  ) async {
+    final fixture = _Fixture();
+    addTearDown(fixture.dispose);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final root = fixture.root.path;
+    await _mount(tester, fixture, style: ShellStyle.macos);
+    final a = _entry(root, 'a.txt');
+    final b = _entry(root, 'b.txt');
+    final gesture = await _mouseMarquee(
+      tester,
+      tester.getTopLeft(a) - const Offset(2, 2),
+      tester.getBottomRight(b) + const Offset(2, 2),
+    );
+    for (final state in ui.ViewFocusState.values) {
+      tester.binding.handleViewFocusChanged(
+        ui.ViewFocusEvent(
+          viewId: tester.view.viewId + 1,
+          state: state,
+          direction: ui.ViewFocusDirection.undefined,
+        ),
+      );
+      await tester.pump();
+      expect(_selectionRectangle, findsOneWidget);
+      expect(_isSelected(tester, a), isTrue);
+      expect(_isSelected(tester, b), isTrue);
+    }
+    await gesture.up(view: tester.view);
+    await tester.pump();
+    expect(_selectionRectangle, findsNothing);
+    expect(_isSelected(tester, a), isTrue);
+    expect(_isSelected(tester, b), isTrue);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 
   testWidgets(
     'Mac group drag preserves spacing, swaps collisions and cancels without persistence',

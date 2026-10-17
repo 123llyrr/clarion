@@ -318,8 +318,9 @@ impl FocusRing {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use clarion_config::{Color, FloatOrInt, Gradient, GradientInterpolation, GradientRelativeTo};
+
+    use super::*;
 
     #[test]
     fn test_animated_gradient_detection() {

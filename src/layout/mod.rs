@@ -59,12 +59,14 @@ use crate::clarion_render_elements;
 use crate::layout::scrolling::ScrollDirection;
 use crate::render_helpers::background_effect::BackgroundEffectElement;
 use crate::render_helpers::offscreen::OffscreenData;
+use crate::render_helpers::renderer::AnyRenderer;
 use crate::render_helpers::renderer::ClarionRenderer;
 use crate::render_helpers::snapshot::RenderSnapshot;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::texture::TextureBuffer;
 use crate::render_helpers::xray::{Xray, XrayPos};
 use crate::render_helpers::{BakedBuffer, RenderCtx};
+use crate::scene::resources::SceneResourceAllocator;
 use crate::utils::transaction::{Transaction, TransactionBlocker};
 use crate::utils::{
     ensure_min_max_size_maybe_zero, output_matches_name, output_size,
@@ -72,25 +74,20 @@ use crate::utils::{
 };
 use crate::window::ResolvedWindowRules;
 
-pub mod closing_window;
 mod core_adapter;
 pub(crate) use core_adapter::CoreProtocolOp;
-mod cube;
 pub mod dwindle;
 pub mod floating;
-pub mod focus_ring;
-pub mod insert_hint_element;
 mod management;
 pub mod minimized;
 pub mod monitor;
 pub mod opening_window;
 pub mod scene_source;
 pub mod scrolling;
-pub mod shadow;
 mod stage_drag;
-pub mod tab_indicator;
 pub mod tile;
-mod wobble;
+pub(crate) mod window_presentation;
+pub(crate) mod wobble;
 pub mod workspace;
 
 #[cfg(test)]
@@ -155,6 +152,13 @@ pub trait LayoutElement {
 
     /// The client surface's committed DMA-BUF, if available.
     fn dmabuf(&self) -> Option<smithay::backend::allocator::dmabuf::Dmabuf> {
+        None
+    }
+
+    /// Exact current attachment lease, if this platform can prove its source.
+    fn native_dmabuf_source(
+        &self,
+    ) -> Option<crate::render_helpers::vulkan::native::OwnedDmabufSource> {
         None
     }
 
@@ -363,6 +367,7 @@ pub trait LayoutElement {
 
 #[derive(Debug)]
 pub struct Layout<W: LayoutElement> {
+    scene_resources: SceneResourceAllocator,
     core: core_adapter::DesktopContext<W::Id>,
     desktop_transition_depth: usize,
     /// Monitors and workspaes in the layout.
@@ -388,6 +393,9 @@ pub struct Layout<W: LayoutElement> {
     overview_progress: Option<OverviewProgress>,
     /// Configurable properties of the layout.
     options: Rc<Options>,
+    // Test convenience owners follow every registration in drop order.
+    #[cfg(test)]
+    test_scene_resources: Option<crate::scene::resources::SceneResources>,
 }
 
 #[derive(Debug)]
@@ -402,6 +410,18 @@ enum MonitorSet<W: LayoutElement> {
         /// The workspaces.
         workspaces: Vec<Workspace<W>>,
     },
+}
+
+impl<W: LayoutElement> MonitorSet<W> {
+    fn monitors_mut(&mut self) -> impl Iterator<Item = &mut Monitor<W>> + '_ {
+        let monitors = if let MonitorSet::Normal { monitors, .. } = self {
+            &mut monitors[..]
+        } else {
+            &mut [][..]
+        };
+
+        monitors.iter_mut()
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -846,12 +866,40 @@ impl<W: LayoutElement> Layout<W> {
         result
     }
 
+    /// Tests own an independent scene beside the layout under construction.
+    #[cfg(test)]
     pub fn new(clock: Clock, config: &Config) -> Self {
-        Self::with_options_and_workspaces(clock, config, Options::from_config(config))
+        let resources = crate::scene::resources::SceneResources::new();
+        let mut layout = Self::new_with_resources(clock, config, resources.allocator());
+        layout.test_scene_resources = Some(resources);
+        layout
     }
 
+    pub fn new_with_resources(
+        clock: Clock,
+        config: &Config,
+        resources: SceneResourceAllocator,
+    ) -> Self {
+        Self::with_options_and_workspaces(clock, config, Options::from_config(config), resources)
+    }
+
+    #[cfg(test)]
     pub fn with_options(clock: Clock, options: Options) -> Self {
+        let resources = crate::scene::resources::SceneResources::new();
+        let mut layout = Self::with_options_and_resources(clock, options, resources.allocator());
+        layout.test_scene_resources = Some(resources);
+        layout
+    }
+
+    pub fn with_options_and_resources(
+        clock: Clock,
+        options: Options,
+        scene_resources: SceneResourceAllocator,
+    ) -> Self {
         Self {
+            scene_resources,
+            #[cfg(test)]
+            test_scene_resources: None,
             core: core_adapter::new_context(),
             desktop_transition_depth: 0,
             monitor_set: MonitorSet::NoOutputs { workspaces: vec![] },
@@ -867,7 +915,12 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
-    fn with_options_and_workspaces(clock: Clock, config: &Config, options: Options) -> Self {
+    fn with_options_and_workspaces(
+        clock: Clock,
+        config: &Config,
+        options: Options,
+        scene_resources: SceneResourceAllocator,
+    ) -> Self {
         let opts = Rc::new(options);
         let core = core_adapter::new_context();
 
@@ -875,12 +928,20 @@ impl<W: LayoutElement> Layout<W> {
             .workspaces
             .iter()
             .map(|ws| {
-                Workspace::new_with_config_no_outputs(Some(ws.clone()), clock.clone(), opts.clone())
-                    .with_core(core.clone())
+                Workspace::new_with_config_no_outputs(
+                    Some(ws.clone()),
+                    clock.clone(),
+                    opts.clone(),
+                    scene_resources.clone(),
+                )
+                .with_core(core.clone())
             })
             .collect();
 
         Self {
+            scene_resources,
+            #[cfg(test)]
+            test_scene_resources: None,
             core,
             desktop_transition_depth: 0,
             monitor_set: MonitorSet::NoOutputs { workspaces },
@@ -937,16 +998,16 @@ impl<W: LayoutElement> Layout<W> {
                             }
 
                             // FIXME: this can be coded in a way that the workspace switch won't be
-                            // affected if the removed workspace is invisible. But this is good enough
-                            // for now.
+                            // affected if the removed workspace is invisible. But this is good
+                            // enough for now.
                             if primary.workspace_switch.is_some() {
                                 primary.clear_workspace_switch();
                                 stopped_primary_ws_switch = true;
                             }
 
-                            // The user could've closed a window while remaining on this workspace, on
-                            // another monitor. However, we will add an empty workspace in the end
-                            // instead.
+                            // The user could've closed a window while remaining on this workspace,
+                            // on another monitor. However, we will add
+                            // an empty workspace in the end instead.
                             if ws.has_windows_or_name() || Some(ws.id()) == stage_drag_source {
                                 workspaces.push(ws);
                             }
@@ -954,9 +1015,9 @@ impl<W: LayoutElement> Layout<W> {
                     }
 
                     // If we stopped a workspace switch, then we might need to clean up workspaces.
-                    // Also if empty_workspace_above_first is set and there are only 2 workspaces left,
-                    // both will be empty and one of them needs to be removed. clean_up_workspaces
-                    // takes care of this.
+                    // Also if empty_workspace_above_first is set and there are only 2 workspaces
+                    // left, both will be empty and one of them needs to be
+                    // removed. clean_up_workspaces takes care of this.
 
                     if stopped_primary_ws_switch
                         || (primary.options.layout.empty_workspace_above_first
@@ -981,6 +1042,7 @@ impl<W: LayoutElement> Layout<W> {
                         this.options.clone(),
                         layout_config,
                         stage_drag_source,
+                        this.scene_resources.clone(),
                     );
                     monitor.set_core(this.core.clone());
                     monitor.set_overview_progress(this.overview_progress.as_ref());
@@ -1003,6 +1065,7 @@ impl<W: LayoutElement> Layout<W> {
                         this.options.clone(),
                         layout_config,
                         stage_drag_source,
+                        this.scene_resources.clone(),
                     );
                     monitor.set_core(this.core.clone());
                     monitor.set_overview_progress(this.overview_progress.as_ref());
@@ -1198,8 +1261,12 @@ impl<W: LayoutElement> Layout<W> {
                     AddWindowTarget::Auto => {
                         if workspaces.is_empty() {
                             workspaces.push(
-                                Workspace::new_no_outputs(self.clock.clone(), self.options.clone())
-                                    .with_core(self.core.clone()),
+                                Workspace::new_no_outputs(
+                                    self.clock.clone(),
+                                    self.options.clone(),
+                                    self.scene_resources.clone(),
+                                )
+                                .with_core(self.core.clone()),
                             );
                         }
 
@@ -1234,6 +1301,7 @@ impl<W: LayoutElement> Layout<W> {
                                     Workspace::new_no_outputs(
                                         self.clock.clone(),
                                         self.options.clone(),
+                                        self.scene_resources.clone(),
                                     )
                                     .with_core(self.core.clone()),
                                 );
@@ -1368,8 +1436,8 @@ impl<W: LayoutElement> Layout<W> {
                                     mon.workspaces.remove(idx);
                                 }
 
-                                // Special case handling when empty_workspace_above_first is set and all
-                                // workspaces are empty.
+                                // Special case handling when empty_workspace_above_first is set and
+                                // all workspaces are empty.
                                 if mon.options.layout.empty_workspace_above_first
                                     && mon.workspaces.len() == 2
                                     && mon.workspace_switch.is_none()
@@ -1823,8 +1891,9 @@ impl<W: LayoutElement> Layout<W> {
                     if ws.activate_window(window) {
                         mon.select_output();
 
-                        // If currently in the middle of a vertical swipe between the target workspace
-                        // and some other, don't switch the workspace.
+                        // If currently in the middle of a vertical swipe between the target
+                        // workspace and some other, don't switch the
+                        // workspace.
                         match &mon.workspace_switch {
                             Some(WorkspaceSwitch::Gesture(_))
                                 if mon.workspace_gesture_value().floor()
@@ -1859,8 +1928,9 @@ impl<W: LayoutElement> Layout<W> {
                     if ws.activate_window_without_raising(window) {
                         mon.select_output();
 
-                        // If currently in the middle of a vertical swipe between the target workspace
-                        // and some other, don't switch the workspace.
+                        // If currently in the middle of a vertical swipe between the target
+                        // workspace and some other, don't switch the
+                        // workspace.
                         match &mon.workspace_switch {
                             Some(WorkspaceSwitch::Gesture(_))
                                 if mon.workspace_gesture_value().floor()
@@ -2120,13 +2190,7 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn monitors_mut(&mut self) -> impl Iterator<Item = &mut Monitor<W>> + '_ {
-        let monitors = if let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set {
-            &mut monitors[..]
-        } else {
-            &mut [][..]
-        };
-
-        monitors.iter_mut()
+        self.monitor_set.monitors_mut()
     }
 
     pub fn monitor_for_output(&self, output: &Output) -> Option<&Monitor<W>> {
@@ -2990,7 +3054,7 @@ impl<W: LayoutElement> Layout<W> {
                     move_win_id = Some(window_id.clone());
                 }
                 InteractiveMoveState::Moving(move_) => {
-                    assert_eq!(self.clock, move_.tile.clock);
+                    assert_eq!(self.clock, move_.tile.presentation.clock);
                     assert!(move_.tile.window().pending_sizing_mode().is_normal());
 
                     move_.tile.verify_invariants();
@@ -3001,7 +3065,7 @@ impl<W: LayoutElement> Layout<W> {
                         .with_merged_layout(move_.workspace_config.as_ref().map(|(_, c)| c))
                         .adjusted_for_scale(scale);
                     assert_eq!(
-                        &*move_.tile.options, &options,
+                        &*move_.tile.presentation.options, &options,
                         "interactive moved tile options must be \
                          base options adjusted for output scale"
                     );
@@ -3013,7 +3077,7 @@ impl<W: LayoutElement> Layout<W> {
                     assert_abs_diff_eq!(tile_pos.x, rounded_pos.x, epsilon = 1e-5);
                     assert_abs_diff_eq!(tile_pos.y, rounded_pos.y, epsilon = 1e-5);
 
-                    if let Some(alpha) = &move_.tile.alpha_animation {
+                    if let Some(alpha) = &move_.tile.presentation.alpha_animation {
                         if move_.is_floating() {
                             assert_eq!(
                                 alpha.anim.to(),
@@ -3561,13 +3625,18 @@ impl<W: LayoutElement> Layout<W> {
                     Some(ws_config.clone()),
                     clock,
                     options,
+                    self.scene_resources.clone(),
                 );
                 mon.insert_workspace(ws, 0, false);
             }
             MonitorSet::NoOutputs { workspaces } => {
-                let ws =
-                    Workspace::new_with_config_no_outputs(Some(ws_config.clone()), clock, options)
-                        .with_core(self.core.clone());
+                let ws = Workspace::new_with_config_no_outputs(
+                    Some(ws_config.clone()),
+                    clock,
+                    options,
+                    self.scene_resources.clone(),
+                )
+                .with_core(self.core.clone());
                 let id = clarion_core::SpaceId(ws.id().get());
                 workspaces.insert(0, ws);
                 self.core.borrow_mut().reorder_detached_space(id, 0);
@@ -4152,8 +4221,8 @@ impl<W: LayoutElement> Layout<W> {
                 return false;
             }
 
-            // Only switch active monitor if the workspace to be moved is the currently focused one on
-            // the current monitor.
+            // Only switch active monitor if the workspace to be moved is the currently focused one
+            // on the current monitor.
             let activate =
                 current.is_selected_output() && old_idx == current.active_workspace_idx();
 
@@ -5173,13 +5242,14 @@ impl<W: LayoutElement> Layout<W> {
                                     }
                                 }
                                 InsertWorkspace::NewAt(_) => {
-                                    // When putting a floating tile on a new workspace, we don't really
-                                    // have a good pre-existing position.
+                                    // When putting a floating tile on a new workspace, we don't
+                                    // really have a good
+                                    // pre-existing position.
                                 }
                             }
 
-                            // Set the floating size so it takes into account any window resizing that
-                            // took place during the move.
+                            // Set the floating size so it takes into account any window resizing
+                            // that took place during the move.
                             if let Some(size) = tile.window().expected_size() {
                                 tile.floating_window_size = Some(size);
                             }
@@ -5234,8 +5304,9 @@ impl<W: LayoutElement> Layout<W> {
                     );
 
                     // Interactive move into floating barely animates (it doesn't really move after
-                    // being dropped), so setting it as moving between workspaces would just cause it to
-                    // awkwardly sit unclipped for a moment before the animation runs out.
+                    // being dropped), so setting it as moving between workspaces would just cause
+                    // it to awkwardly sit unclipped for a moment before the
+                    // animation runs out.
                     if !matches!(position, InsertPosition::Floating) {
                         tile.set_anim_y_between_workspaces();
                     }
@@ -5243,8 +5314,12 @@ impl<W: LayoutElement> Layout<W> {
                 MonitorSet::NoOutputs { workspaces, .. } => {
                     if workspaces.is_empty() {
                         workspaces.push(
-                            Workspace::new_no_outputs(this.clock.clone(), this.options.clone())
-                                .with_core(this.core.clone()),
+                            Workspace::new_no_outputs(
+                                this.clock.clone(),
+                                this.options.clone(),
+                                this.scene_resources.clone(),
+                            )
+                            .with_core(this.core.clone()),
                         );
                     }
                     let index = detached_workspace_idx(&this.core, workspaces);
@@ -5834,6 +5909,7 @@ impl<W: LayoutElement> Layout<W> {
                         Some(config),
                         clock,
                         options,
+                        this.scene_resources.clone(),
                     )
                     .with_core(this.core.clone());
                     ws.set_output(Some(mon.output.clone()));
@@ -5859,8 +5935,13 @@ impl<W: LayoutElement> Layout<W> {
                         .attach_space(id, mon.output_name(), inserted_index);
                 }
                 MonitorSet::NoOutputs { workspaces } => {
-                    let ws = Workspace::new_with_config_no_outputs(Some(config), clock, options)
-                        .with_core(this.core.clone());
+                    let ws = Workspace::new_with_config_no_outputs(
+                        Some(config),
+                        clock,
+                        options,
+                        this.scene_resources.clone(),
+                    )
+                    .with_core(this.core.clone());
                     workspaces.push(ws);
                 }
             }
@@ -6245,9 +6326,9 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
-    pub fn store_unmap_snapshot(
+    pub fn store_unmap_snapshot_any(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut AnyRenderer<'_>,
         xray: Option<&mut Xray>,
         xray_has_blocked_out_layers: bool,
         window: &W::Id,
@@ -6267,7 +6348,7 @@ impl<W: LayoutElement> Layout<W> {
                         .flat_map(Workspace::tiles_mut)
                         .find(|tile| tile.window().id() == window)
                         .unwrap();
-                    tile.store_unmap_snapshot_if_empty(
+                    tile.store_unmap_snapshot_any_if_empty(
                         renderer,
                         xray,
                         xray_has_blocked_out_layers,
@@ -6290,7 +6371,7 @@ impl<W: LayoutElement> Layout<W> {
                         .downscale(zoom);
                 move_.tile.update_render_elements(false, view_rect);
 
-                move_.tile.store_unmap_snapshot_if_empty(
+                move_.tile.store_unmap_snapshot_any_if_empty(
                     renderer,
                     xray,
                     xray_has_blocked_out_layers,
@@ -6306,7 +6387,7 @@ impl<W: LayoutElement> Layout<W> {
                     for (ws, geo) in mon.workspaces_with_render_geo_mut(false) {
                         if ws.has_window(window) {
                             let zoom = (geo.size.w / ws.view_size().w).max(f64::EPSILON);
-                            ws.store_unmap_snapshot_if_empty(
+                            ws.store_any_unmap_snapshot_if_empty(
                                 renderer,
                                 xray,
                                 xray_has_blocked_out_layers,
@@ -6321,7 +6402,7 @@ impl<W: LayoutElement> Layout<W> {
             MonitorSet::NoOutputs { workspaces, .. } => {
                 for ws in workspaces {
                     if ws.has_window(window) {
-                        ws.store_unmap_snapshot_if_empty(
+                        ws.store_any_unmap_snapshot_if_empty(
                             renderer,
                             xray,
                             xray_has_blocked_out_layers,
@@ -6335,6 +6416,21 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
+    pub fn store_unmap_snapshot(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        xray: Option<&mut Xray>,
+        xray_has_blocked_out_layers: bool,
+        window: &W::Id,
+    ) {
+        self.store_unmap_snapshot_any(
+            &mut AnyRenderer::Gles(renderer),
+            xray,
+            xray_has_blocked_out_layers,
+            window,
+        );
+    }
+
     pub fn store_unmap_snapshot_native(
         &mut self,
         renderer: &mut crate::render_helpers::vulkan::native::NativeRenderer,
@@ -6342,87 +6438,12 @@ impl<W: LayoutElement> Layout<W> {
         xray_has_blocked_out_layers: bool,
         window: &W::Id,
     ) {
-        let _span = clarion_tracy_span!("Layout::store_unmap_snapshot");
-
-        if self.is_window_spread_visible() {
-            for mon in self.monitors_mut() {
-                if let Some((_, geo, zoom)) = mon
-                    .spread_tiles()
-                    .into_iter()
-                    .find(|(tile, _, _)| tile.window().id() == window)
-                {
-                    let tile = mon
-                        .workspaces
-                        .iter_mut()
-                        .flat_map(Workspace::tiles_mut)
-                        .find(|tile| tile.window().id() == window)
-                        .unwrap();
-                    tile.store_unmap_snapshot_native_if_empty(
-                        renderer,
-                        xray,
-                        xray_has_blocked_out_layers,
-                        XrayPos::new(geo.loc, zoom),
-                    );
-                    return;
-                }
-            }
-        }
-
-        let zoom = self.interactive_move_zoom();
-
-        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
-            if move_.tile.window().id() == window {
-                let pos_within_output = move_.tile_render_location(zoom);
-
-                // Computation matches update_render_elements().
-                let view_rect =
-                    Rectangle::new(pos_within_output.upscale(-1.), output_size(&move_.output))
-                        .downscale(zoom);
-                move_.tile.update_render_elements(false, view_rect);
-
-                move_.tile.store_unmap_snapshot_native_if_empty(
-                    renderer,
-                    xray,
-                    xray_has_blocked_out_layers,
-                    XrayPos::new(pos_within_output, zoom),
-                );
-                return;
-            }
-        }
-
-        match &mut self.monitor_set {
-            MonitorSet::Normal { monitors, .. } => {
-                for mon in monitors {
-                    for (ws, geo) in mon.workspaces_with_render_geo_mut(false) {
-                        if ws.has_window(window) {
-                            let zoom = (geo.size.w / ws.view_size().w).max(f64::EPSILON);
-                            ws.store_unmap_snapshot_native_if_empty(
-                                renderer,
-                                xray,
-                                xray_has_blocked_out_layers,
-                                XrayPos::new(geo.loc, zoom),
-                                window,
-                            );
-                            return;
-                        }
-                    }
-                }
-            }
-            MonitorSet::NoOutputs { workspaces, .. } => {
-                for ws in workspaces {
-                    if ws.has_window(window) {
-                        ws.store_unmap_snapshot_native_if_empty(
-                            renderer,
-                            xray,
-                            xray_has_blocked_out_layers,
-                            XrayPos::default(),
-                            window,
-                        );
-                        return;
-                    }
-                }
-            }
-        }
+        self.store_unmap_snapshot_any(
+            &mut AnyRenderer::Native(renderer),
+            xray,
+            xray_has_blocked_out_layers,
+            window,
+        );
     }
 
     pub fn clear_unmap_snapshot(&mut self, window: &W::Id) {
@@ -6455,35 +6476,55 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
-    pub fn start_close_animation_for_window(
+    pub fn start_close_animation_for_window<'a>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: impl Into<AnyRenderer<'a>>,
         window: &W::Id,
         blocker: TransactionBlocker,
     ) {
         let _span = clarion_tracy_span!("Layout::start_close_animation_for_window");
+        let mut renderer = renderer.into();
 
         if self.is_window_spread_visible() {
             if let Some(mon) = self.monitors_mut().find(|mon| mon.has_window(window)) {
-                mon.start_spread_close(renderer, window, blocker);
-                return;
+                if let Some((idx, origin)) = mon.spread_close_origin(window) {
+                    let stable_id = {
+                        let ws = &mut mon.workspaces[idx];
+                        let before = ws.closing_windows().count();
+                        ws.start_close_animation_for_window_at(
+                            &mut renderer,
+                            window,
+                            origin.source_pos,
+                            blocker,
+                        );
+                        if ws.closing_windows().count() > before {
+                            Some(ws.closing_windows().last().unwrap().stable_id().clone())
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(stable_id) = stable_id {
+                        mon.register_spread_closing(stable_id, origin);
+                    }
+                    return;
+                }
             }
         }
 
         let zoom = self.interactive_move_zoom();
 
-        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
-            if move_.tile.window().id() == window {
-                let Some(snapshot) = move_.tile.take_unmap_snapshot() else {
-                    return;
-                };
-                let tile_pos = move_.tile_render_location(zoom);
-                let tile_size = move_.tile.tile_size();
-                let dmabuf = move_.tile.window().dmabuf();
+        let Layout {
+            interactive_move,
+            monitor_set,
+            ..
+        } = self;
 
-                let output = move_.output.clone();
+        if let Some(InteractiveMoveState::Moving(move_)) = interactive_move {
+            if move_.tile.window().id() == window {
+                let tile_pos = move_.tile_render_location(zoom);
+                let output = &move_.output;
                 let pointer_pos_within_output = move_.pointer_pos_within_output;
-                let Some(mon) = self.monitor_for_output_mut(&output) else {
+                let Some(mon) = monitor_set.monitors_mut().find(|mon| &mon.output == output) else {
                     return;
                 };
                 let Some((ws, ws_geo)) = mon.workspace_under(pointer_pos_within_output) else {
@@ -6493,19 +6534,22 @@ impl<W: LayoutElement> Layout<W> {
                 let ws = &mut mon.workspaces[idx];
 
                 let tile_pos = tile_pos - ws_geo.loc;
-                ws.start_close_animation_for_tile(
-                    renderer, snapshot, tile_size, tile_pos, blocker, dmabuf,
+                ws.start_close_animation_for_dragged_tile(
+                    &mut renderer,
+                    &move_.tile,
+                    tile_pos,
+                    blocker,
                 );
                 return;
             }
         }
 
-        match &mut self.monitor_set {
+        match monitor_set {
             MonitorSet::Normal { monitors, .. } => {
                 for mon in monitors {
                     for ws in &mut mon.workspaces {
                         if ws.has_window(window) {
-                            ws.start_close_animation_for_window(renderer, window, blocker);
+                            ws.start_close_animation_for_window(&mut renderer, window, blocker);
                             return;
                         }
                     }
@@ -6514,7 +6558,7 @@ impl<W: LayoutElement> Layout<W> {
             MonitorSet::NoOutputs { workspaces, .. } => {
                 for ws in workspaces {
                     if ws.has_window(window) {
-                        ws.start_close_animation_for_window(renderer, window, blocker);
+                        ws.start_close_animation_for_window(&mut renderer, window, blocker);
                         return;
                     }
                 }
@@ -6528,63 +6572,7 @@ impl<W: LayoutElement> Layout<W> {
         window: &W::Id,
         blocker: TransactionBlocker,
     ) {
-        let _span = clarion_tracy_span!("Layout::start_close_animation_for_window_native");
-
-        if self.is_window_spread_visible() {
-            if let Some(mon) = self.monitors_mut().find(|mon| mon.has_window(window)) {
-                mon.start_spread_close_native(renderer, window, blocker);
-                return;
-            }
-        }
-
-        let zoom = self.interactive_move_zoom();
-
-        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
-            if move_.tile.window().id() == window {
-                let snapshot = move_.tile.snapshot_native(renderer).ok();
-                let tile_pos = move_.tile_render_location(zoom);
-                let tile_size = move_.tile.tile_size();
-                let dmabuf = move_.tile.window().dmabuf();
-
-                let output = move_.output.clone();
-                let pointer_pos_within_output = move_.pointer_pos_within_output;
-                let Some(mon) = self.monitor_for_output_mut(&output) else {
-                    return;
-                };
-                let Some((ws, ws_geo)) = mon.workspace_under(pointer_pos_within_output) else {
-                    return;
-                };
-                let idx = mon.idx_of_ws(ws.id()).unwrap();
-                let ws = &mut mon.workspaces[idx];
-
-                let tile_pos = tile_pos - ws_geo.loc;
-                ws.start_close_animation_for_tile_native(
-                    renderer, tile_size, tile_pos, blocker, snapshot, dmabuf,
-                );
-                return;
-            }
-        }
-
-        match &mut self.monitor_set {
-            MonitorSet::Normal { monitors, .. } => {
-                for mon in monitors {
-                    for ws in &mut mon.workspaces {
-                        if ws.has_window(window) {
-                            ws.start_close_animation_for_window_native(renderer, window, blocker);
-                            return;
-                        }
-                    }
-                }
-            }
-            MonitorSet::NoOutputs { workspaces, .. } => {
-                for ws in workspaces {
-                    if ws.has_window(window) {
-                        ws.start_close_animation_for_window_native(renderer, window, blocker);
-                        return;
-                    }
-                }
-            }
-        }
+        self.start_close_animation_for_window(renderer, window, blocker);
     }
 
     pub fn refresh(&mut self, is_active: bool) {

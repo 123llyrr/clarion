@@ -1,14 +1,16 @@
 //! Layer-shell scene imports; stacking, backdrop routing and cache namespaces.
+use std::collections::HashMap;
+
+use smithay::desktop::{layer_map_for_output, LayerMap, LayerSurface};
+use smithay::output::Output;
+use smithay::utils::{Logical, Rectangle};
+use smithay::wayland::shell::wlr_layer::Layer;
+
 use crate::layer::mapped::LayerSurfaceRenderElement;
 use crate::layer::MappedLayer;
 use crate::render_helpers::renderer::ClarionRenderer;
 use crate::render_helpers::xray::XrayPos;
 use crate::render_helpers::RenderCtx;
-use smithay::desktop::{layer_map_for_output, LayerMap, LayerSurface};
-use smithay::output::Output;
-use smithay::utils::{Logical, Rectangle};
-use smithay::wayland::shell::wlr_layer::Layer;
-use std::collections::HashMap;
 
 pub(crate) struct SceneLayers<'a> {
     pub mapped: &'a HashMap<LayerSurface, MappedLayer>,

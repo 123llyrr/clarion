@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+pub use clarion_core::deformation::MeshVertex;
 use glam::{Mat3, Vec2};
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles::{
@@ -18,8 +19,6 @@ use super::vulkan::native::NativeRenderer;
 use super::vulkan::pipeline::MeshGpuVertex;
 use super::vulkan::VulkanTexture;
 use crate::backend::tty::{TtyFrame, TtyRenderer, TtyRendererError};
-
-pub use clarion_core::deformation::MeshVertex;
 
 const EMPTY_VERTEX: MeshVertex = MeshVertex {
     position: [0.; 2],
@@ -116,6 +115,45 @@ fn append_clipped_triangle<T>(
 ) {
     debug_assert_eq!(triangle.len(), 3);
 
+    // Most triangles are wholly inside or outside a damage rectangle. Avoid
+    // walking four polygon clipping planes (and two scratch arrays) in those
+    // cases. Keep the full interpolation path for boundary intersections.
+    let mut any_outside = 0;
+    let mut common_outside = 0b1111;
+    let mut finite = clip.min.into_iter().chain(clip.max).all(f32::is_finite);
+    for vertex in triangle {
+        let [x, y] = vertex.position;
+        if !x.is_finite() || !y.is_finite() {
+            finite = false;
+            break;
+        }
+        let outside = u8::from(x < clip.min[0])
+            | (u8::from(x > clip.max[0]) << 1)
+            | (u8::from(y < clip.min[1]) << 2)
+            | (u8::from(y > clip.max[1]) << 3);
+        any_outside |= outside;
+        common_outside &= outside;
+    }
+    if finite {
+        if common_outside != 0 {
+            return;
+        }
+        if any_outside == 0 {
+            for vertex in triangle {
+                push(output, *vertex);
+            }
+            return;
+        }
+    }
+    append_boundary_clipped_triangle(output, triangle, clip, push);
+}
+
+fn append_boundary_clipped_triangle<T>(
+    output: &mut Vec<T>,
+    triangle: &[MeshVertex],
+    clip: ClipRect,
+    push: impl Fn(&mut Vec<T>, MeshVertex),
+) {
     let mut first = [EMPTY_VERTEX; 8];
     first[..3].copy_from_slice(triangle);
     let mut second = [EMPTY_VERTEX; 8];
@@ -660,6 +698,57 @@ impl smithay::backend::renderer::element::RenderElement<NativeRenderer> for Mesh
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mesh_fast_paths_match_full_clipping_without_changing_uv_or_winding() {
+        let clip = ClipRect {
+            min: [0., 0.],
+            max: [1., 1.],
+        };
+        let mut seed = 0x6f4a_8715_u64;
+        let mut next = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            ((seed >> 32) as u16 as f32 / u16::MAX as f32) * 3. - 1.
+        };
+        let mut optimized = Vec::new();
+        let mut reference = Vec::new();
+        for _ in 0..10_000 {
+            let triangle = std::array::from_fn::<_, 3, _>(|_| {
+                let position = [next(), next()];
+                MeshVertex {
+                    position,
+                    uv: [position[1] * 0.5, position[0] * 0.25],
+                }
+            });
+            optimized.clear();
+            reference.clear();
+            append_clipped_triangle(&mut optimized, &triangle, clip, push_vertex);
+            append_boundary_clipped_triangle(&mut reference, &triangle, clip, push_vertex);
+            assert_eq!(optimized, reference);
+        }
+        // Boundary vertices remain inside, with their original order and UVs.
+        let triangle = [
+            MeshVertex {
+                position: [0., 0.],
+                uv: [0.2, 0.9],
+            },
+            MeshVertex {
+                position: [0., 1.],
+                uv: [0.7, 0.1],
+            },
+            MeshVertex {
+                position: [1., 1.],
+                uv: [0.3, 0.8],
+            },
+        ];
+        optimized.clear();
+        reference.clear();
+        append_clipped_triangle(&mut optimized, &triangle, clip, push_vertex);
+        for vertex in triangle {
+            push_vertex(&mut reference, vertex);
+        }
+        assert_eq!(optimized, reference);
+    }
 
     #[test]
     fn overlapping_damage_is_split_before_blended_mesh_draw() {

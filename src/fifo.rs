@@ -8,14 +8,13 @@ use std::time::{Duration, Instant};
 
 use smithay::desktop::utils::surface_primary_scanout_output;
 use smithay::output::Output;
-use smithay::reexports::wayland_protocols::wp::fifo::v1::server::{
-    wp_fifo_manager_v1::{self, WpFifoManagerV1},
-    wp_fifo_v1::{self, WpFifoV1},
+use smithay::reexports::wayland_protocols::wp::fifo::v1::server::wp_fifo_manager_v1::{
+    self, WpFifoManagerV1,
 };
-use smithay::reexports::wayland_server::{
-    backend::GlobalId, protocol::wl_surface::WlSurface, Client, DataInit, DisplayHandle, New,
-    Resource, Weak,
-};
+use smithay::reexports::wayland_protocols::wp::fifo::v1::server::wp_fifo_v1::{self, WpFifoV1};
+use smithay::reexports::wayland_server::backend::GlobalId;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::reexports::wayland_server::{Client, DataInit, DisplayHandle, New, Resource, Weak};
 use smithay::wayland::compositor::{
     add_blocker, add_pre_commit_hook, is_sync_subsurface, with_states, Barrier,
 };

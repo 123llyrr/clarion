@@ -16,7 +16,7 @@ use smithay::backend::allocator::dmabuf::{Dmabuf, WeakDmabuf};
 use smithay::backend::drm::DrmNode;
 
 pub mod blur;
-mod completion;
+pub(crate) mod completion;
 pub mod custom_shader;
 mod damage;
 pub mod device;
@@ -233,8 +233,9 @@ struct TargetKey {
 }
 impl TargetKey {
     fn new(buffer: &Dmabuf) -> Result<Self, VulkanImportError> {
-        use smithay::backend::allocator::Buffer;
         use std::os::fd::AsRawFd;
+
+        use smithay::backend::allocator::Buffer;
         let planes = buffer
             .handles()
             .zip(buffer.offsets())
@@ -537,7 +538,8 @@ impl VulkanRenderer {
         )
     }
 
-    /// Execute a Vulkan rendering pass directly into a target DMA-BUF (such as the DRM scanout framebuffer).
+    /// Execute a Vulkan rendering pass directly into a target DMA-BUF (such as the DRM scanout
+    /// framebuffer).
     pub fn render_to_target_dmabuf(
         &mut self,
         target_dmabuf: &Dmabuf,
@@ -625,8 +627,9 @@ impl VulkanRenderer {
             Some(full)
         };
         let Some(region) = region else {
-            // No Vulkan submission: KMS still needs a completed producer.
-            crate::render_helpers::sync::wait_for_completion(producer)?;
+            // No Vulkan submission can acquire the dependency for KMS. Preserve
+            // the commit and retry instead of waiting on the desktop thread.
+            crate::render_helpers::sync::require_ready(producer)?;
             cached.last_commit = damage.map(|d| d.current_commit());
             return Ok(CompositionStats::default());
         };
@@ -688,7 +691,8 @@ impl VulkanRenderer {
         })
     }
 
-    /// Create a 1x1 solid color texture on host-visible memory (for pure color quads, overlays, and fallback textures).
+    /// Create a 1x1 solid color texture on host-visible memory (for pure color quads, overlays, and
+    /// fallback textures).
     pub fn create_solid_texture(&self, color: [u8; 4]) -> Result<VulkanTexture, vk::Result> {
         let ctx = self
             .ctx
@@ -866,8 +870,9 @@ impl fmt::Debug for VulkanRenderer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use smithay::backend::allocator::Fourcc;
+
+    use super::*;
 
     fn gpu_test_renderer() -> Option<VulkanRenderer> {
         let path = std::env::var_os("CLARION_VULKAN_TEST_NODE");

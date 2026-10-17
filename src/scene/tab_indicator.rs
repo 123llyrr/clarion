@@ -1,11 +1,6 @@
 use std::iter::zip;
 use std::mem;
 
-use clarion_config::{CornerRadius, Gradient, GradientRelativeTo, TabIndicatorPosition};
-use smithay::utils::{Logical, Point, Rectangle, Size};
-
-use super::tile::Tile;
-use super::LayoutElement;
 use crate::animation::{Animation, Clock};
 use crate::clarion_render_elements;
 use crate::render_helpers::border::BorderRenderElement;
@@ -13,6 +8,8 @@ use crate::render_helpers::renderer::DecorationRenderer;
 use crate::utils::{
     floor_logical_in_physical_max1, round_logical_in_physical, round_logical_in_physical_max1,
 };
+use clarion_config::{CornerRadius, Gradient, GradientRelativeTo, TabIndicatorPosition};
+use smithay::utils::{Logical, Point, Rectangle, Size};
 
 #[derive(Debug)]
 pub struct TabIndicator {
@@ -374,16 +371,15 @@ impl TabIndicator {
 }
 
 impl TabInfo {
-    pub fn from_tile<W: LayoutElement>(
-        tile: &Tile<W>,
-        position: Point<f64, Logical>,
+    pub fn new(
+        rule: &clarion_config::TabIndicatorRule,
+        focus_ring_config: clarion_config::FocusRing,
+        border_config: clarion_config::FocusRing,
+        geometry: Rectangle<f64, Logical>,
         is_active: bool,
         is_urgent: bool,
         config: &clarion_config::TabIndicator,
     ) -> Self {
-        let rules = tile.window().rules();
-        let rule = rules.tab_indicator;
-
         let gradient_from_rule = || {
             let (color, gradient) = if is_urgent {
                 (rule.urgent_color, rule.urgent_gradient)
@@ -409,10 +405,6 @@ impl TabInfo {
         };
 
         let gradient_from_border = || {
-            // Come up with tab indicator gradient matching the focus ring or the border, whichever
-            // one is enabled.
-            let focus_ring_config = tile.focus_ring().config();
-            let border_config = tile.border().config();
             let config = if focus_ring_config.off {
                 border_config
             } else {
@@ -432,8 +424,6 @@ impl TabInfo {
         let gradient = gradient_from_rule()
             .or_else(gradient_from_config)
             .unwrap_or_else(gradient_from_border);
-
-        let geometry = Rectangle::new(position, tile.animated_tile_size());
 
         TabInfo { gradient, geometry }
     }

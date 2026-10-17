@@ -63,9 +63,11 @@ fn renderer_replacement_preserves_layout_identity_minimization_and_drag() {
 #[test]
 #[ignore = "requires real DRM render node and two native Vulkan contexts"]
 fn native_renderer_replacement_discards_stale_tile_snapshots() {
-    use crate::render_helpers::vulkan::{hardware_tests::setup, native::NativeRenderer};
     use smithay::backend::allocator::Fourcc;
     use smithay::backend::renderer::{Bind, ExportMem, Renderer as _, Texture};
+
+    use crate::render_helpers::vulkan::hardware_tests::setup;
+    use crate::render_helpers::vulkan::native::NativeRenderer;
 
     let (vk, reference, allocator) = setup();
     drop(reference);

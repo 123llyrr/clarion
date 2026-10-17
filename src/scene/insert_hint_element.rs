@@ -1,8 +1,8 @@
 use clarion_config::CornerRadius;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
-use super::focus_ring::{FocusRing, FocusRingRenderElement};
 use crate::render_helpers::renderer::DecorationRenderer;
+use crate::scene::focus_ring::{FocusRing, FocusRingRenderElement};
 
 #[derive(Debug)]
 pub struct InsertHintElement {
@@ -62,5 +62,11 @@ impl InsertHintElement {
         push: &mut dyn FnMut(FocusRingRenderElement),
     ) {
         self.inner.render(renderer, location, push)
+    }
+}
+
+impl Default for InsertHintElement {
+    fn default() -> Self {
+        Self::new(clarion_config::InsertHint::default())
     }
 }

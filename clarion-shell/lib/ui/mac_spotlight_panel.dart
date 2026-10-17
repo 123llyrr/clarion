@@ -267,8 +267,9 @@ class _MacSpotlightPanelState extends State<MacSpotlightPanel> {
   }
 
   KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
-    if (event is! KeyDownEvent && event is! KeyRepeatEvent)
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
+    }
     if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
       if (_results.isNotEmpty) {
         setState(() {

@@ -264,8 +264,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::Config;
     use std::path::Path;
+
+    use crate::Config;
 
     #[test]
     fn parse_hyprland_rounding() {

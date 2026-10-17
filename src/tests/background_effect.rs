@@ -301,7 +301,8 @@ fn test_layer_protocol(native: bool) {
                     crate::render_helpers::renderer::AnyRenderer::Gles(renderer) => {
                         let name = renderer
                             .with_context(|gl| unsafe {
-                                let name = gl.GetString(0x1f01); // GL_RENDERER, queried without changing GL state.
+                                let name = gl.GetString(0x1f01); // GL_RENDERER, queried without
+                                                                 // changing GL state.
                                 assert!(!name.is_null());
                                 std::ffi::CStr::from_ptr(name.cast())
                                     .to_string_lossy()
@@ -361,8 +362,8 @@ fn test_layer_protocol(native: bool) {
         let mut changed = 0;
         for y in 0..240 {
             for x in 0..320 {
-                let logical_x = (f64::from(x) + 0.5) / scale;
-                let logical_y = (f64::from(y) + 0.5) / scale;
+                let logical_x = (x as f64 + 0.5) / scale;
+                let logical_y = (y as f64 + 0.5) / scale;
                 let inside = (32. ..48.).contains(&logical_y)
                     && ((32. ..48.).contains(&logical_x) || (64. ..80.).contains(&logical_x));
                 let offset = (y as usize * 320 + x as usize) * 4;
@@ -522,10 +523,11 @@ fn translucent_layer_protocol_blurs_actual_background_on_vulkan() {
 
 #[test]
 fn older_blocked_commit_cannot_consume_newer_blur_region_change() {
-    use crate::handlers::background_effect::get_cached_blur_region;
     use smithay::reexports::wayland_server::Resource as _;
     use smithay::utils::Rectangle;
     use smithay::wayland::compositor::{add_blocker, with_states, Barrier, CompositorHandler as _};
+
+    use crate::handlers::background_effect::get_cached_blur_region;
 
     for close in ["bar", "unset", "empty", "destroy"] {
         for commit_close_before_release in [false, true] {

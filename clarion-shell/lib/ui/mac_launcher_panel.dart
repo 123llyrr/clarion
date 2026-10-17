@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
@@ -51,7 +52,8 @@ class _MouseLaunchpadDraggable extends Draggable<String> {
   )..onStart = onStart;
 }
 
-class _MacLauncherPanelState extends State<MacLauncherPanel> {
+class _MacLauncherPanelState extends State<MacLauncherPanel>
+    with SingleTickerProviderStateMixin {
   late MacLaunchpadLayout _layout;
   bool _ownsLayout = false;
   final _tileKeys = <String, GlobalKey>{};
@@ -81,6 +83,8 @@ class _MacLauncherPanelState extends State<MacLauncherPanel> {
   int _columns = 7;
   int _pageCount = 1;
   List<String> _previousIds = const [];
+  List<MacLaunchpadEntry>? _idEntries;
+  List<String> _entryIds = const [];
   Timer? _wheelReset;
   Timer? _dragPageTimer;
   double _wheelDelta = 0;
@@ -88,6 +92,8 @@ class _MacLauncherPanelState extends State<MacLauncherPanel> {
   bool _wheelPageConsumed = false;
   static const _macPageCurve = Cubic(0.25, 0.1, 0.25, 1.0);
   bool _jiggleMode = false;
+  late final AnimationController _jiggleClock;
+  bool _inheritedReduced = false;
   bool get _reduced =>
       widget.controller.reduceMotion || MediaQuery.disableAnimationsOf(context);
   late List<DesktopApp> _lastApps;
@@ -96,6 +102,11 @@ class _MacLauncherPanelState extends State<MacLauncherPanel> {
   late ShellPanel _lastPanel;
   List<DesktopApp>? _indexedCatalogue;
   Map<String, DesktopApp> _appIndex = const {};
+  List<MacLaunchpadEntry>? _rootEntries;
+  List<MacLaunchpadEntry>? _visibleEntries;
+  String? _entriesQuery;
+  String? _entriesFolder;
+  List<DesktopApp>? _entriesCatalogue;
   bool get _searching => _query.text.trim().isNotEmpty;
   Map<String, DesktopApp> get _apps {
     // The controller replaces its immutable catalogue when applications change.
@@ -108,25 +119,76 @@ class _MacLauncherPanelState extends State<MacLauncherPanel> {
     return _appIndex;
   }
 
+  List<MacLaunchpadEntry> get _roots => _rootEntries ??= _layout.entries;
+
   List<MacLaunchpadEntry> get _entries {
     final query = _query.text.trim();
+    final catalogue = widget.controller.apps;
+    if (_visibleEntries != null &&
+        _entriesQuery == query &&
+        _entriesFolder == _folder &&
+        identical(_entriesCatalogue, catalogue)) {
+      return _visibleEntries!;
+    }
+    _entriesQuery = query;
+    _entriesFolder = _folder;
+    _entriesCatalogue = catalogue;
     if (query.isNotEmpty) {
       final apps = _apps;
-      return _layout.orderedAppIds
-          .where((id) => apps[id]?.matches(query) ?? false)
-          .map(MacLaunchpadEntry.app)
-          .toList();
+      return _visibleEntries = [
+        for (final entry in _roots)
+          for (final id in entry.appIds)
+            if (apps[id]?.matches(query) ?? false) MacLaunchpadEntry.app(id),
+      ];
     }
     final folder = _folder == null ? null : _layout.find(_folder!);
     if (folder != null && folder.isFolder) {
-      return folder.appIds.map(MacLaunchpadEntry.app).toList();
+      return _visibleEntries = folder.appIds
+          .map(MacLaunchpadEntry.app)
+          .toList();
     }
-    return _layout.entries;
+    return _visibleEntries = _roots;
+  }
+
+  void _invalidateEntries() {
+    _rootEntries = null;
+    _visibleEntries = null;
+  }
+
+  void _setJiggleMode(bool value) {
+    _jiggleMode = value;
+    _syncJiggleClock();
+  }
+
+  void _syncJiggleClock() {
+    final active =
+        _jiggleMode &&
+        !_inheritedReduced &&
+        !widget.controller.reduceMotion &&
+        widget.controller.panel == ShellPanel.launcher;
+    if (active) {
+      if (!_jiggleClock.isAnimating) {
+        _jiggleClock.repeat();
+      }
+    } else {
+      _jiggleClock.stop();
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _inheritedReduced = MediaQuery.disableAnimationsOf(context);
+    _syncJiggleClock();
   }
 
   @override
   void initState() {
     super.initState();
+    _jiggleClock = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 440),
+    );
     _ownsLayout = widget.layout == null;
     _layout =
         widget.layout ?? MacLaunchpadLayout(persist: !widget.controller.demo);
@@ -153,10 +215,12 @@ class _MacLauncherPanelState extends State<MacLauncherPanel> {
 
   void _catalogChanged() {
     final panel = widget.controller.panel;
+    var interactionChanged = false;
     if (panel != _lastPanel) {
       _lastPanel = panel;
       if (panel != ShellPanel.launcher) {
-        _jiggleMode = false;
+        interactionChanged = _jiggleMode;
+        _setJiggleMode(false);
         _dragCancelled = true;
         _stopDragPaging();
         _resetWheelState();
@@ -168,17 +232,23 @@ class _MacLauncherPanelState extends State<MacLauncherPanel> {
     if (identical(apps, _lastApps) &&
         preferences == _lastPreferences &&
         reduced == _lastReduced) {
+      if (interactionChanged && mounted) setState(() {});
       return;
     }
+    final catalogueChanged = !identical(apps, _lastApps);
     _lastApps = apps;
     _lastPreferences = preferences;
     _lastReduced = reduced;
-    _layout.reconcile(apps.map((app) => app.id));
-    final validIds = {
-      ...apps.map((app) => app.id),
-      ..._layout.entries.map((entry) => entry.id),
-    };
-    _tileKeys.removeWhere((id, _) => !validIds.contains(id));
+    _syncJiggleClock();
+    if (catalogueChanged) {
+      _invalidateEntries();
+      _layout.reconcile(apps.map((app) => app.id));
+      final validIds = {
+        ...apps.map((app) => app.id),
+        ..._roots.map((entry) => entry.id),
+      };
+      _tileKeys.removeWhere((id, _) => !validIds.contains(id));
+    }
     if (mounted) setState(() {});
   }
 
@@ -192,6 +262,7 @@ class _MacLauncherPanelState extends State<MacLauncherPanel> {
   }
 
   void _changed() {
+    _invalidateEntries();
     if (!mounted) return;
     if (_folder != null && !(_layout.find(_folder!)?.isFolder ?? false)) {
       // Catalog reconciliation can remove the open folder's last member.
@@ -226,6 +297,7 @@ class _MacLauncherPanelState extends State<MacLauncherPanel> {
       _layout =
           widget.layout ?? MacLaunchpadLayout(persist: !widget.controller.demo);
       _layout.addListener(_changed);
+      _invalidateEntries();
       _folder = null;
       _editingFolder = null;
       _selected = null;
@@ -248,6 +320,7 @@ class _MacLauncherPanelState extends State<MacLauncherPanel> {
   @override
   void dispose() {
     widget.controller.removeListener(_catalogChanged);
+    _jiggleClock.dispose();
     _layout.removeListener(_changed);
     if (_editingFolder != null) {
       _layout.rename(_editingFolder!, _nameEdit.text);
@@ -281,10 +354,12 @@ class _MacLauncherPanelState extends State<MacLauncherPanel> {
   }
 
   void _reconcile(List<MacLaunchpadEntry> entries, int capacity) {
-    final ids = entries.map((entry) => entry.id).toList();
-    final changed =
-        _capacity != capacity ||
-        ids.join('\u0000') != _previousIds.join('\u0000');
+    if (!identical(entries, _idEntries)) {
+      _idEntries = entries;
+      _entryIds = entries.map((entry) => entry.id).toList();
+    }
+    final ids = _entryIds;
+    final changed = _capacity != capacity || !listEquals(ids, _previousIds);
     _capacity = capacity;
     _pageCount = math.max(1, (entries.length / capacity).ceil());
     if (!changed) return;
@@ -361,7 +436,7 @@ class _MacLauncherPanelState extends State<MacLauncherPanel> {
     final folderId = _folder;
     if (_editingFolder != null) _commitRename();
     _stopDragPaging();
-    final index = _layout.entries.indexWhere((entry) => entry.id == folderId);
+    final index = _roots.indexWhere((entry) => entry.id == folderId);
     setState(() {
       _folder = null;
       _selected = _rootSelected;
@@ -401,7 +476,7 @@ class _MacLauncherPanelState extends State<MacLauncherPanel> {
         return KeyEventResult.handled;
       }
       if (_jiggleMode) {
-        setState(() => _jiggleMode = false);
+        setState(() => _setJiggleMode(false));
         return KeyEventResult.handled;
       }
       widget.controller.closePanel();
@@ -410,7 +485,7 @@ class _MacLauncherPanelState extends State<MacLauncherPanel> {
     if (key == LogicalKeyboardKey.altLeft ||
         key == LogicalKeyboardKey.altRight) {
       if (event is KeyRepeatEvent) return KeyEventResult.handled;
-      setState(() => _jiggleMode = !_jiggleMode);
+      setState(() => _setJiggleMode(!_jiggleMode));
       return KeyEventResult.handled;
     }
     final entries = _entries;
@@ -666,7 +741,7 @@ class _MacLauncherPanelState extends State<MacLauncherPanel> {
         onTap: () => _activate(entry),
         onLongPress: () {
           if (!_jiggleMode) {
-            setState(() => _jiggleMode = true);
+            setState(() => _setJiggleMode(true));
           }
         },
         onSecondaryTapUp: entry.isFolder
@@ -674,6 +749,7 @@ class _MacLauncherPanelState extends State<MacLauncherPanel> {
             : (_) => widget.controller.openDockAppMenu(entry.id),
         child: _LaunchpadJiggle(
           seed: entry.id.hashCode,
+          clock: _jiggleClock,
           active: _jiggleMode,
           reduced: _reduced,
           child: Column(
@@ -860,7 +936,7 @@ class _MacLauncherPanelState extends State<MacLauncherPanel> {
     }
     // Use the visible root page's real cells to place the extracted app.
     String? before;
-    final rootEntries = _layout.entries;
+    final rootEntries = _roots;
     for (final entry
         in rootEntries.skip(_rootPage * _rootCapacity).take(_rootCapacity)) {
       final box = _tileKeys[entry.id]?.currentContext?.findRenderObject();
@@ -1237,7 +1313,7 @@ class _MacLauncherPanelState extends State<MacLauncherPanel> {
     _rootColumns = (width / 140).floor().clamp(1, 7);
     final rows = (height / 120).floor().clamp(1, 5);
     _rootCapacity = _rootColumns * rows;
-    final rootEntries = _layout.entries;
+    final rootEntries = _roots;
     final index = rootEntries.indexWhere((entry) => entry.id == _folder);
     if (index >= 0) _rootPage = index ~/ _rootCapacity;
     final cellWidth = width / _rootColumns;
@@ -1439,7 +1515,7 @@ class _MacLauncherPanelState extends State<MacLauncherPanel> {
               behavior: HitTestBehavior.opaque,
               onTap: () {
                 if (_jiggleMode) {
-                  setState(() => _jiggleMode = false);
+                  setState(() => _setJiggleMode(false));
                   return;
                 }
                 if (folder != null) {
@@ -1450,7 +1526,7 @@ class _MacLauncherPanelState extends State<MacLauncherPanel> {
               },
               onLongPress: () {
                 if (!_jiggleMode) {
-                  setState(() => _jiggleMode = true);
+                  setState(() => _setJiggleMode(true));
                 }
               },
               child: folder == null
@@ -1484,78 +1560,43 @@ class _MacLauncherPanelState extends State<MacLauncherPanel> {
 }
 
 /// Gentle macOS Catalina icon wobble animation for Launchpad edit mode.
-class _LaunchpadJiggle extends StatefulWidget {
+class _LaunchpadJiggle extends StatelessWidget {
   const _LaunchpadJiggle({
     required this.child,
     required this.seed,
+    required this.clock,
     required this.active,
     required this.reduced,
   });
   final Widget child;
   final int seed;
+  final Animation<double> clock;
   final bool active;
   final bool reduced;
 
   @override
-  State<_LaunchpadJiggle> createState() => _LaunchpadJiggleState();
-}
-
-class _LaunchpadJiggleState extends State<_LaunchpadJiggle>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 220),
-    );
-    if (widget.active && !widget.reduced) {
-      final initial = ((widget.seed.abs() % 100) / 100.0).clamp(0.0, 1.0);
-      _controller.value = initial;
-      _controller.repeat(reverse: true);
-    }
-  }
-
-  @override
-  void didUpdateWidget(covariant _LaunchpadJiggle oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.active && !widget.reduced) {
-      if (!_controller.isAnimating) {
-        final initial = ((widget.seed.abs() % 100) / 100.0).clamp(0.0, 1.0);
-        _controller.value = initial;
-        _controller.repeat(reverse: true);
-      }
-    } else {
-      if (_controller.isAnimating) {
-        _controller.stop();
-        _controller.value = 0.5;
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    if (!widget.active || widget.reduced) return widget.child;
     return AnimatedBuilder(
-      animation: _controller,
+      animation: clock,
       builder: (context, child) {
-        final t = (_controller.value - 0.5) * 2.0; // -1.0 .. 1.0
-        final angle = t * (2.2 * math.pi / 180.0);
-        final offsetY = (1.0 - t.abs()) * 1.5 - 0.75;
+        // Keep the icon subtree mounted when edit mode or reduced motion
+        // changes. The panel stops the shared clock when wobble is inactive.
+        var angle = 0.0;
+        var offsetY = 0.0;
+        if (active && !reduced) {
+          // Seeded phases preserve independent wobble on one panel ticker.
+          final phase = (clock.value + (seed.abs() % 100) / 200.0) % 1.0;
+          final value = phase <= .5 ? phase * 2 : (1 - phase) * 2;
+          final t = (value - 0.5) * 2.0;
+          angle = t * (2.2 * math.pi / 180.0);
+          offsetY = (1.0 - t.abs()) * 1.5 - 0.75;
+        }
         return Transform.translate(
           offset: Offset(0, offsetY),
           child: Transform.rotate(angle: angle, child: child),
         );
       },
-      child: widget.child,
+      child: child,
     );
   }
 }

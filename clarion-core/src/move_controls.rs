@@ -1,8 +1,10 @@
 //! Numeric window-move controls, owned by DesktopCore's one MoveInteraction.
 //! The adapter transports the Tile/output and applies returned visual offsets.
 
-use crate::{policy_memory::Width, Rect};
 use clarion_motion::rubber_band::RubberBand;
+
+use crate::policy_memory::Width;
+use crate::Rect;
 
 // Existing Clarion drag thresholds; not verified Apple measurements.
 const NORMAL_THRESHOLD_SQUARED: f64 = 256. * 256.;

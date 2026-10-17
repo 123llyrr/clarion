@@ -5,7 +5,9 @@ use std::process::Command;
 use std::sync::{mpsc, Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use super::super::{device::VulkanContext, lifecycle, pipeline::VulkanPipelineManager};
+use super::super::device::VulkanContext;
+use super::super::lifecycle;
+use super::super::pipeline::VulkanPipelineManager;
 
 #[test]
 #[ignore = "requires real DRM render node, Vulkan timestamps and native Wayland server"]
@@ -18,11 +20,14 @@ fn native_event_loop_teardown_releases_device_before_loop_drop() {
     use futures_util::io::AsyncReadExt;
     use smithay::backend::allocator::Fourcc;
     use smithay::backend::renderer::Offscreen;
-    use smithay::reexports::calloop::{generic::Generic, EventLoop, Interest, Mode, PostAction};
-    use smithay::reexports::wayland_server::{backend::ClientData, Display};
+    use smithay::reexports::calloop::generic::Generic;
+    use smithay::reexports::calloop::{EventLoop, Interest, Mode, PostAction};
+    use smithay::reexports::wayland_server::backend::ClientData;
+    use smithay::reexports::wayland_server::Display;
 
     use crate::platform::event_sources::ScopedSource;
-    use crate::render_helpers::vulkan::{native::NativeRenderer, VulkanRenderer, VulkanTexture};
+    use crate::render_helpers::vulkan::native::NativeRenderer;
+    use crate::render_helpers::vulkan::{VulkanRenderer, VulkanTexture};
 
     struct Dropped(Arc<AtomicBool>);
     impl Drop for Dropped {

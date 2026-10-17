@@ -113,7 +113,8 @@ pub struct OutputFrameTimings {
     pub gpu_work_deferrals: Option<u64>,
     /// Frames with a valid hardware presentation timestamp. Nested/headless backends report zero.
     pub presentations: u64,
-    /// Fixed-refresh presentations with a valid target prediction, used as the late-frame denominator.
+    /// Fixed-refresh presentations with a valid target prediction, used as the late-frame
+    /// denominator.
     pub fixed_refresh_presentations: u64,
     /// Fixed-refresh presentations over half an interval later than predicted.
     /// This measures prediction misses, not application dropped frames or input latency.

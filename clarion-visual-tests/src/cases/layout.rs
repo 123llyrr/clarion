@@ -21,6 +21,7 @@ pub struct Layout {
     windows: Vec<TestWindow>,
     clock: Clock,
     layout: clarion::layout::Layout<TestWindow>,
+    _scene_resources: clarion::scene::resources::SceneResources,
     start_time: Duration,
     steps: HashMap<Duration, DynStepFn>,
 }
@@ -71,7 +72,12 @@ impl Layout {
             },
             ..Default::default()
         };
-        let mut layout = clarion::layout::Layout::with_options(clock.clone(), options);
+        let scene_resources = clarion::scene::resources::SceneResources::new();
+        let mut layout = clarion::layout::Layout::with_options_and_resources(
+            clock.clone(),
+            options,
+            scene_resources.allocator(),
+        );
         layout.add_output(output.clone(), None);
 
         let start_time = clock.now_unadjusted();
@@ -81,6 +87,7 @@ impl Layout {
             windows: Vec::new(),
             clock,
             layout,
+            _scene_resources: scene_resources,
             start_time,
             steps: HashMap::new(),
         }

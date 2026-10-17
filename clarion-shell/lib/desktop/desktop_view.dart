@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' show ViewFocusEvent, ViewFocusState;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -87,7 +88,7 @@ enum _DesktopAction {
   cleanUpSize,
 }
 
-class _DesktopViewState extends State<DesktopView> {
+class _DesktopViewState extends State<DesktopView> with WidgetsBindingObserver {
   static const _tooltipNameStyle = TextStyle(fontSize: 14, height: 1.3);
   final _focus = FocusNode(debugLabel: 'desktop-files');
   final _renameFocus = FocusNode(debugLabel: 'desktop-inline-rename');
@@ -107,6 +108,9 @@ class _DesktopViewState extends State<DesktopView> {
   Set<String> _dragSelection = const {};
   Offset? _dragPoint;
   Offset? _marqueeStart;
+  int? _marqueePointer;
+  int? _marqueeDevice;
+  int? _marqueeView;
   Rect? _marquee;
   Set<String> _beforeMarquee = const {};
   String? _beforeMarqueeActive;
@@ -127,6 +131,7 @@ class _DesktopViewState extends State<DesktopView> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     widget.service.addListener(_changed);
     widget.layout.addListener(_changed);
     unawaited(widget.layout.load());
@@ -135,6 +140,12 @@ class _DesktopViewState extends State<DesktopView> {
   @override
   void didUpdateWidget(covariant DesktopView oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.service, widget.service) ||
+        !identical(oldWidget.layout, widget.layout) ||
+        oldWidget.outputName != widget.outputName ||
+        oldWidget.shellStyle != widget.shellStyle) {
+      _finishMarquee(cancelled: true, cancelPointer: true, rebuild: false);
+    }
     if (!identical(oldWidget.service, widget.service)) {
       _cancelInlineRename(restoreFocus: false);
       oldWidget.service.removeListener(_changed);
@@ -153,13 +164,11 @@ class _DesktopViewState extends State<DesktopView> {
       _dragging = null;
       _positions = const {};
       if (widget.shellStyle == ShellStyle.macos) _selectOnly(null);
-      _marquee = null;
     }
     if (oldWidget.shellStyle != widget.shellStyle) {
       _cancelInlineRename(restoreFocus: false);
       _selectOnly(_selected);
       _dragging = null;
-      _marquee = null;
     }
   }
 
@@ -188,6 +197,8 @@ class _DesktopViewState extends State<DesktopView> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _finishMarquee(rebuild: false);
     widget.service.removeListener(_changed);
     widget.layout.removeListener(_changed);
     if (_interactionDepth > 0) widget.onInteractionChanged?.call(false);
@@ -195,6 +206,19 @@ class _DesktopViewState extends State<DesktopView> {
     _renameFocus.dispose();
     _renameText.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeViewFocus(ViewFocusEvent event) {
+    if (event.viewId == _marqueeView &&
+        event.state == ViewFocusState.unfocused) {
+      _cancelMarquee();
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) _cancelMarquee();
   }
 
   BuildContext get _interactionContext {
@@ -210,6 +234,7 @@ class _DesktopViewState extends State<DesktopView> {
   Future<T?> _interact<T>(Future<T?> Function() action) async {
     final first = _interactionDepth++ == 0;
     if (first) {
+      _cancelMarquee();
       Tooltip.dismissAllToolTips();
       setState(() {});
       widget.onInteractionChanged?.call(true);
@@ -1032,6 +1057,7 @@ class _DesktopViewState extends State<DesktopView> {
         .clamp(0, grid.pageCount(widget.service.entries.length) - 1)
         .toInt();
     if (next == _page) return;
+    _cancelMarquee();
     Tooltip.dismissAllToolTips();
     setState(() {
       _page = next;
@@ -1039,33 +1065,83 @@ class _DesktopViewState extends State<DesktopView> {
       _dragging = null;
       _dragSelection = const {};
       _dragPoint = null;
-      _marquee = null;
     });
   }
 
-  void _startMarquee(DragStartDetails details) {
+  void _trackMarquee(PointerDownEvent event) {
     final grid = _grid;
-    final start = _marqueeStart;
+    final start = _local(event.position);
     if (widget.shellStyle != ShellStyle.macos ||
+        event.buttons != kPrimaryMouseButton ||
         _interactionDepth > 0 ||
         widget.service.busy ||
         _dragging != null ||
         grid == null ||
-        start == null ||
         !grid.area.contains(start) ||
         _visiblePaths.any(
           (path) => grid.tileRect(_positions[path]!).contains(start),
         )) {
       return;
     }
-    Tooltip.dismissAllToolTips();
-    _focus.requestFocus();
-    _beforeMarquee = Set.of(_selection);
-    _beforeMarqueeActive = _selected;
-    _beforeMarqueeAnchor = _selectionAnchor;
-    final keyboard = HardwareKeyboard.instance;
-    _marqueeAdditive = keyboard.isMetaPressed || keyboard.isShiftPressed;
-    _updateMarquee(_local(details.globalPosition));
+    if (_marqueePointer != null) {
+      if (event.kind != PointerDeviceKind.mouse ||
+          event.device != _marqueeDevice ||
+          event.viewId != _marqueeView ||
+          event.pointer == _marqueePointer) {
+        return;
+      }
+      _cancelMarquee();
+    }
+    _marqueeStart = start;
+    _marqueePointer = event.pointer;
+    _marqueeDevice = event.device;
+    _marqueeView = event.viewId;
+    GestureBinding.instance.pointerRouter.addGlobalRoute(_marqueePointerEvent);
+  }
+
+  void _marqueePointerEvent(PointerEvent event) {
+    if (event.viewId != _marqueeView || event.device != _marqueeDevice) return;
+    // A device can disappear, or return hovering, without a button release
+    // reaching the old surface after a native modal operation takes its grab.
+    if (event is PointerRemovedEvent ||
+        (event is PointerHoverEvent && event.buttons == 0)) {
+      _cancelMarquee();
+    } else if (event.pointer == _marqueePointer) {
+      if (event is PointerMoveEvent) {
+        if ((event.buttons & kPrimaryMouseButton) == 0) {
+          _cancelMarquee();
+        } else {
+          _moveMarquee(event);
+        }
+      } else if (event is PointerUpEvent) {
+        _finishMarquee();
+      } else if (event is PointerCancelEvent) {
+        _finishMarquee(cancelled: true);
+      }
+    }
+  }
+
+  void _moveMarquee(PointerMoveEvent event) {
+    final start = _marqueeStart;
+    if (start == null) return;
+    final point = _local(event.position);
+    if (_marquee == null) {
+      if ((point - start).distance <=
+          computePanSlop(
+            event.kind,
+            MediaQuery.maybeGestureSettingsOf(context),
+          )) {
+        return;
+      }
+      Tooltip.dismissAllToolTips();
+      _focus.requestFocus();
+      _beforeMarquee = Set.of(_selection);
+      _beforeMarqueeActive = _selected;
+      _beforeMarqueeAnchor = _selectionAnchor;
+      final keyboard = HardwareKeyboard.instance;
+      _marqueeAdditive = keyboard.isMetaPressed || keyboard.isShiftPressed;
+    }
+    _updateMarquee(point);
   }
 
   void _updateMarquee(Offset point) {
@@ -1090,9 +1166,21 @@ class _DesktopViewState extends State<DesktopView> {
     });
   }
 
-  void _cancelMarquee() {
-    if (_marquee == null) return;
-    setState(() {
+  void _cancelMarquee() => _finishMarquee(cancelled: true, cancelPointer: true);
+
+  void _finishMarquee({
+    bool cancelled = false,
+    bool cancelPointer = false,
+    bool rebuild = true,
+  }) {
+    final pointer = _marqueePointer;
+    final painted = _marquee != null;
+    if (pointer != null) {
+      GestureBinding.instance.pointerRouter.removeGlobalRoute(
+        _marqueePointerEvent,
+      );
+    }
+    if (painted && cancelled) {
       _selection
         ..clear()
         ..addAll(
@@ -1104,9 +1192,22 @@ class _DesktopViewState extends State<DesktopView> {
       _selectionAnchor = _selection.contains(_beforeMarqueeAnchor)
           ? _beforeMarqueeAnchor
           : _selected;
-      _marquee = null;
-      _marqueeStart = null;
-    });
+    }
+    _marquee = null;
+    _marqueeStart = null;
+    _marqueePointer = null;
+    _marqueeDevice = null;
+    _marqueeView = null;
+    _beforeMarquee = const {};
+    _beforeMarqueeActive = null;
+    _beforeMarqueeAnchor = null;
+    _marqueeAdditive = false;
+    if (painted && rebuild && mounted) setState(() {});
+    // Cancel pending taps too: releasing an interrupted drag must not clear the
+    // selection restored above or become a click in a newly opened popup.
+    if (cancelPointer && pointer != null) {
+      GestureBinding.instance.cancelPointer(pointer);
+    }
   }
 
   KeyEventResult _key(FocusNode node, KeyEvent event) {
@@ -1166,8 +1267,9 @@ class _DesktopViewState extends State<DesktopView> {
     }
     if (macos &&
         matches(const SingleActivator(LogicalKeyboardKey.keyC, meta: true))) {
-      if (widget.service.busy || _dragging != null)
+      if (widget.service.busy || _dragging != null) {
         return KeyEventResult.ignored;
+      }
       final selected = _selectedEntries;
       if (selected.isNotEmpty) {
         widget.service.copySelection(selected);
@@ -1187,8 +1289,9 @@ class _DesktopViewState extends State<DesktopView> {
     }
     if (macos &&
         matches(const SingleActivator(LogicalKeyboardKey.keyD, meta: true))) {
-      if (widget.service.busy || _dragging != null)
+      if (widget.service.busy || _dragging != null) {
         return KeyEventResult.ignored;
+      }
       final selected = _selectedEntries;
       if (selected.isNotEmpty) {
         unawaited(widget.service.duplicateSelection(selected));
@@ -1266,6 +1369,9 @@ class _DesktopViewState extends State<DesktopView> {
     child: Focus(
       focusNode: _focus,
       onKeyEvent: _key,
+      onFocusChange: (focused) {
+        if (!focused) _cancelMarquee();
+      },
       child: LayoutBuilder(
         builder: (context, constraints) {
           final largerText = math.max(
@@ -1399,35 +1505,10 @@ class _DesktopViewState extends State<DesktopView> {
                     if (_controlClick) unawaited(_menu(details.globalPosition));
                   }
                 : null,
-            onPanDown: widget.shellStyle == ShellStyle.macos
-                ? (details) => _marqueeStart = _local(details.globalPosition)
-                : null,
-            onPanStart: widget.shellStyle == ShellStyle.macos
-                ? _startMarquee
-                : null,
-            onPanUpdate: widget.shellStyle == ShellStyle.macos
-                ? (details) {
-                    if (_marquee != null) {
-                      _updateMarquee(_local(details.globalPosition));
-                    }
-                  }
-                : null,
-            onPanEnd: widget.shellStyle == ShellStyle.macos
-                ? (_) {
-                    if (_marquee != null) {
-                      setState(() {
-                        _marquee = null;
-                        _marqueeStart = null;
-                      });
-                    }
-                  }
-                : null,
-            onPanCancel: widget.shellStyle == ShellStyle.macos
-                ? _cancelMarquee
-                : null,
             onSecondaryTapUp: (details) =>
                 unawaited(_menu(details.globalPosition)),
             child: Listener(
+              onPointerDown: _trackMarquee,
               onPointerSignal: (event) {
                 if (event is! PointerScrollEvent ||
                     pages <= 1 ||

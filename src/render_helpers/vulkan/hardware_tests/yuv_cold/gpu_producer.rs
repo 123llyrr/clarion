@@ -1,9 +1,11 @@
 //! Proper GPU allocation and actual exported metadata, independent of DRM dumb storage.
-use super::*;
-use crate::render_helpers::vulkan::VulkanContext;
-use ash::vk;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::sync::Arc;
+
+use ash::vk;
+
+use super::*;
+use crate::render_helpers::vulkan::VulkanContext;
 
 struct GpuProducer {
     ctx: Arc<VulkanContext>,

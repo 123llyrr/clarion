@@ -52,8 +52,9 @@ pub fn read_line(stream: &mut UnixStream, limit: usize, timeout: Duration) -> io
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::Write;
+
+    use super::*;
     #[test]
     fn fragmented_line_and_size_limit() {
         let (mut reader, mut writer) = UnixStream::pair().unwrap();

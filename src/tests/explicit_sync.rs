@@ -47,14 +47,15 @@ mod implicit {
     use calloop::{Interest, Mode, PostAction};
     use smithay::backend::allocator::dmabuf::{AlreadyReady, Dmabuf, DmabufFlags};
     use smithay::backend::allocator::{Fourcc, Modifier};
-    use smithay::reexports::wayland_server::{
-        protocol::wl_surface::WlSurface as ServerSurface, Resource,
-    };
+    use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface as ServerSurface;
+    use smithay::reexports::wayland_server::Resource;
     use smithay::wayland::compositor::{add_pre_commit_hook, with_states, SurfaceAttributes};
-    use wayland_client::{protocol::wl_surface::WlSurface, Proxy};
+    use wayland_client::protocol::wl_surface::WlSurface;
+    use wayland_client::Proxy;
 
     use crate::compositor::State;
-    use crate::tests::{client::ClientId, Fixture};
+    use crate::tests::client::ClientId;
+    use crate::tests::Fixture;
 
     fn fixture() -> (Fixture, ClientId, WlSurface, ServerSurface) {
         let mut fixture = Fixture::new();
@@ -299,7 +300,7 @@ impl HardwareFixture {
             .backend
             .with_renderer(|renderer| match renderer {
                 AnyRenderer::Native(renderer) => eprintln!(
-                    "HARDWARE: {} (Wayland sync fixture headless loader/ICD selection)",
+                    "HARDWARE: {} (Wayland sync fixture headless renderer)",
                     renderer.vulkan().info.device_name
                 ),
                 AnyRenderer::Gles(_) => unreachable!("fixture requires native Vulkan"),
@@ -545,10 +546,10 @@ fn idle_gpu_completion_releases_replaced_and_detached_wayland_buffers() {
     for export_required in [true, false] {
         use calloop::timer::{TimeoutAction, Timer};
         use smithay::backend::drm::DrmNode;
-        use smithay::backend::renderer::element::{
-            surface::{render_elements_from_surface_tree, WaylandSurfaceRenderElement},
-            Element, Kind, RenderElement,
+        use smithay::backend::renderer::element::surface::{
+            render_elements_from_surface_tree, WaylandSurfaceRenderElement,
         };
+        use smithay::backend::renderer::element::{Element, Kind, RenderElement};
         use smithay::backend::renderer::{Bind, Color32F, Frame, Offscreen, Renderer};
         use smithay::reexports::wayland_server::Resource;
         use smithay::utils::{Rectangle, Transform};

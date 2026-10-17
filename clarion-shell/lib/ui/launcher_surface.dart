@@ -31,10 +31,12 @@ class LauncherSurface extends StatefulWidget {
 
 class _LauncherSurfaceState extends State<LauncherSurface> {
   Widget? _macPanel;
+  Widget? _materialPanel;
   MacLaunchpadLayout? _macLayout;
   bool _ownsMacLayout = false;
   void _clearMacLayout() {
     _macPanel = null;
+    _materialPanel = null;
     if (_ownsMacLayout) _macLayout?.dispose();
     _macLayout = null;
     _ownsMacLayout = false;
@@ -93,7 +95,9 @@ class _LauncherSurfaceState extends State<LauncherSurface> {
                     vertical: constraints.maxHeight < 360 ? 8 : 24,
                   ),
                   child: RepaintBoundary(
-                    child: LauncherPanel(controller: widget.controller),
+                    child: _materialPanel ??= LauncherPanel(
+                      controller: widget.controller,
+                    ),
                   ),
                 ),
               ),

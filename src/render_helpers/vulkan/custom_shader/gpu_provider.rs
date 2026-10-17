@@ -193,7 +193,8 @@ impl<W: Send + 'static, R: Send + 'static> Service<W, R> {
                             slot: Some(request.slot),
                             listener: listener.clone(),
                         };
-                        // Closed receivers drop Completion on this worker and enqueue bounded retirement.
+                        // Closed receivers drop Completion on this worker and enqueue bounded
+                        // retirement.
                         let _ = listener.reply.send(Event::Ready(completion));
                     }
                 }
@@ -272,9 +273,10 @@ impl<W: Send + 'static, R: Send + 'static> Endpoint<W, R> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::mpsc::RecvTimeoutError;
     use std::time::Duration;
+
+    use super::*;
     struct Payload {
         thread: std::thread::ThreadId,
         retired: mpsc::Sender<std::thread::ThreadId>,

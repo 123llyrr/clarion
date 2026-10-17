@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use crate::window_manager::WindowManager;
 use clarion_ipc::{Output, Window, Workspace};
 use eframe::egui::{
     self, Align, Align2, Button, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Sense,
@@ -18,6 +17,7 @@ use crate::icons::{self, Icon};
 use crate::ipc::IpcClient;
 use crate::preferences_home;
 use crate::theme::colors as palette;
+use crate::window_manager::WindowManager;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveTab {

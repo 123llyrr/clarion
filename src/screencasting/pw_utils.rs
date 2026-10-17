@@ -9,7 +9,6 @@ use std::rc::{Rc, Weak};
 use std::time::Duration;
 use std::{mem, slice};
 
-use crate::render_helpers::renderer::ClarionRenderer;
 use anyhow::Context as _;
 use calloop::timer::{TimeoutAction, Timer};
 use calloop::RegistrationToken;
@@ -54,6 +53,7 @@ use crate::compositor::{CastTarget, State};
 use crate::dbus::mutter_screen_cast::{self, CursorMode};
 use crate::platform::capture::CapturePermit;
 use crate::platform::pixel_readback::{DeferredCaptureRenderer, PendingPixels};
+use crate::render_helpers::renderer::ClarionRenderer;
 use crate::render_helpers::{clear_dmabuf, encompassing_geo, render_to_dmabuf, render_to_texture};
 use crate::screencasting::CastRenderElement;
 use crate::utils::{get_monotonic_time, CastSessionId, CastStreamId};
@@ -1906,8 +1906,9 @@ fn write_cursor_metadata(
 
 #[cfg(test)]
 mod cursor_bitmap_tests {
-    use super::*;
     use smithay::output::{PhysicalProperties, Subpixel};
+
+    use super::*;
 
     fn output(name: &str) -> Output {
         Output::new(
@@ -2185,7 +2186,9 @@ mod cursor_bitmap_tests {
     #[test]
     #[ignore = "requires a DRM render node and EGL fences"]
     fn deferred_cursor_pixels_match_bgra_channels_rows_and_metadata_geometry() {
-        use crate::platform::gles_readback::GlesReadbackPoll;
+        use std::fs::OpenOptions;
+        use std::sync::Arc;
+
         use smithay::backend::allocator::gbm::GbmDevice;
         use smithay::backend::egl::{EGLContext, EGLDisplay};
         use smithay::backend::renderer::element::memory::{
@@ -2193,8 +2196,8 @@ mod cursor_bitmap_tests {
         };
         use smithay::backend::renderer::element::Kind;
         use smithay::backend::renderer::gles::GlesRenderer;
-        use std::fs::OpenOptions;
-        use std::sync::Arc;
+
+        use crate::platform::gles_readback::GlesReadbackPoll;
 
         let node = std::env::var("CLARION_GLES_TEST_NODE").expect("set CLARION_GLES_TEST_NODE");
         let file = OpenOptions::new()
@@ -2288,11 +2291,12 @@ mod cursor_bitmap_tests {
     #[test]
     #[ignore = "requires a real DRM render node and Vulkan readback"]
     fn native_deferred_cursor_pixels_match_bgra_channels_rows_and_metadata_geometry() {
-        use crate::render_helpers::vulkan::native::NativeRenderer;
         use smithay::backend::renderer::element::memory::{
             MemoryRenderBuffer, MemoryRenderBufferRenderElement,
         };
         use smithay::backend::renderer::element::Kind;
+
+        use crate::render_helpers::vulkan::native::NativeRenderer;
 
         let (vulkan, _reference, _allocator) =
             crate::render_helpers::vulkan::hardware_tests::setup();

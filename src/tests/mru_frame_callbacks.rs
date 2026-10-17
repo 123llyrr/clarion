@@ -7,9 +7,8 @@ use smithay::backend::renderer::element::{
 };
 use smithay::desktop::utils::{send_frames_surface_tree, surface_primary_scanout_output};
 use smithay::output::Output;
-use smithay::reexports::wayland_server::{
-    protocol::wl_surface::WlSurface as ServerSurface, Resource as _,
-};
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface as ServerSurface;
+use smithay::reexports::wayland_server::Resource as _;
 use smithay::wayland::compositor::with_states;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::Proxy as _;
@@ -199,8 +198,9 @@ fn primary(surface: &ServerSurface) -> Option<Output> {
 
 #[test]
 fn removing_mru_output_discards_open_and_fading_overlay_resources() {
-    use crate::compositor::RedrawState;
     use clarion_config::MruScope;
+
+    use crate::compositor::RedrawState;
 
     for (closing, remove_other_first) in
         [(false, false), (false, true), (true, false), (true, true)]

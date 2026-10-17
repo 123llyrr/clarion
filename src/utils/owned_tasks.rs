@@ -22,6 +22,13 @@ impl Drop for Slot {
     }
 }
 
+/// Reserve capacity before freezing a large desktop-owned payload. Dropping an
+/// unused permit releases admission without enqueueing work.
+pub(crate) struct TaskPermit {
+    jobs: async_channel::Sender<Job>,
+    slot: Slot,
+}
+
 pub(crate) struct TaskResult<R> {
     result: async_channel::Receiver<(Result<R, String>, Slot)>,
 }
@@ -53,29 +60,44 @@ impl TaskPool {
         }
     }
 
-    /// Admission never waits. The slot covers queued, executing and undelivered results.
-    pub(crate) fn submit<R: Send + 'static>(
-        &self,
-        work: impl FnOnce() -> Result<R, String> + Send + 'static,
-    ) -> Result<TaskResult<R>, String> {
+    pub(crate) fn reserve(&self) -> Result<TaskPermit, String> {
         self.slots
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                 (n < OUTSTANDING).then_some(n + 1)
             })
             .map_err(|_| "owned-data worker capacity reached".to_owned())?;
-        let slot = Slot(self.slots.clone());
+        Ok(TaskPermit {
+            jobs: self.jobs.clone(),
+            slot: Slot(self.slots.clone()),
+        })
+    }
+
+    /// Admission never waits. The slot covers queued, executing and undelivered results.
+    pub(crate) fn submit<R: Send + 'static>(
+        &self,
+        work: impl FnOnce() -> Result<R, String> + Send + 'static,
+    ) -> Result<TaskResult<R>, String> {
+        self.reserve()?.submit(work)
+    }
+}
+
+impl TaskPermit {
+    pub(crate) fn submit<R: Send + 'static>(
+        self,
+        work: impl FnOnce() -> Result<R, String> + Send + 'static,
+    ) -> Result<TaskResult<R>, String> {
+        let Self { jobs, slot } = self;
         let (sender, result) = async_channel::bounded(1);
-        self.jobs
-            .try_send(Box::new(move || {
-                // A cancelled receiver does not release a running job's slot prematurely.
-                if sender.is_closed() {
-                    return;
-                }
-                let reply = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
-                    .unwrap_or_else(|_| Err("owned-data worker panicked".to_owned()));
-                let _ = sender.try_send((reply, slot));
-            }))
-            .map_err(|_| "owned-data worker unavailable".to_owned())?;
+        jobs.try_send(Box::new(move || {
+            // A cancelled receiver does not release a running job's slot prematurely.
+            if sender.is_closed() {
+                return;
+            }
+            let reply = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+                .unwrap_or_else(|_| Err("owned-data worker panicked".to_owned()));
+            let _ = sender.try_send((reply, slot));
+        }))
+        .map_err(|_| "owned-data worker unavailable".to_owned())?;
         Ok(TaskResult { result })
     }
 }
@@ -103,8 +125,9 @@ pub(crate) fn read_regular_text(path: &Path, limit: usize) -> io::Result<String>
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::Barrier;
+
+    use super::*;
 
     fn take<R>(task: TaskResult<R>) -> Result<R, String> {
         let (result, _slot) = task.result.recv_blocking().unwrap();
@@ -122,6 +145,23 @@ mod tests {
             assert_eq!(take(task).unwrap(), i);
         }
         assert_eq!(take(pool.submit(|| Ok(7)).unwrap()).unwrap(), 7);
+    }
+
+    #[test]
+    fn reservations_bound_payloads_before_jobs_are_submitted() {
+        let pool = TaskPool::new();
+        let mut permits: Vec<_> = (0..OUTSTANDING).map(|_| pool.reserve().unwrap()).collect();
+        assert!(pool.reserve().is_err());
+        assert!(pool.submit(|| Ok(())).is_err());
+        drop(permits.pop());
+        let job = pool.submit(|| Ok(7)).unwrap();
+        // Completed results and not-yet-submitted payloads share the same bound.
+        assert!(pool.reserve().is_err());
+        assert_eq!(take(job).unwrap(), 7);
+        let reserved = permits.pop().unwrap().submit(|| Ok(11)).unwrap();
+        assert_eq!(take(reserved).unwrap(), 11);
+        drop(permits);
+        assert_eq!(pool.slots.load(Ordering::Acquire), 0);
     }
 
     #[test]

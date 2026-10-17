@@ -368,8 +368,9 @@ fn ensure_unique_path(source: &str, path: &[&str], fields: &[&str]) -> Result<()
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use clarion_config::Config;
+
+    use super::*;
 
     #[test]
     fn overview_choice_preserves_inline_comments_animation_and_other_fields() {

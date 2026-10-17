@@ -1,8 +1,9 @@
+use std::time::Duration;
+
 use clarion_core::dnd_hold::{DndActivateIntent, DndHoldAction as Action, DndTarget as Target};
 use clarion_core::{
     CoreEffect, CoreEvent, DesktopCore, Layer, LayoutMode, Rect, SpaceId, WindowRecord,
 };
-use std::time::Duration;
 
 fn desktop() -> DesktopCore<u64> {
     let mut core = DesktopCore::new();

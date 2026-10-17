@@ -3,10 +3,9 @@ use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
-use calloop::channel::Channel;
-
 use anyhow::{bail, Context};
 use ash::vk;
+use calloop::channel::Channel;
 use smithay::backend::renderer::gles::{Uniform, UniformValue};
 
 use super::device::{StagingBuffer, VulkanContext};

@@ -7,9 +7,8 @@ use std::ffi::{CStr, CString};
 use std::fmt;
 use std::sync::Arc;
 
-use ash::vk;
-use ash::{Device, Entry, Instance};
-use libc::{major, minor};
+use ash::{vk, Device, Entry, Instance};
+use libc::{major, makedev, minor};
 use smithay::backend::drm::DrmNode;
 
 use super::VulkanBackendInfo;
@@ -26,6 +25,19 @@ const EXT_EXTERNAL_MEMORY_DMA_BUF: &CStr = c"VK_EXT_external_memory_dma_buf";
 const EXT_QUEUE_FAMILY_FOREIGN: &CStr = c"VK_EXT_queue_family_foreign";
 const EXT_EXTERNAL_MEMORY_FD: &CStr = c"VK_KHR_external_memory_fd";
 const EXT_IMAGE_DRM_FORMAT_MODIFIER: &CStr = c"VK_EXT_image_drm_format_modifier";
+const EXT_PHYSICAL_DEVICE_DRM: &CStr = c"VK_EXT_physical_device_drm";
+
+fn render_device_id(properties: &vk::PhysicalDeviceDrmPropertiesEXT<'_>) -> Option<libc::dev_t> {
+    if properties.has_render != vk::TRUE {
+        return None;
+    }
+    // Vulkan uses signed 64-bit values; libc's Linux makedev accepts unsigned
+    // 32-bit components. Never truncate a malformed driver's device identity.
+    let render_major = u32::try_from(properties.render_major).ok()?;
+    let render_minor = u32::try_from(properties.render_minor).ok()?;
+    let device = makedev(render_major, render_minor);
+    (major(device) == render_major && minor(device) == render_minor).then_some(device)
+}
 
 /// Native window handles borrowed from a live Winit window. The caller keeps
 /// both the display connection and the window alive for the WSI lifetime.
@@ -222,7 +234,31 @@ unsafe impl Sync for VulkanContext {}
 static VULKAN_INIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 impl VulkanContext {
-    /// Initialize Vulkan context, optionally matching a DRM node (e.g. /dev/dri/cardX or renderD128).
+    /// DRM render-device identity for the GPU actually selected by this context.
+    /// Property-only extension queries do not require enabling a logical-device
+    /// extension. Drivers without this extension or a valid render node retain
+    /// the DMA-BUF v3 fallback rather than advertising a guessed primary device.
+    pub(crate) fn drm_render_device_id(&self) -> Result<Option<libc::dev_t>, vk::Result> {
+        let extensions = unsafe {
+            self.instance
+                .enumerate_device_extension_properties(self.physical_device)?
+        };
+        if !extensions.iter().any(|extension| unsafe {
+            CStr::from_ptr(extension.extension_name.as_ptr()) == EXT_PHYSICAL_DEVICE_DRM
+        }) {
+            return Ok(None);
+        }
+        let mut drm = vk::PhysicalDeviceDrmPropertiesEXT::default();
+        let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut drm);
+        unsafe {
+            self.instance
+                .get_physical_device_properties2(self.physical_device, &mut properties)
+        };
+        Ok(render_device_id(&drm))
+    }
+
+    /// Initialize Vulkan context, optionally matching a DRM node (e.g. /dev/dri/cardX or
+    /// renderD128).
     pub fn init(drm_node: Option<&DrmNode>) -> Result<Arc<Self>, VulkanInitError> {
         Self::init_inner(drm_node, None)
     }
@@ -942,6 +978,61 @@ impl Drop for InstanceDropGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dmabuf_feedback_uses_reported_render_device_without_primary_substitution() {
+        let properties = vk::PhysicalDeviceDrmPropertiesEXT::default()
+            .has_primary(true)
+            .has_render(true)
+            .primary_major(226)
+            .primary_minor(0)
+            .render_major(226)
+            .render_minor(137);
+        let device = render_device_id(&properties).unwrap();
+        assert_eq!(major(device), 226);
+        assert_eq!(minor(device), 137);
+    }
+
+    #[test]
+    fn dmabuf_feedback_requires_a_reported_render_node() {
+        let properties = vk::PhysicalDeviceDrmPropertiesEXT::default()
+            .has_primary(true)
+            .primary_major(226)
+            .primary_minor(0)
+            .render_major(226)
+            .render_minor(128);
+        assert_eq!(render_device_id(&properties), None);
+    }
+
+    #[test]
+    fn dmabuf_feedback_rejects_negative_or_truncated_render_device_numbers() {
+        for (render_major, render_minor) in [
+            (-1, 128),
+            (226, -1),
+            (i64::from(u32::MAX) + 1, 128),
+            (226, i64::from(u32::MAX) + 1),
+            (i64::MAX, i64::MAX),
+        ] {
+            let properties = vk::PhysicalDeviceDrmPropertiesEXT::default()
+                .has_render(true)
+                .render_major(render_major)
+                .render_minor(render_minor);
+            assert_eq!(render_device_id(&properties), None);
+        }
+    }
+
+    #[test]
+    fn dmabuf_feedback_device_encoding_preserves_high_component_bits() {
+        // Exercise libc's encoding rather than a hand-written Linux dev_t bit
+        // layout, including values that would expose an accidental u8/u16 cast.
+        let properties = vk::PhysicalDeviceDrmPropertiesEXT::default()
+            .has_render(true)
+            .render_major(0x1234)
+            .render_minor(0x123456);
+        let device = render_device_id(&properties).unwrap();
+        assert_eq!(major(device), 0x1234);
+        assert_eq!(minor(device), 0x123456);
+    }
 
     fn buffer(size: usize) -> StagingBuffer {
         StagingBuffer {

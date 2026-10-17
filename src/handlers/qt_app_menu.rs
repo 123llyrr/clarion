@@ -11,9 +11,9 @@ use smithay::reexports::wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource,
 };
 use smithay::wayland::compositor::with_states;
-use wayland_protocols_plasma::appmenu::server::{
-    org_kde_kwin_appmenu::{self, OrgKdeKwinAppmenu},
-    org_kde_kwin_appmenu_manager::{self, OrgKdeKwinAppmenuManager},
+use wayland_protocols_plasma::appmenu::server::org_kde_kwin_appmenu::{self, OrgKdeKwinAppmenu};
+use wayland_protocols_plasma::appmenu::server::org_kde_kwin_appmenu_manager::{
+    self, OrgKdeKwinAppmenuManager,
 };
 
 use crate::compositor::State;

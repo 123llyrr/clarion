@@ -237,6 +237,7 @@ pub struct Clarion {
     // Each workspace corresponds to a Space. Each workspace generally has one Output mapped to it,
     // however it may have none (when there are no outputs connected) or multiple (when mirroring).
     pub layout: Layout<Mapped>,
+    pub(crate) scene_resources: crate::scene::resources::SceneResources,
     /// Retained connector invalidation drain; render damage uses scene elements.
     core_scene_outputs: Vec<String>,
     /// Reused drain for core requests; seat overrides stay in this protocol adapter.
@@ -525,9 +526,9 @@ pub struct PopupGrabState {
     pub has_keyboard_grab: bool,
 }
 
-// The surfaces here are always toplevel surfaces focused as far as clarion's logic is concerned, even
-// when popup grabs are active (which means the real keyboard focus is on a popup descending from
-// that toplevel surface).
+// The surfaces here are always toplevel surfaces focused as far as clarion's logic is concerned,
+// even when popup grabs are active (which means the real keyboard focus is on a popup descending
+// from that toplevel surface).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeyboardFocus {
     // Layout is focused by default if there's nothing else to focus.
@@ -2489,75 +2490,68 @@ impl State {
         self.clarion.update_xray_render_elements(output);
 
         self.backend
-            .with_renderer_for_output(output, |renderer| match renderer {
-                crate::render_helpers::renderer::AnyRenderer::Gles(renderer) => {
-                    if let Some(output) = output {
-                        let mut ctx = RenderCtx {
-                            target: RenderTarget::Output,
-                            renderer,
-                            xray: None,
-                        };
-
-                        self.clarion.fill_xray_elements(ctx.r(), output);
-
-                        // If any background layer has block_out_from, also fill the Screencast xray
-                        // buffer so the unmap snapshot can render a buffer with blocked-out background.
-                        //
-                        // This will be used in Tile::render_snapshot().
-                        let has_blocked_out =
-                            self.clarion.has_blocked_out_background_layers(output);
-                        if has_blocked_out {
-                            let screencast_ctx = RenderCtx {
-                                target: RenderTarget::Screencast,
-                                ..ctx.r()
+            .with_renderer_for_output(output, |mut renderer| {
+                let (has_blocked_out, xray) = if let Some(output) = output {
+                    let has_blocked_out = match &mut renderer {
+                        crate::render_helpers::renderer::AnyRenderer::Gles(gles) => {
+                            let mut ctx = RenderCtx {
+                                target: RenderTarget::Output,
+                                renderer: &mut **gles,
+                                xray: None,
                             };
-                            self.clarion.fill_xray_elements(screencast_ctx, output);
-                        }
 
-                        let state = self.clarion.output_state.get_mut(output).unwrap();
-                        self.clarion.layout.store_unmap_snapshot(
-                            renderer,
-                            Some(&mut state.xray),
-                            has_blocked_out,
-                            window,
-                        );
+                            self.clarion.fill_xray_elements(ctx.r(), output);
 
-                        self.clarion.clear_xray_elements(output);
-                    } else {
-                        self.clarion
-                            .layout
-                            .store_unmap_snapshot(renderer, None, false, window);
-                    }
-                }
-                crate::render_helpers::renderer::AnyRenderer::Native(renderer) => {
-                    if let Some(output) = output {
-                        for target in [
-                            RenderTarget::Output,
-                            RenderTarget::Screencast,
-                            RenderTarget::ScreenCapture,
-                        ] {
-                            self.clarion.fill_xray_elements_native(
-                                RenderCtx {
-                                    renderer,
-                                    target,
-                                    xray: None,
-                                },
-                                output,
-                            );
+                            // If any background layer has block_out_from, also fill the Screencast xray
+                            // buffer so the unmap snapshot can render a buffer with blocked-out
+                            // background.
+                            //
+                            // This will be used in Tile::render_snapshot().
+                            let has_blocked_out =
+                                self.clarion.has_blocked_out_background_layers(output);
+                            if has_blocked_out {
+                                let screencast_ctx = RenderCtx {
+                                    target: RenderTarget::Screencast,
+                                    ..ctx.r()
+                                };
+                                self.clarion.fill_xray_elements(screencast_ctx, output);
+                            }
+                            has_blocked_out
                         }
-                        let state = self.clarion.output_state.get_mut(output).unwrap();
-                        self.clarion.layout.store_unmap_snapshot_native(
-                            renderer,
-                            Some(&mut state.xray),
-                            true,
-                            window,
-                        );
-                        self.clarion.clear_xray_elements(output);
-                    } else {
-                        self.clarion
-                            .layout
-                            .store_unmap_snapshot_native(renderer, None, false, window);
-                    }
+                        crate::render_helpers::renderer::AnyRenderer::Native(native) => {
+                            for target in [
+                                RenderTarget::Output,
+                                RenderTarget::Screencast,
+                                RenderTarget::ScreenCapture,
+                            ] {
+                                self.clarion.fill_xray_elements_native(
+                                    RenderCtx {
+                                        renderer: &mut **native,
+                                        target,
+                                        xray: None,
+                                    },
+                                    output,
+                                );
+                            }
+                            true
+                        }
+                    };
+
+                    let state = self.clarion.output_state.get_mut(output).unwrap();
+                    (has_blocked_out, Some(&mut state.xray))
+                } else {
+                    (false, None)
+                };
+
+                self.clarion.layout.store_unmap_snapshot_any(
+                    &mut renderer,
+                    xray,
+                    has_blocked_out,
+                    window,
+                );
+
+                if let Some(output) = output {
+                    self.clarion.clear_xray_elements(output);
                 }
             });
     }
@@ -2791,7 +2785,12 @@ impl Clarion {
         animation_clock.set_rate(rate);
         animation_clock.set_complete_instantly(config_.animations.off);
 
-        let layout = Layout::new(animation_clock.clone(), &config_);
+        let scene_resources = crate::scene::resources::SceneResources::new();
+        let layout = Layout::new_with_resources(
+            animation_clock.clone(),
+            &config_,
+            scene_resources.allocator(),
+        );
 
         let (blocker_cleared_tx, blocker_cleared_rx) = mpsc::channel();
 
@@ -3088,6 +3087,7 @@ impl Clarion {
             clock: animation_clock,
 
             layout,
+            scene_resources,
             core_scene_outputs: Vec::new(),
             core_protocol_ops: Vec::new(),
             screenshot_tasks: Default::default(),
@@ -4441,7 +4441,8 @@ impl Clarion {
         // On Linux without hard-realtime kernels, timerfd wakeup jitter typically ranges
         // between 200µs and 1000µs depending on CPU C-states. Arming a timer for < 1500µs
         // risks waking up past the hardware VBlank boundary, causing dropped frames.
-        // If the remaining time to latch deadline is below this threshold, proceed to render immediately.
+        // If the remaining time to latch deadline is below this threshold, proceed to render
+        // immediately.
         const MIN_TIMER_DELAY: Duration = Duration::from_micros(1500);
 
         let Some(latch_time) = self.output_state[output].schedule.latch_deadline(now) else {
@@ -4486,12 +4487,21 @@ impl Clarion {
         true
     }
 
-    /// Snapshot on demand; querying statistics never schedules a redraw.
+    /// Freeze bounded owned data without sorting on the desktop thread.
+    /// Querying statistics never schedules a redraw.
+    pub(crate) fn freeze_frame_timings(&self) -> Vec<crate::frame_stats::FrozenFrameStats> {
+        self.output_state
+            .iter()
+            .map(|(output, state)| state.schedule.freeze_timings(output.name()))
+            .collect()
+    }
+
+    #[cfg(test)]
     pub(crate) fn frame_timings(&self) -> Vec<clarion_ipc::diagnostics::OutputFrameTimings> {
         let mut timings = self
-            .output_state
-            .iter()
-            .map(|(output, state)| state.schedule.timings(output.name()))
+            .freeze_frame_timings()
+            .into_iter()
+            .map(crate::frame_stats::FrozenFrameStats::finish)
             .collect::<Vec<_>>();
         timings.sort_unstable_by(|a, b| a.output.cmp(&b.output));
         timings
@@ -5146,8 +5156,9 @@ impl Clarion {
                             // Render and send to PipeWire screencast streams.
                             self.render_for_screen_cast(renderer, output, target_presentation_time);
 
-                            // FIXME: when a window is hidden, it should probably still receive frame callbacks
-                            // and get rendered for screen cast. This is currently
+                            // FIXME: when a window is hidden, it should probably still receive
+                            // frame callbacks and get rendered for
+                            // screen cast. This is currently
                             // unimplemented, but happens to work by chance, since output
                             // redrawing is more eager than it should be.
                             self.render_windows_for_screen_cast(
@@ -5173,6 +5184,18 @@ impl Clarion {
                     }
                 }
             });
+        }
+        self.finish_scene_effects();
+    }
+
+    /// A render failure can retire a previously static effect. Wake the owner
+    /// once even when the pre-render animation query returned false; no input
+    /// event is required, and ordinary frames perform only one Cell read.
+    pub(crate) fn finish_scene_effects(&mut self) {
+        if self.scene_resources.take_window_effect_wakeup() {
+            // Moving windows and overview previews can have sampled the effect
+            // on more than one output. Retire all previous visible bounds.
+            self.queue_redraw_all();
         }
     }
 

@@ -1,7 +1,9 @@
 //! Drag-and-drop stationary-hover activation, owned by DesktopCore.
 //! Input and lifecycle events advance the timer; render forecasts cannot.
-use crate::{stage_drag::StageOutput, SpaceId};
 use std::time::Duration;
+
+use crate::stage_drag::StageOutput;
+use crate::SpaceId;
 
 /// Existing Clarion delay, inherited from the former GNOME-style adapter.
 /// This is not an Apple measurement.

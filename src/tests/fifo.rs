@@ -7,18 +7,17 @@ use smithay::backend::renderer::element::{
 use smithay::desktop::utils::update_surface_primary_scanout_output;
 use smithay::output::Output;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
-use smithay::reexports::wayland_protocols::wp::fifo::v1::client::{
-    wp_fifo_manager_v1,
-    wp_fifo_v1::{self, WpFifoV1},
-};
-use smithay::reexports::wayland_server::{
-    protocol::wl_surface::WlSurface as ServerSurface, Resource,
-};
+use smithay::reexports::wayland_protocols::wp::fifo::v1::client::wp_fifo_manager_v1;
+use smithay::reexports::wayland_protocols::wp::fifo::v1::client::wp_fifo_v1::{self, WpFifoV1};
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface as ServerSurface;
+use smithay::reexports::wayland_server::Resource;
 use smithay::wayland::compositor::{with_states, SurfaceAttributes};
 use wayland_backend::protocol::ProtocolError;
-use wayland_client::{protocol::wl_surface::WlSurface, Proxy};
+use wayland_client::protocol::wl_surface::WlSurface;
+use wayland_client::Proxy;
 
-use super::{client::ClientId, Fixture};
+use super::client::ClientId;
+use super::Fixture;
 use crate::backend::tty::Tty;
 use crate::compositor::{PointerVisibility, RedrawState};
 use crate::utils::get_monotonic_time;

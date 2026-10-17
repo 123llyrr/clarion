@@ -3,26 +3,20 @@ mod stage;
 use std::cell::RefCell;
 use std::cmp::min;
 use std::collections::HashMap;
-use std::f64::consts::FRAC_PI_2;
 use std::iter::zip;
 use std::rc::Rc;
 use std::time::Duration;
 
-use super::core_adapter::{self, DesktopContext};
 use clarion_config::{CornerRadius, LayoutPart};
 use clarion_core::SpaceId;
 use smithay::backend::renderer::element::utils::{
     CropRenderElement, Relocate, RelocateRenderElement, RescaleRenderElement,
 };
-use smithay::backend::renderer::element::{Element as _, Id, Kind};
-use smithay::backend::renderer::gles::GlesRenderer;
-use smithay::backend::renderer::utils::CommitCounter;
-use smithay::backend::renderer::ErasedContextId;
+use smithay::backend::renderer::element::Id;
 use smithay::output::Output;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
-use super::cube::face_mesh;
-use super::insert_hint_element::{InsertHintElement, InsertHintRenderElement};
+use super::core_adapter::{self, DesktopContext};
 use super::scrolling::{Column, ColumnWidth};
 use super::tile::Tile;
 use super::workspace::{
@@ -36,20 +30,21 @@ use crate::animation::{Animation, Clock};
 use crate::clarion_render_elements;
 use crate::layout::RenderLayer;
 use crate::render_helpers::mesh::MeshRenderElement;
-use crate::render_helpers::offscreen::{NativeOffscreenBuffer, OffscreenBuffer, OffscreenData};
 use crate::render_helpers::renderer::ClarionRenderer;
 use crate::render_helpers::shadow::ShadowRenderElement;
-use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
-use crate::render_helpers::vulkan::native::NativeRenderer;
-use crate::render_helpers::xray::XrayPos;
+use crate::render_helpers::solid_color::SolidColorRenderElement;
 use crate::render_helpers::RenderCtx;
+use crate::scene::insert_hint_element::InsertHintRenderElement;
+pub use crate::scene::monitor_resources::CubeFaceRenderElement;
+use crate::scene::monitor_resources::MonitorResources;
+use crate::scene::resources::SceneResourceAllocator;
+use crate::scene::retained::ResourceHandle;
 use crate::utils::transaction::Transaction;
 use crate::utils::{
     output_size, round_logical_in_physical, round_logical_in_physical_max1, ResizeEdge,
 };
 
 type ExpoGeometryCache = Option<([u64; 7], Vec<WorkspaceId>, Rc<Vec<Rectangle<f64, Logical>>>)>;
-type StageRailText = (String, u64, ErasedContextId, crate::ui::mru::MruTexture);
 
 #[derive(Debug)]
 struct ExpoTransition {
@@ -148,8 +143,6 @@ pub struct Monitor<W: LayoutElement> {
     pub(super) workspace_switch: Option<WorkspaceSwitch>,
     /// Indication where an interactively-moved window is about to be placed.
     pub(super) insert_hint: Option<InsertHint>,
-    /// Insert hint element for rendering.
-    insert_hint_element: InsertHintElement,
     /// Location to render the insert hint element.
     insert_hint_render_loc: Option<InsertHintRenderLoc>,
     /// Progress of the overview zoom animation, 1 is fully in overview.
@@ -163,42 +156,17 @@ pub struct Monitor<W: LayoutElement> {
     /// Layout config overrides for this monitor.
     layout_config: Option<clarion_config::LayoutPart>,
 
-    /// At most two neighboring workspace textures are cached for cube transitions.
-    cube_buffers: [OffscreenBuffer; 2],
-    /// Vulkan counterparts keeping damage history, so steady cube frames skip
-    /// re-rendering workspace contents entirely.
-    cube_native_buffers: [NativeOffscreenBuffer; 2],
-    cube_elements: [RefCell<Vec<CubeFaceRenderElement<GlesRenderer>>>; 2],
-    cube_ids: [Id; 2],
-    cube_commits: RefCell<[CommitCounter; 2]>,
-    cube_face_states: RefCell<[Option<CubeFaceState>; 2]>,
-    cube_visible_workspaces: RefCell<[Option<WorkspaceId>; 2]>,
-    cube_background: RefCell<SolidColorBuffer>,
-    spread_header: RefCell<Option<(String, u64, ErasedContextId, crate::ui::mru::MruTexture)>>,
+    /// Weak capabilities only; retained pixels belong to the platform scene owner.
+    scene_resources: SceneResourceAllocator,
+    resources: ResourceHandle<MonitorResources>,
     spread_transition: Option<spread::SpreadTransition<W::Id>>,
     spread_closing: HashMap<Id, spread::SpreadClosing>,
 
     expo_geometry: RefCell<ExpoGeometryCache>,
-    expo_borders: RefCell<Vec<[SolidColorBuffer; 4]>>,
     /// Card origins and destination for the current Expo direction, independent of selection.
     expo_transition: Option<ExpoTransition>,
     stage: stage::StageState,
     stage_geometry: RefCell<stage::StageGeometryCache>,
-    stage_rail_text: RefCell<Vec<Option<StageRailText>>>,
-    stage_rail_buffers: RefCell<Vec<SolidColorBuffer>>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct CubeFaceState {
-    workspace_idx: usize,
-    source_commit: CommitCounter,
-    source_texture: u64,
-    angle_bits: u64,
-    perspective_bits: u64,
-    width_bits: u64,
-    height_bits: u64,
-    scale_bits: u64,
-    focus_ring: bool,
 }
 
 #[derive(Debug)]
@@ -280,17 +248,10 @@ clarion_render_elements! {
         SolidColor = SolidColorRenderElement,
         Mesh = MeshRenderElement,
         SpreadTile = super::tile::TileRenderElement<R>,
-        SpreadClosing = super::closing_window::ClosingWindowRenderElement,
+        SpreadClosing = crate::scene::closing_window::ClosingWindowRenderElement,
         SpreadText = crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement,
         StageText = CropRenderElement<crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement>,
         StageLayer = CropRenderElement<crate::layer::mapped::LayerSurfaceRenderElement<R>>,
-    }
-}
-
-clarion_render_elements! {
-    CubeFaceRenderElement<R> => {
-        Workspace = CropRenderElement<WorkspaceRenderElement<R>>,
-        SolidColor = SolidColorRenderElement,
     }
 }
 
@@ -347,6 +308,7 @@ impl<W: LayoutElement> Monitor<W> {
         clock: Clock,
         base_options: Rc<Options>,
         layout_config: Option<LayoutPart>,
+        scene_resources: SceneResourceAllocator,
     ) -> Self {
         Self::new_with_stage_drag_source(
             output,
@@ -356,9 +318,12 @@ impl<W: LayoutElement> Monitor<W> {
             base_options,
             layout_config,
             None,
+            scene_resources,
         )
     }
 
+    // Keep the external scene capability explicit beside runtime construction inputs.
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::layout) fn new_with_stage_drag_source(
         output: Output,
         mut workspaces: Vec<Workspace<W>>,
@@ -367,6 +332,7 @@ impl<W: LayoutElement> Monitor<W> {
         base_options: Rc<Options>,
         layout_config: Option<LayoutPart>,
         stage_drag_source: Option<WorkspaceId>,
+        scene_resources: SceneResourceAllocator,
     ) -> Self {
         let options =
             Rc::new(Options::clone(&base_options).with_merged_layout(layout_config.as_ref()));
@@ -399,20 +365,25 @@ impl<W: LayoutElement> Monitor<W> {
         }
 
         if options.layout.empty_workspace_above_first && !workspaces.is_empty() {
-            let ws = Workspace::new(output.clone(), clock.clone(), options.clone())
-                .with_core(core.clone());
+            let ws = Workspace::new(
+                output.clone(),
+                clock.clone(),
+                options.clone(),
+                scene_resources.clone(),
+            )
+            .with_core(core.clone());
             workspaces.insert(0, ws);
             active_workspace_idx += 1;
         }
 
-        let ws =
-            Workspace::new(output.clone(), clock.clone(), options.clone()).with_core(core.clone());
+        let ws = Workspace::new(
+            output.clone(),
+            clock.clone(),
+            options.clone(),
+            scene_resources.clone(),
+        )
+        .with_core(core.clone());
         workspaces.push(ws);
-
-        let cube_background = SolidColorBuffer::new(
-            view_size,
-            options.animations.workspace_switch.1.background_color,
-        );
 
         {
             let mut desktop = core.borrow_mut();
@@ -435,35 +406,30 @@ impl<W: LayoutElement> Monitor<W> {
             working_area,
             workspaces,
             insert_hint: None,
-            insert_hint_element: InsertHintElement::new(options.layout.insert_hint),
             insert_hint_render_loc: None,
             overview_progress: None,
             workspace_switch: None,
             clock,
             base_options,
-            options,
+            options: options.clone(),
             layout_config,
-            cube_buffers: [OffscreenBuffer::default(), OffscreenBuffer::default()],
-            cube_native_buffers: [
-                NativeOffscreenBuffer::default(),
-                NativeOffscreenBuffer::default(),
-            ],
-            cube_elements: std::array::from_fn(|_| RefCell::new(Vec::new())),
-            cube_ids: [Id::new(), Id::new()],
-            cube_commits: RefCell::new([CommitCounter::default(), CommitCounter::default()]),
-            cube_face_states: RefCell::new([None, None]),
-            cube_visible_workspaces: RefCell::new([None, None]),
-            cube_background: RefCell::new(cube_background),
-            spread_header: RefCell::new(None),
+            resources: {
+                let res = scene_resources
+                    .monitors
+                    .register(MonitorResources::default());
+                res.lease()
+                    .insert_hint_element
+                    .borrow_mut()
+                    .update_config(options.layout.insert_hint);
+                res
+            },
+            scene_resources,
             spread_transition: None,
             spread_closing: HashMap::new(),
             expo_geometry: RefCell::new(None),
-            expo_borders: RefCell::new(Vec::new()),
             expo_transition: None,
             stage: stage::StageState::default(),
             stage_geometry: RefCell::new(None),
-            stage_rail_text: RefCell::new(Vec::new()),
-            stage_rail_buffers: RefCell::new(Vec::new()),
         }
     }
 
@@ -569,7 +535,7 @@ impl<W: LayoutElement> Monitor<W> {
 
     pub fn closing_windows(
         &self,
-    ) -> impl Iterator<Item = &crate::layout::closing_window::ClosingWindow> {
+    ) -> impl Iterator<Item = &crate::scene::closing_window::ClosingWindow> {
         self.workspaces.iter().flat_map(|ws| ws.closing_windows())
     }
 
@@ -582,6 +548,7 @@ impl<W: LayoutElement> Monitor<W> {
             self.output.clone(),
             self.clock.clone(),
             self.options.clone(),
+            self.scene_resources.clone(),
         )
         .with_core(self.core.clone());
 
@@ -1371,12 +1338,16 @@ impl<W: LayoutElement> Monitor<W> {
                             area = area.to_physical_precise_round(scale).to_logical(scale);
 
                             let view_rect = Rectangle::new(area.loc.upscale(-1.), view_size);
-                            self.insert_hint_element.update_render_elements(
-                                area.size,
-                                view_rect,
-                                hint.corner_radius,
-                                scale,
-                            );
+                            self.resources
+                                .lease()
+                                .insert_hint_element
+                                .borrow_mut()
+                                .update_render_elements(
+                                    area.size,
+                                    view_rect,
+                                    hint.corner_radius,
+                                    scale,
+                                );
                             self.insert_hint_render_loc = Some(InsertHintRenderLoc {
                                 workspace: hint.workspace,
                                 location: area.loc,
@@ -1416,12 +1387,16 @@ impl<W: LayoutElement> Monitor<W> {
                     // the previous one).
                     let view_rect = Rectangle::new(hint_loc_diff, next_ws_geo.size);
 
-                    self.insert_hint_element.update_render_elements(
-                        hint_size,
-                        view_rect,
-                        CornerRadius::default(),
-                        scale,
-                    );
+                    self.resources
+                        .lease()
+                        .insert_hint_element
+                        .borrow_mut()
+                        .update_render_elements(
+                            hint_size,
+                            view_rect,
+                            CornerRadius::default(),
+                            scale,
+                        );
                     self.insert_hint_render_loc = Some(InsertHintRenderLoc {
                         workspace: hint.workspace,
                         location: hint_loc,
@@ -1450,12 +1425,11 @@ impl<W: LayoutElement> Monitor<W> {
             ws.update_config(options.clone());
         }
 
-        self.insert_hint_element
+        self.resources
+            .lease()
+            .insert_hint_element
+            .borrow_mut()
             .update_config(options.layout.insert_hint);
-        self.cube_background.borrow_mut().update(
-            self.view_size,
-            options.animations.workspace_switch.1.background_color,
-        );
 
         self.base_options = base_options;
         self.options = options;
@@ -1476,25 +1450,7 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub(crate) fn clear_native_caches(&self) {
-        for buffer in &self.cube_native_buffers {
-            buffer.clear();
-        }
-        for elements in &self.cube_elements {
-            elements.borrow_mut().clear();
-        }
-        let mut header = self.spread_header.borrow_mut();
-        if header.as_ref().is_some_and(|(_, _, _, texture)| {
-            matches!(texture, crate::ui::mru::MruTexture::Vulkan(_))
-        }) {
-            *header = None;
-        }
-        for text in self.stage_rail_text.borrow_mut().iter_mut() {
-            if text.as_ref().is_some_and(|(_, _, _, texture)| {
-                matches!(texture, crate::ui::mru::MruTexture::Vulkan(_))
-            }) {
-                *text = None;
-            }
-        }
+        self.resources.lease().clear_native();
     }
 
     pub fn update_shaders(&mut self) {
@@ -1502,17 +1458,17 @@ impl<W: LayoutElement> Monitor<W> {
             ws.update_shaders();
         }
 
-        self.insert_hint_element.update_shaders();
+        self.resources
+            .lease()
+            .insert_hint_element
+            .borrow_mut()
+            .update_shaders();
     }
 
     pub fn update_output_size(&mut self) {
         self.scale = self.output.current_scale();
         self.view_size = output_size(&self.output);
         self.working_area = compute_working_area(&self.output);
-        self.cube_background.borrow_mut().update(
-            self.view_size,
-            self.options.animations.workspace_switch.1.background_color,
-        );
 
         for ws in &mut self.workspaces {
             ws.update_output_size();
@@ -2021,7 +1977,8 @@ impl<W: LayoutElement> Monitor<W> {
 
         let (ws, geo) = self.workspaces_with_render_geo().find_map(|(ws, geo)| {
             if is_expo {
-                // In 2D Expo grid, match exact cell bounds instead of extending width across entire screen
+                // In 2D Expo grid, match exact cell bounds instead of extending width across entire
+                // screen
                 geo.contains(pos_within_output).then_some((ws, geo))
             } else {
                 // Original 1D strip overview: extend width to entire output.
@@ -2181,677 +2138,275 @@ impl<W: LayoutElement> Monitor<W> {
             return;
         };
 
-        self.insert_hint_element
-            .render(renderer, render_loc.location, &mut |elem| {
+        self.resources.lease().insert_hint_element.borrow().render(
+            renderer,
+            render_loc.location,
+            &mut |elem| {
                 let elem = MonitorInnerRenderElement::UncroppedInsertHint(elem);
                 let elem = RescaleRenderElement::from_element(elem, Point::default(), 1.);
                 let elem =
                     RelocateRenderElement::from_element(elem, Point::default(), Relocate::Relative);
                 push(elem);
-            });
+            },
+        );
     }
 
-    fn render_cube_face(
+    /// Capture only feedback capabilities for the previously visible Cube
+    /// workspaces. Retained resource mutation happens later inside the scene.
+    pub(crate) fn cube_lifecycle(&self) -> crate::scene::cube_composition::CubeLifecycle<'_, W> {
+        self.cube_lifecycle_for([None, None])
+    }
+
+    fn cube_lifecycle_for(
         &self,
-        mut ctx: RenderCtx<GlesRenderer>,
-        workspace_idx: usize,
-        slot: usize,
-        angle: f64,
-        focus_ring: bool,
-    ) -> anyhow::Result<Option<MeshRenderElement>> {
-        let Some((area, vertices)) = face_mesh(
-            self.view_size,
-            angle,
-            self.options.animations.workspace_switch.1.perspective,
-        ) else {
-            return Ok(None);
-        };
-
-        let scale = self.scale.fractional_scale();
-        let crop_bounds = Rectangle::from_size(self.view_size).to_physical_precise_round(scale);
-        let xray_pos = XrayPos::new(Point::default(), 1.);
-        let workspace = &self.workspaces[workspace_idx];
-        let mut elements = self.cube_elements[slot].borrow_mut();
-        elements.clear();
-
-        for pass in 0..4 {
-            let mut push_workspace = |element| {
-                if let Some(element) = CropRenderElement::from_element(element, scale, crop_bounds)
-                {
-                    elements.push(CubeFaceRenderElement::Workspace(element));
-                }
+        upcoming: [Option<WorkspaceId>; 2],
+    ) -> crate::scene::cube_composition::CubeLifecycle<'_, W> {
+        use crate::layout::scene_source::WindowFeedbackSource;
+        use crate::scene::cube_composition::CubeLifecycle;
+        let resources = self.resources.lease();
+        let previous = *resources.cube_visible_workspaces.borrow();
+        if previous.iter().chain(&upcoming).all(Option::is_none) {
+            return CubeLifecycle {
+                resources,
+                feedback: Vec::new(),
             };
-            match pass {
-                0 => workspace.render_floating(
-                    ctx.r(),
-                    xray_pos,
-                    focus_ring,
-                    RenderLayer::MovingBetweenWorkspaces,
-                    &mut push_workspace,
-                ),
-                1 => workspace.render_floating(
-                    ctx.r(),
-                    xray_pos,
-                    focus_ring,
-                    RenderLayer::Normal,
-                    &mut push_workspace,
-                ),
-                2 => workspace.render_scrolling(
-                    ctx.r(),
-                    xray_pos,
-                    focus_ring,
-                    RenderLayer::MovingBetweenWorkspaces,
-                    &mut push_workspace,
-                ),
-                _ => workspace.render_scrolling(
-                    ctx.r(),
-                    xray_pos,
-                    focus_ring,
-                    RenderLayer::Normal,
-                    &mut push_workspace,
-                ),
-            }
         }
-
-        elements.push(CubeFaceRenderElement::SolidColor(
-            workspace.render_background(),
-        ));
-
-        let result = self.cube_buffers[slot].render(
-            ctx.renderer,
-            self.scale.fractional_scale().into(),
-            &elements,
-        );
-        elements.clear();
-        drop(elements);
-        let (texture, _sync, mut data) = result?;
-
-        let state = CubeFaceState {
-            workspace_idx,
-            source_commit: texture.current_commit(),
-            source_texture: u64::from(texture.texture().tex_id()),
-            angle_bits: angle.to_bits(),
-            perspective_bits: self
-                .options
-                .animations
-                .workspace_switch
-                .1
-                .perspective
-                .to_bits(),
-            width_bits: self.view_size.w.to_bits(),
-            height_bits: self.view_size.h.to_bits(),
-            scale_bits: scale.to_bits(),
-            focus_ring,
-        };
-        let changed = {
-            let mut states = self.cube_face_states.borrow_mut();
-            let changed = states[slot] != Some(state);
-            states[slot] = Some(state);
-            changed
-        };
-        let commit = {
-            let mut commits = self.cube_commits.borrow_mut();
-            if changed {
-                commits[slot].increment();
-            }
-            commits[slot]
-        };
-        let element = MeshRenderElement::new(
-            self.cube_ids[slot].clone(),
-            commit,
-            texture.texture().clone(),
-            texture.src().size,
-            area,
-            vertices,
-            1.,
-            Kind::Unspecified,
-        );
-
-        data.id = element.id().clone();
-        for window in workspace.windows() {
-            window.set_offscreen_data(Some(data.clone()));
+        let feedback = self
+            .workspaces
+            .iter()
+            .filter(|workspace| {
+                let id = Some(workspace.id());
+                previous.contains(&id) || upcoming.contains(&id)
+            })
+            .flat_map(|workspace| {
+                let id = workspace.id();
+                workspace
+                    .windows()
+                    .map(move |window| (id, WindowFeedbackSource::new(window)))
+            })
+            .collect();
+        CubeLifecycle {
+            resources,
+            feedback,
         }
-
-        Ok(Some(element))
     }
 
-    fn render_cube_workspaces(
+    /// Numeric face choice and renderer-free sources are captured once. The
+    /// fallback retains ordinary visibility while the two face sources include
+    /// every normal window even when their 2D placement is outside the output.
+    pub(crate) fn cube_composition(
         &self,
-        mut ctx: RenderCtx<GlesRenderer>,
-        focus_ring: bool,
-    ) -> anyhow::Result<[Option<MeshRenderElement>; 2]> {
+    ) -> crate::scene::cube_composition::CubeComposition<'_, W> {
+        use std::f64::consts::FRAC_PI_2;
+
+        use crate::scene::cube_composition::{CubeComposition, CubeFace};
         let current = self
             .workspace_switch_idx()
             .clamp(0., (self.workspaces.len() - 1) as f64);
         let low = current.floor() as usize;
         let fraction = current - low as f64;
-
         let low_face = (low, -fraction * FRAC_PI_2);
         let high_face = (low + 1 < self.workspaces.len() && fraction > f64::EPSILON)
             .then_some((low + 1, (1. - fraction) * FRAC_PI_2));
-        let faces = match high_face {
+        let ordered = match high_face {
             Some(high_face) if high_face.1.abs() < low_face.1.abs() => {
                 [Some(high_face), Some(low_face)]
             }
             Some(high_face) => [Some(low_face), Some(high_face)],
             None => [Some(low_face), None],
         };
-
-        self.update_cube_visible_workspaces(
-            faces.map(|face| face.map(|(workspace_idx, _)| self.workspaces[workspace_idx].id())),
-        );
-
-        let mut meshes = [None, None];
-        for (slot, face) in faces.into_iter().enumerate() {
-            let Some((workspace_idx, angle)) = face else {
-                continue;
-            };
-            meshes[slot] = self.render_cube_face(
-                ctx.r(),
-                workspace_idx,
-                slot,
+        let faces = ordered.map(|face| {
+            face.map(|(workspace_index, angle)| CubeFace {
+                workspace_index,
+                workspace_id: self.workspaces[workspace_index].id(),
                 angle,
-                focus_ring && workspace_idx == self.active_workspace_idx(),
-            )?;
-        }
-        Ok(meshes)
-    }
-
-    fn render_cube_face_native(
-        &self,
-        mut ctx: RenderCtx<NativeRenderer>,
-        workspace_idx: usize,
-        slot: usize,
-        angle: f64,
-        focus_ring: bool,
-    ) -> anyhow::Result<Option<MeshRenderElement>> {
-        let Some((area, vertices)) = face_mesh(
-            self.view_size,
-            angle,
-            self.options.animations.workspace_switch.1.perspective,
-        ) else {
-            return Ok(None);
-        };
-
-        let scale = self.scale.fractional_scale();
-        let crop_bounds = Rectangle::from_size(self.view_size).to_physical_precise_round(scale);
-        let xray_pos = XrayPos::new(Point::default(), 1.);
-        let workspace = &self.workspaces[workspace_idx];
-        let mut elements = Vec::new();
-
-        for pass in 0..4 {
-            let mut push_workspace = |element| {
-                if let Some(element) = CropRenderElement::from_element(element, scale, crop_bounds)
-                {
-                    elements.push(CubeFaceRenderElement::Workspace(element));
-                }
-            };
-            match pass {
-                0 => workspace.render_floating(
-                    ctx.r(),
-                    xray_pos,
-                    focus_ring,
-                    RenderLayer::MovingBetweenWorkspaces,
-                    &mut push_workspace,
-                ),
-                1 => workspace.render_floating(
-                    ctx.r(),
-                    xray_pos,
-                    focus_ring,
-                    RenderLayer::Normal,
-                    &mut push_workspace,
-                ),
-                2 => workspace.render_scrolling(
-                    ctx.r(),
-                    xray_pos,
-                    focus_ring,
-                    RenderLayer::MovingBetweenWorkspaces,
-                    &mut push_workspace,
-                ),
-                _ => workspace.render_scrolling(
-                    ctx.r(),
-                    xray_pos,
-                    focus_ring,
-                    RenderLayer::Normal,
-                    &mut push_workspace,
-                ),
-            }
-        }
-
-        elements.push(CubeFaceRenderElement::SolidColor(
-            workspace.render_background(),
-        ));
-
-        let (texture, _sync, geo, states, source_commit) =
-            self.cube_native_buffers[slot].render(ctx.renderer, scale.into(), &elements)?;
-        // Native submissions share a queue; layout barriers order each
-        // incremental re-render against the previous frame's sampling. No CPU
-        // fence wait here, and steady frames redraw nothing at all.
-
-        let state = CubeFaceState {
-            workspace_idx,
-            source_commit,
-            source_texture: texture.cache_key(),
-            angle_bits: angle.to_bits(),
-            perspective_bits: self
+                active: workspace_index == self.active_workspace_idx(),
+            })
+        });
+        let visible = faces.map(|face| face.map(|face| face.workspace_id));
+        CubeComposition {
+            fallback: self.composition_with_sources(visible),
+            faces,
+            lifecycle: self.cube_lifecycle_for(visible),
+            view_size: self.view_size,
+            perspective: self.options.animations.workspace_switch.1.perspective,
+            background_color: self
                 .options
                 .animations
                 .workspace_switch
                 .1
-                .perspective
-                .to_bits(),
-            width_bits: self.view_size.w.to_bits(),
-            height_bits: self.view_size.h.to_bits(),
-            scale_bits: scale.to_bits(),
-            focus_ring,
-        };
-        let changed = {
-            let mut states = self.cube_face_states.borrow_mut();
-            let changed = states[slot] != Some(state);
-            states[slot] = Some(state);
-            changed
-        };
-        let commit = {
-            let mut commits = self.cube_commits.borrow_mut();
-            if changed {
-                commits[slot].increment();
-            }
-            commits[slot]
-        };
-        let used = smithay::utils::Size::from((f64::from(geo.size.w), f64::from(geo.size.h)));
-        let element = MeshRenderElement::new_vulkan(
-            self.cube_ids[slot].clone(),
-            commit,
-            texture,
-            used,
-            area,
-            vertices,
-            1.,
-            Kind::Unspecified,
-        );
-
-        let data = OffscreenData {
-            id: element.id().clone(),
-            states,
-        };
-        for window in workspace.windows() {
-            window.set_offscreen_data(Some(data.clone()));
-        }
-
-        Ok(Some(element))
-    }
-
-    fn render_cube_workspaces_native(
-        &self,
-        mut ctx: RenderCtx<NativeRenderer>,
-        focus_ring: bool,
-    ) -> anyhow::Result<[Option<MeshRenderElement>; 2]> {
-        let current = self
-            .workspace_switch_idx()
-            .clamp(0., (self.workspaces.len() - 1) as f64);
-        let low = current.floor() as usize;
-        let fraction = current - low as f64;
-
-        let low_face = (low, -fraction * FRAC_PI_2);
-        let high_face = (low + 1 < self.workspaces.len() && fraction > f64::EPSILON)
-            .then_some((low + 1, (1. - fraction) * FRAC_PI_2));
-        let faces = match high_face {
-            Some(high_face) if high_face.1.abs() < low_face.1.abs() => {
-                [Some(high_face), Some(low_face)]
-            }
-            Some(high_face) => [Some(low_face), Some(high_face)],
-            None => [Some(low_face), None],
-        };
-
-        self.update_cube_visible_workspaces(
-            faces.map(|face| face.map(|(workspace_idx, _)| self.workspaces[workspace_idx].id())),
-        );
-
-        let mut meshes = [None, None];
-        for (slot, face) in faces.into_iter().enumerate() {
-            let Some((workspace_idx, angle)) = face else {
-                continue;
-            };
-            meshes[slot] = self.render_cube_face_native(
-                ctx.r(),
-                workspace_idx,
-                slot,
-                angle,
-                focus_ring && workspace_idx == self.active_workspace_idx(),
-            )?;
-        }
-        Ok(meshes)
-    }
-
-    fn update_cube_visible_workspaces(&self, visible: [Option<WorkspaceId>; 2]) {
-        let previous = std::mem::replace(&mut *self.cube_visible_workspaces.borrow_mut(), visible);
-        for workspace_id in previous.into_iter().flatten() {
-            if visible.contains(&Some(workspace_id)) {
-                continue;
-            }
-            if let Some(workspace) = self
-                .workspaces
-                .iter()
-                .find(|workspace| workspace.id() == workspace_id)
-            {
-                for window in workspace.windows() {
-                    window.set_offscreen_data(None);
-                }
-            }
-        }
-
-        if visible.iter().all(Option::is_none) && previous.iter().any(Option::is_some) {
-            for buffer in &self.cube_buffers {
-                buffer.clear();
-            }
-            for buffer in &self.cube_native_buffers {
-                buffer.clear();
-            }
-            *self.cube_face_states.borrow_mut() = [None, None];
+                .background_color
+                .into(),
         }
     }
 
-    pub fn render_workspaces<R: ClarionRenderer>(
-        &self,
-        mut ctx: RenderCtx<R>,
-        focus_ring: bool,
-        push: &mut dyn FnMut(MonitorRenderElement<R>),
-    ) {
-        let _span = clarion_tracy_span!("Monitor::render_workspaces");
-        if self.is_stage_visible() {
-            self.update_cube_visible_workspaces([None, None]);
-            self.render_stage(ctx, focus_ring, push);
-            return;
-        }
-        if self.is_spread_visible() {
-            self.render_spread(ctx, push);
-            return;
-        }
+    pub(crate) fn is_spread_scene(&self) -> bool {
+        self.is_spread_visible()
+    }
 
-        let cube_enabled = self.workspace_switch.is_some()
+    pub(crate) fn is_cube_scene(&self) -> bool {
+        self.workspace_switch.is_some()
             && self.overview_progress.is_none()
             && !self.is_overview_open()
             && !self.options.animations.off
-            && !self.options.animations.workspace_switch.1.off;
-        if cube_enabled {
-            let result = {
-                if let Some(gles_ctx) = ctx.as_gles() {
-                    if MeshRenderElement::is_available(gles_ctx.renderer) {
-                        Some(self.render_cube_workspaces(gles_ctx, focus_ring))
-                    } else {
-                        None
-                    }
-                } else {
-                    ctx.as_native().map(|native_ctx| {
-                        self.render_cube_workspaces_native(native_ctx, focus_ring)
-                    })
-                }
-            };
-            match result {
-                None => {}
-                Some(Ok(meshes)) => {
-                    for mesh in meshes.into_iter().flatten() {
-                        let inner = MonitorInnerRenderElement::<R>::Mesh(mesh);
-                        let element =
-                            RescaleRenderElement::from_element(inner, Point::default(), 1.);
-                        push(RelocateRenderElement::from_element(
-                            element,
-                            Point::default(),
-                            Relocate::Relative,
-                        ));
-                    }
+            && !self.options.animations.workspace_switch.1.off
+    }
 
-                    let background = self.cube_background.borrow();
-                    let inner = MonitorInnerRenderElement::<R>::SolidColor(
-                        SolidColorRenderElement::from_buffer(
-                            &background,
-                            Point::default(),
-                            1.,
-                            Kind::Unspecified,
-                        ),
-                    );
-                    let element = RescaleRenderElement::from_element(inner, Point::default(), 1.);
-                    push(RelocateRenderElement::from_element(
-                        element,
-                        Point::default(),
-                        Relocate::Relative,
-                    ));
-                    return;
-                }
-                Some(Err(err)) => {
-                    warn!("error rendering workspace cube; falling back to 2D: {err:?}")
-                }
-            }
+    pub(crate) fn scene_insert_hint_between(
+        &self,
+    ) -> Option<(
+        crate::layout::scene_source::InsertHintRenderSource<'_>,
+        Point<f64, Logical>,
+    )> {
+        if self.options.layout.insert_hint.off {
+            return None;
         }
+        let location = self.insert_hint_render_loc?;
+        if !matches!(location.workspace, InsertWorkspace::NewAt(_)) {
+            return None;
+        }
+        Some((
+            crate::layout::scene_source::InsertHintRenderSource::new(self.resources.lease()),
+            location.location,
+        ))
+    }
 
-        self.update_cube_visible_workspaces([None, None]);
+    /// Capture every workspace geometry exactly once for the four drawing
+    /// channels, lower-layer namespaces, shadows and Expo borders.
+    pub(crate) fn standard_composition(
+        &self,
+    ) -> crate::scene::workspace_composition::Composition<'_, W> {
+        self.composition_with_sources([None, None])
+    }
 
+    fn composition_with_sources(
+        &self,
+        force_visible: [Option<WorkspaceId>; 2],
+    ) -> crate::scene::workspace_composition::Composition<'_, W> {
+        use crate::layout::scene_source::InsertHintRenderSource;
+        use crate::scene::workspace_composition::{
+            Composition, ExpoBorders, GeometryPlan, WorkspacePlacement,
+        };
         let scale = self.scale.fractional_scale();
-        // Ceil the height in physical pixels.
-        let height = (self.view_size.h * scale).ceil() as i32;
-
-        let zoom = self.overview_zoom();
-
-        let insert_hint_render_loc = self
-            .insert_hint_render_loc
-            .filter(|_| !self.options.layout.insert_hint.off);
-
         let is_expo = self.overview_mode() == OverviewMode::Expo
             && (self.is_overview_open() || self.overview_progress.is_some());
-        let view_w = self.view_size.w.max(1.0);
-
-        let scale_relocate = move |geo: Rectangle<f64, Logical>, elem| {
-            let actual_zoom = if is_expo {
-                (geo.size.w / view_w).clamp(0.01, 1.0)
-            } else {
-                zoom
-            };
-            let elem = RescaleRenderElement::from_element(elem, Point::from((0, 0)), actual_zoom);
-            RelocateRenderElement::from_element(
-                elem,
-                // The offset we get from workspaces_with_render_geo() is already
-                // rounded to physical pixels, but it's in the logical coordinate
-                // space, so we need to convert it to physical.
-                geo.loc.to_physical_precise_round(scale),
-                Relocate::Relative,
-            )
-        };
-
-        // Draw in passes for correct Z ordering during window movement between workspaces:
-        // - floating windows moving between workspaces
-        // - normal floating windows
-        // - scrolling windows moving between workspaces
-        // - normal scrolling windows
-        for pass in 0..4 {
-            // Don't cull when drawing windows moving between workspaces so that windows moving to
-            // workspaces off-screen will still render.
-            let cull = matches!(pass, 1 | 3);
-
-            // Crop the elements to prevent them overflowing, currently visible during a workspace
-            // switch.
-            //
-            // HACK: crop to infinite bounds at least horizontally where we
-            // know there's no workspace joining or monitor bounds, otherwise
-            // it will cut pixel shaders and mess up the coordinate space.
-            // There's also a damage tracking bug which causes glitched
-            // rendering for maximized GTK windows.
-            //
-            // FIXME: use proper bounds after fixing the Crop element.
-            //
-            // Also, check cull here to avoid cropping windows moving between workspaces.
-            //
-            // FIXME: for cull=true, it might be better visually to crop to a workspace-high region
-            // anchored to the window/column as it moves between workspaces, to prevent overflowing
-            // windows from appearing and disappearing.
-            let crop_bounds = if is_expo {
-                Rectangle::from_size(self.view_size.to_physical_precise_round(scale))
-            } else if cull && (self.workspace_switch.is_some() || self.overview_progress.is_some())
-            {
-                Rectangle::new(
-                    Point::from((-i32::MAX / 2, 0)),
-                    Size::from((i32::MAX, height)),
-                )
-            } else {
-                Rectangle::new(
-                    Point::from((-i32::MAX / 2, -i32::MAX / 2)),
-                    Size::from((i32::MAX, i32::MAX)),
-                )
-            };
-
-            for (ws, geo) in self.workspaces_with_render_geo_cull(cull) {
-                // Macro instead of closure because ws and insert hint have different elem types.
-                macro_rules! push {
-                    () => {{
-                        &mut |elem| {
-                            let elem = CropRenderElement::from_element(elem, scale, crop_bounds);
-                            if let Some(elem) = elem {
-                                let elem = MonitorInnerRenderElement::from(elem);
-                                push(scale_relocate(geo, elem));
-                            }
-                        }
-                    }};
-                }
-
-                let actual_zoom = if is_expo {
-                    (geo.size.w / view_w).clamp(0.01, 1.0)
+        let view = Rectangle::from_size(self.view_size);
+        let zoom = self.overview_zoom();
+        let placements = self
+            .workspaces
+            .iter()
+            .zip(self.workspaces_render_geo())
+            .map(|(workspace, geometry)| WorkspacePlacement {
+                id: workspace.id(),
+                geometry,
+                zoom: if is_expo {
+                    (geometry.size.w / self.view_size.w.max(1.)).clamp(0.01, 1.)
                 } else {
                     zoom
-                };
-                let xray_pos = XrayPos::new(geo.loc, actual_zoom);
-
-                match pass {
-                    0 => {
-                        ws.render_floating(
-                            ctx.r(),
-                            xray_pos,
-                            focus_ring,
-                            RenderLayer::MovingBetweenWorkspaces,
-                            push!(),
-                        );
-                    }
-                    1 => {
-                        ws.render_floating(
-                            ctx.r(),
-                            xray_pos,
-                            focus_ring,
-                            RenderLayer::Normal,
-                            push!(),
-                        );
-
-                        if let Some(loc) = insert_hint_render_loc {
-                            if loc.workspace == InsertWorkspace::Existing(ws.id()) {
-                                self.insert_hint_element.render(
-                                    ctx.renderer,
-                                    loc.location,
-                                    push!(),
-                                );
-                            }
-                        }
-                    }
-                    2 => {
-                        ws.render_scrolling(
-                            ctx.r(),
-                            xray_pos,
-                            focus_ring,
-                            RenderLayer::MovingBetweenWorkspaces,
-                            push!(),
-                        );
-                    }
-                    _ => {
-                        ws.render_scrolling(
-                            ctx.r(),
-                            xray_pos,
-                            focus_ring,
-                            RenderLayer::Normal,
-                            push!(),
-                        );
-                    }
-                }
-            }
-        }
-
-        if is_expo {
-            let p = self.overview_progress.as_ref().map_or(1.0, |p| p.value());
-            let border_alpha = (p.clamp(0.0, 1.0) as f32).max(0.0);
-            let selected_idx = self
+                },
+                normal_visible: geometry.size.w > 0.
+                    && geometry.size.h > 0.
+                    && geometry.intersection(view).is_some(),
+            })
+            .collect::<smallvec::SmallVec<[_; 2]>>();
+        let unlimited = Rectangle::new(
+            (-i32::MAX / 2, -i32::MAX / 2).into(),
+            (i32::MAX, i32::MAX).into(),
+        );
+        let expo_crop = Rectangle::from_size(self.view_size.to_physical_precise_round(scale));
+        let normal_crop = if is_expo {
+            expo_crop
+        } else if self.workspace_switch.is_some() || self.overview_progress.is_some() {
+            // Preserve the existing horizontal shader/damage workaround.
+            Rectangle::new(
+                (-i32::MAX / 2, 0).into(),
+                (i32::MAX, (self.view_size.h * scale).ceil() as i32).into(),
+            )
+        } else {
+            unlimited
+        };
+        let expo = is_expo.then(|| ExpoBorders {
+            alpha: self
+                .overview_progress
+                .as_ref()
+                .map_or(1., |progress| progress.value())
+                .clamp(0., 1.) as f32,
+            selected: self
                 .insert_hint
                 .as_ref()
                 .and_then(|hint| match hint.workspace {
                     InsertWorkspace::Existing(id) => self.idx_of_ws(id),
                     InsertWorkspace::NewAt(_) => None,
                 })
-                .unwrap_or(self.active_workspace_idx());
-            if border_alpha > 0.05 {
-                for (idx, active_geo) in self
-                    .workspaces_render_geo()
-                    .take(self.workspaces.len())
-                    .enumerate()
-                {
-                    let selected = idx == selected_idx;
-                    let bw = if selected { 4.0 } else { 1.0 };
-                    let color_arr = if selected {
-                        self.options
-                            .layout
-                            .focus_ring
-                            .active_color
-                            .to_array_premul()
-                    } else {
-                        [0.25, 0.25, 0.30, 0.6]
-                    };
-                    let loc = active_geo.loc;
-                    let sz = active_geo.size;
-
-                    if sz.w > bw * 2.0 && sz.h > bw * 2.0 {
-                        let mut cache = self.expo_borders.borrow_mut();
-                        cache.resize_with(self.workspaces.len(), || {
-                            std::array::from_fn(|_| {
-                                SolidColorBuffer::new(Size::from((0., 0.)), [0.; 4])
-                            })
-                        });
-                        let [top_buf, btm_buf, left_buf, right_buf] = &mut cache[idx];
-                        top_buf.update(Size::from((sz.w, bw)), color_arr);
-                        btm_buf.update(Size::from((sz.w, bw)), color_arr);
-                        left_buf.update(Size::from((bw, sz.h - bw * 2.0)), color_arr);
-                        right_buf.update(Size::from((bw, sz.h - bw * 2.0)), color_arr);
-
-                        let top_elem = SolidColorRenderElement::from_buffer(
-                            top_buf,
-                            loc,
-                            border_alpha,
-                            Kind::Unspecified,
-                        );
-                        let btm_elem = SolidColorRenderElement::from_buffer(
-                            btm_buf,
-                            Point::from((loc.x, loc.y + sz.h - bw)),
-                            border_alpha,
-                            Kind::Unspecified,
-                        );
-                        let left_elem = SolidColorRenderElement::from_buffer(
-                            left_buf,
-                            Point::from((loc.x, loc.y + bw)),
-                            border_alpha,
-                            Kind::Unspecified,
-                        );
-                        let right_elem = SolidColorRenderElement::from_buffer(
-                            right_buf,
-                            Point::from((loc.x + sz.w - bw, loc.y + bw)),
-                            border_alpha,
-                            Kind::Unspecified,
-                        );
-
-                        for elem in [top_elem, btm_elem, left_elem, right_elem] {
-                            let inner = MonitorInnerRenderElement::SolidColor(elem);
-                            let rescaled =
-                                RescaleRenderElement::from_element(inner, Point::default(), 1.0);
-                            push(RelocateRenderElement::from_element(
-                                rescaled,
-                                Point::default(),
-                                Relocate::Relative,
-                            ));
-                        }
-                    }
+                .unwrap_or(self.active_workspace_idx()),
+            active_color: self
+                .options
+                .layout
+                .focus_ring
+                .active_color
+                .to_array_premul(),
+        });
+        let workspaces = self
+            .workspaces
+            .iter()
+            .zip(&placements)
+            .map(|(workspace, placement)| {
+                workspace.scene_sources(
+                    placement.normal_visible || force_visible.contains(&Some(workspace.id())),
+                )
+            })
+            .collect();
+        let insert_hint = self
+            .insert_hint_render_loc
+            .filter(|_| !self.options.layout.insert_hint.off)
+            .and_then(|location| {
+                if let InsertWorkspace::Existing(id) = location.workspace {
+                    Some((
+                        id,
+                        InsertHintRenderSource::new(self.resources.lease()),
+                        location.location,
+                    ))
+                } else {
+                    None
                 }
-            }
+            });
+        Composition {
+            geometry: GeometryPlan {
+                scale,
+                placements,
+                normal_crop,
+                moving_crop: if is_expo { expo_crop } else { unlimited },
+                shadow_alpha: self
+                    .overview_progress
+                    .as_ref()
+                    .map(|progress| progress.clamped_value().clamp(0., 1.) as f32),
+                expo,
+            },
+            workspaces,
+            insert_hint,
+            resources: self.resources.lease(),
+        }
+    }
+
+    /// Compatibility callers consume the same captured scene implementations
+    /// as the output source; no parallel legacy composition path remains.
+    pub fn render_workspaces<R: ClarionRenderer>(
+        &self,
+        ctx: RenderCtx<R>,
+        focus_ring: bool,
+        push: &mut dyn FnMut(MonitorRenderElement<R>),
+    ) {
+        if self.is_stage_visible() {
+            self.cube_lifecycle().leave_cube();
+            self.render_stage(ctx, focus_ring, push);
+        } else if self.is_spread_visible() {
+            self.cube_lifecycle().leave_cube();
+            self.render_spread(ctx, push);
+        } else if self.is_cube_scene() {
+            self.cube_composition().render(ctx, focus_ring, push);
+        } else {
+            self.cube_lifecycle().leave_cube();
+            self.standard_composition().render(ctx, focus_ring, push);
         }
     }
 
@@ -2863,36 +2418,10 @@ impl<W: LayoutElement> Monitor<W> {
         if self.is_stage_visible() {
             return;
         }
-        let Some(progress) = self.overview_progress.as_ref().map(|p| p.clamped_value()) else {
-            return;
-        };
-        let alpha = progress.clamp(0., 1.) as f32;
-
-        let _span = clarion_tracy_span!("Monitor::render_workspace_shadows");
-
-        let scale = self.scale.fractional_scale();
-        let zoom = self.overview_zoom();
-
-        for (ws, geo) in self.workspaces_with_render_geo() {
-            let actual_zoom = if self.overview_mode() == OverviewMode::Expo
-                && (self.is_overview_open() || self.overview_progress.is_some())
-            {
-                (geo.size.w / self.view_size.w.max(1.0)).clamp(0.01, 1.0)
-            } else {
-                zoom
-            };
-            ws.render_shadow(renderer, &mut |elem| {
-                let elem = elem.with_alpha(alpha);
-                let elem = MonitorInnerRenderElement::Shadow(elem);
-                let elem =
-                    RescaleRenderElement::from_element(elem, Point::from((0, 0)), actual_zoom);
-                let elem = RelocateRenderElement::from_element(
-                    elem,
-                    geo.loc.to_physical_precise_round(scale),
-                    Relocate::Relative,
-                );
-                push(elem);
-            });
+        if self.is_spread_visible() {
+            self.spread_composition().render_shadows(renderer, push);
+        } else if !self.is_cube_scene() {
+            self.standard_composition().render_shadows(renderer, push);
         }
     }
 

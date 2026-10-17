@@ -3,15 +3,12 @@ use std::ops::Range;
 
 use anyhow::{Context, Result};
 use egui::{ComboBox, ScrollArea, TextEdit, Ui};
-
-use crate::icons::{self, Icon};
-use crate::theme::colors;
-use knuffel::{
-    ast::{Document, Literal, SpannedNode},
-    span::Span,
-};
+use knuffel::ast::{Document, Literal, SpannedNode};
+use knuffel::span::Span;
 
 use crate::config_schema as schema;
+use crate::icons::{self, Icon};
+use crate::theme::colors;
 type Node = SpannedNode<Span>;
 
 pub struct DocumentEditor {
@@ -1475,8 +1472,9 @@ fn friendly_label(name: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::path::Path;
+
+    use super::*;
     fn valid(source: &str) {
         if let Err(error) =
             clarion_config::Config::parse(Path::new("/tmp/clarion-settings-test.kdl"), source)

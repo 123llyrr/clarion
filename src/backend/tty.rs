@@ -18,12 +18,16 @@ use clarion_ipc::{HSyncPolarity, VSyncPolarity};
 use drm_ffi::drm_mode_modeinfo;
 use smithay::backend::allocator::dmabuf::{AsDmabuf, Dmabuf};
 use smithay::backend::allocator::format::FormatSet;
-use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
+use smithay::backend::allocator::gbm::{GbmAllocator, GbmBuffer, GbmBufferFlags, GbmDevice};
 use smithay::backend::allocator::{Format, Fourcc};
-use smithay::backend::drm::compositor::{DrmCompositor, FrameFlags, PrimaryPlaneElement};
+use smithay::backend::drm::compositor::{
+    DrmCompositor, FrameFlags, PrimaryPlaneElement, PrimarySwapchainElement,
+};
 use smithay::backend::drm::exporter::gbm::GbmFramebufferExporter;
+use smithay::backend::drm::gbm::GbmFramebuffer;
 use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmNode, NodeType};
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
+use smithay::backend::renderer::element::RenderElementStates;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::multigpu::gbm::GbmGlesBackend;
 use smithay::backend::renderer::multigpu::{MultiFrame, MultiRenderer};
@@ -54,13 +58,13 @@ use wayland_protocols::wp::linux_dmabuf::zv1::server::zwp_linux_dmabuf_feedback_
 
 use super::{IpcOutputMap, RenderResult};
 use crate::backend::OutputId;
-use crate::platform::device_bridge::{DevicePort, DeviceSetup, UdevInventory};
-use crate::render_helpers::renderer::AsGlesRenderer;
-use crate::render_helpers::{resources, shaders};
-use crate::utils::{get_monotonic_time, is_laptop_panel};
-
 #[cfg(test)]
 pub(crate) use crate::output_schedule::take_redraw_state_on_vblank;
+use crate::platform::device_bridge::{DevicePort, DeviceSetup, UdevInventory};
+use crate::render_helpers::renderer::AsGlesRenderer;
+use crate::render_helpers::sync::DeferredFrame;
+use crate::render_helpers::{resources, shaders};
+use crate::utils::{get_monotonic_time, is_laptop_panel};
 
 pub(crate) mod gles_fallback;
 pub(crate) mod recovery;
@@ -556,6 +560,13 @@ pub(crate) struct TtyOutputState {
 pub(crate) struct Surface {
     pub(crate) name: OutputName,
     pub(crate) compositor: GbmDrmCompositor,
+    pub(crate) frame_epoch: u64,
+    /// A prepared frame awaiting a non-exportable fence. The primary element
+    /// owns its swapchain slot; no later render may recycle it before readiness.
+    pub(crate) pending_kms: Option<DeferredFrame<PendingKmsFrame>>,
+    /// Failed GPU frames keep their slots outside the replacement swapchain.
+    /// Never recycle storage whose producer has not confirmed completion.
+    pub(crate) quarantined_kms: Vec<DeferredFrame<PendingKmsFrame>>,
     /// Set until the KMS swapchain has been converted to a GLES-compatible format.
     pub(crate) native_swapchain: bool,
     pub(crate) last_gles_migration_warning: Option<Duration>,
@@ -574,6 +585,84 @@ pub(crate) struct Surface {
     /// Plot name for the presentation misprediction plot.
     pub(crate) presentation_misprediction_plot_name: tracy_client::PlotName,
     pub(crate) sequence_delta_plot_name: tracy_client::PlotName,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct KmsFrameIdentity {
+    epoch: u64,
+    locked: bool,
+    mode: Option<Mode>,
+    scale: f64,
+    transform: Transform,
+    native_swapchain: bool,
+    format: Fourcc,
+}
+
+impl KmsFrameIdentity {
+    fn new(
+        output: &Output,
+        epoch: u64,
+        locked: bool,
+        native_swapchain: bool,
+        format: Fourcc,
+    ) -> Self {
+        Self {
+            epoch,
+            locked,
+            mode: output.current_mode(),
+            scale: output.current_scale().fractional_scale(),
+            transform: output.current_transform(),
+            native_swapchain,
+            format,
+        }
+    }
+}
+
+pub(crate) struct PendingKmsFrame {
+    _primary: PrimarySwapchainElement<GbmBuffer, GbmFramebuffer>,
+    states: RenderElementStates,
+    is_empty: bool,
+    identity: KmsFrameIdentity,
+    feedback: Option<OutputPresentationFeedback>,
+}
+
+/// Publish feedback only for a frame that can actually be queued. Smithay owns
+/// its prepared next_frame while a PendingKmsFrame retains the swapchain slot.
+fn submit_kms_frame(
+    surface: &mut Surface,
+    port: &mut impl crate::frame_pipeline::FramePort,
+    states: RenderElementStates,
+    is_empty: bool,
+    target: Duration,
+    feedback: Option<OutputPresentationFeedback>,
+) -> RenderResult {
+    port.update_scanout(&states);
+    if let Some(feedback) = surface.dmabuf_feedback.as_ref() {
+        port.send_dmabuf_feedback(feedback, &states);
+    }
+    if is_empty {
+        drop(surface.vblank_frame.take());
+        port.estimated_vblank(target);
+        return RenderResult::NoDamage;
+    }
+    let feedback = feedback.unwrap_or_else(|| port.take_presentation_feedback(&states));
+    let result = {
+        let _latency =
+            crate::utils::latency::Span::new(crate::utils::latency::Operation::KmsSubmit);
+        surface.compositor.queue_frame((feedback, target))
+    };
+    match result {
+        Ok(()) => {
+            port.kms_submitted();
+            RenderResult::Submitted
+        }
+        Err(error) => {
+            surface.compositor.reset_buffer_ages();
+            drop(surface.vblank_frame.take());
+            port.kms_submission_failed(target, &error);
+            RenderResult::Skipped
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -923,7 +1012,7 @@ impl Tty {
         let span = clarion_tracy_span!("Tty::render");
         let _latency = crate::utils::latency::Span::new(crate::utils::latency::Operation::Render);
 
-        let mut rv = RenderResult::Skipped;
+        let rv = RenderResult::Skipped;
 
         let tty_state: &TtyOutputState = output.user_data().get().unwrap();
         // Only a lost native renderer leaves an existing native swapchain needing
@@ -954,6 +1043,87 @@ impl Tty {
             // This branch hits any time we try to render while the user had switched to a
             // different VT, so don't print anything here.
             return rv;
+        }
+
+        if surface.pending_kms.is_some() {
+            let pending = match DeferredFrame::take_ready(&mut surface.pending_kms) {
+                Ok(Some(pending)) => pending,
+                Ok(None) => {
+                    // Keep the exact prepared frame and slot. A new render_frame
+                    // would drop Smithay's next_frame and allow premature reuse.
+                    port.retry_after_vblank(target_presentation_time);
+                    return RenderResult::GpuDeferred;
+                }
+                Err(error) => {
+                    if let Some(frame) = surface.pending_kms.as_mut() {
+                        frame.update_retained(|frame| drop(frame.feedback.take()));
+                    }
+                    // Bound quarantine per output. An unrecoverable series of
+                    // failures may stop this output, never grow without limit
+                    // or free a slot that unfinished GPU work could still use.
+                    if surface.quarantined_kms.len() >= 4 {
+                        port.retry_after_vblank(get_monotonic_time() + Duration::from_millis(500));
+                        return RenderResult::GpuDeferred;
+                    }
+                    warn!(
+                        ?error,
+                        "prepared KMS frame failed; isolating its slot before Vulkan recovery"
+                    );
+                    surface
+                        .quarantined_kms
+                        .push(surface.pending_kms.take().unwrap());
+                    surface.compositor.reset_buffers();
+                    surface.compositor.reset_buffer_ages();
+                    if let Some(native) = self.native_renderer.as_ref() {
+                        let anchor = native.device_anchor();
+                        match self
+                            .vulkan_recovery
+                            .request(self.primary_render_node, Some(anchor))
+                        {
+                            Ok(generation) => {
+                                self.vulkan_recovery_generation = Some(generation);
+                                self.vulkan_recovery_attempt = 1;
+                                self.native_renderer = None;
+                            }
+                            Err(_) => {
+                                self.vulkan_recovery_retry_after =
+                                    get_monotonic_time() + Duration::from_millis(500);
+                            }
+                        }
+                    }
+                    port.retry_after_vblank(target_presentation_time);
+                    return RenderResult::GpuDeferred;
+                }
+            };
+            // Query the output only when a retained frame actually becomes
+            // ready. Normal frames never need an identity or its output locks.
+            let frame_identity = KmsFrameIdentity::new(
+                output,
+                surface.frame_epoch,
+                port.request().locked,
+                surface.native_swapchain,
+                surface.compositor.format(),
+            );
+            if pending.identity == frame_identity {
+                let result = submit_kms_frame(
+                    surface,
+                    port,
+                    pending.states,
+                    pending.is_empty,
+                    target_presentation_time,
+                    pending.feedback,
+                );
+                // New commits/animation endpoints coalesced while A waited.
+                // Presenting A must not consume their request for the next frame.
+                if matches!(result, RenderResult::Submitted | RenderResult::NoDamage) {
+                    port.queue_followup_redraw();
+                }
+                return result;
+            }
+            // Never present an old unlocked composition after a lock request,
+            // or an image prepared for a different output generation. Readiness
+            // was required before releasing the retained slot and rendering anew.
+            surface.compositor.reset_buffer_ages();
         }
 
         let flags = {
@@ -1026,6 +1196,8 @@ impl Tty {
             // === Direct Native Vulkan KMS Display Path ===
             let native = self.native_renderer.as_mut().unwrap();
 
+            let _allocation_scope = native.async_offscreen_scope();
+
             native.begin_scene();
             let scene = port.prepare_scene(native);
             if native.scene_was_deferred() {
@@ -1074,7 +1246,7 @@ impl Tty {
                 Ok(res) => {
                     // Native completion retains sampled client-buffer owners
                     // until the GPU finishes. Exportable output fences pass
-                    // directly to KMS; explicit fallback/debug paths wait here.
+                    // directly to KMS; fallback/debug paths defer submission.
                     let needs_sync = res.needs_sync()
                         || self
                             .config
@@ -1082,54 +1254,40 @@ impl Tty {
                             .debug
                             .wait_for_frame_completion_before_queueing;
                     if needs_sync {
-                        if let PrimaryPlaneElement::Swapchain(ref element) = res.primary_element {
-                            let _span = clarion_tracy_span!("wait for completion");
-                            if let Err(err) =
-                                crate::render_helpers::sync::wait_for_completion(&element.sync)
-                            {
-                                debug!(
-                                    "frame completion wait interrupted: {err}; retrying next frame"
-                                );
-                                drop(res);
-                                drm_compositor.reset_buffer_ages();
-                                drop(surface.vblank_frame.take());
+                        if let PrimaryPlaneElement::Swapchain(element) = res.primary_element {
+                            if crate::render_helpers::sync::require_ready(&element.sync).is_err() {
+                                port.update_scanout(&res.states);
+                                let feedback = (!res.is_empty)
+                                    .then(|| port.take_presentation_feedback(&res.states));
+                                surface.pending_kms = Some(DeferredFrame::new(
+                                    element.sync.clone(),
+                                    PendingKmsFrame {
+                                        _primary: element,
+                                        states: res.states,
+                                        is_empty: res.is_empty,
+                                        identity: KmsFrameIdentity::new(
+                                            output,
+                                            surface.frame_epoch,
+                                            port.request().locked,
+                                            surface.native_swapchain,
+                                            surface.compositor.format(),
+                                        ),
+                                        feedback,
+                                    },
+                                ));
                                 port.retry_after_vblank(target_presentation_time);
-                                return RenderResult::Skipped;
+                                return RenderResult::GpuDeferred;
                             }
                         }
                     }
-
-                    port.update_scanout(&res.states);
-                    if let Some(dmabuf_feedback) = surface.dmabuf_feedback.as_ref() {
-                        port.send_dmabuf_feedback(dmabuf_feedback, &res.states);
-                    }
-
-                    if !res.is_empty {
-                        let presentation_feedbacks = port.take_presentation_feedback(&res.states);
-                        let data = (presentation_feedbacks, target_presentation_time);
-
-                        let queue_result = {
-                            let _latency = crate::utils::latency::Span::new(
-                                crate::utils::latency::Operation::KmsSubmit,
-                            );
-                            drm_compositor.queue_frame(data)
-                        };
-                        match queue_result {
-                            Ok(()) => {
-                                port.kms_submitted();
-
-                                return RenderResult::Submitted;
-                            }
-                            Err(err) => {
-                                drm_compositor.reset_buffer_ages();
-                                drop(surface.vblank_frame.take());
-                                port.kms_submission_failed(target_presentation_time, &err);
-                                return RenderResult::Skipped;
-                            }
-                        }
-                    } else {
-                        rv = RenderResult::NoDamage;
-                    }
+                    return submit_kms_frame(
+                        surface,
+                        port,
+                        res.states,
+                        res.is_empty,
+                        target_presentation_time,
+                        None,
+                    );
                 }
                 Err(err) => {
                     if crate::render_helpers::vulkan::native::NativeError::is_backpressure(&err) {
@@ -1291,54 +1449,40 @@ impl Tty {
                             .debug
                             .wait_for_frame_completion_before_queueing;
                     if needs_sync {
-                        if let PrimaryPlaneElement::Swapchain(ref element) = res.primary_element {
-                            let _span = clarion_tracy_span!("wait for completion");
-                            if let Err(err) =
-                                crate::render_helpers::sync::wait_for_completion(&element.sync)
-                            {
-                                debug!(
-                                    "frame completion wait interrupted: {err}; retrying next frame"
-                                );
-                                drop(res);
-                                drm_compositor.reset_buffer_ages();
-                                drop(surface.vblank_frame.take());
+                        if let PrimaryPlaneElement::Swapchain(element) = res.primary_element {
+                            if crate::render_helpers::sync::require_ready(&element.sync).is_err() {
+                                port.update_scanout(&res.states);
+                                let feedback = (!res.is_empty)
+                                    .then(|| port.take_presentation_feedback(&res.states));
+                                surface.pending_kms = Some(DeferredFrame::new(
+                                    element.sync.clone(),
+                                    PendingKmsFrame {
+                                        _primary: element,
+                                        states: res.states,
+                                        is_empty: res.is_empty,
+                                        identity: KmsFrameIdentity::new(
+                                            output,
+                                            surface.frame_epoch,
+                                            port.request().locked,
+                                            surface.native_swapchain,
+                                            surface.compositor.format(),
+                                        ),
+                                        feedback,
+                                    },
+                                ));
                                 port.retry_after_vblank(target_presentation_time);
-                                return RenderResult::Skipped;
+                                return RenderResult::GpuDeferred;
                             }
                         }
                     }
-
-                    port.update_scanout(&res.states);
-                    if let Some(dmabuf_feedback) = surface.dmabuf_feedback.as_ref() {
-                        port.send_dmabuf_feedback(dmabuf_feedback, &res.states);
-                    }
-
-                    if !res.is_empty {
-                        let presentation_feedbacks = port.take_presentation_feedback(&res.states);
-                        let data = (presentation_feedbacks, target_presentation_time);
-
-                        let queue_result = {
-                            let _latency = crate::utils::latency::Span::new(
-                                crate::utils::latency::Operation::KmsSubmit,
-                            );
-                            drm_compositor.queue_frame(data)
-                        };
-                        match queue_result {
-                            Ok(()) => {
-                                port.kms_submitted();
-
-                                return RenderResult::Submitted;
-                            }
-                            Err(err) => {
-                                drm_compositor.reset_buffer_ages();
-                                drop(surface.vblank_frame.take());
-                                port.kms_submission_failed(target_presentation_time, &err);
-                                return RenderResult::Skipped;
-                            }
-                        }
-                    } else {
-                        rv = RenderResult::NoDamage;
-                    }
+                    return submit_kms_frame(
+                        surface,
+                        port,
+                        res.states,
+                        res.is_empty,
+                        target_presentation_time,
+                        None,
+                    );
                 }
                 Err(err) => {
                     warn!("error rendering frame: {err}");
@@ -1424,7 +1568,8 @@ impl Tty {
 
     pub fn early_import(&mut self, surface: &WlSurface) {
         if self.native_renderer.is_some() {
-            // Native Vulkan mode imports DMA-BUFs on commit/render directly via import_dmabuf without GLES
+            // Native Vulkan mode imports DMA-BUFs on commit/render directly via import_dmabuf
+            // without GLES
             return;
         }
         if let Err(err) = self.gpu_manager.early_import(
@@ -1510,6 +1655,7 @@ impl Tty {
 
         for device in self.devices.values_mut() {
             for surface in device.surfaces.values_mut() {
+                surface.frame_epoch = surface.frame_epoch.wrapping_add(1);
                 if let Err(err) = surface.compositor.clear() {
                     warn!("error clearing drm surface: {err:?}");
                 }
@@ -1886,6 +2032,7 @@ pub(crate) fn migrate_native_swapchain_to_gles(
             Ok(()) => {
                 // The new swapchain has fresh buffers; force a complete frame on it.
                 surface.compositor.reset_buffer_ages();
+                surface.frame_epoch = surface.frame_epoch.wrapping_add(1);
                 if let Err(err) = surface.compositor.reset_state() {
                     warn!("error resetting KMS state after GLES swapchain migration: {err}");
                 }
@@ -2663,13 +2810,72 @@ mod tests {
     use insta::assert_debug_snapshot;
     use smithay::backend::allocator::format::FormatSet;
     use smithay::backend::allocator::{Format, Fourcc, Modifier};
+    use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
+    use smithay::utils::Transform;
 
     use crate::backend::tty::{
         calculate_drm_mode_from_modeline, calculate_mode_cvt, estimated_vblank_delay,
         gles_swapchain_candidates, output_uses_native_renderer, surface_uses_native_renderer,
-        vulkan_scanout_formats,
+        vulkan_scanout_formats, KmsFrameIdentity,
     };
     use crate::frame_clock::FrameClock;
+
+    fn kms_identity_output() -> Output {
+        let output = Output::new(
+            "kms-identity".into(),
+            PhysicalProperties {
+                size: (300, 200).into(),
+                subpixel: Subpixel::Unknown,
+                make: String::new(),
+                model: String::new(),
+                serial_number: String::new(),
+            },
+        );
+        output.change_current_state(
+            Some(Mode {
+                size: (1920, 1080).into(),
+                refresh: 60_000,
+            }),
+            None,
+            None,
+            None,
+        );
+        output
+    }
+
+    #[test]
+    fn retained_kms_identity_rejects_lock_epoch_renderer_and_format_changes() {
+        let output = kms_identity_output();
+        let captured = KmsFrameIdentity::new(&output, 7, false, true, Fourcc::Argb8888);
+        assert!(captured == KmsFrameIdentity::new(&output, 7, false, true, Fourcc::Argb8888));
+        assert!(captured != KmsFrameIdentity::new(&output, 7, true, true, Fourcc::Argb8888));
+        assert!(captured != KmsFrameIdentity::new(&output, 8, false, true, Fourcc::Argb8888));
+        assert!(captured != KmsFrameIdentity::new(&output, 7, false, false, Fourcc::Argb8888));
+        assert!(captured != KmsFrameIdentity::new(&output, 7, false, true, Fourcc::Abgr8888));
+    }
+
+    #[test]
+    fn retained_kms_identity_reads_current_mode_scale_and_transform_after_readiness() {
+        let output = kms_identity_output();
+        let capture = || KmsFrameIdentity::new(&output, 7, false, true, Fourcc::Argb8888);
+        let before_mode = capture();
+        output.change_current_state(
+            Some(Mode {
+                size: (2560, 1440).into(),
+                refresh: 60_000,
+            }),
+            None,
+            None,
+            None,
+        );
+        let before_scale = capture();
+        assert!(before_mode != before_scale);
+        output.change_current_state(None, None, Some(Scale::Fractional(1.5)), None);
+        let before_transform = capture();
+        assert!(before_scale != before_transform);
+        output.change_current_state(None, Some(Transform::_90), None, None);
+        assert!(before_transform != capture());
+    }
 
     #[test]
     fn estimated_vblank_timer_stays_on_fixed_refresh_grid_after_a_late_frame() {

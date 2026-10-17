@@ -249,6 +249,18 @@ impl<'a> AnyRenderer<'a> {
     }
 }
 
+impl<'a> From<&'a mut GlesRenderer> for AnyRenderer<'a> {
+    fn from(r: &'a mut GlesRenderer) -> Self {
+        AnyRenderer::Gles(r)
+    }
+}
+
+impl<'a> From<&'a mut crate::render_helpers::vulkan::native::NativeRenderer> for AnyRenderer<'a> {
+    fn from(r: &'a mut crate::render_helpers::vulkan::native::NativeRenderer) -> Self {
+        AnyRenderer::Native(r)
+    }
+}
+
 /// Trait for getting an `AnyRenderer` view.
 pub trait AsAnyRenderer {
     fn as_any_renderer(&mut self) -> AnyRenderer<'_>;
@@ -348,9 +360,11 @@ macro_rules! with_any_renderer_for_output {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use clarion_config::Config;
     use std::path::Path;
+
+    use clarion_config::Config;
+
+    use super::*;
 
     #[test]
     fn parse_rejects_unknown_backends() {

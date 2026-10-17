@@ -12,7 +12,8 @@ use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size, Transform
 use super::{render_to_encompassing_texture, ToRenderElement};
 use crate::render_helpers::solid_color::SolidColorBuffer;
 use crate::render_helpers::texture::TextureBuffer;
-use crate::render_helpers::vulkan::{native::NativeRenderer, VulkanTexture};
+use crate::render_helpers::vulkan::native::NativeRenderer;
+use crate::render_helpers::vulkan::VulkanTexture;
 use crate::render_helpers::{BakedBuffer, RenderCtx, RenderTarget};
 
 /// Pixel geometry and the scale at which this lazy snapshot cache was rendered.
@@ -177,7 +178,7 @@ where
         B::RenderElement: RenderElement<R>,
     {
         if ctx.target.should_block_out(self.block_out_from) {
-            self.blocked_out_texture.get_or_init(|| {
+            snapshot_texture_or_retry(&self.blocked_out_texture, scale, || {
                 let _span = clarion_tracy_span!("RenderSnapshot::texture");
 
                 let elements: Vec<_> = self
@@ -188,27 +189,18 @@ where
                     })
                     .collect();
 
-                match render_to_encompassing_texture(
+                render_to_encompassing_texture(
                     ctx.renderer,
                     scale,
                     Transform::Normal,
                     Fourcc::Abgr8888,
                     &elements,
-                ) {
-                    Ok((texture, _sync_point, geo)) => Some(SnapshotTexture {
-                        texture: (texture, geo),
-                        scale,
-                    }),
-                    Err(err) => {
-                        warn!("error rendering blocked-out contents to texture: {err:?}");
-                        None
-                    }
-                }
+                )
             })
         } else if ctx.target != RenderTarget::Output && self.contents_with_blocked_out_bg.is_some()
         {
             let contents = self.contents_with_blocked_out_bg.as_ref().unwrap();
-            self.texture_with_blocked_out_bg.get_or_init(|| {
+            snapshot_texture_or_retry(&self.texture_with_blocked_out_bg, scale, || {
                 let _span = clarion_tracy_span!("RenderSnapshot::texture");
 
                 let elements: Vec<_> = contents
@@ -218,25 +210,16 @@ where
                     })
                     .collect();
 
-                match render_to_encompassing_texture(
+                render_to_encompassing_texture(
                     ctx.renderer,
                     scale,
                     Transform::Normal,
                     Fourcc::Abgr8888,
                     &elements,
-                ) {
-                    Ok((texture, _sync_point, geo)) => Some(SnapshotTexture {
-                        texture: (texture, geo),
-                        scale,
-                    }),
-                    Err(err) => {
-                        warn!("error rendering contents with blocked-out bg to texture: {err:?}");
-                        None
-                    }
-                }
+                )
             })
         } else {
-            self.texture.get_or_init(|| {
+            snapshot_texture_or_retry(&self.texture, scale, || {
                 let _span = clarion_tracy_span!("RenderSnapshot::texture");
 
                 let elements: Vec<_> = self
@@ -247,27 +230,45 @@ where
                     })
                     .collect();
 
-                match render_to_encompassing_texture(
+                render_to_encompassing_texture(
                     ctx.renderer,
                     scale,
                     Transform::Normal,
                     Fourcc::Abgr8888,
                     &elements,
-                ) {
-                    Ok((texture, _sync_point, geo)) => Some(SnapshotTexture {
-                        texture: (texture, geo),
-                        scale,
-                    }),
-                    Err(err) => {
-                        warn!("error rendering contents to texture: {err:?}");
-                        None
-                    }
-                }
+                )
             })
         }
-        .as_ref()
         .map(|texture| &texture.texture)
     }
+}
+
+/// Pending GPU work is not a failed immutable snapshot. Leave its selected
+/// privacy cache uninitialized so the next retained scene can retry it. True
+/// failures keep the original sticky-None policy and never expose another target.
+fn snapshot_texture_or_retry<T>(
+    cache: &OnceCell<Option<SnapshotTexture<T>>>,
+    scale: Scale<f64>,
+    render: impl FnOnce() -> anyhow::Result<(T, SyncPoint, Rectangle<i32, Physical>)>,
+) -> Option<&SnapshotTexture<T>> {
+    if let Some(cached) = cache.get() {
+        return cached.as_ref();
+    }
+    let value = match render() {
+        Ok((texture, _sync, geometry)) => Some(SnapshotTexture {
+            texture: (texture, geometry),
+            scale,
+        }),
+        Err(error) if super::vulkan::native::NativeError::is_backpressure(error.as_ref()) => {
+            return None;
+        }
+        Err(error) => {
+            warn!("error rendering snapshot contents to texture: {error:#}");
+            None
+        }
+    };
+    let _ = cache.set(value);
+    cache.get().and_then(Option::as_ref)
 }
 
 fn freeze_texture_contents<R>(
@@ -402,6 +403,75 @@ mod tests {
         snapshot.texture_with_blocked_out_bg.set(None).unwrap();
         snapshot.blocked_out_texture.set(None).unwrap();
         assert_eq!(snapshot.texture_scale(RenderTarget::Screencast), None);
+        assert_eq!(snapshot.texture_scale(RenderTarget::ScreenCapture), None);
+    }
+
+    #[test]
+    fn lazy_privacy_snapshots_retry_pending_gpu_work_without_caching_failure() {
+        use crate::render_helpers::vulkan::native::{NativeBusy, NativeError};
+
+        let snapshot = scale_test_snapshot();
+        for cache in [
+            &snapshot.texture,
+            &snapshot.texture_with_blocked_out_bg,
+            &snapshot.blocked_out_texture,
+        ] {
+            for pending in [
+                NativeBusy::Frame,
+                NativeBusy::Upload,
+                NativeBusy::Completion,
+                NativeBusy::OutputFormat,
+                NativeBusy::YuvPipelines,
+                NativeBusy::ProducerFence,
+                NativeBusy::OffscreenAllocation,
+            ] {
+                let result = snapshot_texture_or_retry(cache, 2.0.into(), || {
+                    Err(anyhow::Error::new(NativeError::Busy(pending))
+                        .context("wrapped renderer error"))
+                });
+                assert!(result.is_none());
+                assert!(
+                    cache.get().is_none(),
+                    "pending {pending:?} poisoned its cache"
+                );
+            }
+            let geometry = Rectangle::new((-4, -6).into(), (80, 60).into());
+            let actual = snapshot_texture_or_retry(cache, 2.0.into(), || {
+                Ok(((), SyncPoint::signaled(), geometry))
+            })
+            .unwrap();
+            assert_eq!(actual.texture.1, geometry);
+            assert_eq!(actual.scale, 2.0.into());
+            assert!(snapshot_texture_or_retry(cache, 1.0.into(), || {
+                panic!("a successful immutable snapshot must not render again")
+            })
+            .is_some());
+        }
+    }
+
+    #[test]
+    fn a_failed_privacy_snapshot_never_uses_another_cache_or_retries_a_true_error() {
+        let mut snapshot = scale_test_snapshot();
+        snapshot.texture.set(cached_texture_at(2.0)).unwrap();
+        snapshot.block_out_from = Some(BlockOutFrom::ScreenCapture);
+        assert!(
+            snapshot_texture_or_retry(&snapshot.blocked_out_texture, 1.0.into(), || {
+                Err(anyhow::anyhow!("unsupported snapshot format"))
+            })
+            .is_none()
+        );
+        assert!(snapshot.blocked_out_texture.get().unwrap().is_none());
+        assert!(snapshot.texture_with_blocked_out_bg.get().is_none());
+        assert!(
+            snapshot_texture_or_retry(&snapshot.blocked_out_texture, 1.0.into(), || {
+                panic!("a true failure keeps the terminal cache policy")
+            })
+            .is_none()
+        );
+        assert_eq!(
+            snapshot.texture_scale(RenderTarget::Output),
+            Some(2.0.into())
+        );
         assert_eq!(snapshot.texture_scale(RenderTarget::ScreenCapture), None);
     }
 

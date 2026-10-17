@@ -1,8 +1,11 @@
-use super::*;
-use crate::layout::dwindle::DwindleSpace;
 use clarion_ipc::management::SessionTree;
 
+use super::*;
+use crate::layout::dwindle::DwindleSpace;
+use crate::scene::resources::SceneResources;
+
 fn fixture() -> (
+    SceneResources,
     DwindleSpace<TestWindow>,
     Size<f64, Logical>,
     Clock,
@@ -16,12 +19,16 @@ fn fixture() -> (
     options.layout.border.off = false;
     options.layout.border.width = 2.;
     let options = Rc::new(options);
-    (
-        DwindleSpace::new(view, area, 1.25, clock.clone(), options.clone()),
+    let scene_resources = SceneResources::new();
+    let space = DwindleSpace::new(
         view,
-        clock,
-        options,
-    )
+        area,
+        1.25,
+        clock.clone(),
+        options.clone(),
+        scene_resources.allocator(),
+    );
+    (scene_resources, space, view, clock, options)
 }
 
 fn tile(
@@ -29,6 +36,7 @@ fn tile(
     view: Size<f64, Logical>,
     clock: &Clock,
     options: &Rc<Options>,
+    scene_resources: &SceneResources,
 ) -> Tile<TestWindow> {
     Tile::new(
         TestWindow::new(TestWindowParams::new(id)),
@@ -36,6 +44,7 @@ fn tile(
         1.25,
         clock.clone(),
         options.clone(),
+        scene_resources.allocator().windows.allocate(),
     )
 }
 
@@ -65,9 +74,12 @@ fn requested(space: &DwindleSpace<TestWindow>, id: usize) -> Size<i32, Logical> 
 
 #[test]
 fn dwindle_core_nested_slots_preserve_internal_resize_geometry() {
-    let (mut space, view, clock, options) = fixture();
+    let (scene_resources, mut space, view, clock, options) = fixture();
     for id in 0..3 {
-        space.add_tile(tile(id, view, &clock, &options), ActivateWindow::Yes);
+        space.add_tile(
+            tile(id, view, &clock, &options, &scene_resources),
+            ActivateWindow::Yes,
+        );
     }
     let tree = nested_tree();
     space.restore_session_tree(&tree, &[Some(0), Some(1), Some(2)]);
@@ -107,7 +119,7 @@ fn dwindle_core_nested_slots_preserve_internal_resize_geometry() {
 
 #[test]
 fn dwindle_core_client_hints_do_not_change_reserved_slots_or_double_subtract_borders() {
-    let (mut space, view, clock, options) = fixture();
+    let (scene_resources, mut space, view, clock, options) = fixture();
     let params = TestWindowParams {
         min_max_size: ((900, 900).into(), (950, 950).into()),
         ..TestWindowParams::new(0)
@@ -119,10 +131,14 @@ fn dwindle_core_client_hints_do_not_change_reserved_slots_or_double_subtract_bor
             1.25,
             clock.clone(),
             options.clone(),
+            scene_resources.allocator().windows.allocate(),
         ),
         ActivateWindow::Yes,
     );
-    space.add_tile(tile(1, view, &clock, &options), ActivateWindow::Yes);
+    space.add_tile(
+        tile(1, view, &clock, &options, &scene_resources),
+        ActivateWindow::Yes,
+    );
     assert_eq!(
         space.tiled_positions(),
         vec![(0, (17.25, 11.5).into()), (1, (525.25, 11.5).into())]
@@ -166,13 +182,16 @@ fn dwindle_core_client_hints_do_not_change_reserved_slots_or_double_subtract_bor
 
 #[test]
 fn dwindle_core_batch_smart_insertion_matches_incremental_topology_and_sizes() {
-    let (mut incremental, view, clock, options) = fixture();
-    let (mut batch, _, _, _) = fixture();
+    let (scene_resources, mut incremental, view, clock, options) = fixture();
+    let (batch_scene_resources, mut batch, _, _, _) = fixture();
     for id in 0..12 {
-        incremental.add_tile(tile(id, view, &clock, &options), ActivateWindow::Yes);
+        incremental.add_tile(
+            tile(id, view, &clock, &options, &scene_resources),
+            ActivateWindow::Yes,
+        );
     }
     batch.add_tiles(
-        (0..12).map(|id| tile(id, view, &clock, &options)),
+        (0..12).map(|id| tile(id, view, &clock, &options, &batch_scene_resources)),
         ActivateWindow::Yes,
     );
     assert_eq!(
@@ -203,9 +222,12 @@ fn dwindle_core_split_cache_keeps_zero_width_leaves_and_fractional_origins() {
 
 #[test]
 fn dwindle_policy_memory_prunes_closed_ids_inserts_new_ids_and_preserves_tile_handles() {
-    let (mut space, view, clock, options) = fixture();
+    let (scene_resources, mut space, view, clock, options) = fixture();
     for id in 0..3 {
-        space.add_tile(tile(id, view, &clock, &options), ActivateWindow::Yes);
+        space.add_tile(
+            tile(id, view, &clock, &options, &scene_resources),
+            ActivateWindow::Yes,
+        );
     }
     space.restore_session_tree(&nested_tree(), &[Some(0), Some(1), Some(2)]);
     space.set_active_window(0);
@@ -218,7 +240,10 @@ fn dwindle_policy_memory_prunes_closed_ids_inserts_new_ids_and_preserves_tile_ha
         .window()
         .clone();
     space.remove_window(&1).unwrap();
-    space.add_tile(tile(3, view, &clock, &options), ActivateWindow::Yes);
+    space.add_tile(
+        tile(3, view, &clock, &options, &scene_resources),
+        ActivateWindow::Yes,
+    );
     assert!(space.set_maximized(&3, true));
     space.set_fullscreen(&0, false);
     space.restore_policy(&snapshot);
@@ -257,9 +282,12 @@ fn dwindle_policy_memory_prunes_closed_ids_inserts_new_ids_and_preserves_tile_ha
 
 #[test]
 fn dwindle_policy_memory_normal_state_clears_later_fullscreen_and_invalid_restore_is_atomic() {
-    let (mut space, view, clock, options) = fixture();
+    let (scene_resources, mut space, view, clock, options) = fixture();
     for id in 0..2 {
-        space.add_tile(tile(id, view, &clock, &options), ActivateWindow::Yes);
+        space.add_tile(
+            tile(id, view, &clock, &options, &scene_resources),
+            ActivateWindow::Yes,
+        );
     }
     let normal = space.policy_snapshot();
     space.set_fullscreen(&0, true);

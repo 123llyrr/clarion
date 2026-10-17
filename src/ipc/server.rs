@@ -1,13 +1,12 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::ffi::OsStr;
-use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use std::{env, io, process};
+use std::{env, fs, io, process};
 
 use anyhow::Context;
 use async_channel::{Receiver, Sender, TrySendError};
@@ -378,11 +377,28 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             Response::Capabilities(vec!["desktop-menu-focus-restore".to_owned()])
         }
         Request::FrameTimings => {
+            // Admission precedes the owner-thread copy, so concurrent clients
+            // cannot accumulate unbounded frozen rings before worker admission.
+            let permit = ctx.owned_tasks.reserve()?;
             let (tx, rx) = async_channel::bounded(1);
             ctx.event_loop.insert_idle(move |state| {
-                let _ = tx.send_blocking(state.clarion.frame_timings());
+                if !tx.is_closed() {
+                    let _ = tx.try_send(state.clarion.freeze_frame_timings());
+                }
             });
-            Response::FrameTimings(rx.recv().await.map_err(|e| e.to_string())?)
+            let frozen = rx.recv().await.map_err(|e| e.to_string())?;
+            let timings = permit
+                .submit(move || {
+                    let mut timings = frozen
+                        .into_iter()
+                        .map(crate::frame_stats::FrozenFrameStats::finish)
+                        .collect::<Vec<_>>();
+                    timings.sort_unstable_by(|a, b| a.output.cmp(&b.output));
+                    Ok(timings)
+                })?
+                .finish()
+                .await?;
+            Response::FrameTimings(timings)
         }
         Request::Outputs => {
             let ipc_outputs = ctx.ipc_outputs.lock().unwrap().clone();
@@ -1316,8 +1332,9 @@ mod lifecycle_tests {
 
 #[cfg(test)]
 mod request_tests {
-    use super::*;
     use futures_util::io::Cursor;
+
+    use super::*;
 
     #[test]
     fn prepared_session_is_bounded_and_semantically_validated() {

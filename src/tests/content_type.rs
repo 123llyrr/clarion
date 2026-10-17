@@ -1,4 +1,3 @@
-use crate::layout::LayoutElement as _;
 use clarion_config::Config;
 use smithay::reexports::wayland_protocols::wp::content_type::v1::client::wp_content_type_v1::{
     Type, WpContentTypeV1,
@@ -7,6 +6,7 @@ use wayland_client::protocol::wl_surface::WlSurface;
 
 use super::client::ClientId;
 use super::Fixture;
+use crate::layout::LayoutElement as _;
 use crate::window::ResolvedWindowRules;
 
 fn setup(config: &str) -> (Fixture, ClientId, WlSurface, WpContentTypeV1) {

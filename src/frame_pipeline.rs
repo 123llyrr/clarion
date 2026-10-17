@@ -27,6 +27,17 @@ use crate::utils::{get_monotonic_time, next_presentation_seq};
 
 pub(crate) const HEADLESS_FRAME_INTERVAL: Duration = Duration::from_micros(16_667);
 
+/// Present the callbacks captured for the actual composed commit, without
+/// looking up a newer client commit after asynchronous preparation.
+pub(crate) fn present_captured_feedback(mut feedback: OutputPresentationFeedback) {
+    feedback.presented::<_, smithay::utils::Monotonic>(
+        get_monotonic_time(),
+        Refresh::Unknown,
+        next_presentation_seq(),
+        wp_presentation_feedback::Kind::empty(),
+    );
+}
+
 /// Frozen policy relevant to one device submission, captured before scene preparation.
 #[derive(Debug, Clone)]
 pub(crate) struct FrameRequest {
@@ -62,6 +73,7 @@ pub(crate) trait FrameServices {
     fn present_immediately(&mut self, states: &RenderElementStates);
     fn set_default_dmabuf_feedback(&mut self, global: &DmabufGlobal, feedback: &DmabufFeedback);
     fn kms_submitted(&mut self);
+    fn queue_followup_redraw(&mut self);
     fn retry_after_vblank(&mut self, target: Duration);
     fn kms_submission_failed(&mut self, target: Duration, error: &dyn Display);
     fn estimated_vblank(&mut self, target: Duration);
@@ -192,13 +204,7 @@ impl FrameServices for FrameCoordinator<'_> {
             .take_presentation_feedbacks(&self.output, states)
     }
     fn present_immediately(&mut self, states: &RenderElementStates) {
-        let mut feedback = self.take_presentation_feedback(states);
-        feedback.presented::<_, smithay::utils::Monotonic>(
-            get_monotonic_time(),
-            Refresh::Unknown,
-            next_presentation_seq(),
-            wp_presentation_feedback::Kind::empty(),
-        );
+        present_captured_feedback(self.take_presentation_feedback(states));
     }
     fn set_default_dmabuf_feedback(&mut self, global: &DmabufGlobal, feedback: &DmabufFeedback) {
         self.clarion
@@ -216,6 +222,9 @@ impl FrameServices for FrameCoordinator<'_> {
         {
             self.clarion.event_loop.remove(token);
         }
+    }
+    fn queue_followup_redraw(&mut self) {
+        self.clarion.queue_redraw(&self.output);
     }
     fn retry_after_vblank(&mut self, target: Duration) {
         queue_retry_after_estimated_vblank(self.clarion, self.output.clone(), target);

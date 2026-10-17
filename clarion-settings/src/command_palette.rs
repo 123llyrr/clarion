@@ -1,5 +1,6 @@
 //! Searchable, keyboard-driven entry points to existing settings and desktop actions.
-use clarion_ipc::{management::ManagementState, Window, Workspace};
+use clarion_ipc::management::ManagementState;
+use clarion_ipc::{Window, Workspace};
 use egui::{self, Align2, Button, Key, Modifiers, ScrollArea, TextEdit, Vec2};
 
 use crate::app::ActiveTab;

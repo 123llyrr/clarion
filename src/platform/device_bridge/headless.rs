@@ -3,21 +3,20 @@
 //! The Vulkan mode uses a real offscreen target and advertises DMA-BUF formats.
 //! The GLES test mode keeps its lightweight callback-only rendering behavior.
 
-use smithay::backend::renderer::ImportDma;
-
-use crate::backend::headless::{Headless, HeadlessRenderer};
-use crate::compositor::Clarion;
-
-#[cfg(test)]
-use crate::backend::OutputId;
-#[cfg(test)]
-use crate::utils::logical_output;
 #[cfg(test)]
 use clarion_config::OutputName;
+use smithay::backend::renderer::ImportDma;
 #[cfg(test)]
 use smithay::output::{Mode, Output, PhysicalProperties, Subpixel};
 #[cfg(test)]
 use smithay::utils::Size;
+
+use crate::backend::headless::{Headless, HeadlessRenderer};
+#[cfg(test)]
+use crate::backend::OutputId;
+use crate::compositor::Clarion;
+#[cfg(test)]
+use crate::utils::logical_output;
 
 impl Headless {
     fn platform_init(&mut self, clarion: &mut Clarion) {

@@ -148,9 +148,11 @@ fn blocked_grabs_and_modal_ui_do_not_trigger_hot_corners() {
 
 #[test]
 fn an_already_moving_compositor_window_keeps_hot_corner_input_priority() {
-    use crate::input::{move_grab::MoveGrab, AnyStartData};
     use smithay::backend::input::ButtonState;
     use smithay::input::pointer::ButtonEvent;
+
+    use crate::input::move_grab::MoveGrab;
+    use crate::input::AnyStartData;
 
     let mut f = setup();
     let client = f.add_client();
@@ -206,11 +208,14 @@ fn an_already_moving_compositor_window_keeps_hot_corner_input_priority() {
 
 #[test]
 fn touch_and_tablet_compositor_grabs_block_pointer_hot_corners() {
-    use crate::input::{touch_overview_grab::TouchOverviewGrab, AnyStartData};
+    use std::time::Duration;
+
     use smithay::backend::input::{TabletToolCapabilities, TabletToolDescriptor, TabletToolType};
     use smithay::input::tablet::{tool, TabletDescriptor, TabletSeatTrait};
     use smithay::input::touch::DownEvent;
-    use std::time::Duration;
+
+    use crate::input::touch_overview_grab::TouchOverviewGrab;
+    use crate::input::AnyStartData;
 
     let mut f = setup();
     let output = f.clarion_output(1);

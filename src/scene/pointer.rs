@@ -1,14 +1,16 @@
 //! Cursor and drag-icon imports from an immutable pointer projection.
-use super::PointerRenderElements;
-use crate::cursor::{CursorManager, CursorTextureCache, RenderCursor, XCursor};
-use crate::render_helpers::renderer::ClarionRenderer;
-use crate::render_helpers::surface::push_elements_from_surface_tree;
+use std::time::Duration;
+
 use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
 use smithay::backend::renderer::element::Kind;
 use smithay::output::Output;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Scale};
-use std::time::Duration;
+
+use super::PointerRenderElements;
+use crate::cursor::{CursorManager, CursorTextureCache, RenderCursor, XCursor};
+use crate::render_helpers::renderer::ClarionRenderer;
+use crate::render_helpers::surface::push_elements_from_surface_tree;
 
 pub(crate) struct SceneDndIcon<'a> {
     pub surface: &'a WlSurface,

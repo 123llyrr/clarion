@@ -10,8 +10,6 @@ use clarion_core::workspace_state::{
 };
 use clarion_core::{CoreEvent, Layer, LayoutMode, SpaceId};
 use clarion_ipc::{ColumnDisplay, PositionChange, SizeChange, WindowLayout};
-
-use super::core_adapter::{self, DesktopContext};
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::desktop::{layer_map_for_output, Window};
@@ -22,25 +20,28 @@ use smithay::utils::{Logical, Point, Rectangle, Serial, Size, Transform};
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::SurfaceCachedState;
 
-use super::closing_window::ClosingWindow;
+use super::core_adapter::{self, DesktopContext};
 use super::dwindle::{DwindleSpace, DwindleSpaceRenderElement};
 use super::floating::{FloatingSpace, FloatingSpaceRenderElement};
 use super::scrolling::{
     Column, ColumnWidth, ScrollDirection, ScrollingSpace, ScrollingSpaceRenderElement,
 };
-use super::shadow::Shadow;
-use super::tile::{Tile, TileRenderElement, TileRenderSnapshot};
+use super::tile::{Tile, TileRenderElement};
 use super::{
     ActivateWindow, HitType, InsertPosition, LayoutElement, Options, RemovedTile, SizeFrac,
 };
 use crate::animation::Clock;
 use crate::clarion_render_elements;
 use crate::layout::RenderLayer;
-use crate::render_helpers::renderer::ClarionRenderer;
+use crate::render_helpers::renderer::{AnyRenderer, ClarionRenderer};
 use crate::render_helpers::shadow::ShadowRenderElement;
-use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
+use crate::render_helpers::solid_color::SolidColorRenderElement;
 use crate::render_helpers::xray::{Xray, XrayPos};
 use crate::render_helpers::RenderCtx;
+use crate::scene::closing_window::ClosingWindow;
+use crate::scene::resources::SceneResourceAllocator;
+use crate::scene::retained::ResourceHandle;
+use crate::scene::workspace_resources::WorkspaceResources;
 use crate::utils::id::IdCounter;
 use crate::utils::transaction::{Transaction, TransactionBlocker};
 use crate::utils::{
@@ -51,6 +52,7 @@ use crate::window::ResolvedWindowRules;
 
 #[derive(Debug)]
 pub struct Workspace<W: LayoutElement> {
+    scene_resources: SceneResourceAllocator,
     /// Shared authoritative identity, mode and visibility state.
     pub(super) core: DesktopContext<W::Id>,
     core_transition_depth: usize,
@@ -95,11 +97,8 @@ pub struct Workspace<W: LayoutElement> {
     /// zones.
     working_area: Rectangle<f64, Logical>,
 
-    /// This workspace's shadow in the overview.
-    shadow: Shadow,
-
-    /// This workspace's background.
-    background_buffer: SolidColorBuffer,
+    /// Weak registration survives moves and retains scene background/shadows.
+    resources: ResourceHandle<WorkspaceResources>,
 
     /// Clock for driving animations.
     pub(super) clock: Clock,
@@ -187,8 +186,13 @@ pub enum WorkspaceAddWindowTarget<'a, W: LayoutElement> {
 }
 
 impl<W: LayoutElement> Workspace<W> {
-    pub fn new(output: Output, clock: Clock, options: Rc<Options>) -> Self {
-        Self::new_with_config(output, None, clock, options)
+    pub fn new(
+        output: Output,
+        clock: Clock,
+        options: Rc<Options>,
+        scene_resources: SceneResourceAllocator,
+    ) -> Self {
+        Self::new_with_config(output, None, clock, options, scene_resources)
     }
 
     pub fn new_with_config(
@@ -196,6 +200,7 @@ impl<W: LayoutElement> Workspace<W> {
         mut config: Option<WorkspaceConfig>,
         clock: Clock,
         base_options: Rc<Options>,
+        scene_resources: SceneResourceAllocator,
     ) -> Self {
         let original_output = config
             .as_ref()
@@ -220,6 +225,7 @@ impl<W: LayoutElement> Workspace<W> {
             scale.fractional_scale(),
             clock.clone(),
             options.clone(),
+            scene_resources.clone(),
         );
 
         let floating = FloatingSpace::new(
@@ -228,6 +234,7 @@ impl<W: LayoutElement> Workspace<W> {
             scale.fractional_scale(),
             clock.clone(),
             options.clone(),
+            scene_resources.clone(),
         );
 
         let dwindle = DwindleSpace::new(
@@ -236,10 +243,18 @@ impl<W: LayoutElement> Workspace<W> {
             scale.fractional_scale(),
             clock.clone(),
             options.clone(),
+            scene_resources.clone(),
         );
 
         let shadow_config =
             compute_workspace_shadow_config(options.overview.workspace_shadow, view_size);
+        let resources = scene_resources.workspaces.register(WorkspaceResources::new(
+            crate::scene::shadow::Shadow::new(shadow_config),
+            crate::render_helpers::solid_color::SolidColorBuffer::new(
+                view_size,
+                options.layout.background_color,
+            ),
+        ));
 
         let id = WorkspaceId::next();
         let core = core_adapter::create_space(SpaceId(id.get()), Some(&output));
@@ -248,6 +263,7 @@ impl<W: LayoutElement> Workspace<W> {
         core.borrow_mut()
             .set_space_name(SpaceId(id.get()), config.map(|config| config.name.0));
         Self {
+            scene_resources,
             core,
             core_transition_depth: 0,
             scrolling,
@@ -258,8 +274,7 @@ impl<W: LayoutElement> Workspace<W> {
             transform: output.current_transform(),
             view_size,
             working_area,
-            shadow: Shadow::new(shadow_config),
-            background_buffer: SolidColorBuffer::new(view_size, options.layout.background_color),
+            resources,
             output: Some(output),
             clock,
             base_options,
@@ -273,6 +288,7 @@ impl<W: LayoutElement> Workspace<W> {
         mut config: Option<WorkspaceConfig>,
         clock: Clock,
         base_options: Rc<Options>,
+        scene_resources: SceneResourceAllocator,
     ) -> Self {
         let original_output = config
             .as_ref()
@@ -297,6 +313,7 @@ impl<W: LayoutElement> Workspace<W> {
             scale.fractional_scale(),
             clock.clone(),
             options.clone(),
+            scene_resources.clone(),
         );
 
         let floating = FloatingSpace::new(
@@ -305,6 +322,7 @@ impl<W: LayoutElement> Workspace<W> {
             scale.fractional_scale(),
             clock.clone(),
             options.clone(),
+            scene_resources.clone(),
         );
 
         let dwindle = DwindleSpace::new(
@@ -313,10 +331,18 @@ impl<W: LayoutElement> Workspace<W> {
             scale.fractional_scale(),
             clock.clone(),
             options.clone(),
+            scene_resources.clone(),
         );
 
         let shadow_config =
             compute_workspace_shadow_config(options.overview.workspace_shadow, view_size);
+        let resources = scene_resources.workspaces.register(WorkspaceResources::new(
+            crate::scene::shadow::Shadow::new(shadow_config),
+            crate::render_helpers::solid_color::SolidColorBuffer::new(
+                view_size,
+                options.layout.background_color,
+            ),
+        ));
 
         let id = WorkspaceId::next();
         let core = core_adapter::create_space(SpaceId(id.get()), None);
@@ -325,6 +351,7 @@ impl<W: LayoutElement> Workspace<W> {
         core.borrow_mut()
             .set_space_name(SpaceId(id.get()), config.map(|config| config.name.0));
         Self {
+            scene_resources,
             core,
             core_transition_depth: 0,
             scrolling,
@@ -336,8 +363,7 @@ impl<W: LayoutElement> Workspace<W> {
             transform: Transform::Normal,
             view_size,
             working_area,
-            shadow: Shadow::new(shadow_config),
-            background_buffer: SolidColorBuffer::new(view_size, options.layout.background_color),
+            resources,
             clock,
             base_options,
             options,
@@ -346,8 +372,12 @@ impl<W: LayoutElement> Workspace<W> {
         }
     }
 
-    pub fn new_no_outputs(clock: Clock, options: Rc<Options>) -> Self {
-        Self::new_with_config_no_outputs(None, clock, options)
+    pub fn new_no_outputs(
+        clock: Clock,
+        options: Rc<Options>,
+        scene_resources: SceneResourceAllocator,
+    ) -> Self {
+        Self::new_with_config_no_outputs(None, clock, options, scene_resources)
     }
 
     /// Attach once to the session core. This transfers constructor state; it
@@ -793,13 +823,17 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     pub(super) fn update_shadow_render_elements(&mut self) {
-        self.shadow.update_render_elements(
-            self.view_size,
-            true,
-            CornerRadius::default(),
-            self.scale.fractional_scale(),
-            1.,
-        );
+        self.resources
+            .lease()
+            .shadow
+            .borrow_mut()
+            .update_render_elements(
+                self.view_size,
+                true,
+                CornerRadius::default(),
+                self.scale.fractional_scale(),
+                1.,
+            );
     }
 
     pub fn update_config(&mut self, base_options: Rc<Options>) {
@@ -834,9 +868,11 @@ impl<W: LayoutElement> Workspace<W> {
 
             let shadow_config =
                 compute_workspace_shadow_config(options.overview.workspace_shadow, this.view_size);
-            this.shadow.update_config(shadow_config);
-
-            this.background_buffer
+            let lease = this.resources.lease();
+            lease.shadow.borrow_mut().update_config(shadow_config);
+            lease
+                .background_buffer
+                .borrow_mut()
                 .set_color(options.layout.background_color);
 
             for parked in &mut this.minimized {
@@ -884,7 +920,7 @@ impl<W: LayoutElement> Workspace<W> {
         for parked in &mut self.minimized {
             parked.tile.update_shaders();
         }
-        self.shadow.update_shaders();
+        self.resources.lease().shadow.borrow_mut().update_shaders();
     }
 
     pub fn windows(&self) -> impl Iterator<Item = &W> + '_ {
@@ -1100,10 +1136,18 @@ impl<W: LayoutElement> Workspace<W> {
 
                 let shadow_config =
                     compute_workspace_shadow_config(this.options.overview.workspace_shadow, size);
-                this.shadow.update_config(shadow_config);
+                this.resources
+                    .lease()
+                    .shadow
+                    .borrow_mut()
+                    .update_config(shadow_config);
             }
 
-            this.background_buffer.resize(size);
+            this.resources
+                .lease()
+                .background_buffer
+                .borrow_mut()
+                .resize(size);
 
             if scale_transform_changed {
                 for window in this.windows() {
@@ -1124,6 +1168,7 @@ impl<W: LayoutElement> Workspace<W> {
             self.scale.fractional_scale(),
             self.clock.clone(),
             self.options.clone(),
+            self.scene_resources.windows.allocate(),
         )
     }
 
@@ -1167,8 +1212,8 @@ impl<W: LayoutElement> Workspace<W> {
                     // Don't steal focus from an active fullscreen window.
                     let activate = activate.map_smart(|| !this.is_active_pending_fullscreen());
 
-                    // If the tile is pending maximized or fullscreen, open it in the scrolling layout
-                    // where it can do that.
+                    // If the tile is pending maximized or fullscreen, open it in the scrolling
+                    // layout where it can do that.
                     if is_floating && tile.window().pending_sizing_mode().is_normal() {
                         this.floating.add_tile(tile, activate);
 
@@ -1961,8 +2006,9 @@ impl<W: LayoutElement> Workspace<W> {
             if this.active_layer().is_floating()
                 || this.tiling_mode() != clarion_ipc::TilingMode::Scrolling
             {
-                // Leave this unimplemented for now. For good UX, this probably needs moving the tile
-                // to be against the left edge of the working area while it is full-width.
+                // Leave this unimplemented for now. For good UX, this probably needs moving the
+                // tile to be against the left edge of the working area while it is
+                // full-width.
                 return;
             }
             this.scrolling.toggle_full_width();
@@ -2080,8 +2126,8 @@ impl<W: LayoutElement> Workspace<W> {
                     restore_to_floating = true;
                     this.toggle_window_floating(Some(window));
                 } else {
-                    // Floating windows are never fullscreen, so this is an unfullscreen request for an
-                    // already unfullscreen window.
+                    // Floating windows are never fullscreen, so this is an unfullscreen request for
+                    // an already unfullscreen window.
                     return;
                 }
             }
@@ -2118,9 +2164,9 @@ impl<W: LayoutElement> Workspace<W> {
                 }
                 return;
             } else if !is_fullscreen {
-                // The window is in the scrolling layout and we're requesting an unfullscreen. If it is
-                // indeed fullscreen (i.e. this isn't a duplicate unfullscreen request), then we may
-                // need to unfullscreen into floating.
+                // The window is in the scrolling layout and we're requesting an unfullscreen. If it
+                // is indeed fullscreen (i.e. this isn't a duplicate unfullscreen
+                // request), then we may need to unfullscreen into floating.
                 let col = this.scrolling.columns().find(|col| col.contains(window));
 
                 let Some(col) = col else {
@@ -2134,8 +2180,9 @@ impl<W: LayoutElement> Workspace<W> {
                         .find(|(tile, _)| tile.window().id() == window)
                         .unwrap();
                     if tile.restore_to_floating {
-                        // Unfullscreen and float in one call so it has a chance to notice and request a
-                        // (0, 0) size, rather than the scrolling column size.
+                        // Unfullscreen and float in one call so it has a chance to notice and
+                        // request a (0, 0) size, rather than the scrolling
+                        // column size.
                         this.toggle_window_floating(Some(window));
                         return;
                     }
@@ -2222,9 +2269,9 @@ impl<W: LayoutElement> Workspace<W> {
                 }
                 return;
             } else if !maximize {
-                // The window is in the scrolling layout and we're requesting to unmaximize. If it is
-                // indeed maximized (i.e. this isn't a duplicate unmaximize request), then we may
-                // need to unmaximize into floating.
+                // The window is in the scrolling layout and we're requesting to unmaximize. If it
+                // is indeed maximized (i.e. this isn't a duplicate unmaximize
+                // request), then we may need to unmaximize into floating.
                 let tile = this
                     .scrolling
                     .tiles()
@@ -2232,8 +2279,8 @@ impl<W: LayoutElement> Workspace<W> {
                 let Some(tile) = tile else {
                     return;
                 };
-                // The tile cannot unmaximize into fullscreen (pending_sizing_mode() will be fullscreen
-                // in that case and not maximized), so this check works.
+                // The tile cannot unmaximize into fullscreen (pending_sizing_mode() will be
+                // fullscreen in that case and not maximized), so this check works.
                 if tile.window().pending_sizing_mode().is_maximized() && tile.restore_to_floating {
                     // Unmaximize and float in one call so it has a chance to notice and request a
                     // (0, 0) size, rather than the scrolling column size.
@@ -2571,8 +2618,8 @@ impl<W: LayoutElement> Workspace<W> {
 
                 let pos = this.floating.stored_or_default_tile_pos(tile);
 
-                // If there's no stored floating position, we can only set both components at once, not
-                // adjust.
+                // If there's no stored floating position, we can only set both components at once,
+                // not adjust.
                 let pos = pos.or_else(|| {
                     (matches!(
                         x,
@@ -2910,6 +2957,45 @@ impl<W: LayoutElement> Workspace<W> {
         }
     }
 
+    /// Pure source projection for ordinary desktop/Expo. No renderer or GPU
+    /// operation enters layout while collecting its ordered presentation items.
+    pub(crate) fn scene_sources(
+        &self,
+        normal_visible: bool,
+    ) -> crate::scene::workspace_composition::WorkspaceSources<'_, W> {
+        use crate::layout::scene_source::{ShadowRenderSource, TileRenderSource};
+        use crate::scene::workspace_composition::{Channel, Item, OrderedItem, WorkspaceSources};
+        let mut items = Vec::new();
+        self.floating.scene_items(
+            normal_visible && self.is_floating_visible(),
+            self.floating_is_active(),
+            &mut items,
+        );
+        if normal_visible {
+            for parked in &self.minimized {
+                items.push(OrderedItem {
+                    channel: Channel::TilingNormal,
+                    item: Item::Genie {
+                        source: TileRenderSource::new(&parked.tile),
+                        origin: parked.source.loc,
+                    },
+                });
+            }
+        }
+        let focus = !self.floating_is_active();
+        if self.tiling_mode() == clarion_ipc::TilingMode::Dwindle {
+            self.dwindle.scene_items(normal_visible, focus, &mut items);
+        } else {
+            self.scrolling
+                .scene_items(normal_visible, focus, &mut items);
+        }
+        WorkspaceSources {
+            items,
+            background: self.render_background(),
+            shadow: ShadowRenderSource::new(self.resources.lease()),
+        }
+    }
+
     pub fn render_scrolling<R: ClarionRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
@@ -2920,7 +3006,7 @@ impl<W: LayoutElement> Workspace<W> {
     ) {
         if layer.is_normal() {
             for parked in &self.minimized {
-                parked.tile.render_genie(
+                parked.tile.scene().render_genie(
                     ctx.r(),
                     xray_pos.offset(parked.source.loc),
                     &mut |elem| push(elem.into()),
@@ -2970,21 +3056,29 @@ impl<W: LayoutElement> Workspace<W> {
         );
     }
 
+    /// A retained shadow capability without workspace traversal or geometry policy.
+    pub(crate) fn scene_shadow_source(
+        &self,
+    ) -> crate::layout::scene_source::ShadowRenderSource<'_> {
+        crate::layout::scene_source::ShadowRenderSource::new(self.resources.lease())
+    }
+
     pub fn render_shadow<R: ClarionRenderer>(
         &self,
         renderer: &mut R,
         push: &mut dyn FnMut(ShadowRenderElement),
     ) {
-        self.shadow.render(renderer, Point::from((0., 0.)), push);
+        self.resources
+            .lease()
+            .shadow
+            .borrow()
+            .render(renderer, Point::from((0., 0.)), push);
     }
 
     pub fn render_background(&self) -> SolidColorRenderElement {
-        SolidColorRenderElement::from_buffer(
-            &self.background_buffer,
-            Point::new(0., 0.),
-            1.,
-            Kind::Unspecified,
-        )
+        let lease = self.resources.lease();
+        let buffer = lease.background_buffer.borrow();
+        SolidColorRenderElement::from_buffer(&buffer, Point::new(0., 0.), 1., Kind::Unspecified)
     }
 
     pub fn render_above_top_layer(&self) -> bool {
@@ -3003,9 +3097,9 @@ impl<W: LayoutElement> Workspace<W> {
         ) || !self.render_above_top_layer()
     }
 
-    pub fn store_unmap_snapshot_if_empty(
+    pub fn store_any_unmap_snapshot_if_empty(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut AnyRenderer<'_>,
         xray: Option<&mut Xray>,
         xray_has_blocked_out_layers: bool,
         xray_pos: XrayPos,
@@ -3018,7 +3112,7 @@ impl<W: LayoutElement> Workspace<W> {
                 let view_rect = Rectangle::new(view_pos, view_size);
                 tile.update_render_elements(false, view_rect);
                 let xray_pos = xray_pos.offset(tile_pos);
-                tile.store_unmap_snapshot_if_empty(
+                tile.store_unmap_snapshot_any_if_empty(
                     renderer,
                     xray,
                     xray_has_blocked_out_layers,
@@ -3029,6 +3123,23 @@ impl<W: LayoutElement> Workspace<W> {
         }
     }
 
+    pub fn store_unmap_snapshot_if_empty(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        xray: Option<&mut Xray>,
+        xray_has_blocked_out_layers: bool,
+        xray_pos: XrayPos,
+        window: &W::Id,
+    ) {
+        self.store_any_unmap_snapshot_if_empty(
+            &mut AnyRenderer::Gles(renderer),
+            xray,
+            xray_has_blocked_out_layers,
+            xray_pos,
+            window,
+        );
+    }
+
     pub fn store_unmap_snapshot_native_if_empty(
         &mut self,
         renderer: &mut crate::render_helpers::vulkan::native::NativeRenderer,
@@ -3037,22 +3148,13 @@ impl<W: LayoutElement> Workspace<W> {
         xray_pos: XrayPos,
         window: &W::Id,
     ) {
-        let view_size = self.view_size();
-        for (tile, tile_pos) in self.tiles_with_render_positions_mut(false) {
-            if tile.window().id() == window {
-                let view_pos = Point::from((-tile_pos.x, -tile_pos.y));
-                let view_rect = Rectangle::new(view_pos, view_size);
-                tile.update_render_elements(false, view_rect);
-                let xray_pos = xray_pos.offset(tile_pos);
-                tile.store_unmap_snapshot_native_if_empty(
-                    renderer,
-                    xray,
-                    xray_has_blocked_out_layers,
-                    xray_pos,
-                );
-                return;
-            }
-        }
+        self.store_any_unmap_snapshot_if_empty(
+            &mut AnyRenderer::Native(renderer),
+            xray,
+            xray_has_blocked_out_layers,
+            xray_pos,
+            window,
+        );
     }
 
     pub fn clear_unmap_snapshot(&mut self, window: &W::Id) {
@@ -3066,7 +3168,7 @@ impl<W: LayoutElement> Workspace<W> {
 
     pub fn start_close_animation_for_window(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut AnyRenderer<'_>,
         window: &W::Id,
         blocker: TransactionBlocker,
     ) {
@@ -3082,6 +3184,28 @@ impl<W: LayoutElement> Workspace<W> {
         } else {
             self.scrolling
                 .start_close_animation_for_window(renderer, window, blocker);
+        }
+    }
+
+    pub fn start_close_animation_for_window_at(
+        &mut self,
+        renderer: &mut AnyRenderer<'_>,
+        window: &W::Id,
+        tile_pos: Point<f64, Logical>,
+        blocker: TransactionBlocker,
+    ) {
+        if self.is_minimized(window) {
+            return;
+        }
+        if self.floating.has_window(window) {
+            self.floating
+                .start_close_animation_for_window_at(renderer, window, tile_pos, blocker);
+        } else if self.dwindle.has_window(window) {
+            self.dwindle
+                .start_close_animation_for_window_at(renderer, window, tile_pos, blocker);
+        } else {
+            self.scrolling
+                .start_close_animation_for_window_at(renderer, window, tile_pos, blocker);
         }
     }
 
@@ -3091,47 +3215,18 @@ impl<W: LayoutElement> Workspace<W> {
         window: &W::Id,
         blocker: TransactionBlocker,
     ) {
-        if self.is_minimized(window) {
-            return;
-        }
-        if self.floating.has_window(window) {
-            self.floating
-                .start_close_animation_for_window_native(renderer, window, blocker);
-        } else if self.dwindle.has_window(window) {
-            self.dwindle
-                .start_close_animation_for_window_native(renderer, window, blocker);
-        } else {
-            self.scrolling
-                .start_close_animation_for_window_native(renderer, window, blocker);
-        }
+        self.start_close_animation_for_window(&mut AnyRenderer::Native(renderer), window, blocker);
     }
 
-    pub fn start_close_animation_for_tile(
+    pub fn start_close_animation_for_dragged_tile(
         &mut self,
-        renderer: &mut GlesRenderer,
-        snapshot: TileRenderSnapshot,
-        tile_size: Size<f64, Logical>,
+        renderer: &mut AnyRenderer<'_>,
+        tile: &Tile<W>,
         tile_pos: Point<f64, Logical>,
         blocker: TransactionBlocker,
-        dmabuf: Option<smithay::backend::allocator::dmabuf::Dmabuf>,
     ) {
-        self.floating.start_close_animation_for_tile(
-            renderer, snapshot, tile_size, tile_pos, blocker, dmabuf,
-        );
-    }
-
-    pub fn start_close_animation_for_tile_native(
-        &mut self,
-        renderer: &mut crate::render_helpers::vulkan::native::NativeRenderer,
-        tile_size: Size<f64, Logical>,
-        tile_pos: Point<f64, Logical>,
-        blocker: TransactionBlocker,
-        snapshot: Option<super::tile::NativeTileSnapshot>,
-        dmabuf: Option<smithay::backend::allocator::dmabuf::Dmabuf>,
-    ) {
-        self.floating.start_close_animation_for_tile_native(
-            renderer, tile_size, tile_pos, blocker, snapshot, dmabuf,
-        );
+        self.floating
+            .start_close_animation_for_dragged_tile(renderer, tile, tile_pos, blocker);
     }
 
     pub fn start_open_animation(&mut self, id: &W::Id) -> bool {
@@ -3549,9 +3644,11 @@ impl<W: LayoutElement> Workspace<W> {
         assert!(self.view_size.w > 0.);
         assert!(self.view_size.h > 0.);
 
-        assert_eq!(self.background_buffer.size(), self.view_size);
+        let lease = self.resources.lease();
+        let background = lease.background_buffer.borrow();
+        assert_eq!(background.size(), self.view_size);
         assert_eq!(
-            self.background_buffer.color().components(),
+            background.color().components(),
             options.layout.background_color.to_array_unpremul(),
         );
 
@@ -3590,7 +3687,7 @@ impl<W: LayoutElement> Workspace<W> {
             assert_abs_diff_eq!(tile_pos.x, rounded_pos.x, epsilon = 1e-5);
             assert_abs_diff_eq!(tile_pos.y, rounded_pos.y, epsilon = 1e-5);
 
-            if let Some(alpha) = &tile.alpha_animation {
+            if let Some(alpha) = &tile.presentation.alpha_animation {
                 let anim = &alpha.anim;
                 if visible {
                     assert_eq!(anim.to(), 1., "visible tiles can animate alpha only to 1");

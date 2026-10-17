@@ -30,24 +30,23 @@ use smithay::wayland::presentation::Refresh;
 use smithay_drm_extras::drm_scanner::{DrmScanEvent, DrmScanner};
 use wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
 
+use crate::backend::tty::renderer_init::initialize_device_renderer;
+use crate::backend::tty::*;
 use crate::backend::OutputId;
 use crate::compositor::{Clarion, State};
+use crate::output_schedule::EstimatedVblankAction;
 use crate::render_helpers::renderer::AsGlesRenderer;
 use crate::utils::{
     get_monotonic_time, is_laptop_panel, logical_output, next_presentation_seq, PanelOrientation,
 };
-
-use crate::output_schedule::EstimatedVblankAction;
-
-use crate::backend::tty::renderer_init::initialize_device_renderer;
-use crate::backend::tty::*;
 
 impl Tty {
     fn platform_init(&mut self, clarion: &mut Clarion) {
         // If the session is inactive, skip initialization because we won't be able to do much with
         // the devices anyway. We'll get ActivateSession and add the devices there instead.
         //
-        // This can happen when starting clarion while having a different TTY active (e.g. via tmux).
+        // This can happen when starting clarion while having a different TTY active (e.g. via
+        // tmux).
         if !self.session.is_active() {
             return;
         }
@@ -651,6 +650,7 @@ impl Tty {
                 // We aren't force-clearing the CRTCs, so we need to make the surfaces read the
                 // updated state after a session resume. This also causes a full damage for the
                 // next redraw.
+                surface.frame_epoch = surface.frame_epoch.wrapping_add(1);
                 if let Err(err) = surface.compositor.reset_state() {
                     warn!("error resetting DrmCompositor state: {err:?}");
                 }
@@ -1181,6 +1181,9 @@ impl Tty {
             name: output_name,
             connector: connector.handle(),
             compositor,
+            frame_epoch: 0,
+            pending_kms: None,
+            quarantined_kms: Vec::new(),
             native_swapchain: use_native_renderer,
             last_gles_migration_warning: None,
             next_gles_migration_attempt: Duration::ZERO,
@@ -1839,6 +1842,7 @@ impl Tty {
                         "output {:?}: picking mode: {mode:?}",
                         surface.name.connector
                     );
+                    surface.frame_epoch = surface.frame_epoch.wrapping_add(1);
                     if let Err(err) = surface.compositor.use_mode(mode) {
                         warn!("error changing mode: {err:?}");
                         continue;

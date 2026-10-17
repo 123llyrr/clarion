@@ -53,7 +53,9 @@ Future<Map<String, dynamic>> _waitNative(
   do {
     await tester.pump(const Duration(milliseconds: 16));
     state = await _state();
-    final height = expanded ? (state['monitorGeometry'] as Map)['height'] : 40;
+    // The native surface stays full-output sized when collapsed. Only its
+    // input region shrinks to the bar; opening panels does not resize GTK.
+    final height = (state['monitorGeometry'] as Map)['height'];
     if (state['expanded'] == expanded && state['height'] == height) {
       expect(state['keyboard'], expanded ? 'Exclusive' : 'None');
       expect(state['inputHeight'], expanded ? height : 40);

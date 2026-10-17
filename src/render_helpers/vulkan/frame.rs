@@ -1,21 +1,21 @@
 //! Deferred Vulkan compositing with ordered rendering and capture scopes.
 #![allow(clippy::too_many_arguments)]
-use super::{
-    device::{StagingBuffer, VulkanContext},
-    dmabuf::{DmabufImporter, VulkanImportError},
-    pipeline::{
-        BlurPushConstants, BorderPushConstants, MeshGpuVertex, MeshPushConstants,
-        ParticlePushConstants, QuadPushConstants, ShadowPushConstants, VulkanPipelineManager,
-    },
-    VulkanTexture,
-};
-use crate::render_helpers::particles::ParticleVertex;
-use ash::vk;
-use smithay::backend::allocator::dmabuf::Dmabuf;
-use smithay::backend::renderer::utils::Buffer as WlBufferOwner;
 use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::Arc;
+
+use ash::vk;
+use smithay::backend::allocator::dmabuf::Dmabuf;
+use smithay::backend::renderer::utils::Buffer as WlBufferOwner;
+
+use super::device::{StagingBuffer, VulkanContext};
+use super::dmabuf::{DmabufImporter, VulkanImportError};
+use super::pipeline::{
+    BlurPushConstants, BorderPushConstants, MeshGpuVertex, MeshPushConstants,
+    ParticlePushConstants, QuadPushConstants, ShadowPushConstants, VulkanPipelineManager,
+};
+use super::VulkanTexture;
+use crate::render_helpers::particles::ParticleVertex;
 
 const MAX_IDLE_SCRATCH_IMAGES: usize = 8;
 const MAX_IDLE_SCRATCH_BYTES: u64 = 64 * 1024 * 1024;
@@ -145,6 +145,7 @@ pub struct VulkanFrame<'frame> {
     fence: Option<vk::Fence>,
     completion_fence: vk::Fence,
     acquire_semaphores: Vec<vk::Semaphore>,
+    producer_error: Option<crate::render_helpers::sync::ProducerNotReady>,
     signal_semaphore: Option<vk::Semaphore>,
     damage: Option<vk::Rect2D>,
     vertex_buffers: Vec<StagingBuffer>,
@@ -402,6 +403,7 @@ impl<'frame> VulkanFrame<'frame> {
             fence: None,
             completion_fence,
             acquire_semaphores: Vec::new(),
+            producer_error: None,
             signal_semaphore: None,
             damage: None,
             vertex_buffers: Vec::new(),
@@ -413,7 +415,8 @@ impl<'frame> VulkanFrame<'frame> {
         })
     }
 
-    /// Adapt Nourish's TEMPORARY SYNC_FD import. Keep the FD owned on failure.
+    /// Acquire a producer on the GPU, or defer an unimportable unfinished fence.
+    /// No compatibility path may wait for the producer on the desktop thread.
     pub(super) fn wait_for_producer(
         &mut self,
         sync: &smithay::backend::renderer::sync::SyncPoint,
@@ -448,13 +451,27 @@ impl<'frame> VulkanFrame<'frame> {
                         unsafe {
                             self.ctx.device.destroy_semaphore(semaphore, None);
                         }
-                        debug!("Vulkan acquire import unavailable ({err}); waiting on producer fence on CPU");
+                        debug!("Vulkan acquire import unavailable ({err}); checking producer readiness");
                     }
                 }
             }
         }
-        crate::render_helpers::sync::wait_for_completion(sync)?;
+        if let Err(pending) = crate::render_helpers::sync::require_ready(sync) {
+            // Latch the refusal for this frame: even a caller that ignores the
+            // acquisition error cannot submit commands without the dependency.
+            if !matches!(
+                self.producer_error,
+                Some(crate::render_helpers::sync::ProducerNotReady::Failed(_))
+            ) {
+                self.producer_error = Some(pending);
+            }
+            return Err(Box::new(pending));
+        }
         Ok(false)
+    }
+
+    pub(super) fn producer_error(&self) -> Option<crate::render_helpers::sync::ProducerNotReady> {
+        self.producer_error
     }
 
     fn matrix(&self, x: f32, y: f32, w: f32, h: f32) -> [f32; 16] {
@@ -872,6 +889,12 @@ impl<'frame> VulkanFrame<'frame> {
     }
 
     fn submit(&mut self, wait: bool) -> Result<(), vk::Result> {
+        if let Some(error) = self.producer_error {
+            return Err(match error {
+                crate::render_helpers::sync::ProducerNotReady::Pending => vk::Result::NOT_READY,
+                crate::render_helpers::sync::ProducerNotReady::Failed(error) => error,
+            });
+        }
         let _command_lock = self.ctx.command_lock.lock().unwrap();
         let pipes = self.pipeline_mgr.get_pipelines(self.target_format)?;
         // Allocate descriptors before recording; failure leaves external buffers untouched.
@@ -1315,7 +1338,8 @@ impl<'frame> VulkanFrame<'frame> {
                             false,
                             false,
                         );
-                        // Preserve the main attachment and restore its viewport and active damage clip.
+                        // Preserve the main attachment and restore its viewport and active damage
+                        // clip.
                         let resumed_attachment =
                             [attachment[0].load_op(vk::AttachmentLoadOp::LOAD)];
                         let resumed = rendering.color_attachments(&resumed_attachment);
@@ -1543,7 +1567,8 @@ impl<'frame> VulkanFrame<'frame> {
                             false,
                             false,
                         );
-                        // Resuming must preserve all previous draws even if the original scope cleared.
+                        // Resuming must preserve all previous draws even if the original scope
+                        // cleared.
                         let resumed_attachment =
                             [attachment[0].load_op(vk::AttachmentLoadOp::LOAD)];
                         let resumed = rendering.color_attachments(&resumed_attachment);
@@ -2323,7 +2348,8 @@ impl GpuCompletion {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render_helpers::vulkan::{allocate_texture, hardware_tests::setup};
+    use crate::render_helpers::vulkan::allocate_texture;
+    use crate::render_helpers::vulkan::hardware_tests::setup;
 
     #[test]
     fn an_expired_unexported_owner_is_not_an_already_signaled_export_sentinel() {
@@ -2474,9 +2500,10 @@ mod tests {
 
     #[test]
     fn readable_fd_without_successful_sync_status_is_not_completion() {
-        use smithay::backend::renderer::sync::Fence;
         use std::io::Write;
         use std::os::unix::net::UnixStream;
+
+        use smithay::backend::renderer::sync::Fence;
 
         let (read, mut write) = UnixStream::pair().unwrap();
         write.write_all(&[1]).unwrap();
@@ -2498,8 +2525,9 @@ mod tests {
 
     #[test]
     fn sync_file_status_distinguishes_pending_success_and_device_error() {
-        use smithay::backend::renderer::sync::Fence;
         use std::os::unix::net::UnixStream;
+
+        use smithay::backend::renderer::sync::Fence;
 
         for (status, complete) in [
             (0, false),

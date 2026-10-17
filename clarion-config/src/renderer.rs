@@ -88,7 +88,8 @@ impl<S: knuffel::traits::ErrorSpan> knuffel::Decode<S> for RendererPart {
         node: &knuffel::ast::SpannedNode<S>,
         ctx: &mut knuffel::decode::Context<S>,
     ) -> Result<Self, knuffel::errors::DecodeError<S>> {
-        // 1. Try decoding from the first argument (e.g. `renderer "vulkan"` or `renderer-backend "gles"`)
+        // 1. Try decoding from the first argument (e.g. `renderer "vulkan"` or `renderer-backend
+        //    "gles"`)
         if let Some(arg) = node.arguments.first() {
             let backend = knuffel::traits::DecodeScalar::decode(arg, ctx)?;
             return Ok(Self {
@@ -118,9 +119,10 @@ impl<S: knuffel::traits::ErrorSpan> knuffel::Decode<S> for RendererPart {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
     use crate::Config;
-    use std::path::Path;
 
     #[test]
     fn test_parse_renderer_top_level() {

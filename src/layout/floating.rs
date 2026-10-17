@@ -3,14 +3,13 @@ use std::rc::Rc;
 
 use clarion_config::utils::MergeWith as _;
 use clarion_config::{PresetSize, RelativeTo};
+use clarion_core::floating::{Direction, FloatingPolicy, Placement, PlacementChange};
 use clarion_core::layout::LiveLayoutPolicy;
 use clarion_ipc::{PositionChange, SizeChange, WindowLayout};
-use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size};
 
-use super::closing_window::{ClosingWindow, ClosingWindowRenderElement};
 use super::scrolling::ColumnWidth;
-use super::tile::{Tile, TileRenderElement, TileRenderSnapshot};
+use super::tile::{Tile, TileRenderElement};
 use super::wobble::WobbleAnchor;
 use super::{
     ConfigureIntent, InteractiveResizeData, LayoutElement, Options, RemovedTile, SizeFrac,
@@ -18,13 +17,14 @@ use super::{
 use crate::animation::{Animation, Clock};
 use crate::clarion_render_elements;
 use crate::layout::RenderLayer;
-use crate::render_helpers::renderer::ClarionRenderer;
+use crate::render_helpers::renderer::{AnyRenderer, ClarionRenderer};
 use crate::render_helpers::xray::XrayPos;
 use crate::render_helpers::RenderCtx;
+use crate::scene::closing_window::{ClosingWindow, ClosingWindowRenderElement};
+use crate::scene::resources::SceneResourceAllocator;
 use crate::utils::transaction::TransactionBlocker;
 use crate::utils::ResizeEdge;
 use crate::window::ResolvedWindowRules;
-use clarion_core::floating::{Direction, FloatingPolicy, Placement, PlacementChange};
 
 /// By how many logical pixels the directional move commands move floating windows.
 pub const DIRECTIONAL_MOVE_PX: f64 = 50.;
@@ -32,6 +32,7 @@ pub const DIRECTIONAL_MOVE_PX: f64 = 50.;
 /// Space for floating windows.
 #[derive(Debug)]
 pub struct FloatingSpace<W: LayoutElement> {
+    scene_resources: SceneResourceAllocator,
     /// Tiles in top-to-bottom order.
     tiles: Vec<Tile<W>>,
     /// Sole numeric camera owner; the adapter only converts coordinates/time.
@@ -118,8 +119,10 @@ impl<W: LayoutElement> FloatingSpace<W> {
         scale: f64,
         clock: Clock,
         options: Rc<Options>,
+        scene_resources: SceneResourceAllocator,
     ) -> Self {
         Self {
+            scene_resources,
             tiles: Vec::new(),
             canvas: None,
             policy: FloatingPolicy::new(),
@@ -549,57 +552,12 @@ impl<W: LayoutElement> FloatingSpace<W> {
         }
     }
 
-    pub fn start_close_animation_for_window(
+    pub fn start_close_animation_for_dragged_tile(
         &mut self,
-        renderer: &mut GlesRenderer,
-        id: &W::Id,
-        blocker: TransactionBlocker,
-    ) {
-        let (tile, tile_pos) = self
-            .tiles_with_render_positions_mut(false)
-            .find(|(tile, _)| tile.window().id() == id)
-            .unwrap();
-
-        let Some(snapshot) = tile.take_unmap_snapshot() else {
-            return;
-        };
-
-        let dmabuf = tile.window().dmabuf();
-        let tile_size = tile.tile_size();
-
-        self.start_close_animation_for_tile(
-            renderer, snapshot, tile_size, tile_pos, blocker, dmabuf,
-        );
-    }
-
-    pub fn start_close_animation_for_window_native(
-        &mut self,
-        renderer: &mut crate::render_helpers::vulkan::native::NativeRenderer,
-        id: &W::Id,
-        blocker: TransactionBlocker,
-    ) {
-        let (tile, tile_pos) = self
-            .tiles_with_render_positions_mut(false)
-            .find(|(tile, _)| tile.window().id() == id)
-            .unwrap();
-
-        let dmabuf = tile.window().dmabuf();
-        let tile_size = tile.tile_size();
-        let snapshot = tile.snapshot_native(renderer).ok();
-
-        self.start_close_animation_for_tile_native(
-            renderer, tile_size, tile_pos, blocker, snapshot, dmabuf,
-        );
-    }
-
-    pub fn start_close_animation_for_tile_native(
-        &mut self,
-        renderer: &mut crate::render_helpers::vulkan::native::NativeRenderer,
-        tile_size: Size<f64, Logical>,
+        renderer: &mut AnyRenderer<'_>,
+        tile: &Tile<W>,
         tile_pos: Point<f64, Logical>,
         blocker: TransactionBlocker,
-        snapshot: Option<super::tile::NativeTileSnapshot>,
-        dmabuf: Option<smithay::backend::allocator::dmabuf::Dmabuf>,
     ) {
         let anim = Animation::new(
             self.clock.clone(),
@@ -616,29 +574,112 @@ impl<W: LayoutElement> FloatingSpace<W> {
         };
 
         let scale = Scale::from(self.scale);
-        let res = ClosingWindow::new_native(
+        match tile.create_closing_window(
             renderer,
             scale,
-            tile_size,
             tile_pos,
             blocker,
             anim,
-            self.options.animations.window_close.glide,
-            self.options.animations.window_close.effect,
-            self.options
-                .animations
-                .window_close
-                .custom_shader
-                .as_deref(),
-            snapshot,
-            dmabuf,
-        );
-        match res {
+            &self.options.animations.window_close,
+            self.scene_resources.closing.clone(),
+        ) {
             Ok(closing) => {
                 self.closing_windows.push(closing);
             }
             Err(err) => {
-                warn!("error creating a native closing window animation: {err:?}");
+                warn!("error creating a closing window animation: {err:?}");
+            }
+        }
+    }
+
+    pub fn start_close_animation_for_window(
+        &mut self,
+        renderer: &mut AnyRenderer<'_>,
+        id: &W::Id,
+        blocker: TransactionBlocker,
+    ) {
+        let closing_res = {
+            let Some((tile, tile_pos)) = self
+                .tiles_with_render_positions()
+                .find(|(tile, _)| tile.window().id() == id)
+            else {
+                return;
+            };
+            let anim = Animation::new(
+                self.clock.clone(),
+                0.,
+                1.,
+                0.,
+                self.options.animations.window_close.anim,
+            );
+            let blocker = if self.options.disable_transactions {
+                TransactionBlocker::completed()
+            } else {
+                blocker
+            };
+            let scale = Scale::from(self.scale);
+            tile.create_closing_window(
+                renderer,
+                scale,
+                tile_pos,
+                blocker,
+                anim,
+                &self.options.animations.window_close,
+                self.scene_resources.closing.clone(),
+            )
+        };
+
+        match closing_res {
+            Ok(closing) => {
+                self.closing_windows.push(closing);
+            }
+            Err(err) => {
+                warn!("error creating a closing window animation: {err:?}");
+            }
+        }
+    }
+
+    pub fn start_close_animation_for_window_at(
+        &mut self,
+        renderer: &mut AnyRenderer<'_>,
+        id: &W::Id,
+        tile_pos: Point<f64, Logical>,
+        blocker: TransactionBlocker,
+    ) {
+        let closing_res = {
+            let Some(tile) = self.tiles().find(|tile| tile.window().id() == id) else {
+                return;
+            };
+            let anim = Animation::new(
+                self.clock.clone(),
+                0.,
+                1.,
+                0.,
+                self.options.animations.window_close.anim,
+            );
+            let blocker = if self.options.disable_transactions {
+                TransactionBlocker::completed()
+            } else {
+                blocker
+            };
+            let scale = Scale::from(self.scale);
+            tile.create_closing_window(
+                renderer,
+                scale,
+                tile_pos,
+                blocker,
+                anim,
+                &self.options.animations.window_close,
+                self.scene_resources.closing.clone(),
+            )
+        };
+
+        match closing_res {
+            Ok(closing) => {
+                self.closing_windows.push(closing);
+            }
+            Err(err) => {
+                warn!("error creating a closing window animation: {err:?}");
             }
         }
     }
@@ -675,55 +716,6 @@ impl<W: LayoutElement> FloatingSpace<W> {
         let change = self.policy.raise(id, to_idx).unwrap();
         let tile = self.tiles.remove(change.from);
         self.tiles.insert(change.to, tile);
-    }
-
-    pub fn start_close_animation_for_tile(
-        &mut self,
-        renderer: &mut GlesRenderer,
-        snapshot: TileRenderSnapshot,
-        tile_size: Size<f64, Logical>,
-        tile_pos: Point<f64, Logical>,
-        blocker: TransactionBlocker,
-        dmabuf: Option<smithay::backend::allocator::dmabuf::Dmabuf>,
-    ) {
-        let anim = Animation::new(
-            self.clock.clone(),
-            0.,
-            1.,
-            0.,
-            self.options.animations.window_close.anim,
-        );
-
-        let blocker = if self.options.disable_transactions {
-            TransactionBlocker::completed()
-        } else {
-            blocker
-        };
-
-        let scale = Scale::from(self.scale);
-        let is_vulkan = self.options.renderer.is_vulkan();
-        let res = ClosingWindow::new(
-            renderer,
-            snapshot,
-            scale,
-            tile_size,
-            tile_pos,
-            blocker,
-            anim,
-            self.options.animations.window_close.glide,
-            self.options.animations.window_close.effect,
-            self.options.animations.window_close.custom_shader.is_some(),
-            is_vulkan,
-            dmabuf,
-        );
-        match res {
-            Ok(closing) => {
-                self.closing_windows.push(closing);
-            }
-            Err(err) => {
-                warn!("error creating a closing window animation: {err:?}");
-            }
-        }
     }
 
     fn sizing_input(&self, index: usize) -> clarion_core::floating::SizingInput {
@@ -1003,6 +995,50 @@ impl<W: LayoutElement> FloatingSpace<W> {
         true
     }
 
+    /// Capture this space once; scene code owns channel iteration and drawing.
+    pub(crate) fn scene_items<'a>(
+        &'a self,
+        normal_visible: bool,
+        focus: bool,
+        items: &mut Vec<crate::scene::workspace_composition::OrderedItem<'a, W>>,
+    ) {
+        use crate::layout::scene_source::{ClosingRenderSource, TileRenderSource};
+        use crate::scene::workspace_composition::{Channel, Item, OrderedItem, TileSpace};
+        if normal_visible {
+            for closing in self.closing_windows.iter().rev() {
+                items.push(OrderedItem {
+                    channel: Channel::FloatingNormal,
+                    item: Item::Closing {
+                        source: ClosingRenderSource::new(closing),
+                        view: Rectangle::from_size(self.view_size),
+                        scale: Scale::from(self.scale),
+                        space: TileSpace::Floating,
+                    },
+                });
+            }
+        }
+        let active = self.active_window_id();
+        for (tile, position) in self.tiles_with_render_positions() {
+            let moving = tile.is_moving_between_workspaces();
+            if !moving && !normal_visible {
+                continue;
+            }
+            items.push(OrderedItem {
+                channel: if moving {
+                    Channel::FloatingMoving
+                } else {
+                    Channel::FloatingNormal
+                },
+                item: Item::Tile {
+                    source: TileRenderSource::new(tile),
+                    position,
+                    focused: focus && Some(tile.window().id()) == active,
+                    space: TileSpace::Floating,
+                },
+            });
+        }
+    }
+
     pub fn render<R: ClarionRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
@@ -1036,9 +1072,10 @@ impl<W: LayoutElement> FloatingSpace<W> {
             let focus_ring = focus_ring && Some(tile.window().id()) == active.as_ref();
 
             let xray_pos = xray_pos.offset(tile_pos);
-            tile.render(ctx.r(), tile_pos, xray_pos, focus_ring, &mut |elem| {
-                push(elem.into())
-            });
+            tile.scene()
+                .render(ctx.r(), tile_pos, xray_pos, focus_ring, &mut |elem| {
+                    push(elem.into())
+                });
         }
     }
 
@@ -1270,9 +1307,9 @@ impl<W: LayoutElement> FloatingSpace<W> {
         for (i, (tile, data)) in zip(&self.tiles, &self.policy).enumerate() {
             use crate::layout::SizingMode;
 
-            assert!(Rc::ptr_eq(&self.options, &tile.options));
+            assert!(Rc::ptr_eq(&self.options, &tile.presentation.options));
             assert_eq!(self.view_size, tile.view_size());
-            assert_eq!(self.clock, tile.clock);
+            assert_eq!(self.clock, tile.presentation.clock);
             assert_eq!(self.scale, tile.scale());
             tile.verify_invariants();
 

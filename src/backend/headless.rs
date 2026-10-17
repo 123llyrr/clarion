@@ -24,13 +24,13 @@ use smithay::wayland::dmabuf::DmabufGlobal;
 
 use super::{AnyRenderer, IpcOutputMap, RenderResult, RendererBackendType};
 #[cfg(test)]
+use crate::frame_pipeline::HEADLESS_FRAME_INTERVAL;
+#[cfg(test)]
 use crate::output_schedule::RedrawState;
 use crate::platform::device_bridge::DevicePort;
-use crate::render_helpers::vulkan::{native::NativeRenderer, VulkanRenderer, VulkanTexture};
+use crate::render_helpers::vulkan::native::NativeRenderer;
+use crate::render_helpers::vulkan::{VulkanRenderer, VulkanTexture};
 use crate::render_helpers::{resources, shaders};
-
-#[cfg(test)]
-use crate::frame_pipeline::HEADLESS_FRAME_INTERVAL;
 
 pub(crate) enum HeadlessRenderer {
     Gles(Box<GlesRenderer>),
@@ -95,9 +95,32 @@ impl Headless {
             }
             RendererBackendType::Vulkan => {
                 let mut renderer = VulkanRenderer::new();
+                // Hardware matrices must exercise the assigned GPU rather than
+                // silently using the loader's preferred discrete device.
+                #[cfg(test)]
+                let node = {
+                    let path = std::env::var_os("CLARION_VULKAN_TEST_NODE");
+                    anyhow::ensure!(
+                        std::env::var_os("CLARION_REQUIRE_VULKAN").is_none() || path.is_some(),
+                        "required headless Vulkan test node is missing"
+                    );
+                    path.map(smithay::backend::drm::DrmNode::from_path)
+                        .transpose()
+                        .context("invalid headless Vulkan test node")?
+                };
+                #[cfg(not(test))]
+                let node: Option<smithay::backend::drm::DrmNode> = None;
                 renderer
-                    .init_from_drm_node(None)
+                    .init_from_drm_node(node.as_ref())
                     .context("error initializing headless Vulkan device")?;
+                #[cfg(test)]
+                if let Some(path) = std::env::var_os("CLARION_VULKAN_TEST_NODE") {
+                    eprintln!(
+                        "HARDWARE: {} (headless fixture {})",
+                        renderer.info.device_name,
+                        std::path::Path::new(&path).display()
+                    );
+                }
                 let mut renderer = NativeRenderer::new(renderer)
                     .context("error creating headless native Vulkan renderer")?;
                 shaders::init_native(&mut renderer, &self.config.animations);
@@ -212,6 +235,7 @@ impl Headless {
         }
 
         renderer.begin_scene();
+        let _allocation_scope = renderer.async_offscreen_scope();
         let scene = port.prepare_scene(renderer);
         if renderer.scene_was_deferred() {
             return Ok((RenderElementStates::default(), RenderResult::GpuDeferred));
@@ -299,12 +323,14 @@ impl Default for Headless {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use smithay::reexports::calloop::EventLoop;
+    use smithay::reexports::wayland_server::Display;
+
     use super::*;
     use crate::backend::Backend;
     use crate::compositor::State;
-    use smithay::reexports::calloop::EventLoop;
-    use smithay::reexports::wayland_server::Display;
-    use std::time::Duration;
 
     #[test]
     fn device_settings_are_isolated_until_an_explicit_snapshot_publication() {

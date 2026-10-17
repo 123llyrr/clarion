@@ -1,9 +1,9 @@
 //! Build-time metadata extraction owned by the configuration crate.
-use quote::ToTokens;
 use std::collections::HashSet;
-use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
+use std::{fs, io};
+
+use quote::ToTokens;
 use syn::visit::Visit;
 use syn::{Fields, GenericArgument, Item, PathArguments, Type};
 

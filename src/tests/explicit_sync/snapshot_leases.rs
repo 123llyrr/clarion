@@ -1,26 +1,30 @@
 //! Old snapshots must keep their own attachment lease across a same-storage replacement.
-use super::*;
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use calloop::timer::{TimeoutAction, Timer};
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::drm::DrmNode;
-use smithay::backend::renderer::element::{
-    surface::{render_elements_from_surface_tree, WaylandSurfaceRenderElement},
-    Element, Kind, RenderElement,
+use smithay::backend::renderer::element::surface::{
+    render_elements_from_surface_tree, WaylandSurfaceRenderElement,
 };
+use smithay::backend::renderer::element::{Element, Kind, RenderElement};
+use smithay::backend::renderer::gles::Uniform;
 use smithay::backend::renderer::utils::RendererSurfaceStateUserData;
-use smithay::backend::renderer::{
-    gles::Uniform, Bind, Color32F, ExportMem, Frame, Offscreen, Renderer,
-};
+use smithay::backend::renderer::{Bind, Color32F, ExportMem, Frame, Offscreen, Renderer};
 use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Rectangle, Transform};
-use smithay::wayland::{compositor::with_states, dmabuf::get_dmabuf};
+use smithay::wayland::compositor::with_states;
+use smithay::wayland::dmabuf::get_dmabuf;
 
+use super::*;
 use crate::render_helpers::shader_element::ShaderRenderElement;
 use crate::render_helpers::shaders::{animation_source, mat3_uniform, ProgramType};
 use crate::render_helpers::vulkan::hardware_tests::SubmittedGpuWork;
-use crate::render_helpers::vulkan::native::NativeRenderer;
+use crate::render_helpers::vulkan::native::{
+    owned_surface_dmabuf, NativeRenderer, OwnedDmabufSource,
+};
 use crate::render_helpers::vulkan::VulkanRenderer;
-use std::{collections::HashMap, rc::Rc};
 
 fn wayland_buffer(
     fixture: &HardwareFixture,
@@ -58,7 +62,224 @@ fn wayland_buffer(
 
 #[test]
 #[ignore = "requires selected DRM GPU with DMA-BUF and timeline syncobj support"]
+fn tile_close_source_survives_precommit_destroy_and_renderer_epoch() {
+    use std::sync::atomic::AtomicBool;
+
+    use smithay::wayland::compositor::{add_destruction_hook, add_pre_commit_hook};
+
+    use crate::render_helpers::vulkan::native::recorded_surface_buffer_id;
+
+    for destroy_surface in [false, true] {
+        let mut fixture = HardwareFixture::new();
+        fixture
+            .server
+            .state
+            .backend
+            .with_renderer(|renderer| {
+                let AnyRenderer::Native(renderer) = renderer else {
+                    unreachable!()
+                };
+                renderer
+                    .prepare_output_format_for_test(Fourcc::Argb8888)
+                    .unwrap();
+                renderer
+                    .prepare_output_format_for_test(Fourcc::Abgr8888)
+                    .unwrap();
+            })
+            .unwrap();
+        let syncobj: WpLinuxDrmSyncobjManagerV1 = fixture.bind();
+        let dmabuf: ZwpLinuxDmabufV1 = fixture.bind();
+        fixture.roundtrip_without_render();
+        let acquire = Timeline::new(&fixture.node.device);
+        acquire.signal(1);
+        let release = Timeline::new(&fixture.node.device);
+        let acquire_proxy =
+            syncobj.import_timeline(acquire.export().as_fd(), &fixture.client.qh, ());
+        let release_proxy =
+            syncobj.import_timeline(release.export().as_fd(), &fixture.client.qh, ());
+        let buffer = fixture.make_dmabuf(&dmabuf);
+        let surface = fixture.client.create_window().surface.clone();
+        let sync_surface = syncobj.get_surface(&surface, &fixture.client.qh, ());
+        surface.commit();
+        // Initial configure is emitted by the compositor's normal refresh.
+        // The producer is not attached yet; later lifecycle steps deliberately
+        // dispatch without rendering the headless output's synchronous fixture.
+        fixture.roundtrip();
+        fixture.roundtrip();
+        fixture.client.window(&surface).ack_last();
+        sync_surface.set_acquire_point(&acquire_proxy, 0, 1);
+        sync_surface.set_release_point(&release_proxy, 0, 2);
+        surface.attach(Some(&buffer), 0, 0);
+        surface.damage_buffer(0, 0, 64, 64);
+        surface.commit();
+        fixture.roundtrip_without_render();
+        fixture.roundtrip_without_render();
+        assert_eq!(fixture.server.state.clarion.layout.windows().count(), 1);
+        fixture
+            .server
+            .state
+            .clarion
+            .clock
+            .set_complete_instantly(true);
+        fixture.server.state.clarion.advance_animations();
+        fixture
+            .server
+            .state
+            .clarion
+            .clock
+            .set_complete_instantly(false);
+        let server_surface = fixture
+            .server
+            .state
+            .clarion
+            .root_surface
+            .keys()
+            .find(|server| server.id().protocol_id() == surface.id().protocol_id())
+            .unwrap()
+            .clone();
+        let expected = owned_surface_dmabuf(&server_surface)
+            .unwrap()
+            .dmabuf()
+            .clone();
+        let (window, output) = fixture
+            .server
+            .state
+            .clarion
+            .layout
+            .find_window_and_output(&server_surface)
+            .map(|(mapped, output)| (mapped.window.clone(), output.cloned()))
+            .unwrap();
+        let resources = fixture
+            .server
+            .state
+            .clarion
+            .layout
+            .active_workspace()
+            .unwrap()
+            .tiles()
+            .next()
+            .unwrap()
+            .scene_registration()
+            .1;
+
+        // Exercise the real Tile preparation and renderer-replacement entry.
+        // A context epoch discards GPU snapshots but not this exact client lease.
+        fixture
+            .server
+            .state
+            .store_unmap_snapshot(&window, output.as_ref());
+        assert_eq!(
+            resources
+                .native_close_source
+                .borrow()
+                .as_ref()
+                .map(|s| s.dmabuf()),
+            Some(&expected)
+        );
+        fixture.server.state.clarion.on_native_renderer_replaced();
+        assert!(resources.native_unmap.borrow().is_none());
+        assert_eq!(
+            resources
+                .native_close_source
+                .borrow()
+                .as_ref()
+                .map(|s| s.dmabuf()),
+            Some(&expected)
+        );
+        assert_eq!(release.value(), 0);
+
+        // The mapped pre-commit hook clears stale close preparation on a normal
+        // commit. It must not keep an old source for a later, different close.
+        surface.damage_buffer(0, 0, 64, 64);
+        surface.commit();
+        fixture.roundtrip_without_render();
+        fixture.roundtrip_without_render();
+        assert!(resources.native_close_source.borrow().is_none());
+        let observed = Arc::new(AtomicBool::new(false));
+        let observe = {
+            let observed = observed.clone();
+            move |state: &mut State, server: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface| {
+                let tile = state.clarion.layout.active_workspace().unwrap().tiles().next().unwrap();
+                let resources = tile.scene_registration().1;
+                assert_eq!(resources.native_close_source.borrow().as_ref().map(|s| s.dmabuf()), Some(&expected));
+                if destroy_surface {
+                    // This hook executes after State::destroyed and before the
+                    // surface user data is reclaimed. The handler must have
+                    // captured the source and cleared the surface-local slot.
+                    assert!(recorded_surface_buffer_id(server).is_none());
+                } else {
+                    // Added after the mapped pre-commit hook: its Tile source is
+                    // already captured, while the old renderer Buffer is current.
+                    assert!(recorded_surface_buffer_id(server).is_some());
+                }
+                observed.store(true, Ordering::Relaxed);
+            }
+        };
+        if destroy_surface {
+            add_destruction_hook::<State, _>(&server_surface, observe);
+            surface.destroy();
+        } else {
+            add_pre_commit_hook::<State, _>(&server_surface, move |state, _, server| {
+                observe(state, server)
+            });
+            surface.attach(None, 0, 0);
+            surface.commit();
+        }
+        fixture.roundtrip_without_render();
+        fixture.roundtrip_without_render();
+        assert!(
+            observed.load(Ordering::Relaxed),
+            "real close hook was not dispatched"
+        );
+        assert!(recorded_surface_buffer_id(&server_surface).is_none());
+        if destroy_surface {
+            // Deliberately destroy the protocol role after wl_surface, matching
+            // the non-guaranteed destruction order on unexpected client exit.
+            let window = fixture.client.window(&surface);
+            window.xdg_toplevel.destroy();
+            window.xdg_surface.destroy();
+            fixture.roundtrip_without_render();
+            fixture.roundtrip_without_render();
+        }
+        assert_eq!(fixture.server.state.clarion.layout.windows().count(), 0);
+        assert!(resources.native_close_source.borrow().is_none());
+        // Discard the completed client's animations through the production epoch
+        // reset. The held test lease then contains no original client Buffer.
+        fixture.server.state.clarion.on_native_renderer_replaced();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while release.value() != 2 {
+            assert!(
+                Instant::now() < deadline,
+                "original attachment did not retire after close"
+            );
+            fixture.roundtrip_without_render();
+        }
+        fixture
+            .server
+            .state
+            .clarion
+            .display_handle
+            .flush_clients()
+            .unwrap();
+        fixture.client.dispatch();
+        assert_eq!(buffer.data::<BufferReleases>().unwrap().count(), 1);
+        assert!(fixture.client.connection.protocol_error().is_none());
+    }
+}
+
+#[test]
+#[ignore = "requires selected DRM GPU with DMA-BUF and timeline syncobj support"]
 fn replaced_same_storage_snapshots_submit_without_owner_wait_and_release_on_idle() {
+    same_storage_snapshot_release(false);
+}
+
+#[test]
+#[ignore = "requires selected DRM GPU with DMA-BUF and timeline syncobj support"]
+fn owned_close_fallback_copies_detached_generations_without_owner_wait() {
+    same_storage_snapshot_release(true);
+}
+
+fn same_storage_snapshot_release(owned_close: bool) {
     for export_required in [true, false] {
         let mut fixture = HardwareFixture::new();
         let syncobj: WpLinuxDrmSyncobjManagerV1 = fixture.bind();
@@ -146,6 +367,7 @@ fn replaced_same_storage_snapshots_submit_without_owner_wait_and_release_on_idle
         let mut snapshots: Vec<WaylandSurfaceRenderElement<NativeRenderer>> = Vec::new();
         let mut shader_inputs = Vec::new();
         let mut raw_cache_handles = Vec::new();
+        let mut owned_sources: Vec<OwnedDmabufSource> = Vec::new();
         for index in 0..2 {
             surface.attach(Some(&buffers[index]), 0, 0);
             sync_surface.set_acquire_point(&acquire_proxy, 0, 1);
@@ -163,6 +385,26 @@ fn replaced_same_storage_snapshots_submit_without_owner_wait_and_release_on_idle
                 .find(|server| server.id().protocol_id() == surface.id().protocol_id())
                 .unwrap()
                 .clone();
+            let source = owned_surface_dmabuf(&server_surface)
+                .expect("committed DMA-BUF must retain Smithay's original attachment");
+            if let Some(previous) = owned_sources.first() {
+                let owner = with_states(&server_surface, |states| {
+                    states
+                        .data_map
+                        .get::<RendererSurfaceStateUserData>()
+                        .unwrap()
+                        .lock()
+                        .unwrap()
+                        .buffer()
+                        .unwrap()
+                        .clone()
+                });
+                // Identical storage via a second protocol resource is still a
+                // distinct attachment generation; never attach its release lease
+                // to the old Dmabuf object just because the FDs name the same file.
+                assert!(OwnedDmabufSource::new(previous.dmabuf().clone(), owner).is_err());
+            }
+            owned_sources.push(source);
             snapshots.extend(render_elements_from_surface_tree(
                 &mut renderer,
                 &server_surface,
@@ -245,6 +487,85 @@ fn replaced_same_storage_snapshots_submit_without_owner_wait_and_release_on_idle
         )
         .unwrap();
 
+        if owned_close {
+            let builtin = animation_source(
+                ProgramType::Close,
+                crate::render_helpers::shaders::resolve_close_shader(
+                    None,
+                    clarion_config::WindowCloseEffect::Fade,
+                ),
+            );
+            renderer
+                .wait_for_animation_program_for_test(ProgramType::Close, &builtin)
+                .unwrap();
+        }
+        // Queue a legal long GPU workload before the one-shot owned copies.
+        // Their completion must hold the attachment after all source handles drop.
+        let mut work = SubmittedGpuWork::new(renderer.vulkan().ctx.as_ref().unwrap().clone());
+        let _producer = work.submit();
+        let waits = crate::render_helpers::vulkan::owner_fence_wait_calls_for_test();
+        let scene_resources = crate::scene::resources::SceneResources::new();
+        let mut closings = Vec::new();
+        let mut close_elements = Vec::new();
+        if owned_close {
+            use crate::animation::Animation;
+            use crate::render_helpers::{RenderCtx, RenderTarget};
+            use crate::scene::closing_window::ClosingWindow;
+            use crate::scene::window_resources::NativeCloseSource;
+            use crate::utils::transaction::Transaction;
+
+            for (index, source) in owned_sources.drain(..).enumerate() {
+                let clock = crate::animation::Clock::with_time(Duration::ZERO);
+                let transaction = Transaction::new();
+                let closing = ClosingWindow::new_native(
+                    &mut renderer,
+                    1.0.into(),
+                    (64., 64.).into(),
+                    (index as f64 * 64., 0.).into(),
+                    transaction.blocker(),
+                    Animation::new(
+                        clock,
+                        0.,
+                        1.,
+                        0.,
+                        clarion_config::Animations::default().window_close.anim,
+                    ),
+                    Default::default(),
+                    clarion_config::WindowCloseEffect::Fade,
+                    None,
+                    None,
+                    Some(NativeCloseSource::Owned(source)),
+                    scene_resources.allocator().closing,
+                )
+                .unwrap();
+                // A failed full snapshot gives no trusted capture image. The
+                // output may animate the copy; screen/window capture stays hidden.
+                for target in [RenderTarget::Screencast, RenderTarget::ScreenCapture] {
+                    assert!(closing
+                        .render(
+                            RenderCtx {
+                                renderer: &mut renderer,
+                                target,
+                                xray: None
+                            },
+                            Rectangle::from_size((128., 64.).into()),
+                            1.0.into()
+                        )
+                        .is_empty());
+                }
+                close_elements.extend(closing.render(
+                    RenderCtx {
+                        renderer: &mut renderer,
+                        target: RenderTarget::Output,
+                        xray: None,
+                    },
+                    Rectangle::from_size((128., 64.).into()),
+                    1.0.into(),
+                ));
+                closings.push(closing);
+            }
+        }
+        drop(owned_sources);
         let mut completion_loop = EventLoop::<bool>::try_new().unwrap();
         renderer
             .install_completion_wakeup(&completion_loop.handle())
@@ -259,7 +580,23 @@ fn replaced_same_storage_snapshots_submit_without_owner_wait_and_release_on_idle
         frame
             .clear(Color32F::BLACK, &[Rectangle::from_size((128, 64).into())])
             .unwrap();
-        if export_required {
+        if owned_close {
+            for element in &close_elements {
+                let geometry = element.geometry(1.0.into());
+                <crate::scene::closing_window::ClosingWindowRenderElement as RenderElement<
+                    NativeRenderer,
+                >>::draw(
+                    element,
+                    &mut frame,
+                    element.src(),
+                    geometry,
+                    &[Rectangle::from_size(geometry.size)],
+                    &[],
+                    None,
+                )
+                .unwrap();
+            }
+        } else if export_required {
             for snapshot in &snapshots {
                 let geometry = snapshot.geometry(1.0.into());
                 snapshot
@@ -288,11 +625,13 @@ fn replaced_same_storage_snapshots_submit_without_owner_wait_and_release_on_idle
             )
             .unwrap();
         }
-        // Use a legal already-submitted workload, including when exporting a SYNC_FD.
-        let mut work = SubmittedGpuWork::new(frame.context());
-        let _producer = work.submit();
         let started = Instant::now();
         let sync = frame.finish().unwrap();
+        assert_eq!(
+            crate::render_helpers::vulkan::owner_fence_wait_calls_for_test(),
+            waits,
+            "owned source/copy submission performed a compositor-thread fence wait"
+        );
         eprintln!(
             "OLD_SNAPSHOT_OWNER_WORK export_required={export_required} finish_wall_ms={}",
             started.elapsed().as_secs_f64() * 1000.

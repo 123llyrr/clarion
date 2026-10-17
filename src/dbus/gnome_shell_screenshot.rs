@@ -107,11 +107,12 @@ impl Start for Screenshot {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::future::Future;
     use std::sync::Arc;
     use std::task::{Context, Poll};
     use std::time::{Duration, Instant};
+
+    use super::*;
 
     fn request(rx: &calloop::channel::Channel<ScreenshotToClarion>) -> ScreenshotToClarion {
         let deadline = Instant::now() + Duration::from_secs(5);

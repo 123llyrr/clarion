@@ -1,13 +1,13 @@
-use anyhow::{Context, Result};
-use clarion_ipc::{Action, Output, Reply, Request, Response, TilingMode, Window, Workspace};
-use std::env;
-use std::fs;
 use std::io::Write;
 #[cfg(test)]
 use std::io::{BufRead, BufReader};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
+use std::{env, fs};
+
+use anyhow::{Context, Result};
+use clarion_ipc::{Action, Output, Reply, Request, Response, TilingMode, Window, Workspace};
 
 // IPC paths are interpreted in the compositor's working directory.
 pub(crate) fn config_reload_action(path: &std::path::Path) -> Result<Action> {
@@ -457,9 +457,10 @@ impl IpcClient {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::os::unix::net::UnixListener;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
 
     static NEXT_SOCKET: AtomicUsize = AtomicUsize::new(0);
 
@@ -668,8 +669,9 @@ fn read_event_batch(
     pending: &mut Vec<u8>,
     state: &mut clarion_ipc::state::EventStreamState,
 ) -> Result<bool> {
-    use clarion_ipc::state::EventStreamStatePart;
     use std::io::Read;
+
+    use clarion_ipc::state::EventStreamStatePart;
     const MAX_LINE: usize = 16 * 1024 * 1024;
     if !pending.contains(&b'\n') {
         let mut bytes = [0u8; 8192];
@@ -792,11 +794,10 @@ fn read_session(path: &std::path::Path) -> Result<clarion_ipc::management::Sessi
 
 #[cfg(test)]
 mod worker_tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
     use super::*;
-    use std::sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    };
 
     #[test]
     fn session_restore_rejects_special_and_oversized_files_without_blocking() {

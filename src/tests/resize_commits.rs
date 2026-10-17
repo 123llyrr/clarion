@@ -1,7 +1,6 @@
 use clarion_ipc::SizeChange;
-use smithay::reexports::wayland_server::{
-    protocol::wl_surface::WlSurface as ServerSurface, Resource as _,
-};
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface as ServerSurface;
+use smithay::reexports::wayland_server::Resource as _;
 use smithay::utils::{Logical, Rectangle, Serial, Size};
 use smithay::wayland::compositor::{add_blocker, Barrier, CompositorHandler as _};
 use wayland_client::protocol::wl_surface::WlSurface;

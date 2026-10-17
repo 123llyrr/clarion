@@ -260,7 +260,13 @@ impl CompositorHandler for State {
                     let hook = add_mapped_toplevel_pre_commit_hook(toplevel);
                     let mapped = {
                         let config = self.clarion.config.borrow();
-                        Mapped::new(window, rules, hook, &config)
+                        Mapped::new(
+                            window,
+                            rules,
+                            hook,
+                            &config,
+                            self.clarion.scene_resources.allocator(),
+                        )
                     };
                     let window = mapped.window.clone();
 
@@ -337,21 +343,12 @@ impl CompositorHandler for State {
                 let transaction = Transaction::new();
                 if !is_mapped {
                     let blocker = transaction.blocker();
-                    self.backend.with_renderer_for_output(
-                        output.as_ref(),
-                        |renderer| match renderer {
-                            crate::render_helpers::renderer::AnyRenderer::Gles(gles) => {
-                                self.clarion
-                                    .layout
-                                    .start_close_animation_for_window(gles, &window, blocker);
-                            }
-                            crate::render_helpers::renderer::AnyRenderer::Native(native) => {
-                                self.clarion.layout.start_close_animation_for_window_native(
-                                    native, &window, blocker,
-                                );
-                            }
-                        },
-                    );
+                    self.backend
+                        .with_renderer_for_output(output.as_ref(), |renderer| {
+                            self.clarion
+                                .layout
+                                .start_close_animation_for_window(renderer, &window, blocker);
+                        });
                 }
 
                 self.clarion
@@ -577,7 +574,17 @@ impl CompositorHandler for State {
     }
 
     fn destroyed(&mut self, surface: &WlSurface) {
-        crate::render_helpers::vulkan::native::clear_surface_buffer_owner(surface);
+        // Smithay calls this before PrivateSurfaceData::cleanup resets its
+        // renderer state. Preserve the original attachment through the close
+        // preparation below, then always clear this surface-local slot (also
+        // while unwinding) before the destruction callback returns.
+        struct ClearBufferOwner<'a>(&'a WlSurface);
+        impl Drop for ClearBufferOwner<'_> {
+            fn drop(&mut self) {
+                crate::render_helpers::vulkan::native::clear_surface_buffer_owner(self.0);
+            }
+        }
+        let clear_buffer_owner = ClearBufferOwner(surface);
         self.clarion.destroy_commit_timing(surface);
         self.clarion.destroy_fifo_surface(surface);
         self.clarion.stop_signal.wakeup();
@@ -597,6 +604,7 @@ impl CompositorHandler for State {
                 self.store_unmap_snapshot(&window, output.as_ref());
             }
         }
+        drop(clear_buffer_owner);
 
         self.clarion
             .root_surface

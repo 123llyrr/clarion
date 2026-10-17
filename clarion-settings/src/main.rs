@@ -16,11 +16,10 @@ mod storage;
 mod theme;
 mod window_manager;
 
+use std::env;
+use std::path::{Path, PathBuf};
+
 use clap::Parser;
-use std::{
-    env,
-    path::{Path, PathBuf},
-};
 
 #[derive(Parser)]
 #[command(version, about = "Clarion settings")]

@@ -11,10 +11,10 @@ use std::time::{Duration, Instant};
 
 use clarion_config::{Color, Config};
 use smithay::backend::allocator::Fourcc;
-use smithay::reexports::wayland_protocols_wlr::screencopy::v1::client::{
-    zwlr_screencopy_frame_v1::{self, ZwlrScreencopyFrameV1},
-    zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1,
+use smithay::reexports::wayland_protocols_wlr::screencopy::v1::client::zwlr_screencopy_frame_v1::{
+    self, ZwlrScreencopyFrameV1,
 };
+use smithay::reexports::wayland_protocols_wlr::screencopy::v1::client::zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1;
 use wayland_client::protocol::wl_buffer::WlBuffer;
 use wayland_client::protocol::wl_shm::{self, WlShm};
 use wayland_client::protocol::wl_shm_pool::WlShmPool;
@@ -146,7 +146,8 @@ fn setup(native: bool) -> (Fixture, ClientId, ZwlrScreencopyManagerV1, WlShm) {
     let mut f = Fixture::with_config(config);
     if native {
         use crate::backend::headless::HeadlessRenderer;
-        use crate::render_helpers::vulkan::{native::NativeRenderer, VulkanRenderer};
+        use crate::render_helpers::vulkan::native::NativeRenderer;
+        use crate::render_helpers::vulkan::VulkanRenderer;
         let path =
             std::env::var_os("CLARION_VULKAN_TEST_NODE").expect("set CLARION_VULKAN_TEST_NODE");
         let node = smithay::backend::drm::DrmNode::from_path(&path).unwrap();
@@ -304,6 +305,28 @@ fn drive_damage(f: &mut Fixture) {
         .unwrap();
 }
 
+fn roundtrip_without_redraw(f: &mut Fixture, id: ClientId) {
+    // A normal fixture roundtrip runs the compositor refresh callback. Cursor
+    // loading or another queued redraw may then legitimately service this copy
+    // before the test's explicit damage step. Dispatch only protocol sources so
+    // the no-ready/no-write assertion below has a controlled render boundary.
+    let done = f.client(id).send_sync();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !done.done.load(std::sync::atomic::Ordering::Relaxed) {
+        assert!(
+            Instant::now() < deadline,
+            "screencopy request roundtrip timed out"
+        );
+        let server = &mut f.state.server;
+        server
+            .event_loop
+            .dispatch(Duration::from_millis(2), &mut server.state)
+            .unwrap();
+        server.state.clarion.display_handle.flush_clients().unwrap();
+        f.client(id).dispatch();
+    }
+}
+
 fn success_paths(native: bool) {
     for with_damage in [false, true] {
         let (mut f, id, manager, shm) = setup(native);
@@ -315,7 +338,9 @@ fn success_paths(native: bool) {
         }
         f.client(id).connection.flush().unwrap();
         if with_damage {
-            f.double_roundtrip(id);
+            roundtrip_without_redraw(&mut f, id);
+            let output = f.clarion_output(1);
+            assert!(f.clarion().screencopy_state.has_queued_for_output(&output));
             assert_eq!(capture.events.lock().unwrap().ready, 0);
             assert_eq!(capture.bytes(), vec![SENTINEL; capture.len]);
             drive_damage(&mut f);

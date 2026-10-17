@@ -52,9 +52,8 @@ fn stage_rects(layout: &Layout<TestWindow>) -> Vec<Rectangle<f64, Logical>> {
 
 #[test]
 fn stage_reserved_bar_keeps_cards_and_entire_workspace_rail_in_the_working_area() {
-    use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::{
-        zwlr_layer_shell_v1::Layer, zwlr_layer_surface_v1::Anchor,
-    };
+    use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer;
+    use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::Anchor;
 
     for scale in [1., 1.25, 1.5, 2.] {
         for anchor in [
@@ -169,9 +168,8 @@ fn stage_reserved_bar_keeps_cards_and_entire_workspace_rail_in_the_working_area(
 
 #[test]
 fn stage_bar_edge_changes_refresh_cached_geometry_without_resizing_the_output() {
-    use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::{
-        zwlr_layer_shell_v1::Layer, zwlr_layer_surface_v1::Anchor,
-    };
+    use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer;
+    use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::Anchor;
 
     for scale in [1., 1.25, 1.5, 2.] {
         let mut f = crate::tests::Fixture::new();
@@ -249,9 +247,8 @@ fn stage_bar_edge_changes_refresh_cached_geometry_without_resizing_the_output() 
 
 #[test]
 fn stage_tiny_or_exhausted_working_area_has_no_invisible_rail_targets() {
-    use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::{
-        zwlr_layer_shell_v1::Layer, zwlr_layer_surface_v1::Anchor,
-    };
+    use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer;
+    use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::Anchor;
 
     for scale in [1., 1.25, 1.5, 2.] {
         for (anchor, zone) in [
@@ -1096,13 +1093,29 @@ fn stage_expo_update_cost_for_128_windows() {
 #[test]
 #[ignore = "requires a DRM render node, EGL and Vulkan; never acquires display master"]
 fn stage_pixels_share_card_occlusion_rail_and_privacy_on_gles_and_vulkan() {
-    use crate::render_helpers::vulkan::{hardware_tests::setup, native::NativeRenderer};
-    use crate::render_helpers::{render_to_vec, shaders, RenderTarget};
     use smithay::backend::allocator::Fourcc;
+
+    use crate::render_helpers::vulkan::hardware_tests::setup;
+    use crate::render_helpers::vulkan::native::NativeRenderer;
+    use crate::render_helpers::{render_to_vec, shaders, RenderTarget};
+    fn same_pixels(actual: &[u8], expected: &[u8], context: &str) {
+        let first_difference = actual
+            .iter()
+            .zip(expected)
+            .enumerate()
+            .find(|(_, (a, b))| a != b)
+            .map(|(index, (a, b))| (index / 4 % 1280, index / 4 / 1280, index % 4, *a, *b));
+        assert!(actual == expected,
+            "{context}: lengths={}/{} first_difference=(x,y,channel,actual,expected) {first_difference:?}",
+            actual.len(), expected.len());
+    }
     let (vk, mut gles, _) = setup();
     crate::render_helpers::resources::init(&mut gles);
     shaders::init(&mut gles);
     let mut native = NativeRenderer::new(vk).unwrap();
+    native
+        .prepare_output_format_for_test(Fourcc::Abgr8888)
+        .unwrap();
     for scale in [1., 1.25, 1.5, 2.] {
         let mut layout = stage_layout_with_privacy(scale, 0.5, true);
         let mut options = Options::clone(&layout.options);
@@ -1177,25 +1190,73 @@ fn stage_pixels_share_card_occlusion_rail_and_privacy_on_gles_and_vulkan() {
         macro_rules! draw {
             ($renderer:expr, $target:expr) => {{
                 let renderer = &mut $renderer;
-                let mut elements = Vec::new();
-                layout.active_monitor_ref().unwrap().render_workspaces(
-                    RenderCtx {
+                let deadline = std::time::Instant::now() + Duration::from_secs(15);
+                let mut attempts = 0;
+                loop {
+                    attempts += 1;
+                    {
+                        let mut ctx = RenderCtx { renderer: &mut *renderer, target: $target, xray: None };
+                        if let Some(native) = ctx.as_native() {
+                            native.renderer.begin_scene();
+                        }
+                    }
+                    let mut elements = Vec::new();
+                    layout.active_monitor_ref().unwrap().render_workspaces(
+                        RenderCtx { renderer, target: $target, xray: None },
+                        true,
+                        &mut |element| elements.push(element),
+                    );
+                    let (deferred, backpressured) = {
+                        let mut ctx = RenderCtx { renderer: &mut *renderer, target: $target, xray: None };
+                        ctx.as_native().map_or((false, false), |native| (
+                            native.renderer.scene_was_deferred(),
+                            native.renderer.take_backpressure(),
+                        ))
+                    };
+                    if std::env::var_os("CLARION_STAGE_PNG_DIR").is_some() || deferred {
+                        let stage = layout.active_monitor_ref().unwrap().stage_composition();
+                        let expected_texts = stage.rail.iter().map(|item| 1 + usize::from(item.subtitle.is_some())).sum::<usize>();
+                        let cached_texts = stage.resources.stage_rail_text.borrow().iter().flatten().count();
+                        if attempts == 1 || !deferred {
+                            eprintln!("STAGE_DRAW renderer={} target={:?} scale={scale} attempts={attempts} elements={} rail_text_cached={cached_texts}/{expected_texts} deferred={deferred} bounded_capacity_busy={backpressured}", stringify!($renderer), $target, elements.len());
+                        }
+                    }
+                    if deferred {
+                        // Match the device backend: a deferred scene cannot be
+                        // read back as though its omitted text were a frame.
+                        drop(elements);
+                        assert!(std::time::Instant::now() < deadline,
+                            "Stage scene preparation retry deadline: renderer={} target={:?} scale={scale} attempts={attempts} deferred={deferred} bounded_capacity_busy={backpressured}; text upload/completion or format/offscreen preparation remains pending", stringify!($renderer), $target);
+                        let mut ctx = RenderCtx { renderer: &mut *renderer, target: $target, xray: None };
+                        let native = ctx.as_native().expect("only native scenes defer preparation");
+                        native.renderer.poll_preparation_for_test().expect("Stage test preparation completion failed");
+                        native.renderer.retire_completed().expect("Stage test GPU retirement failed");
+                        std::thread::sleep(Duration::from_millis(1));
+                        continue;
+                    }
+                    let result = render_to_vec(
                         renderer,
-                        target: $target,
-                        xray: None,
-                    },
-                    true,
-                    &mut |element| elements.push(element),
-                );
-                render_to_vec(
-                    renderer,
-                    (1280, 720).into(),
-                    scale.into(),
-                    Transform::Normal,
-                    Fourcc::Abgr8888,
-                    elements.iter().rev(),
-                )
-                .unwrap()
+                        (1280, 720).into(),
+                        scale.into(),
+                        Transform::Normal,
+                        Fourcc::Abgr8888,
+                        elements.iter().rev(),
+                    );
+                    match result {
+                        Ok(pixels) => break pixels,
+                        Err(error) if crate::render_helpers::vulkan::native::NativeError::is_backpressure(error.as_ref()) => {
+                            drop(elements);
+                            assert!(std::time::Instant::now() < deadline,
+                                "Stage readback retry deadline: renderer={} target={:?} scale={scale} attempts={attempts} reason={error:#}", stringify!($renderer), $target);
+                            let mut ctx = RenderCtx { renderer: &mut *renderer, target: $target, xray: None };
+                            let native = ctx.as_native().expect("native backpressure error");
+                            native.renderer.poll_preparation_for_test().expect("Stage test readback preparation failed");
+                            native.renderer.retire_completed().expect("Stage test readback GPU retirement failed");
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                        Err(error) => panic!("Stage readback failed: renderer={} target={:?} scale={scale}: {error:#}", stringify!($renderer), $target),
+                    }
+                }
             }};
         }
         let output = draw!(native, RenderTarget::Output);
@@ -1263,6 +1324,57 @@ fn stage_pixels_share_card_occlusion_rail_and_privacy_on_gles_and_vulkan() {
             .map(|(a, b)| a.abs_diff(*b))
             .max()
             .unwrap();
+        // Persist both privacy results before the comparison can panic, so a
+        // failed capture is inspectable instead of leaving only output PNGs.
+        if let Some(directory) = std::env::var_os("CLARION_STAGE_PNG_DIR") {
+            for (name, pixels) in [
+                ("capture-vulkan", &capture),
+                ("capture-gles", &expected_capture),
+            ] {
+                let file = std::fs::File::create(
+                    std::path::Path::new(&directory)
+                        .join(format!("clarion-stage-{scale}-{name}.png")),
+                )
+                .unwrap();
+                let mut encoder = png::Encoder::new(file, 1280, 720);
+                encoder.set_color(png::ColorType::Rgba);
+                encoder
+                    .write_header()
+                    .unwrap()
+                    .write_image_data(pixels)
+                    .unwrap();
+            }
+        }
+        if worst > 2 {
+            let (index, _) = capture
+                .iter()
+                .zip(&expected_capture)
+                .enumerate()
+                .max_by_key(|(_, (a, b))| a.abs_diff(**b))
+                .unwrap();
+            let offset = index / 4 * 4;
+            let location = Point::<i32, smithay::utils::Physical>::from((
+                (index / 4 % 1280) as i32,
+                (index / 4 / 1280) as i32,
+            ));
+            let logical = Point::from((location.x as f64 / scale, location.y as f64 / scale));
+            let stage = layout.active_monitor_ref().unwrap().stage_composition();
+            eprintln!("STAGE_CAPTURE_MISMATCH scale={scale} physical={location:?} logical={logical:?} channel={} native={:?} GLES={:?} front_index={selected_index} sample={sample:?} backdrop_alpha={}",
+                index % 4, &capture[offset..offset + 4], &expected_capture[offset..offset + 4], stage.alpha);
+            for card in &stage.cards {
+                eprintln!("STAGE_CARD id={:?} workspace_index={} geometry={:?} zoom={} crop={:?} contains_mismatch={}",
+                    card.id, card.workspace_index, card.geometry, card.zoom, card.crop, card.geometry.contains(logical));
+            }
+            for item in &stage.rail {
+                eprintln!(
+                    "STAGE_RAIL text={:?} geometry={:?} clip={:?} contains_mismatch={}",
+                    item.text,
+                    item.geometry,
+                    item.clip,
+                    item.clip.contains(logical)
+                );
+            }
+        }
         assert!(
             worst <= 2,
             "Stage capture scale={scale}, worst channel difference={worst}"
@@ -1300,7 +1412,7 @@ fn stage_pixels_share_card_occlusion_rail_and_privacy_on_gles_and_vulkan() {
         }
         let before = output;
         assert!(layout.stage_navigate(None, 1));
-        assert_eq!(draw!(native, RenderTarget::Output), before, "preview retargeting must preserve geometry, occlusion, border emphasis and rail pixels at scale={scale}");
+        same_pixels(&draw!(native, RenderTarget::Output), &before, &format!("preview retargeting must preserve geometry, occlusion, border emphasis and rail pixels at scale={scale}"));
         assert_eq!(
             layout
                 .active_monitor_ref()
@@ -1319,7 +1431,7 @@ fn stage_pixels_share_card_occlusion_rail_and_privacy_on_gles_and_vulkan() {
         layout.advance_animations();
         layout.update_render_elements(None);
         let previewing = draw!(native, RenderTarget::Output);
-        assert_ne!(previewing, before);
+        assert!(previewing != before, "preview navigation must move pixels");
         let previewing_gles = draw!(gles, RenderTarget::Output);
         assert!(
             previewing
@@ -1329,10 +1441,10 @@ fn stage_pixels_share_card_occlusion_rail_and_privacy_on_gles_and_vulkan() {
             "preview animation must match on GLES/native"
         );
         assert!(layout.cancel_stage());
-        assert_eq!(
-            draw!(native, RenderTarget::Output),
-            previewing,
-            "Esc after preview navigation must preserve the composed first closing frame"
+        same_pixels(
+            &draw!(native, RenderTarget::Output),
+            &previewing,
+            "Esc after preview navigation must preserve the composed first closing frame",
         );
         layout.toggle_overview();
         assert!(
@@ -1343,12 +1455,16 @@ fn stage_pixels_share_card_occlusion_rail_and_privacy_on_gles_and_vulkan() {
         layout.update_render_elements(None);
         let before = draw!(native, RenderTarget::Output);
         assert!(layout.stage_navigate(None, 1));
-        assert_eq!(draw!(native, RenderTarget::Output), before);
+        same_pixels(
+            &draw!(native, RenderTarget::Output),
+            &before,
+            "preview retargeting preserves the first frame",
+        );
         assert!(layout.confirm_stage());
-        assert_eq!(
-            draw!(native, RenderTarget::Output),
-            before,
-            "same-mode close begins from the rendered frame"
+        same_pixels(
+            &draw!(native, RenderTarget::Output),
+            &before,
+            "same-mode close begins from the rendered frame",
         );
         let now = layout.clock.now_unadjusted();
         layout
@@ -1357,7 +1473,7 @@ fn stage_pixels_share_card_occlusion_rail_and_privacy_on_gles_and_vulkan() {
         layout.advance_animations();
         layout.update_render_elements(None);
         let closing = draw!(native, RenderTarget::Output);
-        assert_ne!(closing, before);
+        assert!(closing != before, "closing must move pixels");
         let closing_gles = draw!(gles, RenderTarget::Output);
         let worst = closing
             .iter()
@@ -1370,10 +1486,10 @@ fn stage_pixels_share_card_occlusion_rail_and_privacy_on_gles_and_vulkan() {
             "Stage closing scale={scale}, worst channel difference={worst}"
         );
         layout.toggle_overview();
-        assert_eq!(
-            draw!(native, RenderTarget::Output),
-            closing,
-            "reversal begins from the rendered frame"
+        same_pixels(
+            &draw!(native, RenderTarget::Output),
+            &closing,
+            "reversal begins from the rendered frame",
         );
         Op::CompleteAnimations.apply(&mut layout);
         let mut options = Options::clone(&layout.options);
@@ -1389,10 +1505,10 @@ fn stage_pixels_share_card_occlusion_rail_and_privacy_on_gles_and_vulkan() {
         layout.update_render_elements(None);
         let spring_frame = draw!(native, RenderTarget::Output);
         assert!(layout.stage_navigate(None, -1));
-        assert_eq!(
-            draw!(native, RenderTarget::Output),
-            spring_frame,
-            "spring retarget starts at the presented pixels"
+        same_pixels(
+            &draw!(native, RenderTarget::Output),
+            &spring_frame,
+            "spring retarget starts at the presented pixels",
         );
         layout
             .clock
@@ -1401,8 +1517,8 @@ fn stage_pixels_share_card_occlusion_rail_and_privacy_on_gles_and_vulkan() {
         layout.update_render_elements(None);
         let carried = draw!(native, RenderTarget::Output);
         let carried_gles = draw!(gles, RenderTarget::Output);
-        assert_ne!(
-            carried, spring_frame,
+        assert!(
+            carried != spring_frame,
             "spring momentum moves on the next 144 Hz frame"
         );
         assert!(
@@ -1413,10 +1529,10 @@ fn stage_pixels_share_card_occlusion_rail_and_privacy_on_gles_and_vulkan() {
             "carried spring geometry matches on GLES/native"
         );
         assert!(layout.confirm_stage());
-        assert_eq!(
-            draw!(native, RenderTarget::Output),
-            carried,
-            "confirm carries the current spring pixels into closing"
+        same_pixels(
+            &draw!(native, RenderTarget::Output),
+            &carried,
+            "confirm carries the current spring pixels into closing",
         );
         layout
             .clock

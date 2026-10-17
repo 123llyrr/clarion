@@ -5,23 +5,22 @@ use clarion_config::utils::MergeWith as _;
 use clarion_core::bsp::{BspArrangement, BspSnapshot, BspTree, Direction, PaneMode};
 use clarion_core::layout::{BspNode, LiveLayoutPolicy};
 use clarion_ipc::{SizeChange, WindowLayout};
-use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size};
 
-use super::closing_window::{ClosingWindow, ClosingWindowRenderElement};
 use super::scrolling::ColumnWidth;
-use super::tile::{Tile, TileRenderElement, TileRenderSnapshot};
+use super::tile::{Tile, TileRenderElement};
 use super::{
     ActivateWindow, ConfigureIntent, HitType, InteractiveResizeData, LayoutElement, Options,
     RemovedTile, RenderLayer, SizingMode,
 };
 use crate::animation::{Animation, Clock};
 use crate::clarion_render_elements;
-use crate::render_helpers::renderer::ClarionRenderer;
+use crate::render_helpers::renderer::{AnyRenderer, ClarionRenderer};
 use crate::render_helpers::xray::XrayPos;
 use crate::render_helpers::RenderCtx;
-use crate::utils::transaction::Transaction;
-use crate::utils::transaction::TransactionBlocker;
+use crate::scene::closing_window::{ClosingWindow, ClosingWindowRenderElement};
+use crate::scene::resources::SceneResourceAllocator;
+use crate::utils::transaction::{Transaction, TransactionBlocker};
 use crate::utils::ResizeEdge;
 
 /// Direction to split a container node in dwindle layout.
@@ -244,6 +243,7 @@ clarion_render_elements! {
 /// Dynamic BSP / Dwindle tiling space (Hyprland style).
 #[derive(Debug)]
 pub struct DwindleSpace<W: LayoutElement> {
+    scene_resources: SceneResourceAllocator,
     tree: BspTree<u64>,
     payloads: Option<TileStore<W>>,
     pub(super) closing_windows: Vec<ClosingWindow>,
@@ -262,8 +262,10 @@ impl<W: LayoutElement> DwindleSpace<W> {
         scale: f64,
         clock: Clock,
         options: Rc<Options>,
+        scene_resources: SceneResourceAllocator,
     ) -> Self {
         Self {
+            scene_resources,
             tree: BspTree::new(
                 core_rect(working_area),
                 options.layout.gaps,
@@ -697,141 +699,87 @@ impl<W: LayoutElement> DwindleSpace<W> {
 
     pub fn start_close_animation_for_window(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut AnyRenderer<'_>,
         window: &W::Id,
         blocker: TransactionBlocker,
     ) {
-        let Some((tile, tile_pos, _)) = self
-            .tiles_with_render_positions_mut(true)
-            .find(|(tile, _, visible)| *visible && tile.window().id() == window)
-        else {
-            return;
+        let closing_res = {
+            let Some((tile, tile_pos, _)) = self
+                .tiles_with_render_positions()
+                .find(|(tile, _, visible)| *visible && tile.window().id() == window)
+            else {
+                return;
+            };
+            let anim = Animation::new(
+                self.clock.clone(),
+                0.,
+                1.,
+                0.,
+                self.options.animations.window_close.anim,
+            );
+            let blocker = if self.options.disable_transactions {
+                TransactionBlocker::completed()
+            } else {
+                blocker
+            };
+            let scale = Scale::from(self.scale);
+            tile.create_closing_window(
+                renderer,
+                scale,
+                tile_pos,
+                blocker,
+                anim,
+                &self.options.animations.window_close,
+                self.scene_resources.closing.clone(),
+            )
         };
 
-        let Some(snapshot) = tile.take_unmap_snapshot() else {
-            return;
-        };
-
-        let dmabuf = tile.window().dmabuf();
-        let tile_size = tile.tile_size();
-
-        self.start_close_animation_for_tile(
-            renderer, snapshot, tile_size, tile_pos, blocker, dmabuf,
-        );
-    }
-
-    pub fn start_close_animation_for_window_native(
-        &mut self,
-        renderer: &mut crate::render_helpers::vulkan::native::NativeRenderer,
-        window: &W::Id,
-        blocker: TransactionBlocker,
-    ) {
-        let Some((tile, tile_pos, _)) = self
-            .tiles_with_render_positions_mut(true)
-            .find(|(tile, _, visible)| *visible && tile.window().id() == window)
-        else {
-            return;
-        };
-        let dmabuf = tile.window().dmabuf();
-        let tile_size = tile.tile_size();
-        let snapshot = tile.snapshot_native(renderer).ok();
-
-        self.start_close_animation_for_tile_native(
-            renderer, tile_size, tile_pos, blocker, snapshot, dmabuf,
-        );
-    }
-
-    pub fn start_close_animation_for_tile_native(
-        &mut self,
-        renderer: &mut crate::render_helpers::vulkan::native::NativeRenderer,
-        tile_size: Size<f64, Logical>,
-        tile_pos: Point<f64, Logical>,
-        blocker: TransactionBlocker,
-        snapshot: Option<super::tile::NativeTileSnapshot>,
-        dmabuf: Option<smithay::backend::allocator::dmabuf::Dmabuf>,
-    ) {
-        let anim = Animation::new(
-            self.clock.clone(),
-            0.,
-            1.,
-            0.,
-            self.options.animations.window_close.anim,
-        );
-
-        let blocker = if self.options.disable_transactions {
-            TransactionBlocker::completed()
-        } else {
-            blocker
-        };
-
-        let scale = Scale::from(self.scale);
-        let res = ClosingWindow::new_native(
-            renderer,
-            scale,
-            tile_size,
-            tile_pos,
-            blocker,
-            anim,
-            self.options.animations.window_close.glide,
-            self.options.animations.window_close.effect,
-            self.options
-                .animations
-                .window_close
-                .custom_shader
-                .as_deref(),
-            snapshot,
-            dmabuf,
-        );
-        match res {
+        match closing_res {
             Ok(closing) => {
                 self.closing_windows.push(closing);
             }
             Err(err) => {
-                warn!("error creating a native closing window animation: {err:?}");
+                warn!("error creating a closing window animation: {err:?}");
             }
         }
     }
 
-    fn start_close_animation_for_tile(
+    pub fn start_close_animation_for_window_at(
         &mut self,
-        renderer: &mut GlesRenderer,
-        snapshot: TileRenderSnapshot,
-        tile_size: Size<f64, Logical>,
+        renderer: &mut AnyRenderer<'_>,
+        window: &W::Id,
         tile_pos: Point<f64, Logical>,
         blocker: TransactionBlocker,
-        dmabuf: Option<smithay::backend::allocator::dmabuf::Dmabuf>,
     ) {
-        let anim = Animation::new(
-            self.clock.clone(),
-            0.,
-            1.,
-            0.,
-            self.options.animations.window_close.anim,
-        );
-
-        let blocker = if self.options.disable_transactions {
-            TransactionBlocker::completed()
-        } else {
-            blocker
+        let closing_res = {
+            let Some(tile) = self.tiles().find(|tile| tile.window().id() == window) else {
+                return;
+            };
+            let anim = Animation::new(
+                self.clock.clone(),
+                0.,
+                1.,
+                0.,
+                self.options.animations.window_close.anim,
+            );
+            let blocker = if self.options.disable_transactions {
+                TransactionBlocker::completed()
+            } else {
+                blocker
+            };
+            let scale = Scale::from(self.scale);
+            tile.create_closing_window(
+                renderer,
+                scale,
+                tile_pos,
+                blocker,
+                anim,
+                &self.options.animations.window_close,
+                self.scene_resources.closing.clone(),
+            )
         };
 
-        let scale = Scale::from(self.scale);
-        let is_vulkan = self.options.renderer.is_vulkan();
-        let res = ClosingWindow::new(
-            renderer,
-            snapshot,
-            scale,
-            tile_size,
-            tile_pos,
-            blocker,
-            anim,
-            self.options.animations.window_close.glide,
-            self.options.animations.window_close.effect,
-            self.options.animations.window_close.custom_shader.is_some(),
-            is_vulkan,
-            dmabuf,
-        );
-        match res {
+        match closing_res {
             Ok(closing) => {
                 self.closing_windows.push(closing);
             }
@@ -1240,6 +1188,48 @@ impl<W: LayoutElement> DwindleSpace<W> {
     }
 
     /// Render tiles with their decoration elements.
+    pub(crate) fn scene_items<'a>(
+        &'a self,
+        normal_visible: bool,
+        focus: bool,
+        items: &mut Vec<crate::scene::workspace_composition::OrderedItem<'a, W>>,
+    ) {
+        use crate::layout::scene_source::{ClosingRenderSource, TileRenderSource};
+        use crate::scene::workspace_composition::{Channel, Item, OrderedItem, TileSpace};
+        if normal_visible {
+            for closing in self.closing_windows.iter().rev() {
+                items.push(OrderedItem {
+                    channel: Channel::TilingNormal,
+                    item: Item::Closing {
+                        source: ClosingRenderSource::new(closing),
+                        view: Rectangle::from_size(self.view_size),
+                        scale: Scale::from(self.scale),
+                        space: TileSpace::Dwindle,
+                    },
+                });
+            }
+        }
+        for (tile, position, visible) in self.tiles_with_render_positions() {
+            let moving = tile.is_moving_between_workspaces();
+            if !visible || (!moving && !normal_visible) {
+                continue;
+            }
+            items.push(OrderedItem {
+                channel: if moving {
+                    Channel::TilingMoving
+                } else {
+                    Channel::TilingNormal
+                },
+                item: Item::Tile {
+                    source: TileRenderSource::new(tile),
+                    position,
+                    focused: focus && Some(tile.window().core_id()) == self.tree.active().copied(),
+                    space: TileSpace::Dwindle,
+                },
+            });
+        }
+    }
+
     pub fn render<R: ClarionRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
@@ -1268,9 +1258,10 @@ impl<W: LayoutElement> DwindleSpace<W> {
             let is_focused =
                 focus_ring && Some(tile.window().core_id()) == self.tree.active().copied();
             let xray_pos = xray_pos.offset(pos);
-            tile.render(ctx.r(), pos, xray_pos, is_focused, &mut |elem| {
-                push(elem.into());
-            });
+            tile.scene()
+                .render(ctx.r(), pos, xray_pos, is_focused, &mut |elem| {
+                    push(elem.into());
+                });
         }
     }
 }

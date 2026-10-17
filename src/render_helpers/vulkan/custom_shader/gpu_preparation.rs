@@ -1,8 +1,9 @@
 //! Vulkan device objects only. No renderer, Wayland, scene or compositor state crosses this cut.
-use ash::vk;
-use calloop::channel::Channel;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+
+use ash::vk;
+use calloop::channel::Channel;
 
 use super::{gpu_provider, PreparedShader, Program};
 use crate::render_helpers::vulkan::device::VulkanContext;
@@ -10,6 +11,61 @@ use crate::render_helpers::vulkan::pipeline::YuvPipeline;
 use crate::render_helpers::vulkan::VulkanPipelineManager;
 
 pub(crate) const YUV_PREPARATION_KIND: u8 = u8::MAX - 1;
+pub(crate) const OFFSCREEN_PREPARATION_KIND: u8 = u8::MAX - 3;
+
+// Ash Display contains prose; the owner needs the stable Vulkan enum identity
+// to distinguish transient allocation pressure from an invalid/lost device.
+fn offscreen_vk_error(error: vk::Result) -> String {
+    format!("{error:?}")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct OffscreenKey {
+    pub width: u32,
+    pub height: u32,
+    pub format: vk::Format,
+    pub alpha: bool,
+}
+
+const MAX_OFFSCREEN_PREPARATION_BYTES: u64 = 256 * 1024 * 1024;
+static OFFSCREEN_PREPARATION_BYTES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) struct OffscreenBudget(u64);
+impl OffscreenBudget {
+    pub fn reserve(key: OffscreenKey) -> Result<Self, String> {
+        let estimate = u64::from(key.width)
+            .checked_mul(u64::from(key.height))
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| "offscreen allocation size overflow".to_owned())?;
+        let mut budget = Self(0);
+        budget.grow_to(estimate)?;
+        Ok(budget)
+    }
+    fn grow_to(&mut self, bytes: u64) -> Result<(), String> {
+        let additional = bytes.saturating_sub(self.0);
+        OFFSCREEN_PREPARATION_BYTES
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current
+                    .checked_add(additional)
+                    .filter(|total| *total <= MAX_OFFSCREEN_PREPARATION_BYTES)
+            })
+            .map_err(|_| "offscreen preparation byte budget exhausted".to_owned())?;
+        self.0 += additional;
+        Ok(())
+    }
+}
+impl Drop for OffscreenBudget {
+    fn drop(&mut self) {
+        OFFSCREEN_PREPARATION_BYTES.fetch_sub(self.0, Ordering::AcqRel);
+    }
+}
+
+pub(crate) struct PreparedOffscreen {
+    pub key: OffscreenKey,
+    pub(in crate::render_helpers::vulkan) image: Arc<super::super::TextureGpu>,
+    _budget: OffscreenBudget,
+}
 
 pub(crate) enum Work {
     Build {
@@ -29,6 +85,11 @@ pub(crate) enum Work {
     YuvTargets {
         targets: Vec<(Arc<YuvPipeline>, Vec<vk::Format>)>,
     },
+    Offscreen {
+        ctx: Arc<VulkanContext>,
+        key: OffscreenKey,
+        budget: OffscreenBudget,
+    },
     #[cfg(test)]
     Gate {
         entered: std::sync::mpsc::Sender<()>,
@@ -47,6 +108,7 @@ pub(crate) enum Prepared {
     YuvTargets {
         failed: Vec<(vk::Format, vk::Result)>,
     },
+    Offscreen(PreparedOffscreen),
 }
 pub(crate) type Event = gpu_provider::Event<Work, Prepared>;
 pub(crate) type Endpoint = gpu_provider::Endpoint<Work, Prepared>;
@@ -138,6 +200,53 @@ fn prepare(work: Work, cancel: &AtomicBool) -> Result<Prepared, String> {
                 "yuv_variant_target_formats",
             )
         }
+        Work::Offscreen {
+            ctx,
+            key,
+            mut budget,
+        } => {
+            let usage = vk::ImageUsageFlags::COLOR_ATTACHMENT
+                | vk::ImageUsageFlags::SAMPLED
+                | vk::ImageUsageFlags::TRANSFER_SRC
+                | vk::ImageUsageFlags::TRANSFER_DST;
+            let limits = unsafe {
+                ctx.instance.get_physical_device_image_format_properties(
+                    ctx.physical_device,
+                    key.format,
+                    vk::ImageType::TYPE_2D,
+                    vk::ImageTiling::OPTIMAL,
+                    usage,
+                    vk::ImageCreateFlags::empty(),
+                )
+            }
+            .map_err(offscreen_vk_error)?;
+            if key.width > limits.max_extent.width || key.height > limits.max_extent.height {
+                return Err("unsupported Vulkan target dimensions".into());
+            }
+            check()?;
+            let texture = super::super::allocate_texture(
+                &ctx,
+                key.width,
+                key.height,
+                key.format,
+                vk::ImageTiling::OPTIMAL,
+                usage,
+                vk::ImageLayout::UNDEFINED,
+                key.alpha,
+            )
+            .map_err(offscreen_vk_error)?;
+            // Account for driver tiling/alignment padding before publication.
+            budget.grow_to(texture.inner.allocation_size)?;
+            check()?;
+            (
+                Prepared::Offscreen(PreparedOffscreen {
+                    key,
+                    image: texture.inner,
+                    _budget: budget,
+                }),
+                "offscreen_allocation",
+            )
+        }
         #[cfg(test)]
         Work::Gate { entered, release } => {
             entered.send(()).map_err(|error| error.to_string())?;
@@ -204,7 +313,7 @@ fn prepare_formats<T: Copy>(
         match prepare(format) {
             Ok(()) => ready.push(format),
             Err(vk::Result::ERROR_DEVICE_LOST) => {
-                return Err(vk::Result::ERROR_DEVICE_LOST.to_string())
+                return Err(format!("{:?}", vk::Result::ERROR_DEVICE_LOST))
             }
             Err(error) => failed.push((format, error.to_string())),
         }
@@ -214,6 +323,20 @@ fn prepare_formats<T: Copy>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn offscreen_vk_errors_keep_real_oom_and_device_loss_identity() {
+        for (error, marker) in [
+            (vk::Result::ERROR_OUT_OF_HOST_MEMORY, "OUT_OF_HOST_MEMORY"),
+            (
+                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY,
+                "OUT_OF_DEVICE_MEMORY",
+            ),
+            (vk::Result::ERROR_DEVICE_LOST, "DEVICE_LOST"),
+        ] {
+            let transferred = offscreen_vk_error(error);
+            assert!(transferred.contains(marker), "{error:?}: {transferred}");
+        }
+    }
     #[test]
     fn rejected_format_keeps_supported_siblings_and_failure_identity() {
         let mut visited = Vec::new();
@@ -245,9 +368,6 @@ mod tests {
             }
         });
         assert_eq!(visited, [1, 2]);
-        assert_eq!(
-            result.unwrap_err(),
-            vk::Result::ERROR_DEVICE_LOST.to_string()
-        );
+        assert_eq!(result.unwrap_err(), "ERROR_DEVICE_LOST");
     }
 }

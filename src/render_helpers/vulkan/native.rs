@@ -1,41 +1,35 @@
 //! Smithay renderer adapter backed exclusively by Vulkan commands.
 //! Native sync files cover presentation; a completion worker retires GPU owners.
-use super::{
-    allocate_texture,
-    completion::FrameCompletion,
-    frame::VulkanFrame,
-    pipeline::{MeshGpuVertex, MeshPushConstants, QuadPushConstants},
-    VulkanRenderer, VulkanTexture,
-};
+use std::marker::PhantomData;
+use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, Weak};
+
 use ash::vk;
-use smithay::backend::allocator::{
-    dmabuf::Dmabuf, format::FormatSet, Buffer as _, Format, Fourcc, Modifier,
-};
+use smithay::backend::allocator::dmabuf::Dmabuf;
+use smithay::backend::allocator::format::FormatSet;
+use smithay::backend::allocator::{Buffer as _, Format, Fourcc, Modifier};
+use smithay::backend::renderer::sync::SyncPoint;
+use smithay::backend::renderer::utils::{Buffer as WlBufferOwner, RendererSurfaceStateUserData};
 use smithay::backend::renderer::{
-    sync::SyncPoint,
-    utils::{Buffer as WlBufferOwner, RendererSurfaceStateUserData},
     Bind, Color32F, ContextId, DebugFlags, ExportMem, Frame, ImportDma, ImportDmaWl, ImportMem,
     Offscreen, Renderer, RendererSuper, Texture, TextureFilter, TextureMapping,
 };
 #[cfg(test)]
 use smithay::reexports::wayland_server::backend::ObjectId;
-use smithay::reexports::wayland_server::{
-    protocol::{wl_buffer::WlBuffer, wl_surface::WlSurface},
-    Resource,
-};
+use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Buffer, Physical, Point, Rectangle, Size, Transform};
-use smithay::wayland::{
-    compositor::{with_states, with_surface_tree_downward, SurfaceData, TraversalAction},
-    dmabuf::get_dmabuf,
+use smithay::wayland::compositor::{
+    with_states, with_surface_tree_downward, SurfaceData, TraversalAction,
 };
-use std::{
-    marker::PhantomData,
-    rc::Rc,
-    sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, Mutex, Weak,
-    },
-};
+use smithay::wayland::dmabuf::get_dmabuf;
+
+use super::completion::FrameCompletion;
+use super::frame::VulkanFrame;
+use super::pipeline::{MeshGpuVertex, MeshPushConstants, QuadPushConstants};
+use super::{allocate_texture, VulkanRenderer, VulkanTexture};
 
 /// Only hardware regressions may stop the fixed preparer. Dropping this guard
 /// always releases it, including while unwinding a failed assertion.
@@ -85,6 +79,24 @@ struct ShaderCompileOwner {
     live_programs: Vec<Weak<super::custom_shader::Program>>,
     yuv_targets: Vec<YuvTargetRequest>,
     yuv_pending: Option<(u64, Arc<AtomicBool>)>,
+    offscreen_pending: Option<(
+        super::custom_shader::gpu_preparation::OffscreenKey,
+        u64,
+        Arc<AtomicBool>,
+    )>,
+    offscreen_ready: Vec<
+        super::custom_shader::gpu_provider::Completion<
+            super::custom_shader::gpu_preparation::Work,
+            super::custom_shader::gpu_preparation::Prepared,
+        >,
+    >,
+    offscreen_failed: Option<OffscreenFailure>,
+}
+struct OffscreenFailure {
+    key: super::custom_shader::gpu_preparation::OffscreenKey,
+    error: String,
+    retry_at: Option<std::time::Instant>,
+    attempts: u32,
 }
 struct YuvTargetRequest {
     variant: Weak<super::pipeline::YuvPipeline>,
@@ -137,6 +149,9 @@ impl ShaderCompileOwner {
             live_programs: Vec::new(),
             yuv_targets: Vec::new(),
             yuv_pending: None,
+            offscreen_pending: None,
+            offscreen_ready: Vec::new(),
+            offscreen_failed: None,
         }
     }
 }
@@ -146,6 +161,9 @@ impl Drop for ShaderCompileOwner {
             cancel.store(true, Ordering::Release);
         }
         if let Some((_, cancel)) = &self.yuv_pending {
+            cancel.store(true, Ordering::Release);
+        }
+        if let Some((_, _, cancel)) = &self.offscreen_pending {
             cancel.store(true, Ordering::Release);
         }
         // Pending shader guards cancel executing work without releasing its worker permit.
@@ -242,6 +260,54 @@ fn request_yuv_warm(owner: &mut ShaderCompileOwner) -> bool {
 #[derive(Default)]
 struct SurfaceBufferOwner(Arc<Mutex<Option<WlBufferOwner>>>);
 
+/// The exact committed Wayland attachment, not merely a reference to its storage.
+/// The private pair can only be constructed after checking the buffer's DMA-BUF
+/// identity, so it is safe to transfer its release lease to GPU completion.
+#[derive(Debug, Clone)]
+pub struct OwnedDmabufSource {
+    dmabuf: Dmabuf,
+    owner: WlBufferOwner,
+}
+
+impl OwnedDmabufSource {
+    pub(crate) fn new(dmabuf: Dmabuf, owner: WlBufferOwner) -> Result<Self, NativeError> {
+        if get_dmabuf(&owner).ok() != Some(&dmabuf) {
+            return Err(NativeError::Other(
+                "source attachment does not own this DMA-BUF".into(),
+            ));
+        }
+        Ok(Self { dmabuf, owner })
+    }
+
+    pub(crate) fn dmabuf(&self) -> &Dmabuf {
+        &self.dmabuf
+    }
+}
+
+/// Capture before an unmap replaces renderer state. This slot contains a clone
+/// of Smithay's existing Buffer, including its original explicit release point;
+/// constructing a new Buffer from wl_buffer would create a different lease.
+pub(crate) fn owned_surface_dmabuf(surface: &WlSurface) -> Option<OwnedDmabufSource> {
+    let owner = with_states(surface, |states| {
+        let owner = states
+            .data_map
+            .get::<SurfaceBufferOwner>()
+            .and_then(|slot| slot.0.lock().unwrap().clone())?;
+        // This accessor is used outside ImportAll's renderer-state lock. Refuse
+        // a stale slot rather than capture a previous commit's source pixels.
+        let current_id = states
+            .data_map
+            .get::<RendererSurfaceStateUserData>()?
+            .lock()
+            .unwrap()
+            .buffer()
+            .map(|buffer| buffer.id());
+        (current_id == Some(owner.id())).then_some(owner)
+    })?;
+    let dmabuf = get_dmabuf(&owner).ok()?.clone();
+    OwnedDmabufSource::new(dmabuf, owner).ok()
+}
+
 pub(crate) fn record_surface_tree_buffer_owners(surface: &WlSurface) {
     let mut previous = Vec::new();
     // Smithay applies synchronized child commits when the parent commits.
@@ -277,7 +343,7 @@ pub(crate) fn clear_surface_buffer_owner(surface: &WlSurface) {
 }
 
 #[cfg(test)]
-pub(super) fn recorded_surface_buffer_id(surface: &WlSurface) -> Option<ObjectId> {
+pub(crate) fn recorded_surface_buffer_id(surface: &WlSurface) -> Option<ObjectId> {
     with_states(surface, |states| {
         states
             .data_map
@@ -304,6 +370,8 @@ pub enum NativeBusy {
     Completion,
     OutputFormat,
     YuvPipelines,
+    ProducerFence,
+    OffscreenAllocation,
 }
 
 #[derive(Debug)]
@@ -331,14 +399,26 @@ impl std::fmt::Display for NativeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Other(message) => message.fmt(f),
-            Self::Busy(kind) => write!(f, "Vulkan {kind:?} capacity is busy"),
+            Self::Busy(kind) => write!(f, "Vulkan {kind:?} is pending"),
         }
     }
 }
 impl std::error::Error for NativeError {}
+impl From<crate::render_helpers::sync::ProducerNotReady> for NativeError {
+    fn from(error: crate::render_helpers::sync::ProducerNotReady) -> Self {
+        match error {
+            crate::render_helpers::sync::ProducerNotReady::Pending => {
+                Self::Busy(NativeBusy::ProducerFence)
+            }
+            crate::render_helpers::sync::ProducerNotReady::Failed(error) => error.into(),
+        }
+    }
+}
 impl From<vk::Result> for NativeError {
     fn from(e: vk::Result) -> Self {
-        Self::Other(e.to_string())
+        // Keep the enum identity across Smithay/anyhow wrappers. Ash Display
+        // alone is prose and cannot drive the device-loss recovery classifier.
+        Self::Other(format!("{e:?}: {e}"))
     }
 }
 
@@ -427,6 +507,8 @@ pub struct NativeRenderer {
     completions: super::completion::CompletionQueue,
     pending_uploads: Vec<Weak<super::memory::PendingUpload>>,
     offscreen_cache: Vec<VulkanTexture>,
+    async_offscreen_scopes: Rc<std::cell::Cell<u32>>,
+    compatibility_work: NativeCompatibilityWork,
     pub(super) shm_cache_registrations:
         std::collections::HashMap<usize, super::shm::ShmCacheRegistration>,
     pub(super) shm_cache_imports: u64,
@@ -438,6 +520,65 @@ pub struct NativeRenderer {
     shader_compiles: ShaderCompileOwner,
     prepared_output_formats: std::collections::HashSet<vk::Format>,
     hdr_output: bool,
+}
+
+/// Enables deferred cold allocations only inside a retryable frame. Commit,
+/// unmap and explicit capture preparation keep their synchronous lease contract.
+pub(crate) struct AsyncOffscreenScope(Rc<std::cell::Cell<u32>>);
+
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct NativeCompatibilityWork {
+    pub unowned_frames: u64,
+    pub cold_allocations: u64,
+}
+impl Drop for AsyncOffscreenScope {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() - 1);
+    }
+}
+
+/// A capture observes only deferrals caused by its own preparation, while an
+/// enclosing output scene keeps every deferral on normal return, error or unwind.
+#[must_use = "the scope restores the enclosing scene's deferred state on drop"]
+pub(crate) struct NativeCaptureScope<'a> {
+    renderer: &'a mut NativeRenderer,
+    deferred: CaptureDeferredState,
+}
+
+#[derive(Clone, Copy)]
+struct CaptureDeferredState {
+    inherited: bool,
+}
+
+impl CaptureDeferredState {
+    fn begin(current: &mut bool) -> Self {
+        Self {
+            inherited: std::mem::take(current),
+        }
+    }
+
+    fn restore(self, current: &mut bool) {
+        *current |= self.inherited;
+    }
+}
+
+impl std::ops::Deref for NativeCaptureScope<'_> {
+    type Target = NativeRenderer;
+    fn deref(&self) -> &Self::Target {
+        self.renderer
+    }
+}
+
+impl std::ops::DerefMut for NativeCaptureScope<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.renderer
+    }
+}
+
+impl Drop for NativeCaptureScope<'_> {
+    fn drop(&mut self) {
+        self.deferred.restore(&mut self.renderer.scene_deferred);
+    }
 }
 
 pub struct NativeFramebuffer<'a> {
@@ -495,15 +636,19 @@ pub struct NativeFrame<'a> {
     completions: &'a super::completion::CompletionQueue,
     completion_wakeup: Option<smithay::reexports::calloop::ping::Ping>,
     completion_permit: Option<super::completion::CompletionPermit>,
-    async_export: bool,
     completion_export_required: bool,
     hdr_output: bool,
     hdr_damage: Vec<Rectangle<i32, Physical>>,
     shader_compiles: &'a mut ShaderCompileOwner,
     scene_deferred: &'a mut bool,
+    compatibility_work: &'a mut NativeCompatibilityWork,
 }
 
 impl NativeRenderer {
+    #[cfg(test)]
+    pub(crate) fn compatibility_work(&self) -> NativeCompatibilityWork {
+        self.compatibility_work
+    }
     /// Wake the main event loop after GPU-owned Wayland buffers are released,
     /// so its normal flush sends release events even on a completely idle desktop.
     pub fn install_completion_wakeup<Data: 'static>(
@@ -953,6 +1098,52 @@ impl NativeRenderer {
         if identity.renderer != self.shader_compiles.instance {
             return false;
         }
+        if identity.kind == super::custom_shader::gpu_preparation::OFFSCREEN_PREPARATION_KIND {
+            let Some((key, generation, _)) = self.shader_compiles.offscreen_pending.as_ref() else {
+                return false;
+            };
+            if *generation != identity.generation {
+                return false;
+            }
+            let key = *key;
+            let (_, _, cancel) = self.shader_compiles.offscreen_pending.take().unwrap();
+            cancel.store(true, Ordering::Release);
+            match completion.result.as_ref().unwrap() {
+                Ok(Prepared::Offscreen(allocation)) => {
+                    debug_assert_eq!(allocation.key, key);
+                    // An unconsumed/stale completion retires on the worker.
+                    if self.shader_compiles.offscreen_ready.len() >= 2 {
+                        self.shader_compiles.offscreen_ready.remove(0);
+                    }
+                    self.shader_compiles.offscreen_ready.push(completion);
+                }
+                Err(error) => {
+                    let error = error.clone();
+                    if error.contains("DEVICE_LOST") {
+                        self.shader_compiles.format_error = Some(error.clone());
+                    }
+                    let attempts = self
+                        .shader_compiles
+                        .offscreen_failed
+                        .as_ref()
+                        .filter(|failed| failed.key == key)
+                        .map_or(1, |failed| failed.attempts.saturating_add(1));
+                    let retryable = error.contains("OUT_OF_HOST_MEMORY")
+                        || error.contains("OUT_OF_DEVICE_MEMORY")
+                        || error.contains("budget exhausted");
+                    let delay = std::time::Duration::from_millis(250)
+                        .saturating_mul(1 << attempts.saturating_sub(1).min(4));
+                    self.shader_compiles.offscreen_failed = Some(OffscreenFailure {
+                        key,
+                        error,
+                        attempts,
+                        retry_at: retryable.then(|| std::time::Instant::now() + delay),
+                    });
+                }
+                Ok(_) => unreachable!("offscreen request produced another preparation kind"),
+            }
+            return true;
+        }
         if identity.kind == YUV_PREPARATION_KIND {
             if !self
                 .shader_compiles
@@ -1007,10 +1198,7 @@ impl NativeRenderer {
                     warn!("Vulkan format preparation failed: {error}");
                     self.shader_compiles.format_error = Some(error);
                 }
-                Ok(Prepared::Program { .. }) => unreachable!("format request produced a shader"),
-                Ok(Prepared::YuvTargets { .. }) => {
-                    unreachable!("format request produced YUV preparation")
-                }
+                Ok(_) => unreachable!("format request produced another preparation kind"),
             }
             self.retry_deferred_shader_compiles();
             return true;
@@ -1058,12 +1246,7 @@ impl NativeRenderer {
                 self.record_animation_failure(kind, source, error);
                 false
             }
-            Ok(Prepared::Formats { .. }) => {
-                unreachable!("shader request produced a format acknowledgment")
-            }
-            Ok(Prepared::YuvTargets { .. }) => {
-                unreachable!("shader request produced YUV preparation")
-            }
+            Ok(_) => unreachable!("shader request produced another preparation kind"),
         };
         self.retry_deferred_shader_compiles();
         installed
@@ -1163,7 +1346,7 @@ impl NativeRenderer {
     }
 
     #[cfg(test)]
-    fn poll_preparation_for_test(&mut self) -> anyhow::Result<()> {
+    pub(crate) fn poll_preparation_for_test(&mut self) -> anyhow::Result<()> {
         while let Some(completions) = self.shader_compiles.completions.as_ref() {
             match completions.try_recv() {
                 Ok(completion) => {
@@ -1441,6 +1624,203 @@ impl NativeRenderer {
         self.scene_deferred = false;
     }
 
+    pub(crate) fn capture_scope(&mut self) -> NativeCaptureScope<'_> {
+        let deferred = CaptureDeferredState::begin(&mut self.scene_deferred);
+        NativeCaptureScope {
+            renderer: self,
+            deferred,
+        }
+    }
+
+    pub(crate) fn async_offscreen_scope(&self) -> AsyncOffscreenScope {
+        self.async_offscreen_scopes
+            .set(self.async_offscreen_scopes.get() + 1);
+        AsyncOffscreenScope(self.async_offscreen_scopes.clone())
+    }
+
+    /// Capacity-aware retained scenes use actual texture dimensions for their
+    /// tracker and keep visible source geometry separately. Exact-size capture
+    /// and snapshot helpers must continue calling Offscreen::create_buffer.
+    pub(crate) fn create_offscreen_capacity(
+        &mut self,
+        format: Fourcc,
+        minimum: Size<i32, Buffer>,
+    ) -> Result<VulkanTexture, NativeError> {
+        let (format_vk, alpha) = super::dmabuf::fourcc_to_vk_format(format)
+            .ok_or_else(|| NativeError::Other("unsupported Vulkan target format".into()))?;
+        if minimum.w <= 0 || minimum.h <= 0 {
+            return Err(NativeError::Other(
+                "unsupported Vulkan target dimensions".into(),
+            ));
+        }
+        self.retire_completed()?;
+        if let Some(index) = self.offscreen_cache.iter().position(|texture| {
+            Arc::strong_count(&texture.inner) == 1
+                && texture.width >= minimum.w as u32
+                && texture.height >= minimum.h as u32
+                && texture.format == format_vk.as_raw() as u32
+                && texture.has_alpha == alpha
+        }) {
+            return Ok(self.offscreen_cache.swap_remove(index));
+        }
+        if self.async_offscreen_scopes.get() == 0 {
+            return self.create_buffer(format, minimum);
+        }
+        let capacity = |size: i32| {
+            (size as u32)
+                .checked_add(255)
+                .map(|size| size & !255)
+                .unwrap_or(size as u32)
+        };
+        let width = capacity(minimum.w);
+        let height = capacity(minimum.h);
+        if u64::from(width) * u64::from(height) > 64 * 1024 * 1024 {
+            return Err(NativeError::Other(
+                "offscreen allocation exceeds preparation budget".into(),
+            ));
+        }
+        self.prepare_offscreen_async(
+            super::custom_shader::gpu_preparation::OffscreenKey {
+                width,
+                height,
+                format: format_vk,
+                alpha,
+            },
+            true,
+        )
+    }
+
+    /// WSI targets require exact extents but can retain and retry preparation.
+    pub(crate) fn create_exact_frame_target(
+        &mut self,
+        format: Fourcc,
+        size: Size<i32, Buffer>,
+    ) -> Result<VulkanTexture, NativeError> {
+        if self.async_offscreen_scopes.get() == 0 {
+            return self.create_buffer(format, size);
+        }
+        let (format, alpha) = super::dmabuf::fourcc_to_vk_format(format)
+            .ok_or_else(|| NativeError::Other("unsupported Vulkan target format".into()))?;
+        if size.w <= 0
+            || size.h <= 0
+            || u64::from(size.w as u32) * u64::from(size.h as u32) > 64 * 1024 * 1024
+        {
+            return Err(NativeError::Other(
+                "unsupported Vulkan target dimensions".into(),
+            ));
+        }
+        self.prepare_offscreen_async(
+            super::custom_shader::gpu_preparation::OffscreenKey {
+                width: size.w as u32,
+                height: size.h as u32,
+                format,
+                alpha,
+            },
+            false,
+        )
+    }
+
+    fn prepare_offscreen_async(
+        &mut self,
+        key: super::custom_shader::gpu_preparation::OffscreenKey,
+        allow_larger: bool,
+    ) -> Result<VulkanTexture, NativeError> {
+        use super::custom_shader::gpu_preparation::{
+            Identity, OffscreenBudget, Prepared, Work, OFFSCREEN_PREPARATION_KIND,
+        };
+        let ready = self
+            .shader_compiles
+            .offscreen_ready
+            .iter()
+            .position(|completion| {
+                matches!(completion.result.as_ref(),
+                Some(Ok(Prepared::Offscreen(allocation)))
+                    if allocation.key.format == key.format && allocation.key.alpha == key.alpha
+                        && if allow_larger {
+                            allocation.key.width >= key.width && allocation.key.height >= key.height
+                        } else { allocation.key == key })
+            });
+        if let Some(index) = ready {
+            let completion = self.shader_compiles.offscreen_ready.remove(index);
+            let Prepared::Offscreen(allocation) =
+                completion.consume().map_err(NativeError::Other)?
+            else {
+                unreachable!()
+            };
+            return Ok(VulkanTexture {
+                width: allocation.key.width,
+                height: allocation.key.height,
+                format: allocation.key.format.as_raw() as u32,
+                has_alpha: allocation.key.alpha,
+                y_inverted: false,
+                inner: allocation.image.clone(),
+                client_buffer: None,
+            });
+        }
+        // Keep another target's ready result. Only evict when both bounded
+        // preparation slots are occupied and a different capacity is required.
+        if self.shader_compiles.offscreen_ready.len() >= 2 {
+            self.shader_compiles.offscreen_ready.remove(0);
+        }
+        if let Some(failed) = &self.shader_compiles.offscreen_failed {
+            if failed.key == key {
+                match failed.retry_at {
+                    None => return Err(NativeError::Other(failed.error.clone())),
+                    Some(deadline) if std::time::Instant::now() < deadline => {
+                        return Err(self.busy(NativeBusy::OffscreenAllocation))
+                    }
+                    Some(_) => {}
+                }
+            }
+        }
+        if self.shader_compiles.offscreen_pending.is_some() {
+            return Err(self.busy(NativeBusy::OffscreenAllocation));
+        }
+        // Reserve bytes before admitting driver work. The fixed provider also
+        // bounds jobs/results to two across all renderers.
+        let budget = match OffscreenBudget::reserve(key) {
+            Ok(budget) => budget,
+            Err(_) => return Err(self.busy(NativeBusy::OffscreenAllocation)),
+        };
+        let Some(endpoint) = &self.shader_compiles.gpu_endpoint else {
+            return Err(NativeError::Other(
+                "GPU allocation worker unavailable".into(),
+            ));
+        };
+        self.shader_compiles.generation = self
+            .shader_compiles
+            .generation
+            .checked_add(1)
+            .expect("offscreen generation exhausted");
+        let generation = self.shader_compiles.generation;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let ctx = self
+            .renderer
+            .ctx
+            .as_ref()
+            .expect("initialized renderer")
+            .clone();
+        if let Err(rejected) = endpoint.request(
+            Identity {
+                renderer: self.shader_compiles.instance,
+                kind: OFFSCREEN_PREPARATION_KIND,
+                generation,
+                source: String::new(),
+            },
+            Work::Offscreen { ctx, key, budget },
+            cancel.clone(),
+        ) {
+            if rejected.unavailable {
+                return Err(NativeError::Other(
+                    "GPU allocation worker unavailable".into(),
+                ));
+            }
+            return Err(self.busy(NativeBusy::OffscreenAllocation));
+        }
+        self.shader_compiles.offscreen_pending = Some((key, generation, cancel));
+        Err(self.busy(NativeBusy::OffscreenAllocation))
+    }
+
     pub(crate) fn scene_was_deferred(&self) -> bool {
         self.scene_deferred
     }
@@ -1546,6 +1926,8 @@ impl NativeRenderer {
             upscale: TextureFilter::Linear,
             debug: DebugFlags::empty(),
             offscreen_cache: Vec::new(),
+            async_offscreen_scopes: Rc::new(std::cell::Cell::new(0)),
+            compatibility_work: NativeCompatibilityWork::default(),
             shm_cache_registrations: Default::default(),
             shm_cache_imports: 0,
             custom_programs: Default::default(),
@@ -1559,11 +1941,11 @@ impl NativeRenderer {
     /// Limit both count and pixel storage (64 MiB of 32-bit pixels, excluding driver overhead).
     pub fn recycle_offscreen(&mut self, texture: VulkanTexture) {
         const MAX_IMAGES: usize = 8;
-        const MAX_PIXELS: u64 = 16 * 1024 * 1024;
+        const MAX_BYTES: u64 = 64 * 1024 * 1024;
         let Some(ctx) = self.renderer.ctx.as_ref() else {
             return;
         };
-        let pixels = u64::from(texture.width) * u64::from(texture.height);
+        let bytes = texture.inner.allocation_size;
         let usage = vk::ImageUsageFlags::COLOR_ATTACHMENT
             | vk::ImageUsageFlags::SAMPLED
             | vk::ImageUsageFlags::TRANSFER_SRC
@@ -1572,7 +1954,7 @@ impl NativeRenderer {
             || texture.y_inverted
             || !Arc::ptr_eq(ctx, &texture.inner.ctx)
             || !texture.inner.usage.contains(usage)
-            || pixels > MAX_PIXELS
+            || bytes > MAX_BYTES
             || self
                 .offscreen_cache
                 .iter()
@@ -1584,10 +1966,10 @@ impl NativeRenderer {
             || self
                 .offscreen_cache
                 .iter()
-                .map(|t| u64::from(t.width) * u64::from(t.height))
+                .map(|t| t.inner.allocation_size)
                 .sum::<u64>()
-                + pixels
-                > MAX_PIXELS
+                + bytes
+                > MAX_BYTES
         {
             // Do not block the compositor waiting for a cache slot to become idle.
             let Some(idle) = self
@@ -1714,8 +2096,8 @@ impl Renderer for NativeRenderer {
             pending: &mut self.pending,
             completions: &self.completions,
             completion_wakeup: self.completion_wakeup.clone(),
-            async_export: !self.completion_export_required || ctx.supports_sync_file_export,
-            completion_export_required: self.completion_export_required,
+            completion_export_required: self.completion_export_required
+                && ctx.supports_sync_file_export,
             frame,
             target: t.clone(),
             white: self.white.clone(),
@@ -1729,11 +2111,15 @@ impl Renderer for NativeRenderer {
             hdr_damage: Vec::new(),
             shader_compiles: &mut self.shader_compiles,
             scene_deferred: &mut self.scene_deferred,
+            compatibility_work: &mut self.compatibility_work,
         })
     }
     fn wait(&mut self, sync: &SyncPoint) -> Result<(), NativeError> {
-        crate::render_helpers::sync::wait_for_completion(sync)
-            .map_err(|e| NativeError::Other(e.to_string()))
+        crate::render_helpers::sync::require_ready(sync).map_err(|error| {
+            let error = NativeError::from(error);
+            self.scene_deferred |= error.is_busy();
+            error
+        })
     }
 }
 impl Bind<VulkanTexture> for NativeRenderer {
@@ -2122,6 +2508,24 @@ impl ImportDmaWl for NativeRenderer {
         Ok(texture)
     }
 }
+impl NativeRenderer {
+    /// Unlike raw ImportDma, this handle carries the original attachment lease.
+    /// Revalidate the pair at the import boundary; GPU completion retains it if
+    /// the resulting texture is sampled, including by the one-shot close copy.
+    pub(crate) fn import_owned_dmabuf(
+        &mut self,
+        source: &OwnedDmabufSource,
+    ) -> Result<VulkanTexture, NativeError> {
+        if get_dmabuf(&source.owner).ok() != Some(&source.dmabuf) {
+            return Err(NativeError::Other(
+                "source attachment no longer matches its DMA-BUF".into(),
+            ));
+        }
+        let mut texture = self.import_dmabuf(&source.dmabuf, None)?;
+        texture.client_buffer = Some(source.owner.clone());
+        Ok(texture)
+    }
+}
 impl Bind<Dmabuf> for NativeRenderer {
     fn supported_formats(&self) -> Option<FormatSet> {
         Some(self.target_formats.clone())
@@ -2176,6 +2580,8 @@ impl Offscreen<VulkanTexture> for NativeRenderer {
             | vk::ImageUsageFlags::SAMPLED
             | vk::ImageUsageFlags::TRANSFER_SRC
             | vk::ImageUsageFlags::TRANSFER_DST;
+        self.compatibility_work.cold_allocations =
+            self.compatibility_work.cold_allocations.saturating_add(1);
         let limits = unsafe {
             ctx.instance.get_physical_device_image_format_properties(
                 ctx.physical_device,
@@ -2783,12 +3189,30 @@ impl Frame for NativeFrame<'_> {
         )
     }
     fn wait(&mut self, sync: &SyncPoint) -> Result<(), NativeError> {
-        self.frame
-            .wait_for_producer(sync)
-            .map(|_| ())
-            .map_err(|e| NativeError::Other(e.to_string()))
+        match self.frame.wait_for_producer(sync) {
+            Ok(_) => Ok(()),
+            Err(error)
+                if error
+                    .downcast_ref::<crate::render_helpers::sync::ProducerNotReady>()
+                    .is_some() =>
+            {
+                let error = NativeError::from(
+                    *error
+                        .downcast_ref::<crate::render_helpers::sync::ProducerNotReady>()
+                        .unwrap(),
+                );
+                *self.scene_deferred |= error.is_busy();
+                Err(error)
+            }
+            Err(error) => Err(NativeError::Other(error.to_string())),
+        }
     }
     fn finish(mut self) -> Result<SyncPoint, NativeError> {
+        if let Some(error) = self.frame.producer_error() {
+            let error = NativeError::from(error);
+            *self.scene_deferred |= error.is_busy();
+            return Err(error);
+        }
         if self.hdr_output {
             self.frame.encode_hdr_output(&self.hdr_damage)?;
         }
@@ -2819,7 +3243,7 @@ impl Frame for NativeFrame<'_> {
         // method returns. Keep exactly the sampled buffer owners in the GPU
         // completion, including for offscreen targets without a KMS consumer.
         let buffers = sampled_client_buffers(&self.frame);
-        if let (true, Some(buffers)) = (self.async_export, buffers) {
+        if let Some(buffers) = buffers {
             self.frame.retain_client_buffers(buffers);
             let (completion, export_error) = self
                 .frame
@@ -2848,6 +3272,8 @@ impl Frame for NativeFrame<'_> {
             }
             return Ok(sync);
         }
+        self.compatibility_work.unowned_frames =
+            self.compatibility_work.unowned_frames.saturating_add(1);
         self.frame.finish_and_wait()?;
         self.target.current_layout().set(vk::ImageLayout::GENERAL);
         Ok(SyncPoint::signaled())
@@ -3091,6 +3517,23 @@ mod readback_tests {
     use super::super::hardware_tests::setup;
     use super::super::VulkanContext;
     use super::*;
+
+    #[test]
+    fn native_vk_errors_preserve_device_loss_and_memory_identity_without_becoming_busy() {
+        for (error, marker) in [
+            (vk::Result::ERROR_DEVICE_LOST, "DEVICE_LOST"),
+            (vk::Result::ERROR_OUT_OF_HOST_MEMORY, "OUT_OF_HOST_MEMORY"),
+            (
+                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY,
+                "OUT_OF_DEVICE_MEMORY",
+            ),
+        ] {
+            let native = NativeError::from(error);
+            assert!(!native.is_busy());
+            assert!(format!("{native:?}").contains(marker));
+            assert!(native.to_string().contains(&error.to_string()));
+        }
+    }
 
     #[test]
     fn pending_job_is_send_without_moving_the_renderer() {
@@ -3368,6 +3811,250 @@ mod backpressure_tests {
             &[Rectangle::from_size(size)],
         )?;
         frame.finish()
+    }
+
+    #[test]
+    #[ignore = "requires real DRM render node and Vulkan"]
+    fn cold_frame_allocation_defers_to_worker_and_warm_cache_never_allocates_on_owner() {
+        let (renderer, _, _) = setup();
+        let mut native = NativeRenderer::new(renderer).unwrap();
+        native.set_completion_export_required(false);
+        let gate = native.gate_gpu_preparation_for_test().unwrap();
+        let before = native.compatibility_work();
+        let start = std::time::Instant::now();
+        {
+            let _scope = native.async_offscreen_scope();
+            native.begin_scene();
+            assert!(matches!(
+                native.create_offscreen_capacity(Fourcc::Abgr8888, (83, 47).into()),
+                Err(NativeError::Busy(NativeBusy::OffscreenAllocation))
+            ));
+            assert!(native.scene_was_deferred());
+        }
+        assert!(start.elapsed() < std::time::Duration::from_millis(250));
+        assert_eq!(
+            native.compatibility_work().cold_allocations,
+            before.cold_allocations
+        );
+        drop(gate);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while native.shader_compiles.offscreen_ready.is_empty() {
+            native.poll_preparation_for_test().unwrap();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let _scope = native.async_offscreen_scope();
+        native.begin_scene();
+        let texture = native
+            .create_offscreen_capacity(Fourcc::Abgr8888, (83, 47).into())
+            .unwrap();
+        assert!(texture.width >= 83 && texture.height >= 47);
+        let image = Arc::downgrade(&texture.inner);
+        native.recycle_offscreen(texture);
+        let warmed = native
+            .create_offscreen_capacity(Fourcc::Abgr8888, (83, 47).into())
+            .unwrap();
+        assert!(Arc::ptr_eq(&image.upgrade().unwrap(), &warmed.inner));
+        assert!(!native.scene_was_deferred());
+        assert_eq!(
+            native.compatibility_work().cold_allocations,
+            before.cold_allocations
+        );
+    }
+
+    #[test]
+    #[ignore = "requires real DRM render node and Vulkan"]
+    fn dynamic_capacity_targets_keep_rendering_before_resize_finishes() {
+        use smithay::backend::renderer::element::Kind;
+
+        use crate::render_helpers::offscreen::NativeOffscreenBuffer;
+        use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
+
+        let (renderer, _, _) = setup();
+        let mut native = NativeRenderer::new(renderer).unwrap();
+        native.set_completion_export_required(false);
+        native
+            .prepare_output_format_for_test(Fourcc::Abgr8888)
+            .unwrap();
+        let buffers = [
+            NativeOffscreenBuffer::default(),
+            NativeOffscreenBuffer::default(),
+        ];
+        let colors = [Color32F::new(1., 0., 0., 1.), Color32F::new(0., 0., 1., 1.)];
+        let mut source = [
+            SolidColorBuffer::new((1., 1.), colors[0]),
+            SolidColorBuffer::new((1., 1.), colors[1]),
+        ];
+        let mut presented = [0usize; 2];
+        let mut first_ready = [None; 2];
+        let before = native.compatibility_work();
+        let _scope = native.async_offscreen_scope();
+        // Both geometries cross capacity boundaries while still changing.
+        // A result for the other target must not be discarded every frame.
+        for step in 0..128 {
+            native.poll_preparation_for_test().unwrap();
+            for target in 0..2 {
+                let width = if target == 0 {
+                    120 + step * 3
+                } else {
+                    380 + step * 2
+                };
+                let height = if target == 0 { 70 + step } else { 290 + step };
+                source[target].resize((f64::from(width), f64::from(height)));
+                let element = SolidColorRenderElement::from_buffer(
+                    &source[target],
+                    (0., 0.),
+                    1.,
+                    Kind::Unspecified,
+                );
+                native.begin_scene();
+                match buffers[target].render(&mut native, 1.0.into(), &[element]) {
+                    Ok((texture, sync, geometry, _, _)) => {
+                        assert_eq!(geometry.size, (width, height).into());
+                        assert!(texture.width >= width as u32 && texture.height >= height as u32);
+                        presented[target] += 1;
+                        first_ready[target].get_or_insert(step);
+                        // Explicit fixture readback is outside the owner admission
+                        // measurement and proves the larger texture's visible UVs.
+                        sync.wait().unwrap();
+                        let mapping = native
+                            .copy_texture(
+                                &texture,
+                                Rectangle::from_size((width, height).into()),
+                                Fourcc::Abgr8888,
+                            )
+                            .unwrap();
+                        let pixels = native.map_texture(&mapping).unwrap();
+                        let expected = if target == 0 {
+                            [255, 0, 0, 255]
+                        } else {
+                            [0, 0, 255, 255]
+                        };
+                        assert_eq!(&pixels[..4], &expected);
+                        assert_eq!(&pixels[pixels.len() - 4..], &expected);
+                    }
+                    Err(error) => {
+                        assert!(NativeError::is_backpressure(error.as_ref()), "{error:#}")
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(
+            first_ready
+                .iter()
+                .all(|step| step.is_some_and(|step| step < 64)),
+            "{first_ready:?}"
+        );
+        assert!(presented.iter().all(|count| *count > 64), "{presented:?}");
+        assert!(native.shader_compiles.offscreen_ready.len() <= 2);
+        assert_eq!(
+            native.compatibility_work().cold_allocations,
+            before.cold_allocations
+        );
+    }
+
+    #[test]
+    #[ignore = "requires real DRM render node and Vulkan"]
+    fn unexportable_producer_defers_without_wait_or_submission_and_retries_when_ready() {
+        use smithay::backend::renderer::sync::{Fence, Interrupted};
+
+        #[derive(Debug)]
+        struct Producer(Arc<AtomicBool>);
+
+        impl Fence for Producer {
+            fn is_signaled(&self) -> bool {
+                self.0.load(Ordering::Acquire)
+            }
+            fn wait(&self) -> Result<(), Interrupted> {
+                panic!("an unexportable producer must never block the renderer owner")
+            }
+            fn is_exportable(&self) -> bool {
+                false
+            }
+            fn export(&self) -> Option<std::os::fd::OwnedFd> {
+                None
+            }
+        }
+
+        fn pixels(native: &mut NativeRenderer, target: &VulkanTexture) -> Vec<u8> {
+            let mapping = native
+                .copy_texture(
+                    target,
+                    Rectangle::from_size(target.size()),
+                    Fourcc::Abgr8888,
+                )
+                .unwrap();
+            native.map_texture(&mapping).unwrap().to_vec()
+        }
+
+        let (renderer, _, _) = setup();
+        let mut native = NativeRenderer::new(renderer).unwrap();
+        native.set_completion_export_required(false);
+        native
+            .prepare_output_format_for_test(Fourcc::Abgr8888)
+            .unwrap();
+        let mut target = native
+            .create_buffer(Fourcc::Abgr8888, (8, 4).into())
+            .unwrap();
+        clear(&mut native, &mut target).unwrap().wait().unwrap();
+        let previous = pixels(&mut native, &target);
+        let ready = Arc::new(AtomicBool::new(false));
+        let producer = SyncPoint::from(Producer(ready.clone()));
+        let waits = super::super::owner_fence_wait_calls_for_test();
+
+        native.begin_scene();
+        assert!(matches!(
+            Renderer::wait(&mut native, &producer),
+            Err(NativeError::Busy(NativeBusy::ProducerFence))
+        ));
+        assert!(native.scene_was_deferred());
+        native.begin_scene();
+        {
+            let mut framebuffer = native.bind(&mut target).unwrap();
+            let mut frame = native
+                .render(&mut framebuffer, (8, 4).into(), Transform::Normal)
+                .unwrap();
+            frame
+                .clear(
+                    Color32F::new(1., 0., 0., 1.),
+                    &[Rectangle::from_size((8, 4).into())],
+                )
+                .unwrap();
+            assert!(matches!(
+                frame.wait(&producer),
+                Err(NativeError::Busy(NativeBusy::ProducerFence))
+            ));
+            // Simulate a caller ignoring an acquisition error. A later ready
+            // dependency must not retroactively validate this aborted frame.
+            ready.store(true, Ordering::Release);
+            frame.wait(&SyncPoint::signaled()).unwrap();
+            assert!(matches!(
+                frame.finish(),
+                Err(NativeError::Busy(NativeBusy::ProducerFence))
+            ));
+        }
+        assert_eq!(super::super::owner_fence_wait_calls_for_test(), waits);
+        assert!(native.scene_was_deferred());
+        assert_eq!(pixels(&mut native, &target), previous);
+
+        native.begin_scene();
+        Renderer::wait(&mut native, &producer).unwrap();
+        let mut framebuffer = native.bind(&mut target).unwrap();
+        let mut frame = native
+            .render(&mut framebuffer, (8, 4).into(), Transform::Normal)
+            .unwrap();
+        frame.wait(&producer).unwrap();
+        frame
+            .clear(
+                Color32F::new(1., 0., 0., 1.),
+                &[Rectangle::from_size((8, 4).into())],
+            )
+            .unwrap();
+        frame.finish().unwrap().wait().unwrap();
+        drop(framebuffer);
+        assert!(!native.scene_was_deferred());
+        assert_eq!(pixels(&mut native, &target), [255, 0, 0, 255].repeat(32));
     }
 
     #[test]
@@ -3679,7 +4366,7 @@ mod backpressure_tests {
             };
             assert_eq!(
                 error.to_string(),
-                vk::Result::ERROR_TOO_MANY_OBJECTS.to_string(),
+                NativeError::from(vk::Result::ERROR_TOO_MANY_OBJECTS).to_string(),
                 "retirement must preserve the original export error"
             );
             assert!(!error.is_busy());
@@ -4391,5 +5078,70 @@ mod hdr_damage_tests {
             .map(VulkanTexture::image)
             .collect();
         assert_eq!(after_scratch, before_scratch);
+    }
+}
+
+#[cfg(test)]
+mod capture_deferred_tests {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    use super::CaptureDeferredState;
+
+    struct Scope<'a> {
+        current: &'a mut bool,
+        deferred: CaptureDeferredState,
+    }
+    impl<'a> Scope<'a> {
+        fn new(current: &'a mut bool) -> Self {
+            let deferred = CaptureDeferredState::begin(current);
+            Self { current, deferred }
+        }
+    }
+    impl Drop for Scope<'_> {
+        fn drop(&mut self) {
+            self.deferred.restore(self.current);
+        }
+    }
+
+    #[test]
+    fn capture_defer_scope_is_local_and_merges_on_normal_error_and_unwind() {
+        for inherited in [false, true] {
+            for local in [false, true] {
+                for unwind in [false, true] {
+                    let mut current = inherited;
+                    let result = catch_unwind(AssertUnwindSafe(|| {
+                        let scope = Scope::new(&mut current);
+                        assert!(
+                            !*scope.current,
+                            "a previous output deferral is not this capture's failure"
+                        );
+                        *scope.current = local;
+                        if unwind {
+                            panic!("injected capture unwind");
+                        }
+                        Err::<(), ()>(())
+                    }));
+                    assert_eq!(result.is_err(), unwind);
+                    assert_eq!(current, inherited || local);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn nested_capture_defer_scopes_keep_inner_outer_and_parent_failures() {
+        for inherited in [false, true] {
+            let mut current = inherited;
+            {
+                let outer = Scope::new(&mut current);
+                *outer.current = true;
+                {
+                    let inner = Scope::new(outer.current);
+                    assert!(!*inner.current);
+                }
+                assert!(*outer.current);
+            }
+            assert!(current);
+        }
     }
 }

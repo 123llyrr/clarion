@@ -218,10 +218,11 @@ impl<J, T, R> Drop for RecoveryWorker<J, T, R> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::mpsc;
     use std::thread::ThreadId;
     use std::time::Instant;
+
+    use super::*;
 
     #[derive(Debug)]
     struct DroppedOn(mpsc::Sender<ThreadId>);

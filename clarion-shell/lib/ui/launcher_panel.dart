@@ -31,6 +31,8 @@ class _LauncherPanelState extends State<LauncherPanel> {
   double _wheelDelta = 0;
   String? _selectedId;
   List<String> _previousIds = const [];
+  List<DesktopApp>? _idCatalogue;
+  List<String> _catalogueIds = const [];
   int _columns = 1;
   int _capacity = 1;
   int _page = 0;
@@ -41,9 +43,34 @@ class _LauncherPanelState extends State<LauncherPanel> {
   int _animationRevision = 0;
   ({int page, String selectedId})? _programmatic;
 
-  List<DesktopApp> get _apps => widget.controller.apps
-      .where((app) => app.matches(_query.text.trim()))
-      .toList();
+  List<DesktopApp>? _filteredCatalogue;
+  List<DesktopApp> _filteredApps = const [];
+  String? _filteredQuery;
+  late Object _controllerProjection;
+
+  List<DesktopApp> get _apps {
+    final catalogue = widget.controller.apps;
+    final query = _query.text.trim();
+    if (!identical(catalogue, _filteredCatalogue) || query != _filteredQuery) {
+      _filteredCatalogue = catalogue;
+      _filteredQuery = query;
+      _filteredApps = query.isEmpty
+          ? catalogue
+          : catalogue.where((app) => app.matches(query)).toList();
+    }
+    return _filteredApps;
+  }
+
+  // Window, clock, tray and slider updates do not change the launcher. Compare
+  // the values it displays instead of rebuilding and rescanning every tile.
+  Object _projectController() => (
+    apps: widget.controller.apps,
+    error: widget.controller.error,
+    launching: widget.controller.busy.contains('launch'),
+    connected: widget.controller.connected,
+    reduced: widget.controller.reduceMotion,
+    style: widget.controller.shellStyle,
+  );
 
   bool get _reduced =>
       widget.controller.reduceMotion || MediaQuery.disableAnimationsOf(context);
@@ -52,6 +79,7 @@ class _LauncherPanelState extends State<LauncherPanel> {
   void initState() {
     super.initState();
     _searchFocus.onKeyEvent = _key;
+    _controllerProjection = _projectController();
     widget.controller.addListener(_controllerChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _searchFocus.requestFocus();
@@ -59,7 +87,10 @@ class _LauncherPanelState extends State<LauncherPanel> {
   }
 
   void _controllerChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    final projection = _projectController();
+    if (_controllerProjection == projection) return;
+    setState(() => _controllerProjection = projection);
   }
 
   @override
@@ -68,6 +99,7 @@ class _LauncherPanelState extends State<LauncherPanel> {
     if (oldWidget.controller != widget.controller) {
       oldWidget.controller.removeListener(_controllerChanged);
       widget.controller.addListener(_controllerChanged);
+      _controllerProjection = _projectController();
     }
   }
 
@@ -84,7 +116,11 @@ class _LauncherPanelState extends State<LauncherPanel> {
   }
 
   void _reconcile(List<DesktopApp> apps, int columns, int capacity) {
-    final ids = apps.map((app) => app.id).toList();
+    if (!identical(apps, _idCatalogue)) {
+      _idCatalogue = apps;
+      _catalogueIds = apps.map((app) => app.id).toList();
+    }
+    final ids = _catalogueIds;
     _columns = columns;
     if (_capacity == capacity && listEquals(ids, _previousIds)) return;
     _capacity = capacity;

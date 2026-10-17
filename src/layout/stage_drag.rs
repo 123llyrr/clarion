@@ -1,8 +1,9 @@
 //! Apply pure Stage restoration intents to the physical Tile and scene pose.
-use super::*;
 use clarion_core::stage_drag::{
     StageCapture, StageDragAction, StageRestoreIntent, StageRestorePosition,
 };
+
+use super::*;
 
 impl<W: LayoutElement> Layout<W> {
     pub(super) fn stage_drag_source_workspace(&self) -> Option<WorkspaceId> {
@@ -160,8 +161,12 @@ impl<W: LayoutElement> Layout<W> {
             if let MonitorSet::NoOutputs { workspaces } = &mut self.monitor_set {
                 if workspaces.is_empty() {
                     workspaces.push(
-                        Workspace::new_no_outputs(self.clock.clone(), self.options.clone())
-                            .with_core(self.core.clone()),
+                        Workspace::new_no_outputs(
+                            self.clock.clone(),
+                            self.options.clone(),
+                            self.scene_resources.clone(),
+                        )
+                        .with_core(self.core.clone()),
                     );
                 }
             }
@@ -286,8 +291,12 @@ impl<W: LayoutElement> Layout<W> {
             MonitorSet::NoOutputs { workspaces } => {
                 if workspaces.is_empty() {
                     workspaces.push(
-                        Workspace::new_no_outputs(self.clock.clone(), self.options.clone())
-                            .with_core(self.core.clone()),
+                        Workspace::new_no_outputs(
+                            self.clock.clone(),
+                            self.options.clone(),
+                            self.scene_resources.clone(),
+                        )
+                        .with_core(self.core.clone()),
                     );
                 }
                 let idx = workspaces

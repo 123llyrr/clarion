@@ -12,8 +12,7 @@ use crate::bsp::BspSnapshot;
 use crate::geometry::{Rect, Size};
 use crate::layout::LayoutMode;
 use crate::move_controls::{MoveControls, MovePlacement, MoveStart, MoveStartIntent};
-use crate::policy_memory::Width;
-use crate::policy_memory::{LayoutHistory, ScrollingSnapshot};
+use crate::policy_memory::{LayoutHistory, ScrollingSnapshot, Width};
 use crate::workspace_state::{
     CanvasTransition, MinimizeIntent, MinimizeRestore, RestoreColumn, SpaceInteraction,
     SpaceLayerFocus,

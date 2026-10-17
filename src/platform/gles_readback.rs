@@ -183,12 +183,14 @@ fn capture_len(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::fs::OpenOptions;
+    use std::sync::Arc;
+
     use smithay::backend::allocator::gbm::GbmDevice;
     use smithay::backend::egl::{EGLContext, EGLDisplay};
     use smithay::backend::renderer::ImportMem;
-    use std::fs::OpenOptions;
-    use std::sync::Arc;
+
+    use super::*;
 
     fn setup(with_fences: bool) -> GlesRenderer {
         let path = std::env::var("CLARION_GLES_TEST_NODE")

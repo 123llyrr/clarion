@@ -4,11 +4,11 @@ use clarion_config::{BlockOutFrom, Config, LayerRule, Workspace, WorkspaceName};
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::element::Element;
 use smithay::output::Scale as OutputScale;
-use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::{
-    zwlr_layer_shell_v1::Layer, zwlr_layer_surface_v1::Anchor,
-};
+use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer;
+use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::Anchor;
 use smithay::utils::{Logical, Physical, Point, Rectangle, Scale};
-use wayland_client::protocol::{wl_region::WlRegion, wl_subsurface::WlSubsurface};
+use wayland_client::protocol::wl_region::WlRegion;
+use wayland_client::protocol::wl_subsurface::WlSubsurface;
 
 use super::client::{ClientId, LayerConfigureProps};
 use super::Fixture;

@@ -1,10 +1,9 @@
 //! Lossless edits using the same KDL parser as the compositor. Untouched source stays intact.
-use anyhow::{Context, Result};
-use knuffel::{
-    ast::{Document, Literal, SpannedNode},
-    span::Span,
-};
 use std::ops::Range;
+
+use anyhow::{Context, Result};
+use knuffel::ast::{Document, Literal, SpannedNode};
+use knuffel::span::Span;
 
 type Node = SpannedNode<Span>;
 

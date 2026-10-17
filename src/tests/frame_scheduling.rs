@@ -1,5 +1,8 @@
+use std::cell::Cell;
+use std::rc::Rc;
 use std::time::Duration;
-use std::{cell::Cell, rc::Rc};
+
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 
 use super::Fixture;
 use crate::backend::tty::{
@@ -10,7 +13,6 @@ use crate::backend::RenderResult;
 use crate::compositor::{PointerVisibility, RedrawState};
 use crate::frame_clock::FrameClock;
 use crate::utils::get_monotonic_time;
-use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 
 fn pending_empty_frame(
     estimated_delay: Duration,
@@ -1052,4 +1054,65 @@ fn hidden_animated_cursor_stops_estimated_vblank_redraw_loop() {
         );
         state.clarion.event_loop.remove(token);
     }
+}
+
+#[test]
+fn scene_effect_failure_wakes_one_owner_frame_after_static_render_without_input() {
+    use crate::scene::window_resources::EffectRetirements;
+    let mut fixture = Fixture::new();
+    fixture.add_output(1, (1920, 1080));
+    fixture.add_output(2, (1280, 720));
+    let output = fixture.clarion_output(1);
+    let registration = fixture
+        .clarion()
+        .scene_resources
+        .allocator()
+        .windows
+        .allocate();
+    let lease = registration.lease();
+    let state = fixture.clarion().output_state.get_mut(&output).unwrap();
+    state.schedule.test_set_redraw(RedrawState::Idle);
+    state.schedule.set_animations_remain(false);
+    let second = fixture.clarion_output(2);
+    fixture
+        .clarion()
+        .output_state
+        .get_mut(&second)
+        .unwrap()
+        .schedule
+        .test_set_redraw(RedrawState::Idle);
+    lease.request_effect_retirement(EffectRetirements {
+        wobble: true,
+        genie: false,
+    });
+    // Rendering happened after the false animation query. Cleanup must not
+    // depend on a pointer event or an already-running numeric animation.
+    fixture.clarion().finish_scene_effects();
+    assert!(matches!(
+        fixture.clarion().output_state[&output]
+            .schedule
+            .redraw_state(),
+        RedrawState::Queued
+    ));
+    assert!(matches!(
+        fixture.clarion().output_state[&second]
+            .schedule
+            .redraw_state(),
+        RedrawState::Queued
+    ));
+    assert!(lease.take_effect_retirements().wobble);
+    fixture
+        .clarion()
+        .output_state
+        .get_mut(&output)
+        .unwrap()
+        .schedule
+        .test_set_redraw(RedrawState::Idle);
+    fixture.clarion().finish_scene_effects();
+    assert!(matches!(
+        fixture.clarion().output_state[&output]
+            .schedule
+            .redraw_state(),
+        RedrawState::Idle
+    ));
 }

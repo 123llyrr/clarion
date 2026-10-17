@@ -401,8 +401,9 @@ pub fn a11y_node() -> accesskit::Node {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::time::Duration;
+
+    use super::*;
 
     #[test]
     fn dialog_reversal_preserves_motion_and_repeated_requests_are_idempotent() {

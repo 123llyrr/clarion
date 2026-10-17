@@ -1,6 +1,8 @@
-use super::Fixture;
-use clarion_config::Config;
 use std::time::Duration;
+
+use clarion_config::Config;
+
+use super::Fixture;
 
 fn candidate() -> clarion_config::Outputs {
     Config::parse_mem("output \"headless-1\" { scale 2; transform \"90\"; position x=20 y=40; }")

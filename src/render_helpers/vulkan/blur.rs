@@ -1,15 +1,14 @@
 //! Native dual-Kawase blur with reusable intermediate images.
-use super::{
-    native::{NativeError, NativeFrame, NativeRenderer},
-    VulkanTexture,
-};
-use crate::render_helpers::blur::BlurOptions;
-use smithay::backend::allocator::Fourcc;
-use smithay::backend::renderer::{
-    sync::SyncPoint, Bind, Color32F, ContextId, Frame, Offscreen, Renderer, Texture,
-};
-use smithay::utils::{Buffer, Rectangle, Size, Transform};
 use std::sync::Arc;
+
+use smithay::backend::allocator::Fourcc;
+use smithay::backend::renderer::sync::SyncPoint;
+use smithay::backend::renderer::{Bind, Color32F, ContextId, Frame, Offscreen, Renderer, Texture};
+use smithay::utils::{Buffer, Rectangle, Size, Transform};
+
+use super::native::{NativeError, NativeFrame, NativeRenderer};
+use super::VulkanTexture;
+use crate::render_helpers::blur::BlurOptions;
 
 const MAX_RETAINED_OUTPUTS: usize = 8;
 const MAX_RETAINED_OUTPUT_BYTES: u64 = 64 * 1024 * 1024;

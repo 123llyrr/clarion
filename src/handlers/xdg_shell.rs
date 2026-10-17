@@ -987,17 +987,10 @@ impl XdgShellHandler for State {
         if !self.clarion.shutting_down {
             let blocker = transaction.blocker();
             self.backend
-                .with_renderer_for_output(output.as_ref(), |renderer| match renderer {
-                    crate::render_helpers::renderer::AnyRenderer::Gles(gles) => {
-                        self.clarion
-                            .layout
-                            .start_close_animation_for_window(gles, &window, blocker);
-                    }
-                    crate::render_helpers::renderer::AnyRenderer::Native(native) => {
-                        self.clarion
-                            .layout
-                            .start_close_animation_for_window_native(native, &window, blocker);
-                    }
+                .with_renderer_for_output(output.as_ref(), |renderer| {
+                    self.clarion
+                        .layout
+                        .start_close_animation_for_window(renderer, &window, blocker);
                 });
         }
 

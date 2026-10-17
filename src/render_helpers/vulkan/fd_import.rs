@@ -114,9 +114,10 @@ fn with_budget_and_probe<T, E>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::cell::Cell;
     use std::os::fd::{AsRawFd, FromRawFd};
+
+    use super::*;
 
     fn descriptor() -> OwnedFd {
         std::fs::File::open("/dev/null").unwrap().into()

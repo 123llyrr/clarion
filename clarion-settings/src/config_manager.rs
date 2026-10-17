@@ -1,10 +1,12 @@
-use crate::kdl_edit::Editor;
-use anyhow::{Context, Result};
-use clarion_config::{read_config_file, Config};
 use std::fs;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result};
+use clarion_config::{read_config_file, Config};
+
+use crate::kdl_edit::Editor;
 
 const VALIDATION_DEBOUNCE: Duration = Duration::from_millis(300);
 
@@ -485,8 +487,9 @@ impl ConfigManager {
     }
 
     pub fn poll_preview(&mut self, ipc: &crate::ipc::IpcClient) -> Option<Result<String>> {
-        use crate::output_preview::Phase;
         use clarion_ipc::Response;
+
+        use crate::output_preview::Phase;
         let preview = self.preview.as_mut()?;
         let (result, keep, id, save_error) = match &preview.phase {
             Phase::Ready { deadline, .. } => {
@@ -1514,7 +1517,8 @@ fn update_keyboard_repeat(
 }
 
 fn update_input_number(source: &str, device: &str, name: &str, value: &str) -> Result<String> {
-    use knuffel::{ast::SpannedNode, span::Span};
+    use knuffel::ast::SpannedNode;
+    use knuffel::span::Span;
 
     // Config validation rejects duplicate local input/device nodes before
     // this edit runs. Includes merge separately; never rewrite their contents.
@@ -2414,10 +2418,8 @@ mod tests {
         crate::ipc::IpcClient,
         std::sync::Arc<std::sync::atomic::AtomicUsize>,
     ) {
-        use std::sync::{
-            atomic::{AtomicUsize, Ordering},
-            Arc,
-        };
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
         let cancellations = Arc::new(AtomicUsize::new(0));
         let calls = cancellations.clone();
         let ipc = crate::ipc::IpcClient::scripted_for_test(move |request| {

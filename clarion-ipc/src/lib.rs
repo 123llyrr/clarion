@@ -1,8 +1,8 @@
 //! Types for communicating with clarion via IPC.
 //!
-//! After connecting to the clarion socket, you can send [`Request`]s. Clarion will process them one by
-//! one, in order, and to each request it will respond with a single [`Reply`], which is a `Result`
-//! wrapping a [`Response`].
+//! After connecting to the clarion socket, you can send [`Request`]s. Clarion will process them one
+//! by one, in order, and to each request it will respond with a single [`Reply`], which is a
+//! `Result` wrapping a [`Response`].
 //!
 //! If you send a [`Request::EventStream`], clarion will *stop* reading subsequent [`Request`]s, and
 //! will start continuously writing compositor [`Event`]s to the socket. If you'd like to read an
@@ -29,8 +29,8 @@
 //! 3. Clarion will respond with a single line JSON-formatted [`Reply`].
 //! 4. You can keep writing [`Request`]s, each on a single line, and read [`Reply`]s, also each on a
 //!    separate line.
-//! 5. After you request an event stream, clarion will keep responding with JSON-formatted [`Event`]s,
-//!    on a single line each.
+//! 5. After you request an event stream, clarion will keep responding with JSON-formatted
+//!    [`Event`]s, on a single line each.
 //!
 //! ## Backwards compatibility
 //!
@@ -1679,8 +1679,8 @@ pub struct Timestamp {
 /// Position- and size-related properties of a [`Window`].
 ///
 /// Optional properties will be unset for some windows, do not rely on them being present. Whether
-/// some optional properties are present or absent for certain window types may change across clarion
-/// releases.
+/// some optional properties are present or absent for certain window types may change across
+/// clarion releases.
 ///
 /// All sizes and positions are in *logical pixels* unless stated otherwise. Logical sizes may be
 /// fractional. For example, at 1.25 monitor scale, a 2-physical-pixel-wide window border is 1.6
@@ -2578,8 +2578,9 @@ mod tests {
 
 #[cfg(all(test, feature = "clap"))]
 mod canvas_cli_tests {
-    use super::*;
     use clap::Parser;
+
+    use super::*;
 
     #[derive(Parser)]
     struct Command {

@@ -6,13 +6,15 @@
 //! case checks cold target admission without submitting the incomplete scene.
 mod gpu_producer;
 
-use super::*;
+use std::os::fd::{AsFd, BorrowedFd};
+use std::time::{Duration, Instant};
+
 use smithay::backend::allocator::dmabuf::{Dmabuf, DmabufFlags, DmabufSyncFlags};
 use smithay::backend::drm::NodeType;
 use smithay::backend::renderer::ImportDma;
 use smithay::reexports::drm;
-use std::os::fd::{AsFd, BorrowedFd};
-use std::time::{Duration, Instant};
+
+use super::*;
 
 struct Card(std::fs::File);
 impl AsFd for Card {

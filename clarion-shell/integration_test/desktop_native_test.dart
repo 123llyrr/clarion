@@ -218,6 +218,97 @@ Future<_Pixels> _capture(String name) async {
   }
 }
 
+Future<List<Map<String, dynamic>>> _marqueeCleanup(WidgetTester tester) async {
+  final binding = tester.binding;
+  final propagate = binding.shouldPropagateDevicePointerEvents;
+  // Route fixture events through the public device-event path to avoid the
+  // live test binding painting pointer crosshairs into the pixels under test.
+  // These remain synthetic events; no Wayland input is generated here.
+  binding.shouldPropagateDevicePointerEvents = true;
+  void send(PointerEvent event) => binding.handlePointerEventForSource(event);
+  try {
+    final view = _desktopFlutterView(tester);
+    final size = view.physicalSize / view.devicePixelRatio;
+    final region = Rect.fromLTRB(
+      size.width * .2,
+      size.height * .25,
+      size.width * .5,
+      size.height * .55,
+    );
+    final rectangle = find.byKey(const ValueKey('desktop-selection-rectangle'));
+    final results = <Map<String, dynamic>>[];
+    for (final ending in ['release', 'cancel', 'view-focus-loss']) {
+      final baseline = await _capture('marquee-$ending-before');
+      final expected = baseline.region(region.inflate(2));
+      final id = _nextPointer++;
+      final pointer = TestPointer(id, PointerDeviceKind.mouse, id);
+      send(pointer.addPointer(location: region.topLeft, view: view));
+      send(pointer.down(region.topLeft, view: view));
+      send(pointer.move(region.bottomRight, view: view));
+      await tester.pumpAndSettle();
+      expect(rectangle, findsOneWidget);
+      var painted = 0;
+      var drawAttempts = 0;
+      do {
+        await tester.pump(const Duration(milliseconds: 50));
+        expect(rectangle, findsOneWidget);
+        final drawn = await _capture('marquee-$ending-drawn-${drawAttempts++}');
+        painted = _changedPixels(expected, drawn.region(region.inflate(2)));
+      } while (painted <= region.width * region.height * .8 &&
+          drawAttempts < 20);
+      expect(painted, greaterThan(region.width * region.height * .8));
+
+      if (ending == 'view-focus-loss') {
+        tester.binding.handleViewFocusChanged(
+          ui.ViewFocusEvent(
+            viewId: view.viewId,
+            state: ui.ViewFocusState.unfocused,
+            direction: ui.ViewFocusDirection.undefined,
+          ),
+        );
+      } else if (ending == 'cancel') {
+        send(pointer.cancel(view: view));
+      } else {
+        send(pointer.up(view: view));
+      }
+      await tester.pumpAndSettle();
+      expect(rectangle, findsNothing);
+      // Observe actual presented pixels, including the final transparent frame.
+      // Waiting for presentation sends no further pointer or keyboard input.
+      var remaining = -1;
+      var attempts = 0;
+      do {
+        await tester.pump(const Duration(milliseconds: 50));
+        final cleared = await _capture('marquee-$ending-cleared-${attempts++}');
+        remaining = _changedPixels(expected, cleared.region(region.inflate(2)));
+      } while (remaining != 0 && attempts < 20);
+      expect(remaining, 0, reason: '$ending left presented selection pixels');
+      await tester.pump(const Duration(seconds: 3));
+      final idle = await _capture('marquee-$ending-idle');
+      expect(_changedPixels(expected, idle.region(region.inflate(2))), 0);
+      if (ending == 'view-focus-loss') {
+        send(pointer.up(view: view));
+        await tester.pumpAndSettle();
+        expect(rectangle, findsNothing);
+      }
+      send(pointer.removePointer(view: view));
+      results.add({
+        'ending': ending,
+        'paintedPixels': painted,
+        'drawPresentationAttempts': drawAttempts,
+        'remainingPixels': remaining,
+        'presentationAttempts': attempts,
+        'idleSeconds': 3,
+        'capture': idle.capture,
+        'input': 'tester injected mouse; native Wayland surface and screencopy',
+      });
+    }
+    return results;
+  } finally {
+    binding.shouldPropagateDevicePointerEvents = propagate;
+  }
+}
+
 List<double> _rect(Rect rect) => [rect.left, rect.top, rect.width, rect.height];
 
 int _checksum(List<int> bytes) {
@@ -254,8 +345,15 @@ Map<String, dynamic> _ink(List<int> bytes) {
   return {'colours': colours.length, 'inkPixels': bytes.length ~/ 4 - common};
 }
 
+Finder _menuItems() {
+  final desktop = find.byKey(const ValueKey('desktop-context-menu-0'));
+  return desktop.evaluate().isNotEmpty
+      ? desktop
+      : find.byWidgetPredicate((widget) => widget is PopupMenuEntry);
+}
+
 Rect _menuRect(WidgetTester tester) {
-  final items = find.byWidgetPredicate((widget) => widget is PopupMenuEntry);
+  final items = _menuItems();
   expect(items, findsWidgets);
   Rect? bounds;
   for (final element in items.evaluate()) {
@@ -390,7 +488,7 @@ Future<_PresentedPixels> _presentedMenu(
   name,
   baseline,
   _menuRect(tester),
-  _routeTexts(find.byWidgetPredicate((widget) => widget is PopupMenuEntry)),
+  _routeTexts(_menuItems()),
 );
 
 Rect _dialogRect(WidgetTester tester) {
@@ -1174,6 +1272,7 @@ void main() {
       layout,
       evidence['menuContinuity'] as Map<String, dynamic>,
     );
+    evidence['marqueeCleanup'] = await _marqueeCleanup(tester);
     evidence['ignoredUnattachedDevicePackets'] = deviceFilter.ignored;
     evidence['passed'] = true;
     evidence['status'] = 'passed';

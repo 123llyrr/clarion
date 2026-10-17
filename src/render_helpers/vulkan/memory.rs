@@ -1,12 +1,14 @@
 //! Native CPU-memory texture import. No EGL context or GLES upload is involved.
-use super::{
-    allocate_texture, device::VulkanContext, frame::color_range, VulkanRenderer, VulkanTexture,
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc};
+
 use ash::vk;
 use smithay::backend::allocator::Fourcc;
 use smithay::utils::{Buffer, Rectangle};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc};
+
+use super::device::VulkanContext;
+use super::frame::color_range;
+use super::{allocate_texture, VulkanRenderer, VulkanTexture};
 
 // Includes cancelled or timed-out jobs whose GPU allocations are still live.
 // The screenshot UI applies a smaller admission quota before submitting work.

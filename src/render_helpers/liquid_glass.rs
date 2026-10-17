@@ -1,8 +1,10 @@
 //! Bound each disconnected protocol glass surface independently. This keeps a
 //! menu plus popup from capturing/shading the whole expanded Shell surface.
-use crate::utils::region::TransformedRegion;
-use smithay::utils::{Logical, Rectangle};
 use std::sync::Arc;
+
+use smithay::utils::{Logical, Rectangle};
+
+use crate::utils::region::TransformedRegion;
 
 type GlassRegion = (Rectangle<f64, Logical>, f32, TransformedRegion);
 
@@ -82,8 +84,9 @@ pub(super) fn split_regions(region: &TransformedRegion) -> Option<Vec<GlassRegio
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use smithay::utils::Point;
+
+    use super::*;
     #[test]
     fn menu_and_rounded_panel_have_separate_bounded_captures() {
         let region = TransformedRegion {

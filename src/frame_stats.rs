@@ -14,6 +14,7 @@ use crate::frame_clock::FrameClock;
 
 const CAPACITY: usize = 240;
 
+#[derive(Clone)]
 struct Samples {
     values: [f64; CAPACITY],
     len: usize,
@@ -65,6 +66,7 @@ impl Samples {
     }
 }
 
+#[derive(Clone)]
 struct RecordRing<T: Copy> {
     values: [Option<T>; CAPACITY],
     len: usize,
@@ -104,7 +106,7 @@ impl<T: Copy> RecordRing<T> {
 type LongIntervalSamples = RecordRing<LongPresentationInterval>;
 type MainThreadCpuSamples = RecordRing<MainThreadCpuSample>;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct GpuSamples {
     samples: RecordRing<GpuFrameSample>,
     retired_through: u64,
@@ -207,6 +209,39 @@ pub struct FrameStats {
     kms_latch_wakeup_lateness: Samples,
     kms_latch_to_render_delay: Samples,
     pending_latch_wakeup: Option<(Duration, Duration)>,
+}
+
+/// Owned, bounded diagnostics data. The desktop thread only copies the rings;
+/// percentile sorting and response assembly run on the owned-data worker.
+pub(crate) struct FrozenFrameStats {
+    base: OutputFrameTimings,
+    distributions: [Samples; 9],
+    main_thread_cpu: MainThreadCpuSamples,
+    gpu: GpuSamples,
+    long_intervals: LongIntervalSamples,
+}
+
+impl FrozenFrameStats {
+    pub(crate) fn finish(self) -> OutputFrameTimings {
+        let mut base = self.base;
+        base.cpu_frame_work_samples = self.distributions[3].cpu_samples(base.redraws);
+        let [delay, lateness, latch_to_render, render, main_cpu, gpu, presented, active, error] =
+            self.distributions.map(|samples| samples.snapshot());
+        base.kms_latch_delay_ms = delay;
+        base.kms_latch_wakeup_lateness_ms = lateness;
+        base.kms_latch_to_render_delay_ms = latch_to_render;
+        base.render_time_ms = render.clone();
+        base.cpu_frame_work_ms = render;
+        base.compositor_main_thread_cpu_ms = main_cpu;
+        base.gpu_frame_work_ms = gpu;
+        base.presented_interval_ms = presented;
+        base.continuous_active_interval_ms = active;
+        base.presentation_error_ms = error;
+        base.compositor_main_thread_cpu_samples = self.main_thread_cpu.snapshot();
+        base.gpu_frame_work_samples = self.gpu.snapshot();
+        base.continuous_active_long_interval_samples = self.long_intervals.snapshot();
+        base
+    }
 }
 
 impl FrameStats {
@@ -385,13 +420,13 @@ impl FrameStats {
         }
     }
 
-    pub fn snapshot(
+    pub(crate) fn freeze(
         &self,
         output: String,
         clock: &FrameClock,
         kms_latch_enabled: bool,
-    ) -> OutputFrameTimings {
-        OutputFrameTimings {
+    ) -> FrozenFrameStats {
+        let base = OutputFrameTimings {
             output,
             output_generation: self.generation.0,
             refresh_interval_ms: clock.refresh_interval().map(|d| d.as_secs_f64() * 1000.),
@@ -402,9 +437,9 @@ impl FrameStats {
                 None
             },
             kms_latch_deferrals: self.kms_latch_deferrals,
-            kms_latch_delay_ms: self.kms_latch_delay.snapshot(),
-            kms_latch_wakeup_lateness_ms: self.kms_latch_wakeup_lateness.snapshot(),
-            kms_latch_to_render_delay_ms: self.kms_latch_to_render_delay.snapshot(),
+            kms_latch_delay_ms: None,
+            kms_latch_wakeup_lateness_ms: None,
+            kms_latch_to_render_delay_ms: None,
             redraws: self.redraws,
             submitted: self.submitted,
             no_damage: self.no_damage,
@@ -413,47 +448,105 @@ impl FrameStats {
             presentations: self.presentations,
             fixed_refresh_presentations: self.fixed_refresh_presentations,
             late_presentations: self.late_presentations,
-            render_time_ms: self.render_time.snapshot(),
-            cpu_frame_work_ms: self.render_time.snapshot(),
-            cpu_frame_work_samples: self.render_time.cpu_samples(self.redraws),
+            render_time_ms: None,
+            cpu_frame_work_ms: None,
+            cpu_frame_work_samples: Vec::new(),
             cpu_frame_work_max_ms: self.cpu_frame_work_max_ms,
             // Submission wall time cannot stand in for GPU completion. Genuine
             // device timestamp measurements will populate this only when supported.
             compositor_main_thread_cpu_scope: Some(
                 "compositor_main_thread_between_output_presentations".into(),
             ),
-            compositor_main_thread_cpu_ms: self.main_thread_cpu.snapshot(),
-            compositor_main_thread_cpu_samples: self.main_thread_cpu_samples.snapshot(),
+            compositor_main_thread_cpu_ms: None,
+            compositor_main_thread_cpu_samples: Vec::new(),
             compositor_main_thread_cpu_max_ms: self.main_thread_cpu_max_ms,
             compositor_main_thread_cpu_unavailable_intervals: self
                 .main_thread_cpu_unavailable_intervals,
             compositor_main_thread_cpu_samples_overwritten: self
                 .main_thread_cpu_samples
                 .overwritten,
-            gpu_frame_work_ms: self.gpu_frame_work.snapshot(),
+            gpu_frame_work_ms: None,
             gpu_frame_work_scope: self
                 .gpu_frame_work_max_ms
                 .map(|_| "native_output_command_buffer".into()),
-            gpu_frame_work_samples: self.gpu_frame_samples.snapshot(),
+            gpu_frame_work_samples: Vec::new(),
             gpu_frame_work_max_ms: self.gpu_frame_work_max_ms,
             gpu_frame_work_samples_overwritten: self.gpu_frame_samples.samples.overwritten,
-            presented_interval_ms: self.presented_interval.snapshot(),
-            continuous_active_interval_ms: self.continuous_active_interval.snapshot(),
+            presented_interval_ms: None,
+            continuous_active_interval_ms: None,
             continuous_active_intervals: self.continuous_active_intervals,
             continuous_active_long_intervals: self.continuous_active_long_intervals,
             continuous_active_interval_max_ms: self.continuous_active_interval_max_ms,
-            continuous_active_long_interval_samples: self.long_interval_samples.snapshot(),
+            continuous_active_long_interval_samples: Vec::new(),
             continuous_active_long_interval_samples_overwritten: self
                 .long_interval_samples
                 .overwritten,
-            presentation_error_ms: self.presentation_error.snapshot(),
+            presentation_error_ms: None,
+        };
+        FrozenFrameStats {
+            base,
+            distributions: [
+                self.kms_latch_delay.clone(),
+                self.kms_latch_wakeup_lateness.clone(),
+                self.kms_latch_to_render_delay.clone(),
+                self.render_time.clone(),
+                self.main_thread_cpu.clone(),
+                self.gpu_frame_work.clone(),
+                self.presented_interval.clone(),
+                self.continuous_active_interval.clone(),
+                self.presentation_error.clone(),
+            ],
+            main_thread_cpu: self.main_thread_cpu_samples.clone(),
+            gpu: self.gpu_frame_samples.clone(),
+            long_intervals: self.long_interval_samples.clone(),
         }
+    }
+
+    #[cfg(test)]
+    pub fn snapshot(
+        &self,
+        output: String,
+        clock: &FrameClock,
+        kms_latch_enabled: bool,
+    ) -> OutputFrameTimings {
+        self.freeze(output, clock, kms_latch_enabled).finish()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frozen_diagnostics_keep_the_exact_ring_when_the_desktop_advances() {
+        fn assert_send<T: Send + 'static>() {}
+        assert_send::<FrozenFrameStats>();
+        let clock = FrameClock::new(Some(Duration::from_millis(10)), false);
+        let mut stats = FrameStats::default();
+        for value in 1..=(CAPACITY as u64 + 11) {
+            stats.rendered(Duration::from_millis(value), &RenderResult::Submitted);
+        }
+        let frozen = stats.freeze("DP-1".into(), &clock, false);
+        stats.rendered(Duration::from_millis(9999), &RenderResult::Submitted);
+        let snapshot = std::thread::spawn(move || frozen.finish()).join().unwrap();
+        assert_eq!(snapshot.redraws, 251);
+        let render = snapshot.render_time_ms.as_ref().unwrap();
+        assert_eq!(render.samples, CAPACITY);
+        assert_eq!(
+            (render.last, render.mean, render.p50, render.p95, render.max),
+            (251., 131.5, 131., 239., 251.)
+        );
+        assert_eq!(snapshot.render_time_ms, snapshot.cpu_frame_work_ms);
+        assert_eq!(snapshot.cpu_frame_work_samples.len(), CAPACITY);
+        assert_eq!(snapshot.cpu_frame_work_samples[0].sequence, 12);
+        assert_eq!(snapshot.cpu_frame_work_samples[0].wall_time_ms, 12.);
+        assert_eq!(snapshot.cpu_frame_work_samples[239].sequence, 251);
+        assert_eq!(snapshot.cpu_frame_work_samples[239].wall_time_ms, 251.);
+        assert_eq!(snapshot.compositor_main_thread_cpu_ms, None);
+        assert!(snapshot.compositor_main_thread_cpu_samples.is_empty());
+        assert_eq!(snapshot.gpu_frame_work_ms, None);
+        assert!(snapshot.gpu_frame_work_samples.is_empty());
+    }
 
     #[test]
     fn gpu_samples_require_current_generation_and_completed_nonzero_redraw() {

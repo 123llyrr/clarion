@@ -1,5 +1,6 @@
-use super::*;
 use clarion_core::{CoreEvent, LayoutMode, SpaceId};
+
+use super::*;
 
 fn desktop() -> Layout<TestWindow> {
     check_ops([
@@ -364,9 +365,11 @@ fn policy_history_prunes_closed_ids_and_inserts_new_members_once() {
 #[test]
 fn empty_workspace_retirement_survives_an_outstanding_core_reader() {
     let context = core_adapter::new_context::<usize>();
+    let scene_resources = crate::scene::resources::SceneResources::new();
     let workspace = Workspace::<TestWindow>::new_no_outputs(
         Clock::with_time(Duration::ZERO),
         Rc::new(Options::default()),
+        scene_resources.allocator(),
     )
     .with_core(context.clone());
     let id = SpaceId(workspace.id().get());
@@ -653,4 +656,402 @@ fn canvas_exit_keeps_runtime_expanded_window_from_an_original_normal_group() {
         assert_eq!(restored.display, original.display);
         layout.verify_invariants();
     }
+}
+
+fn registered_tile(layout: &Layout<TestWindow>, id: usize) -> &Tile<TestWindow> {
+    if let Some(InteractiveMoveState::Moving(moving)) = &layout.interactive_move {
+        if *moving.tile.window().id() == id {
+            return &moving.tile;
+        }
+    }
+    layout
+        .workspaces()
+        .flat_map(|(_, _, workspace)| workspace.tiles())
+        .find(|tile| *tile.window().id() == id)
+        .expect("window remains registered while mapped or parked")
+}
+
+#[test]
+fn scene_registration_survives_layout_switches_and_minimization_then_retires_after_close() {
+    let scene = crate::scene::resources::SceneResources::new();
+    let mut layout = Layout::with_options_and_resources(
+        Clock::with_time(Duration::ZERO),
+        Options::default(),
+        scene.allocator(),
+    );
+    for operation in [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(0),
+        },
+    ] {
+        operation.apply(&mut layout);
+    }
+    let (key, lease) = registered_tile(&layout, 0).scene_registration();
+    let image_lifetime = lease.liveness_probe();
+    assert_eq!(scene.registration_counts(), [1, 0, 1, 0]);
+    for mode in [
+        clarion_ipc::TilingMode::Dwindle,
+        clarion_ipc::TilingMode::Scrolling,
+    ] {
+        layout.active_workspace_mut().unwrap().set_tiling_mode(mode);
+        assert_eq!(registered_tile(&layout, 0).scene_registration().0, key);
+        layout.set_window_floating(Some(&0), true);
+        assert_eq!(registered_tile(&layout, 0).scene_registration().0, key);
+        assert!(layout.minimize_window(&0));
+        assert_eq!(registered_tile(&layout, 0).scene_registration().0, key);
+        assert_eq!(scene.registration_counts(), [1, 0, 1, 0]);
+        assert!(layout.restore_window(&0));
+        layout.set_window_floating(Some(&0), false);
+        assert_eq!(registered_tile(&layout, 0).scene_registration().0, key);
+        assert_eq!(scene.registration_counts(), [1, 0, 1, 0]);
+    }
+    drop(layout.remove_window(&0, Transaction::new()).unwrap());
+    assert_eq!(scene.registration_counts(), [0, 0, 1, 0]);
+    assert!(
+        image_lifetime.upgrade().is_some(),
+        "in-progress scene lease survives unregistration"
+    );
+    drop(lease);
+    assert!(image_lifetime.upgrade().is_none());
+    drop(layout);
+    assert_eq!(scene.registration_counts(), [0; 4]);
+}
+
+#[test]
+fn cross_output_drag_and_hotplug_keep_window_key_and_retire_output_registrations() {
+    let scene = crate::scene::resources::SceneResources::new();
+    let mut layout = Layout::with_options_and_resources(
+        Clock::with_time(Duration::ZERO),
+        Options::default(),
+        scene.allocator(),
+    );
+    for operation in [
+        Op::AddOutput(1),
+        Op::AddOutput(2),
+        Op::FocusOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(0),
+        },
+    ] {
+        operation.apply(&mut layout);
+    }
+    layout.set_window_floating(Some(&0), true);
+    let key = registered_tile(&layout, 0).scene_registration().0;
+    Op::InteractiveMoveBegin {
+        window: 0,
+        output_idx: 1,
+        px: 100.,
+        py: 100.,
+    }
+    .apply(&mut layout);
+    Op::InteractiveMoveUpdate {
+        window: 0,
+        dx: 1000.,
+        dy: 0.,
+        output_idx: 2,
+        px: 600.,
+        py: 200.,
+    }
+    .apply(&mut layout);
+    assert!(matches!(
+        layout.interactive_move,
+        Some(InteractiveMoveState::Moving(_))
+    ));
+    assert_eq!(registered_tile(&layout, 0).scene_registration().0, key);
+    assert_eq!(scene.registration_counts(), [1, 0, 2, 0]);
+    Op::InteractiveMoveEnd { window: 0 }.apply(&mut layout);
+    for (operation, outputs) in [
+        (Op::RemoveOutput(2), 1),
+        (Op::AddOutput(2), 2),
+        (Op::RemoveOutput(1), 1),
+        (Op::RemoveOutput(2), 0),
+        (Op::AddOutput(1), 1),
+    ] {
+        operation.apply(&mut layout);
+        assert_eq!(registered_tile(&layout, 0).scene_registration().0, key);
+        assert_eq!(scene.registration_counts(), [1, 0, outputs, 0]);
+    }
+    drop(layout);
+    assert_eq!(scene.registration_counts(), [0; 4]);
+}
+
+#[test]
+fn external_scene_owner_is_not_kept_alive_by_a_live_layout_or_its_weak_allocators() {
+    let scene = crate::scene::resources::SceneResources::new();
+    let allocator = scene.allocator();
+    let mut layout = Layout::with_options_and_resources(
+        Clock::with_time(Duration::ZERO),
+        Options::default(),
+        allocator.clone(),
+    );
+    for operation in [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(0),
+        },
+    ] {
+        operation.apply(&mut layout);
+    }
+    assert!(allocator.windows.owner_is_alive());
+    drop(scene);
+    assert!(!allocator.windows.owner_is_alive());
+    // Teardown only unregisters weak tokens; no invalid lease is requested.
+    drop(layout);
+    assert!(!allocator.windows.owner_is_alive());
+}
+
+#[test]
+fn native_capacity_backpressure_keeps_tile_effects_until_retry_but_fatal_errors_retire_them() {
+    use crate::layout::tile::NativeEffect;
+    use crate::layout::wobble::WobbleAnchor;
+    use crate::render_helpers::vulkan::native::{NativeBusy, NativeError};
+    use crate::scene::window_resources::EffectRetirements;
+
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(0),
+        },
+    ]);
+    let output = layout.active_monitor_ref().unwrap().output().clone();
+    let tile = layout
+        .active_workspace_mut()
+        .unwrap()
+        .tiles_mut()
+        .find(|tile| *tile.window().id() == 0)
+        .unwrap();
+    let key = tile.scene_registration().0;
+    tile.start_wobble(WobbleAnchor::Point((0.5, 0.5)));
+    assert!(tile.has_effect_pose());
+    let resources = tile.scene_registration().1;
+    let _ = tile.window().0.offscreen_writes.replace(Some(Vec::new()));
+    resources.wobble_forecast.borrow_mut().rebuild_for_test(
+        &tile.presentation.wobble.borrow(),
+        Rectangle::new((100., 100.).into(), (640., 480.).into()),
+    );
+    let wobble_vertices = Rc::downgrade(
+        &resources
+            .wobble_forecast
+            .borrow()
+            .cached_for_test()
+            .unwrap()
+            .vertices,
+    );
+    assert!(wobble_vertices.upgrade().is_some());
+    for kind in [
+        NativeBusy::Frame,
+        NativeBusy::Upload,
+        NativeBusy::Completion,
+        NativeBusy::OutputFormat,
+        NativeBusy::YuvPipelines,
+        NativeBusy::ProducerFence,
+        NativeBusy::OffscreenAllocation,
+    ] {
+        let error =
+            anyhow::Error::new(NativeError::Busy(kind)).context("preparing native effect image");
+        assert!(tile.handle_native_effect_error(NativeEffect::Wobble, error.as_ref()));
+        assert!(
+            tile.has_effect_pose(),
+            "{kind:?} must retain the wobble trajectory"
+        );
+        assert_eq!(tile.scene_registration().0, key);
+        assert_eq!(
+            resources.effect_retirements.get(),
+            EffectRetirements::default()
+        );
+        assert!(wobble_vertices.upgrade().is_some());
+        assert!(tile
+            .window()
+            .0
+            .offscreen_writes
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .is_empty());
+    }
+    assert!(!tile.handle_native_effect_error(
+        NativeEffect::Wobble,
+        &NativeError::Other("device lost".into())
+    ));
+    assert!(
+        tile.has_effect_pose(),
+        "scene must not cancel the owner's trajectory"
+    );
+    assert_eq!(
+        resources.effect_retirements.get(),
+        EffectRetirements {
+            wobble: true,
+            genie: false
+        }
+    );
+    assert!(
+        !tile.are_transitions_ongoing(),
+        "a static effect stays idle; scene retirement wakes the owner through the registry marker"
+    );
+    assert!(wobble_vertices.upgrade().is_none());
+    assert!(resources
+        .wobble_forecast
+        .borrow()
+        .cached_for_test()
+        .is_none());
+    assert!(tile
+        .window()
+        .0
+        .offscreen_writes
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .last()
+        .unwrap()
+        .is_none());
+    tile.advance_animations();
+    assert!(!tile.has_effect_pose());
+    assert_eq!(
+        resources.effect_retirements.get(),
+        EffectRetirements::default()
+    );
+
+    tile.set_minimize_target(
+        Some(clarion_ipc::DockTarget {
+            output: output.name(),
+            x: 100.,
+            y: 100.,
+            width: 48.,
+            height: 48.,
+            edge: Default::default(),
+            effect: Default::default(),
+        }),
+        false,
+    );
+    tile.start_genie(
+        Rectangle::new((100., 100.).into(), (640., 480.).into()),
+        Some(&output),
+        true,
+        true,
+    );
+    assert!(tile.genie_ongoing());
+    let _ = tile.window().0.offscreen_writes.replace(Some(Vec::new()));
+    let pose = tile.presentation.genie.borrow().as_ref().unwrap().pose();
+    let mesh = resources.genie_mesh.borrow_mut().sample(
+        &pose,
+        Rectangle::from_size(pose.source.size),
+        pose.source.size,
+        smithay::backend::renderer::utils::CommitCounter::default(),
+        7,
+    );
+    let genie_vertices = Rc::downgrade(&mesh.vertices);
+    drop(mesh);
+    for kind in [
+        NativeBusy::Frame,
+        NativeBusy::Upload,
+        NativeBusy::Completion,
+        NativeBusy::OutputFormat,
+        NativeBusy::YuvPipelines,
+        NativeBusy::ProducerFence,
+        NativeBusy::OffscreenAllocation,
+    ] {
+        let error =
+            anyhow::Error::new(NativeError::Busy(kind)).context("preparing parked window image");
+        assert!(tile.handle_native_effect_error(NativeEffect::Genie, error.as_ref()));
+        assert!(
+            tile.genie_ongoing(),
+            "{kind:?} must not jump to the minimized endpoint"
+        );
+        assert_eq!(tile.scene_registration().0, key);
+        assert_eq!(
+            resources.effect_retirements.get(),
+            EffectRetirements::default()
+        );
+        assert!(genie_vertices.upgrade().is_some());
+        assert!(tile
+            .window()
+            .0
+            .offscreen_writes
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .is_empty());
+    }
+    assert!(!tile.handle_native_effect_error(
+        NativeEffect::Genie,
+        &NativeError::Other("device lost".into())
+    ));
+    assert!(
+        tile.genie_ongoing(),
+        "scene must not take the owner's minimize state"
+    );
+    assert_eq!(
+        resources.effect_retirements.get(),
+        EffectRetirements {
+            wobble: false,
+            genie: true
+        }
+    );
+    assert!(
+        tile.are_transitions_ongoing(),
+        "pending retirement needs an owner tick"
+    );
+    assert!(genie_vertices.upgrade().is_none());
+    assert!(tile
+        .window()
+        .0
+        .offscreen_writes
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .last()
+        .unwrap()
+        .is_none());
+    tile.advance_animations();
+    assert!(!tile.genie_ongoing());
+    assert_eq!(
+        resources.effect_retirements.get(),
+        EffectRetirements::default()
+    );
+}
+
+#[test]
+fn busy_errors_neither_enqueue_nor_consume_existing_effect_retirements() {
+    use crate::layout::tile::NativeEffect;
+    use crate::render_helpers::vulkan::native::{NativeBusy, NativeError};
+    use crate::scene::window_resources::EffectRetirements;
+
+    let layout = desktop();
+    let tile = registered_tile(&layout, 0);
+    let resources = tile.scene_registration().1;
+    let _ = tile.window().0.offscreen_writes.replace(Some(Vec::new()));
+    for pending in [
+        EffectRetirements::default(),
+        EffectRetirements {
+            wobble: true,
+            genie: true,
+        },
+    ] {
+        resources.effect_retirements.set(pending);
+        for effect in [NativeEffect::Wobble, NativeEffect::Genie] {
+            for busy in [
+                NativeBusy::Frame,
+                NativeBusy::Upload,
+                NativeBusy::Completion,
+                NativeBusy::OutputFormat,
+                NativeBusy::YuvPipelines,
+                NativeBusy::ProducerFence,
+                NativeBusy::OffscreenAllocation,
+            ] {
+                let error = anyhow::Error::new(NativeError::Busy(busy))
+                    .context("nested native preparation");
+                assert!(tile.handle_native_effect_error(effect, error.as_ref()));
+                assert_eq!(resources.effect_retirements.get(), pending);
+            }
+        }
+    }
+    assert!(tile
+        .window()
+        .0
+        .offscreen_writes
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .is_empty());
 }

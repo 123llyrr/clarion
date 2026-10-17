@@ -1,6 +1,8 @@
 //! Capture submission stays on the compositor thread. Vulkan transfers may
 //! finish on a worker; GLES PBOs are polled by their owning EGL event loop.
 
+use std::time::Duration;
+
 use anyhow::{ensure, Context};
 use calloop::timer::{TimeoutAction, Timer};
 use calloop::LoopHandle;
@@ -9,16 +11,13 @@ use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::{ExportMem, Texture};
 use smithay::output::Output;
 use smithay::utils::{Buffer, Rectangle};
-use std::time::Duration;
 
+use super::capture::CaptureStamp;
+use super::gles_readback::{GlesReadbackPoll, PendingGlesReadback};
 use crate::compositor::State;
 use crate::render_helpers::renderer::ClarionRenderer;
 use crate::render_helpers::vulkan::lifecycle;
 use crate::render_helpers::vulkan::native::{NativeRenderer, PendingNativeReadback};
-
-use super::capture::CaptureStamp;
-use super::gles_readback::GlesReadbackPoll;
-use super::gles_readback::PendingGlesReadback;
 
 #[derive(Debug)]
 pub(crate) enum PendingPixels {

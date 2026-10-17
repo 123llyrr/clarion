@@ -452,12 +452,14 @@ fn horizontal_dnd_release_combines_scroll_and_layout_momentum() {
 #[test]
 fn tile_retarget_keeps_momentum_even_when_new_offset_is_zero() {
     let mut clock = Clock::with_time(Duration::ZERO);
+    let scene_resources = crate::scene::resources::SceneResources::new();
     let mut tile = Tile::new(
         TestWindow::new(TestWindowParams::new(1)),
         Size::from((1920., 1080.)),
         1.,
         clock.clone(),
         Rc::new(Options::default()),
+        scene_resources.allocator().windows.allocate(),
     );
     tile.animate_move_from(Point::from((400., -200.)));
     clock.set_unadjusted(Duration::from_micros(59999));
@@ -1694,12 +1696,14 @@ fn interrupted_resize_preserves_each_size_velocity() {
             let mut clock = Clock::with_time(Duration::ZERO);
             clock.set_rate(rate);
             // Expose subpixel motion to the derivative check without a GPU.
+            let scene_resources = crate::scene::resources::SceneResources::new();
             let mut tile = Tile::new(
                 TestWindow::new(TestWindowParams::new(1)),
                 Size::from((1920., 1080.)),
                 1_000_000.,
                 clock.clone(),
                 Rc::new(Options::default()),
+                scene_resources.allocator().windows.allocate(),
             );
             tile.window_mut()
                 .request_size((1000, 700).into(), SizingMode::Fullscreen, true, None);
@@ -1746,12 +1750,14 @@ fn interrupted_resize_preserves_each_size_velocity() {
 #[test]
 fn resize_to_current_size_keeps_momentum_and_eventually_stops() {
     let mut clock = Clock::with_time(Duration::ZERO);
+    let scene_resources = crate::scene::resources::SceneResources::new();
     let mut tile = Tile::new(
         TestWindow::new(TestWindowParams::new(1)),
         Size::from((1920., 1080.)),
         1.,
         clock.clone(),
         Rc::new(Options::default()),
+        scene_resources.allocator().windows.allocate(),
     );
     tile.window_mut()
         .request_size((1000, 700).into(), SizingMode::Normal, true, None);
@@ -1778,12 +1784,14 @@ fn resize_to_current_size_keeps_momentum_and_eventually_stops() {
 fn clamped_tile_alpha_stops_redrawing_and_retains_held_target() {
     for held in [false, true] {
         let mut clock = Clock::with_time(Duration::ZERO);
+        let scene_resources = crate::scene::resources::SceneResources::new();
         let mut tile = Tile::new(
             TestWindow::new(TestWindowParams::new(1)),
             Size::from((1920., 1080.)),
             1.,
             clock.clone(),
             Rc::new(Options::default()),
+            scene_resources.allocator().windows.allocate(),
         );
         let mut config = clarion_config::animations::WindowMovementAnim::default().0;
         let Kind::Spring(params) = &mut config.kind else {
@@ -1801,18 +1809,23 @@ fn clamped_tile_alpha_stops_redrawing_and_retains_held_target() {
             tile.hold_alpha_animation_after_done();
         }
         clock.set_unadjusted(Duration::from_millis(100));
-        let alpha = tile.alpha_animation.as_ref().unwrap();
+        let alpha = tile.presentation.alpha_animation.as_ref().unwrap();
         assert!(alpha.anim.is_clamped_done());
         assert!(!alpha.anim.is_done());
         assert!(!tile.are_transitions_ongoing());
         tile.advance_animations();
         if held {
             assert_eq!(
-                tile.alpha_animation.as_ref().unwrap().anim.clamped_value(),
+                tile.presentation
+                    .alpha_animation
+                    .as_ref()
+                    .unwrap()
+                    .anim
+                    .clamped_value(),
                 0.75
             );
         } else {
-            assert!(tile.alpha_animation.is_none());
+            assert!(tile.presentation.alpha_animation.is_none());
         }
     }
 }
@@ -1820,12 +1833,14 @@ fn clamped_tile_alpha_stops_redrawing_and_retains_held_target() {
 #[test]
 fn shrinking_resize_keeps_signed_velocity_through_repeated_reversals() {
     let mut clock = Clock::with_time(Duration::ZERO);
+    let scene_resources = crate::scene::resources::SceneResources::new();
     let mut tile = Tile::new(
         TestWindow::new(TestWindowParams::new(1)),
         Size::from((1920., 1080.)),
         1_000_000.,
         clock.clone(),
         Rc::new(Options::default()),
+        scene_resources.allocator().windows.allocate(),
     );
     tile.window_mut()
         .request_size((1000, 700).into(), SizingMode::Normal, true, None);
@@ -1880,12 +1895,14 @@ fn shrinking_resize_clamps_negative_overshoot_and_hidden_inward_velocity() {
     params.damping_ratio = 0.1;
     // At 150 ms this spring is past its first peak and returning inward.
     params.stiffness = 800;
+    let scene_resources = crate::scene::resources::SceneResources::new();
     let mut tile = Tile::new(
         TestWindow::new(TestWindowParams::new(1)),
         Size::from((1920., 1080.)),
         1_000_000.,
         clock.clone(),
         Rc::new(options),
+        scene_resources.allocator().windows.allocate(),
     );
     tile.window_mut()
         .request_size((1, 1).into(), SizingMode::Normal, true, None);
@@ -2003,12 +2020,14 @@ fn interrupted_resize_keeps_pixels_when_commit_application_is_delayed() {
         let options = Rc::new(options);
         let mut params = TestWindowParams::new(1);
         params.bbox = Rectangle::from_size((16, 16).into());
+        let scene_resources = crate::scene::resources::SceneResources::new();
         let mut tile = Tile::new(
             TestWindow::new(params),
             (64., 64.).into(),
             initial_scale,
             clock.clone(),
             options.clone(),
+            scene_resources.allocator().windows.allocate(),
         );
         tile.window_mut()
             .request_size((40, 40).into(), SizingMode::Normal, true, None);
@@ -2086,12 +2105,14 @@ fn builtin_opening_releases_its_tile_transition_after_visible_spring_motion() {
                     epsilon: 0.0001,
                 });
             options.animations.window_open.custom_shader = custom.then(String::new);
+            let scene_resources = crate::scene::resources::SceneResources::new();
             let mut tile = Tile::new(
                 TestWindow::new(TestWindowParams::new(1)),
                 (1920., 1080.).into(),
                 1.,
                 clock.clone(),
                 Rc::new(options),
+                scene_resources.allocator().windows.allocate(),
             );
             let visible_end = Spring {
                 from: 0.,

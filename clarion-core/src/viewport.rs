@@ -1,9 +1,12 @@
 //! Authoritative scroll viewport intent and numeric gesture/trajectory state.
 //! The platform provides timestamps, configuration conversion and column geometry;
 //! projected rendering samples this owner without advancing it.
-use crate::{gestures::swipe_tracker::SwipeTracker, Rect};
-use clarion_motion::trajectory::Trajectory;
 use std::time::Duration;
+
+use clarion_motion::trajectory::Trajectory;
+
+use crate::gestures::swipe_tracker::SwipeTracker;
+use crate::Rect;
 
 const TOUCHPAD_WORKING_AREA_MOVEMENT: f64 = 1200.;
 #[derive(Debug, Clone, Copy)]
@@ -920,8 +923,9 @@ pub fn snap_gesture(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use clarion_motion::trajectory::Curve;
+
+    use super::*;
     fn time(ms: u64, rate: f64) -> ViewportTime {
         ViewportTime {
             animation: Duration::from_secs_f64(ms as f64 / 1000. * rate),

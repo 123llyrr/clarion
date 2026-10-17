@@ -4,12 +4,39 @@
 //! device scheduling access. Only the adapter in `Clarion::scene_for_output`
 //! projects those owners into the references required to build a frame.
 
+pub mod closing_window;
+pub(crate) mod cube_composition;
+pub(crate) mod cube_geometry;
 mod elements;
+pub mod focus_ring;
+pub(crate) mod genie;
+pub mod insert_hint_element;
 mod layers;
 pub(crate) mod lifecycle;
+pub(crate) mod mapped_resources;
+pub(crate) mod monitor_resources;
+pub(crate) mod opening_window;
 mod pointer;
+pub(crate) mod resize_snapshot;
+pub mod resources;
+pub(crate) mod retained;
+pub mod shadow;
+pub(crate) mod spread_composition;
+pub(crate) mod stage_composition;
+pub mod tab_indicator;
+pub(crate) mod tile;
+pub(crate) mod window_decorations;
+pub mod window_resources;
+pub(crate) mod window_snapshot;
+pub(crate) mod wobble;
+pub(crate) mod workspace_composition;
+pub(crate) mod workspace_resources;
 
 use clarion_config::debug::PreviewRender;
+use elements::scale_relocate_crop;
+pub use elements::{OutputRenderElements, PointerRenderElements, WindowScreenshotRenderElement};
+pub(crate) use layers::SceneLayers;
+pub(crate) use pointer::{SceneDndIcon, ScenePointer};
 use smithay::backend::renderer::element::Kind;
 use smithay::desktop::layer_map_for_output;
 use smithay::output::Output;
@@ -31,11 +58,6 @@ use crate::ui::mru::WindowMruUi;
 use crate::ui::screen_transition::ScreenTransition;
 use crate::ui::screenshot_ui::ScreenshotUi;
 use crate::window::Mapped;
-
-use elements::scale_relocate_crop;
-pub use elements::{OutputRenderElements, PointerRenderElements, WindowScreenshotRenderElement};
-pub(crate) use layers::SceneLayers;
-pub(crate) use pointer::{SceneDndIcon, ScenePointer};
 
 /// The output-local effect resources. Scheduling and device state are deliberately
 /// absent; existing buffer identities and effect caches survive every snapshot.
@@ -404,12 +426,14 @@ impl OutputScene<'_> {
                     for workspace in mon.workspaces() {
                         let geo = workspace.geometry;
                         // The render element namespace. This will be set to the workspace index for
-                        // elements duplicated across workspaces (i.e. background and bottom layers) in
-                        // order to have their non-xray framebuffer effects separated from each other.
+                        // elements duplicated across workspaces (i.e. background and bottom layers)
+                        // in order to have their non-xray framebuffer
+                        // effects separated from each other.
                         //
                         // This doesn't have to correspond exactly to workspace id or idx, the only
-                        // requirement is that there's only one framebuffer effect element with a given id +
-                        // namespace on the frame at once. Id + namespace is used as the cache key in the
+                        // requirement is that there's only one framebuffer effect element with a
+                        // given id + namespace on the frame at once. Id +
+                        // namespace is used as the cache key in the
                         // damage tracker.
                         let ns = Some(workspace.namespace);
                         let zoom = workspace.zoom;

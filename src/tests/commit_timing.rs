@@ -1,17 +1,18 @@
 use std::time::{Duration, Instant};
 
-use smithay::reexports::wayland_protocols::wp::commit_timing::v1::client::{
-    wp_commit_timer_v1::{self, WpCommitTimerV1},
-    wp_commit_timing_manager_v1,
+use smithay::reexports::wayland_protocols::wp::commit_timing::v1::client::wp_commit_timer_v1::{
+    self, WpCommitTimerV1,
 };
-use smithay::reexports::wayland_server::{
-    protocol::wl_surface::WlSurface as ServerSurface, Resource,
-};
+use smithay::reexports::wayland_protocols::wp::commit_timing::v1::client::wp_commit_timing_manager_v1;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface as ServerSurface;
+use smithay::reexports::wayland_server::Resource;
 use smithay::wayland::compositor::{with_states, SurfaceAttributes};
 use wayland_backend::protocol::ProtocolError;
-use wayland_client::{protocol::wl_surface::WlSurface, Proxy};
+use wayland_client::protocol::wl_surface::WlSurface;
+use wayland_client::Proxy;
 
-use super::{client::ClientId, Fixture};
+use super::client::ClientId;
+use super::Fixture;
 use crate::utils::get_monotonic_time;
 
 fn setup() -> (Fixture, ClientId, WlSurface, ServerSurface, WpCommitTimerV1) {

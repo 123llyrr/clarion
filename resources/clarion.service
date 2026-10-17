@@ -1,5 +1,5 @@
 [Unit]
-Description=Clarion modular Wayland compositor (澄境)
+Description=Clarion modular Wayland compositor
 BindsTo=graphical-session.target
 Before=graphical-session.target
 Wants=graphical-session-pre.target

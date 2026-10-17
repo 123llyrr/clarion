@@ -1338,11 +1338,13 @@ mod tests {
     #[test]
     #[ignore = "requires real DRM render node, Vulkan and GLES reference"]
     fn native_paginated_hotkeys_match_gles_after_navigation_and_resize() {
-        use crate::render_helpers::render_to_vec;
-        use crate::render_helpers::vulkan::{hardware_tests::setup, native::NativeRenderer};
         use smithay::backend::renderer::element::{Element, Id};
         use smithay::backend::renderer::gles::GlesRenderer;
         use smithay::output::{Mode, PhysicalProperties, Scale, Subpixel};
+
+        use crate::render_helpers::render_to_vec;
+        use crate::render_helpers::vulkan::hardware_tests::setup;
+        use crate::render_helpers::vulkan::native::NativeRenderer;
 
         fn compare(
             hotkeys: &HotkeyOverlay,

@@ -538,8 +538,9 @@ pub fn shutdown_or_terminate(timeout: Duration) {
 /// success (main returns) and failure/explicit exit (main never returns).
 #[cfg(clarion_exit_trampoline)]
 mod process_boundary {
-    use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    use super::*;
 
     static ENTERED: AtomicBool = AtomicBool::new(false);
     unsafe extern "C" {
@@ -694,8 +695,9 @@ pub(super) fn set_exit_timeout_for_test(timeout: Duration) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
 
     const WAIT: Duration = Duration::from_secs(3);
     fn wait_workers(owner: &Registry, count: usize) {

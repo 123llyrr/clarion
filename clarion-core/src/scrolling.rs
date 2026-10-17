@@ -1092,8 +1092,9 @@ mod tests {
 
 #[cfg(test)]
 mod identity_tests {
-    use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::*;
     #[test]
     fn local_reservations_skip_foreign_high_ids_and_reject_exhaustion_without_wrapping() {
         let counter = AtomicU64::new(1);

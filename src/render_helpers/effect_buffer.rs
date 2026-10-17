@@ -564,12 +564,13 @@ impl EffectBuffer {
 
 #[cfg(test)]
 mod tests {
-    use super::{offscreen_plan, CachedOffscreenState, Elements, OffscreenPlan};
-    use crate::render_helpers::solid_color::SolidColorRenderElement;
-    use smithay::backend::renderer::element::{Id, Kind};
+    use smithay::backend::renderer::element::{Element as _, Id, Kind};
     use smithay::backend::renderer::utils::CommitCounter;
     use smithay::backend::renderer::Color32F;
     use smithay::utils::Rectangle;
+
+    use super::{offscreen_plan, CachedOffscreenState, Elements, OffscreenPlan};
+    use crate::render_helpers::solid_color::SolidColorRenderElement;
 
     #[test]
     fn shared_offscreen_is_reused_until_its_contents_change() {
@@ -649,8 +650,61 @@ mod tests {
 
         use crate::render_helpers::blur::BlurOptions;
         use crate::render_helpers::solid_color::SolidColorBuffer;
-        use crate::render_helpers::vulkan::{hardware_tests::setup, native::NativeRenderer};
+        use crate::render_helpers::vulkan::hardware_tests::setup;
+        use crate::render_helpers::vulkan::native::NativeRenderer;
         use crate::render_helpers::xray::Xray;
+
+        // This test checks epoch ownership and rebuilt pixels, while native
+        // preparation can legitimately defer to a later owner frame. Wait on
+        // real progress before the original public-API/cache assertions.
+        fn prepare_ready(buffer: &mut super::EffectBuffer, renderer: &mut NativeRenderer) {
+            use crate::render_helpers::vulkan::native::NativeError;
+            let ids: Vec<_> = buffer
+                .native_elements
+                .iter()
+                .map(|element| element.id().clone())
+                .collect();
+            let deadline = Instant::now() + Duration::from_secs(15);
+            let mut retries = 0;
+            loop {
+                renderer.begin_scene();
+                match buffer.prepare_native(renderer, true) {
+                    Ok(()) => {
+                        if retries > 0 {
+                            eprintln!("EFFECT_BUFFER_PREPARATION retries={retries}");
+                        }
+                        return;
+                    }
+                    Err(error) if NativeError::is_backpressure(error.as_ref()) => {
+                        assert!(
+                            renderer.scene_was_deferred(),
+                            "Busy must wake a retry frame"
+                        );
+                        assert_eq!(
+                            buffer
+                                .native_elements
+                                .iter()
+                                .map(|element| element.id().clone())
+                                .collect::<Vec<_>>(),
+                            ids,
+                            "backpressure must preserve pending scene elements"
+                        );
+                        assert!(
+                            Instant::now() < deadline,
+                            "native effect retry timed out: {error:#}"
+                        );
+                        if retries == 0 {
+                            eprintln!("EFFECT_BUFFER_PREPARATION deferred={error:#}");
+                        }
+                        retries += 1;
+                        renderer.poll_preparation_for_test().unwrap();
+                        renderer.retire_completed().unwrap();
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("native effect preparation failed: {error:#}"),
+                }
+            }
+        }
 
         let (vk, reference, allocator) = setup();
         drop(reference);
@@ -674,6 +728,7 @@ mod tests {
                 SolidColorRenderElement::from_buffer(&source, (0., 0.), 1., Kind::Unspecified)
                     .into(),
             );
+            prepare_ready(&mut buffer, &mut previous);
             assert!(buffer.prepare_any(&mut previous, true));
             // Force rotation into NativeBlur's retained output pool. Clearing
             // only EffectBuffer.native_texture/native_blurred must not pass.
@@ -684,6 +739,7 @@ mod tests {
                 SolidColorRenderElement::from_buffer(&source, (0., 0.), 1., Kind::Unspecified)
                     .into(),
             );
+            prepare_ready(&mut buffer, &mut previous);
             assert!(buffer.prepare_any(&mut previous, true));
             assert!(!buffer.native_blur.retained_output_allocations().is_empty());
             drop(retained);
@@ -750,6 +806,7 @@ mod tests {
                 SolidColorRenderElement::from_buffer(&source, (0., 0.), 1., Kind::Unspecified)
                     .into(),
             );
+            prepare_ready(&mut buffer, &mut replacement);
             assert!(buffer.prepare_any(&mut replacement, true));
             let mut texture = buffer.native_texture(true).unwrap().clone();
             let size = texture.size();

@@ -5,10 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use calloop::generic::Generic;
-use smithay::reexports::wayland_server::{
-    backend::{ClientId, DisconnectReason},
-    Display,
-};
+use smithay::reexports::wayland_server::backend::{ClientId, DisconnectReason};
+use smithay::reexports::wayland_server::Display;
 
 /// Only clients successfully admitted by this compositor, pruned on disconnect.
 /// Keep IDs rather than Client/Display owners so the registry cannot retain any

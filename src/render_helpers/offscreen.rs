@@ -152,7 +152,7 @@ impl NativeOffscreenBuffer {
             // Animated bounds can grow by a pixel each frame. Small capacity
             // buckets avoid allocating a new image for every such step. The
             // returned geometry, not the allocation size, defines visible UVs.
-            let capacity = Size::from((
+            let capacity = Size::<i32, Physical>::from((
                 target_size
                     .w
                     .checked_add(63)
@@ -164,13 +164,20 @@ impl NativeOffscreenBuffer {
                     .map(|size| size & !63)
                     .unwrap_or(target_size.h),
             ));
-            let texture = super::create_texture(renderer, capacity, Fourcc::Abgr8888)
+            let texture = renderer
+                .create_offscreen_capacity(
+                    Fourcc::Abgr8888,
+                    capacity.to_logical(1).to_buffer(1, Transform::Normal),
+                )
                 .or_else(|err| {
                     if capacity == target_size {
                         Err(err)
                     } else {
                         // Rounding can cross the device's image-size limit.
-                        super::create_texture(renderer, target_size, Fourcc::Abgr8888)
+                        renderer.create_offscreen_capacity(
+                            Fourcc::Abgr8888,
+                            target_size.to_logical(1).to_buffer(1, Transform::Normal),
+                        )
                     }
                 })
                 .context("error creating texture")?;

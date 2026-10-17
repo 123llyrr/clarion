@@ -20,10 +20,8 @@ use smithay::reexports::winit::event::{
     ButtonSource, ElementState, MouseButton, MouseScrollDelta, PointerKind, PointerSource,
     WindowEvent,
 };
-use smithay::reexports::winit::event_loop::{
-    pump_events::{EventLoopExtPumpEvents, PumpStatus},
-    ActiveEventLoop, ControlFlow, EventLoop,
-};
+use smithay::reexports::winit::event_loop::pump_events::{EventLoopExtPumpEvents, PumpStatus};
+use smithay::reexports::winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use smithay::reexports::winit::platform::scancode::PhysicalKeyExtScancode;
 use smithay::reexports::winit::window::{Window, WindowAttributes, WindowId};
 use smithay::utils::{Physical, Size};

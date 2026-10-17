@@ -43,6 +43,9 @@ use crate::render_helpers::surface::{
 };
 use crate::render_helpers::xray::XrayPos;
 use crate::render_helpers::{background_effect, BakedBuffer, RenderCtx, RenderTarget};
+use crate::scene::mapped_resources::MappedResources;
+use crate::scene::resources::SceneResourceAllocator;
+use crate::scene::retained::ResourceHandle;
 use crate::utils::id::IdCounter;
 use crate::utils::transaction::Transaction;
 use crate::utils::{
@@ -127,10 +130,9 @@ pub struct Mapped {
     /// Serials of commits that should be animated.
     animate_serials: Vec<Serial>,
 
-    /// Snapshot right before an animated commit, without popups.
-    animation_snapshot: Option<LayoutElementRenderSnapshot>,
-    native_animation_snapshot:
-        Option<LayoutElementRenderSnapshot<crate::render_helpers::vulkan::VulkanTexture>>,
+    /// Weak registration for snapshots taken before an animated commit. The
+    /// scene owns the images; this protocol adapter owns only commit ordering.
+    scene_resources: ResourceHandle<MappedResources>,
 
     /// Geometry matching the current renderer buffers, before the next applied commit.
     /// Smithay applies xdg geometry before calling our commit handler, so reading
@@ -249,8 +251,8 @@ impl MappedId {
     /// That way, clients can associate a foreign toplevel handle with an IPC window ID.
     ///
     /// We use the decimal representation of the ID, which is up to 20 characters long for u64::MAX.
-    /// This is within the 32-character limit, and is nice because it matches up with how `clarion msg`
-    /// prints the IDs to the console.
+    /// This is within the 32-character limit, and is nice because it matches up with how `clarion
+    /// msg` prints the IDs to the console.
     ///
     /// This namespace can be extended in the future, with any non-numeric prefix to disambiguate.
     pub fn to_protocol_identifier(self) -> String {
@@ -294,7 +296,13 @@ enum RequestSizeOnce {
 }
 
 impl Mapped {
-    pub fn new(window: Window, rules: ResolvedWindowRules, hook: HookId, config: &Config) -> Self {
+    pub fn new(
+        window: Window,
+        rules: ResolvedWindowRules,
+        hook: HookId,
+        config: &Config,
+        scene_resources: SceneResourceAllocator,
+    ) -> Self {
         let surface = window.wl_surface().expect("no X11 support");
         let credentials = get_credentials_for_surface(&surface);
         let content_type = surface_content_type(window.toplevel().expect("no X11 support"));
@@ -322,8 +330,7 @@ impl Mapped {
             blur_config: config.blur,
             animate_next_configure: false,
             animate_serials: Vec::new(),
-            animation_snapshot: None,
-            native_animation_snapshot: None,
+            scene_resources: scene_resources.mapped.register(MappedResources::default()),
             committed_geometry,
             #[cfg(test)]
             animation_snapshot_sources: Vec::new(),
@@ -517,8 +524,9 @@ impl Mapped {
         renderer: &mut crate::render_helpers::vulkan::native::NativeRenderer,
         scale: Scale<f64>,
     ) {
-        self.animation_snapshot = None;
-        self.native_animation_snapshot = match self
+        let resources = self.scene_resources.lease();
+        resources.gles_snapshot.borrow_mut().take();
+        let snapshot = match self
             .render_snapshot(renderer, self.committed_geometry.get())
             .freeze_native(renderer, scale)
         {
@@ -528,15 +536,20 @@ impl Mapped {
                 None
             }
         };
+        *resources.native_snapshot.borrow_mut() = snapshot;
     }
 
     pub fn has_animation_snapshot(&self) -> bool {
-        self.animation_snapshot.is_some() || self.native_animation_snapshot.is_some()
+        let resources = self.scene_resources.lease();
+        let present = resources.gles_snapshot.borrow().is_some()
+            || resources.native_snapshot.borrow().is_some();
+        present
     }
 
     pub fn store_animation_snapshot(&mut self, renderer: &mut GlesRenderer, scale: Scale<f64>) {
-        self.native_animation_snapshot = None;
-        self.animation_snapshot = match self
+        let resources = self.scene_resources.lease();
+        resources.native_snapshot.borrow_mut().take();
+        let snapshot = match self
             .render_snapshot(renderer, self.committed_geometry.get())
             .freeze(renderer, scale)
         {
@@ -546,6 +559,7 @@ impl Mapped {
                 None
             }
         };
+        *resources.gles_snapshot.borrow_mut() = snapshot;
     }
 
     pub fn take_pending_transaction(&mut self, commit_serial: Serial) -> Option<Transaction> {
@@ -763,6 +777,12 @@ impl LayoutElement for Mapped {
 
     fn dmabuf(&self) -> Option<smithay::backend::allocator::dmabuf::Dmabuf> {
         self.dmabuf()
+    }
+
+    fn native_dmabuf_source(
+        &self,
+    ) -> Option<crate::render_helpers::vulkan::native::OwnedDmabufSource> {
+        crate::render_helpers::vulkan::native::owned_surface_dmabuf(self.toplevel().wl_surface())
     }
 
     fn is_in_input_region(&self, point: Point<f64, Logical>) -> bool {
@@ -1520,11 +1540,15 @@ impl LayoutElement for Mapped {
     fn take_native_animation_snapshot(
         &mut self,
     ) -> Option<LayoutElementRenderSnapshot<crate::render_helpers::vulkan::VulkanTexture>> {
-        self.native_animation_snapshot.take()
+        let resources = self.scene_resources.lease();
+        let snapshot = resources.native_snapshot.borrow_mut().take();
+        snapshot
     }
 
     fn take_animation_snapshot(&mut self) -> Option<LayoutElementRenderSnapshot> {
-        self.animation_snapshot.take()
+        let resources = self.scene_resources.lease();
+        let snapshot = resources.gles_snapshot.borrow_mut().take();
+        snapshot
     }
 
     fn set_interactive_resize(&mut self, data: Option<InteractiveResizeData>) {

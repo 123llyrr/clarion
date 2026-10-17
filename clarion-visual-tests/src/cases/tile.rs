@@ -15,6 +15,7 @@ use crate::test_window::TestWindow;
 pub struct Tile {
     window: TestWindow,
     tile: clarion::layout::tile::Tile<TestWindow>,
+    _scene_resources: clarion::scene::window_resources::WindowResourceRegistry,
 }
 
 impl Tile {
@@ -75,18 +76,24 @@ impl Tile {
             ..Default::default()
         };
 
+        let scene_resources = clarion::scene::window_resources::WindowResourceRegistry::new();
         let mut tile = clarion::layout::tile::Tile::new(
             window.clone(),
             size.to_f64(),
             1.,
             clock,
             Rc::new(options),
+            scene_resources.allocator().allocate(),
         );
 
         tile.request_tile_size(size.to_f64(), false, None);
         window.communicate();
 
-        Self { window, tile }
+        Self {
+            window,
+            tile,
+            _scene_resources: scene_resources,
+        }
     }
 }
 

@@ -10,8 +10,9 @@ use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::element::RenderElementStates;
 use smithay::backend::renderer::gles::GlesRenderer;
-use smithay::backend::renderer::{Bind, DebugFlags, ImportDma, Offscreen, Renderer};
+use smithay::backend::renderer::{Bind, DebugFlags, ImportDma, Renderer};
 use smithay::backend::winit::{self, WinitGraphicsBackend};
+use smithay::desktop::utils::OutputPresentationFeedback;
 use smithay::output::{Mode, Output, PhysicalProperties, Subpixel};
 use smithay::reexports::calloop::RegistrationToken;
 use smithay::reexports::winit::dpi::LogicalSize;
@@ -20,11 +21,12 @@ use smithay::reexports::winit::raw_window_handle::{
     HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle,
 };
 use smithay::reexports::winit::window::{Window, WindowAttributes};
-use smithay::utils::{Buffer, Physical, Size, Transform};
+use smithay::utils::{Buffer, Physical, Rectangle, Size, Transform};
 use smithay::wayland::dmabuf::DmabufGlobal;
 
 use super::{AnyRenderer, IpcOutputMap, OutputId, RenderResult, RendererBackendType};
 use crate::platform::device_bridge::{DevicePort, DeviceSetup};
+use crate::render_helpers::sync::DeferredFrame;
 use crate::render_helpers::vulkan::device::{VulkanContext, VulkanSurfaceHandle};
 use crate::render_helpers::vulkan::native::NativeRenderer;
 use crate::render_helpers::vulkan::wsi::{PresentResult, VulkanWsi};
@@ -70,23 +72,37 @@ pub(crate) struct NativeWinit {
     // Preserve the composition and its source states while the host/GPU cannot
     // accept it. A retry must not advance damage history by rendering it again.
     pub(crate) pending: Option<PendingComposition>,
+    presented_feedback: Option<OutputPresentationFeedback>,
 }
 
 pub(crate) struct PendingComposition {
     pub(crate) states: RenderElementStates,
     pub(crate) locked: bool,
+    feedback: Option<OutputPresentationFeedback>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct GlesFrameIdentity {
+    locked: bool,
+    size: Size<i32, Physical>,
+    scale: f64,
+    transform: Transform,
+}
+
+struct PendingGlesFrame {
+    damage: Vec<Rectangle<i32, Physical>>,
+    states: RenderElementStates,
+    identity: GlesFrameIdentity,
+    feedback: OutputPresentationFeedback,
 }
 
 impl PendingComposition {
-    fn take_for_lock(
-        pending: &mut Option<Self>,
-        locked: bool,
-    ) -> (Option<RenderElementStates>, bool) {
+    fn take_for_lock(pending: &mut Option<Self>, locked: bool) -> (Option<Self>, bool) {
         let Some(pending) = pending.take() else {
             return (None, false);
         };
         if pending.locked == locked {
-            (Some(pending.states), false)
+            (Some(pending), false)
         } else {
             // The WSI still owns its acquired image/semaphore, but this source
             // composition can no longer be used to confirm the current lock.
@@ -127,6 +143,7 @@ pub struct Winit {
     retry: Retry,
     pub(crate) retry_timer: Option<RegistrationToken>,
     pub(crate) last_attempt_deferred: bool,
+    pending_gles: Option<DeferredFrame<PendingGlesFrame>>,
 }
 
 impl Winit {
@@ -166,6 +183,7 @@ impl Winit {
                 target_size: (0, 0).into(),
                 target_valid: false,
                 pending: None,
+                presented_feedback: None,
             };
             info!("nested native Vulkan WSI renderer initialized");
             (
@@ -253,6 +271,7 @@ impl Winit {
             retry: Retry::default(),
             retry_timer: None,
             last_attempt_deferred: false,
+            pending_gles: None,
         })
     }
 
@@ -296,7 +315,7 @@ impl Winit {
         let _span = clarion_tracy_span!("Winit::render");
         self.last_attempt_deferred = false;
 
-        if matches!(self.backend, WinitBackend::Native(_)) && self.retry.waiting(Instant::now()) {
+        if self.retry.waiting(Instant::now()) {
             self.last_attempt_deferred = self.retry.pending();
             // Input/client commits remain coalesced behind the existing timer.
             // They cannot turn a pending host image into an immediate GPU poll.
@@ -313,16 +332,28 @@ impl Winit {
         }
 
         let rendered = match &mut self.backend {
-            WinitBackend::Gles(backend) => {
-                render_gles(backend, &mut self.damage_tracker, &self.config, port)
-            }
+            WinitBackend::Gles(backend) => render_gles(
+                backend,
+                &mut self.damage_tracker,
+                &mut self.pending_gles,
+                &self.config,
+                port,
+                output,
+            ),
             WinitBackend::Native(native) => {
                 render_native(native, &mut self.damage_tracker, port, output)
+                    .map(|(states, result)| (states, result, native.presented_feedback.take()))
             }
         };
-        let (states, rv) = match rendered {
+        let (states, rv, captured_feedback) = match rendered {
             Ok(value) => value,
             Err(err) => {
+                if crate::render_helpers::vulkan::native::NativeError::is_backpressure(err.as_ref())
+                {
+                    self.last_attempt_deferred = true;
+                    self.defer_native_attempt(port, false);
+                    return RenderResult::GpuDeferred;
+                }
                 let native = matches!(self.backend, WinitBackend::Native(_));
                 if !native || self.retry.should_warn(Instant::now()) {
                     warn!("winit renderer failed on {}: {err:#}", output.name());
@@ -351,11 +382,11 @@ impl Winit {
                     self.damage_tracker = OutputDamageTracker::from_output(output);
                     native.target_valid = false;
                 }
-                self.last_attempt_deferred = true;
-                self.defer_native_attempt(port, false);
-                return rv;
             }
-        } else if matches!(self.backend, WinitBackend::Native(_)) {
+            self.last_attempt_deferred = true;
+            self.defer_native_attempt(port, false);
+            return rv;
+        } else {
             self.retry.recovered();
             if let Some(token) = self.retry_timer.take() {
                 port.cancel_timer(token);
@@ -363,7 +394,11 @@ impl Winit {
         }
         port.update_scanout(&states);
         if rv == RenderResult::Submitted {
-            port.present_immediately(&states);
+            if let Some(feedback) = captured_feedback {
+                crate::frame_pipeline::present_captured_feedback(feedback);
+            } else {
+                port.present_immediately(&states);
+            }
         }
         let animations_remain = port.finish_nested_redraw();
 
@@ -515,12 +550,50 @@ pub(crate) fn native_surface_handle(window: &dyn Window) -> anyhow::Result<Vulka
     }
 }
 
-pub(crate) fn render_gles(
+fn render_gles(
     backend: &mut WinitGraphicsBackend<GlesRenderer>,
     damage_tracker: &mut OutputDamageTracker,
+    pending: &mut Option<DeferredFrame<PendingGlesFrame>>,
     config: &super::DeviceSettings,
     port: &mut impl crate::frame_pipeline::FramePort,
-) -> anyhow::Result<(RenderElementStates, RenderResult)> {
+    output: &Output,
+) -> anyhow::Result<(
+    RenderElementStates,
+    RenderResult,
+    Option<OutputPresentationFeedback>,
+)> {
+    let identity = GlesFrameIdentity {
+        locked: port.request().locked,
+        size: backend.window_size(),
+        scale: output.current_scale().fractional_scale(),
+        transform: output.current_transform(),
+    };
+    if pending.is_some() {
+        let Some(frame) =
+            DeferredFrame::take_ready(pending).context("GLES prepared frame fence failed")?
+        else {
+            // The rendered back buffer remains bound to this backend. Do not
+            // bind, draw into, or swap it while its GPU dependency is pending.
+            return Ok((
+                RenderElementStates::default(),
+                RenderResult::GpuDeferred,
+                None,
+            ));
+        };
+        if frame.identity != identity {
+            // In particular, an unlocked composition must never be swapped
+            // after a lock request arrived during the fence wait.
+            *damage_tracker = OutputDamageTracker::from_output(output);
+            return Ok((
+                RenderElementStates::default(),
+                RenderResult::GpuDeferred,
+                None,
+            ));
+        }
+        backend.submit(Some(&frame.damage))?;
+        backend.window().request_redraw();
+        return Ok((frame.states, RenderResult::Submitted, Some(frame.feedback)));
+    }
     let scene = port.prepare_scene(backend.renderer());
     let elements = scene.elements();
     let res = {
@@ -528,17 +601,32 @@ pub(crate) fn render_gles(
         damage_tracker.render_output(renderer, &mut framebuffer, 0, elements, [0.; 4])?
     };
     let rv = if let Some(damage) = res.damage {
-        if config.debug.wait_for_frame_completion_before_queueing {
-            if let Err(err) = res.sync.wait() {
-                warn!("error waiting for GLES frame completion: {err:?}");
-            }
+        if config.debug.wait_for_frame_completion_before_queueing
+            && crate::render_helpers::sync::require_ready(&res.sync).is_err()
+        {
+            port.update_scanout(&res.states);
+            let feedback = port.take_presentation_feedback(&res.states);
+            *pending = Some(DeferredFrame::new(
+                res.sync,
+                PendingGlesFrame {
+                    damage: damage.clone(),
+                    states: res.states,
+                    identity,
+                    feedback,
+                },
+            ));
+            return Ok((
+                RenderElementStates::default(),
+                RenderResult::GpuDeferred,
+                None,
+            ));
         }
         backend.submit(Some(damage))?;
         RenderResult::Submitted
     } else {
         RenderResult::NoDamage
     };
-    Ok((res.states, rv))
+    Ok((res.states, rv, None))
 }
 
 pub(crate) fn render_native(
@@ -547,10 +635,11 @@ pub(crate) fn render_native(
     port: &mut impl crate::frame_pipeline::FramePort,
     output: &Output,
 ) -> anyhow::Result<(RenderElementStates, RenderResult)> {
+    let _allocation_scope = native.renderer.async_offscreen_scope();
     let locked = port.request().locked;
     let (pending, lock_changed) = PendingComposition::take_for_lock(&mut native.pending, locked);
-    if let Some(states) = pending {
-        return present_native(native, states, true, locked);
+    if let Some(pending) = pending {
+        return present_native(native, pending.states, true, locked, pending.feedback);
     }
     if lock_changed {
         native.target_valid = false;
@@ -596,11 +685,11 @@ pub(crate) fn render_native(
             != Some(format)
     {
         native.renderer.prepare_output_format(format)?;
-        native.target = Some(
-            native
-                .renderer
-                .create_buffer(format, Size::<i32, Buffer>::from((wanted.w, wanted.h)))?,
-        );
+        native.target =
+            Some(native.renderer.create_exact_frame_target(
+                format,
+                Size::<i32, Buffer>::from((wanted.w, wanted.h)),
+            )?);
         native.target_size = wanted;
         native.target_valid = false;
     }
@@ -637,7 +726,9 @@ pub(crate) fn render_native(
         result => result?,
     };
     if res.damage.is_some() {
-        present_native(native, res.states, false, locked)
+        port.update_scanout(&res.states);
+        let feedback = port.take_presentation_feedback(&res.states);
+        present_native(native, res.states, false, locked, Some(feedback))
     } else {
         Ok((res.states, RenderResult::NoDamage))
     }
@@ -648,6 +739,7 @@ pub(crate) fn present_native(
     states: RenderElementStates,
     resumed: bool,
     locked: bool,
+    feedback: Option<OutputPresentationFeedback>,
 ) -> anyhow::Result<(RenderElementStates, RenderResult)> {
     match native
         .wsi
@@ -655,6 +747,7 @@ pub(crate) fn present_native(
     {
         Ok(PresentResult::Presented) => {
             native.target_valid = true;
+            native.presented_feedback = feedback;
             if resumed {
                 // Commits coalesced while presenting this older composition
                 // must be rendered next, even after its animation has finished.
@@ -663,7 +756,11 @@ pub(crate) fn present_native(
             Ok((states, RenderResult::Submitted))
         }
         Ok(PresentResult::Pending) => {
-            native.pending = Some(PendingComposition { states, locked });
+            native.pending = Some(PendingComposition {
+                states,
+                locked,
+                feedback,
+            });
             Ok((RenderElementStates::default(), RenderResult::Skipped))
         }
         Ok(PresentResult::Recreate) => {
@@ -671,7 +768,11 @@ pub(crate) fn present_native(
             Ok((RenderElementStates::default(), RenderResult::Skipped))
         }
         Err(err) => {
-            native.pending = Some(PendingComposition { states, locked });
+            native.pending = Some(PendingComposition {
+                states,
+                locked,
+                feedback,
+            });
             Err(err)
         }
     }
@@ -689,6 +790,7 @@ mod tests {
         let mut pending = Some(PendingComposition {
             states: RenderElementStates::default(),
             locked: false,
+            feedback: None,
         });
         let (states, changed) = PendingComposition::take_for_lock(&mut pending, true);
         assert!(states.is_none() && changed && pending.is_none());
@@ -696,12 +798,14 @@ mod tests {
         pending = Some(PendingComposition {
             states: RenderElementStates::default(),
             locked: true,
+            feedback: None,
         });
         let (states, changed) = PendingComposition::take_for_lock(&mut pending, true);
         assert!(states.is_some() && !changed && pending.is_none());
         pending = Some(PendingComposition {
             states: RenderElementStates::default(),
             locked: true,
+            feedback: None,
         });
         let (states, changed) = PendingComposition::take_for_lock(&mut pending, false);
         assert!(states.is_none() && changed);

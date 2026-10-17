@@ -96,6 +96,7 @@ pub(super) fn on_completion(state: &mut State) {
                     if let Err(error) = native.prepare_output_format(surface.compositor.format()) {
                         warn!("cannot enqueue recovered Vulkan output pipelines: {error}");
                     }
+                    surface.frame_epoch = surface.frame_epoch.wrapping_add(1);
                     surface.compositor.reset_buffer_ages();
                     match surface_dmabuf_feedback(
                         &surface.compositor,

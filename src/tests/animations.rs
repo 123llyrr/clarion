@@ -313,9 +313,10 @@ fn egl_clientside_height_change_doesnt_animate() {
 
 #[test]
 fn egl_window_spread_renders_offscreen_clients_and_search_empty_state() {
-    use crate::render_helpers::{RenderCtx, RenderTarget};
     use smithay::backend::allocator::Fourcc;
     use smithay::utils::Transform;
+
+    use crate::render_helpers::{RenderCtx, RenderTarget};
     let mut f = set_up();
     let client = f.add_client();
     for idx in 0..9 {
@@ -410,9 +411,10 @@ fn egl_window_spread_renders_offscreen_clients_and_search_empty_state() {
 
 #[test]
 fn egl_canvas_pan_culls_and_restores_window_pixels() {
-    use crate::render_helpers::{RenderCtx, RenderTarget};
     use smithay::backend::allocator::Fourcc;
     use smithay::utils::Transform;
+
+    use crate::render_helpers::{RenderCtx, RenderTarget};
     let mut f = set_up();
     let client = f.add_client();
     let surface = create_window(&mut f, client, 400, 300);

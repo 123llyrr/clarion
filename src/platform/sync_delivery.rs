@@ -62,12 +62,14 @@ pub(crate) fn defer_unexported_sync<'l, Data>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use calloop::EventLoop;
-    use smithay::backend::renderer::sync::{Fence, Interrupted};
     use std::os::fd::OwnedFd;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
+
+    use calloop::EventLoop;
+    use smithay::backend::renderer::sync::{Fence, Interrupted};
+
+    use super::*;
 
     #[derive(Debug, Clone)]
     struct FailedExportFence(Arc<AtomicBool>);

@@ -1,24 +1,20 @@
 //! Wayland SHM snapshots and surface-local native texture reuse.
-use super::{
-    native::{NativeError, NativeRenderer},
-    VulkanTexture,
-};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::{Rc, Weak as RcWeak};
+use std::sync::Weak;
+
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::{
     buffer_type, BufferType, ContextId, ImportAll, ImportDmaWl, ImportMemWl, Renderer, Texture,
 };
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::utils::{Buffer, Rectangle};
-use smithay::wayland::{
-    compositor::SurfaceData,
-    shm::{shm_format_to_fourcc, with_buffer_contents},
-};
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    rc::{Rc, Weak as RcWeak},
-    sync::Weak,
-};
+use smithay::wayland::compositor::SurfaceData;
+use smithay::wayland::shm::{shm_format_to_fourcc, with_buffer_contents};
+
+use super::native::{NativeError, NativeRenderer};
+use super::VulkanTexture;
 
 const MAX_DAMAGE_REGIONS: usize = 64;
 
@@ -340,9 +336,10 @@ impl ImportMemWl for NativeRenderer {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::render_helpers::vulkan::hardware_tests::setup;
-    use std::sync::Arc;
 
     #[test]
     fn upload_damage_is_clipped_disjoint_and_preserves_covered_pixels() {

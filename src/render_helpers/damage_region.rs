@@ -30,8 +30,9 @@ pub(super) fn disjoint_damage<K>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use smithay::utils::{Physical, Point};
+
+    use super::*;
 
     fn rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Physical> {
         let mut rectangle = Rectangle {

@@ -5,9 +5,8 @@ use clarion_ipc::AppMenu;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface as ServerSurface;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::Proxy as _;
-use wayland_protocols_plasma::appmenu::client::{
-    org_kde_kwin_appmenu::OrgKdeKwinAppmenu, org_kde_kwin_appmenu_manager::OrgKdeKwinAppmenuManager,
-};
+use wayland_protocols_plasma::appmenu::client::org_kde_kwin_appmenu::OrgKdeKwinAppmenu;
+use wayland_protocols_plasma::appmenu::client::org_kde_kwin_appmenu_manager::OrgKdeKwinAppmenuManager;
 
 use super::client::ClientId;
 use super::Fixture;

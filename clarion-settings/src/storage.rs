@@ -1,5 +1,8 @@
+use std::fs;
+use std::io::Write;
+use std::path::Path;
+
 use anyhow::{Context, Result};
-use std::{fs, io::Write, path::Path};
 
 /// The rename committed the new contents, but syncing the directory failed.
 /// Callers must not treat this as a failure before the file was replaced.

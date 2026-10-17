@@ -261,19 +261,23 @@ impl Animation {
 }
 
 impl Curve {
-    /// Native macOS Core Animation default curve: kCAMediaTimingFunctionDefault (0.25, 0.1, 0.25, 1.0)
+    /// Native macOS Core Animation default curve: kCAMediaTimingFunctionDefault (0.25, 0.1, 0.25,
+    /// 1.0)
     pub const MACOS_DEFAULT: Self = Self::CubicBezier(CubicBezier::MACOS_DEFAULT);
     pub const CA_DEFAULT: Self = Self::MACOS_DEFAULT;
     /// Native macOS Core Animation linear curve: kCAMediaTimingFunctionLinear (0.0, 0.0, 1.0, 1.0)
     pub const MACOS_LINEAR: Self = Self::Linear;
     pub const CA_LINEAR: Self = Self::Linear;
-    /// Native macOS Core Animation ease-in curve: kCAMediaTimingFunctionEaseIn (0.42, 0.0, 1.0, 1.0)
+    /// Native macOS Core Animation ease-in curve: kCAMediaTimingFunctionEaseIn (0.42, 0.0, 1.0,
+    /// 1.0)
     pub const MACOS_EASE_IN: Self = Self::CubicBezier(CubicBezier::MACOS_EASE_IN);
     pub const CA_EASE_IN: Self = Self::MACOS_EASE_IN;
-    /// Native macOS Core Animation ease-out curve: kCAMediaTimingFunctionEaseOut (0.0, 0.0, 0.58, 1.0)
+    /// Native macOS Core Animation ease-out curve: kCAMediaTimingFunctionEaseOut (0.0, 0.0, 0.58,
+    /// 1.0)
     pub const MACOS_EASE_OUT: Self = Self::CubicBezier(CubicBezier::MACOS_EASE_OUT);
     pub const CA_EASE_OUT: Self = Self::MACOS_EASE_OUT;
-    /// Native macOS Core Animation ease-in-ease-out curve: kCAMediaTimingFunctionEaseInEaseOut (0.42, 0.0, 0.58, 1.0)
+    /// Native macOS Core Animation ease-in-ease-out curve: kCAMediaTimingFunctionEaseInEaseOut
+    /// (0.42, 0.0, 0.58, 1.0)
     pub const MACOS_EASE_IN_EASE_OUT: Self = Self::CubicBezier(CubicBezier::MACOS_EASE_IN_EASE_OUT);
     pub const CA_EASE_IN_EASE_OUT: Self = Self::MACOS_EASE_IN_EASE_OUT;
 

@@ -15,8 +15,8 @@
 //!
 //! Technically, a "more correct" solution would be to remember the original sigmask and restore it
 //! after the child exits, but that's painful *and* likely to cause issues, because the user almost
-//! never intended to spawn clarion with a nonempty sigmask. It indicates a bug in whoever spawned us,
-//! so we may as well clean up after them (which is easier than not doing so).
+//! never intended to spawn clarion with a nonempty sigmask. It indicates a bug in whoever spawned
+//! us, so we may as well clean up after them (which is easier than not doing so).
 
 pub use platform::*;
 

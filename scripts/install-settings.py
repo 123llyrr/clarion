@@ -83,9 +83,7 @@ def main():
         atomic_text(paths["desktop"], f'''[Desktop Entry]
 Type=Application
 Name=Clarion System Preferences
-Name[zh_CN]=系统偏好设置
 Comment=Configure the Clarion desktop
-Comment[zh_CN]=配置澄境桌面
 Exec="{escaped}"
 Icon=preferences-system
 Terminal=false

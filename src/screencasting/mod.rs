@@ -3,7 +3,6 @@ use std::collections::{HashMap, HashSet};
 use std::mem;
 use std::time::Duration;
 
-use crate::platform::pixel_readback::DeferredCaptureRenderer;
 use anyhow::Context as _;
 use calloop::LoopHandle;
 use smithay::backend::allocator::format::FormatSet;
@@ -21,6 +20,7 @@ use zbus::object_server::SignalEmitter;
 use crate::clarion_render_elements;
 use crate::compositor::{CastTarget, Clarion, State};
 use crate::dbus::mutter_screen_cast::{self, CursorMode, ScreenCastToClarion, StreamTargetId};
+use crate::platform::pixel_readback::DeferredCaptureRenderer;
 use crate::render_helpers::{RenderCtx, RenderTarget};
 use crate::scene::{OutputRenderElements, PointerRenderElements};
 use crate::utils::{get_monotonic_time, CastSessionId, CastStreamId};

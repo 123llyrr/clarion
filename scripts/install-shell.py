@@ -94,7 +94,6 @@ def main():
             atomic_text(paths["desktop"], f'''[Desktop Entry]
 Type=Application
 Name=Clarion Shell Preview
-Name[zh_CN]=澄境桌面外壳预览
 Comment=Preview the Clarion desktop shell
 Exec="{escaped}" --preview
 Icon=preferences-desktop

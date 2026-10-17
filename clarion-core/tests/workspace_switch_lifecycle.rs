@@ -1,6 +1,7 @@
+use std::time::Duration;
+
 use clarion_core::workspace_switch::WorkspaceSwitchAction as Action;
 use clarion_core::{CoreEffect, CoreEvent, DesktopCore, LayoutMode, Rect, SpaceId};
-use std::time::Duration;
 
 fn desktop() -> DesktopCore<u64> {
     let mut core = DesktopCore::new();

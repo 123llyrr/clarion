@@ -45,6 +45,9 @@
               ./build.rs
               ./clarion-config
               ./clarion-core
+              ./clarion-motion
+              ./clarion-timing
+              ./clarion-scene
               ./clarion-ipc
               ./clarion-settings
               ./clarion-shell/assets/macos/SFNS.ttf

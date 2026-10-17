@@ -1,4 +1,5 @@
-use super::*;
+use std::collections::HashMap;
+
 use clarion_core::management::{
     Arrangement, ArrangementSizing, ArrangementSpace, ArrangementWindow, Group as CoreGroup,
     ManagementAction,
@@ -6,7 +7,8 @@ use clarion_core::management::{
 use clarion_core::policy_memory::{ColumnDisplay as CoreDisplay, Height, Width};
 use clarion_core::{LayoutMode, SpaceId};
 use clarion_ipc::management::*;
-use std::collections::HashMap;
+
+use super::*;
 
 fn core_display(display: clarion_ipc::ColumnDisplay) -> CoreDisplay {
     match display {

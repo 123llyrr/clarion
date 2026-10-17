@@ -1,6 +1,4 @@
 use super::*;
-use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
-use crate::render_helpers::texture::TextureRenderElement;
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct SpreadPose {
@@ -75,12 +73,12 @@ pub(super) struct SpreadTransition<I> {
 }
 
 #[derive(Debug)]
-pub(super) struct SpreadClosing {
-    workspace: WorkspaceId,
-    start_progress: f64,
-    start: SpreadPose,
-    grid: SpreadPose,
-    source_pos: Point<f64, Logical>,
+pub(in crate::layout) struct SpreadClosing {
+    pub(super) workspace: WorkspaceId,
+    pub(super) start_progress: f64,
+    pub(super) start: SpreadPose,
+    pub(super) grid: SpreadPose,
+    pub(in crate::layout) source_pos: Point<f64, Logical>,
 }
 
 impl<W: LayoutElement> Monitor<W> {
@@ -215,27 +213,31 @@ impl<W: LayoutElement> Monitor<W> {
     /// the ordinary desktop even when focus changes while the overview is closing.
     fn spread_desktop_poses(&self, current_scene: bool) -> Vec<(W::Id, SpreadPose)> {
         let render_idx = self.workspace_switch_idx();
-        let geometry = self.workspaces_render_geo();
+        // Returning poses use the unzoomed desktop. Do not construct a second
+        // overview geometry projection only to discard all its rectangles.
+        let mut geometry = current_scene.then(|| self.workspaces_render_geo());
         self.workspaces
             .iter()
-            .zip(geometry)
             .enumerate()
-            .flat_map(|(idx, (ws, geo))| {
-                let zoom = if current_scene {
-                    self.workspace_render_zoom(geo)
-                } else {
-                    1.
-                };
-                let loc = if current_scene {
-                    geo.loc
-                } else {
-                    Point::from((
-                        0.,
-                        (idx as f64 - render_idx) * (self.view_size.h + self.workspace_gap(1.)),
-                    ))
-                    .to_physical_precise_round(self.scale.fractional_scale())
-                    .to_logical(self.scale.fractional_scale())
-                };
+            .flat_map(|(idx, ws)| {
+                let (loc, zoom) = geometry.as_mut().map_or_else(
+                    || {
+                        (
+                            Point::from((
+                                0.,
+                                (idx as f64 - render_idx)
+                                    * (self.view_size.h + self.workspace_gap(1.)),
+                            ))
+                            .to_physical_precise_round(self.scale.fractional_scale())
+                            .to_logical(self.scale.fractional_scale()),
+                            1.,
+                        )
+                    },
+                    |geometry| {
+                        let geo = geometry.next().expect("each workspace has a scene pose");
+                        (geo.loc, self.workspace_render_zoom(geo))
+                    },
+                );
                 ws.tiles_with_render_positions()
                     .map(move |(tile, pos, visible)| {
                         let mut pose = SpreadPose {
@@ -499,7 +501,10 @@ impl<W: LayoutElement> Monitor<W> {
         )
     }
 
-    fn spread_close_origin(&self, window: &W::Id) -> Option<(usize, SpreadClosing)> {
+    pub(in crate::layout) fn spread_close_origin(
+        &self,
+        window: &W::Id,
+    ) -> Option<(usize, SpreadClosing)> {
         if !self.is_spread_visible() {
             return None;
         }
@@ -539,76 +544,12 @@ impl<W: LayoutElement> Monitor<W> {
         ))
     }
 
-    pub(in crate::layout) fn start_spread_close(
+    pub(in crate::layout) fn register_spread_closing(
         &mut self,
-        renderer: &mut GlesRenderer,
-        window: &W::Id,
-        blocker: crate::utils::transaction::TransactionBlocker,
-    ) -> bool {
-        let Some((idx, origin)) = self.spread_close_origin(window) else {
-            return false;
-        };
-        let ws = &mut self.workspaces[idx];
-        let tile = ws
-            .tiles_mut()
-            .find(|tile| tile.window().id() == window)
-            .unwrap();
-        let Some(snapshot) = tile.take_unmap_snapshot() else {
-            return true;
-        };
-        let size = tile.tile_size();
-        let dmabuf = tile.window().dmabuf();
-        let before = ws.closing_windows().count();
-        ws.start_close_animation_for_tile(
-            renderer,
-            snapshot,
-            size,
-            origin.source_pos,
-            blocker,
-            dmabuf,
-        );
-        if ws.closing_windows().count() > before {
-            self.spread_closing.insert(
-                ws.closing_windows().last().unwrap().stable_id().clone(),
-                origin,
-            );
-        }
-        true
-    }
-
-    pub(in crate::layout) fn start_spread_close_native(
-        &mut self,
-        renderer: &mut NativeRenderer,
-        window: &W::Id,
-        blocker: crate::utils::transaction::TransactionBlocker,
-    ) -> bool {
-        let Some((idx, origin)) = self.spread_close_origin(window) else {
-            return false;
-        };
-        let ws = &mut self.workspaces[idx];
-        let tile = ws
-            .tiles_mut()
-            .find(|tile| tile.window().id() == window)
-            .unwrap();
-        let snapshot = tile.snapshot_native(renderer).ok();
-        let size = tile.tile_size();
-        let dmabuf = tile.window().dmabuf();
-        let before = ws.closing_windows().count();
-        ws.start_close_animation_for_tile_native(
-            renderer,
-            size,
-            origin.source_pos,
-            blocker,
-            snapshot,
-            dmabuf,
-        );
-        if ws.closing_windows().count() > before {
-            self.spread_closing.insert(
-                ws.closing_windows().last().unwrap().stable_id().clone(),
-                origin,
-            );
-        }
-        true
+        id: smithay::backend::renderer::element::Id,
+        origin: SpreadClosing,
+    ) {
+        self.spread_closing.insert(id, origin);
     }
 
     /// Opening the grid should preserve the user's current focus on each output.
@@ -648,17 +589,16 @@ impl<W: LayoutElement> Monitor<W> {
 
     pub(super) fn update_spread_render_elements(&mut self) {
         let selected = self.spread_selected();
-        let ids: Vec<_> = self
+        let ids: std::collections::HashSet<_> = self
             .spread_render_tiles()
             .map(|tile| tile.window().id().clone())
             .collect();
-        let tiles: Vec<_> = self
+        for tile in self
             .workspaces
             .iter_mut()
             .flat_map(|ws| ws.tiles_mut())
             .filter(|tile| ids.contains(tile.window().id()))
-            .collect();
-        for tile in tiles {
+        {
             // Workspace decorations are not drawn in the spread. Updating the same tile first
             // in workspace coordinates would change its highlight and damage it again every frame.
             tile.update_render_elements(
@@ -706,14 +646,39 @@ impl<W: LayoutElement> Monitor<W> {
         }
     }
 
-    pub(super) fn render_spread<R: ClarionRenderer>(
+    /// Capture geometry and ordered narrow sources once before any rendering.
+    /// Selection, search and interruption policy stay in this desktop adapter.
+    pub(crate) fn spread_composition(
         &self,
-        mut ctx: RenderCtx<R>,
-        push: &mut dyn FnMut(MonitorRenderElement<R>),
-    ) {
+    ) -> crate::scene::spread_composition::SpreadComposition<'_, W> {
+        use crate::layout::scene_source::{ClosingRenderSource, TileRenderSource};
+        use crate::scene::spread_composition::{
+            SpreadClosingPlacement, SpreadComposition, SpreadGeometry, SpreadTilePlacement,
+            SpreadWorkspacePlacement, SpreadWorkspaceSources,
+        };
+
         let scale = self.scale.fractional_scale();
-        for ws in &self.workspaces {
-            for closing in ws.closing_windows() {
+        let view = Rectangle::from_size(self.view_size);
+        let selected = self.spread_selected();
+        let (tile_placements, tiles) = self
+            .spread_draw_tiles()
+            .into_iter()
+            .map(|(tile, geometry, zoom)| {
+                (
+                    SpreadTilePlacement {
+                        geometry,
+                        zoom,
+                        focused: selected.as_ref() == Some(tile.window().id()),
+                    },
+                    TileRenderSource::new(tile),
+                )
+            })
+            .unzip();
+        let (closing_placements, closing) = self
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.closing_windows())
+            .map(|closing| {
                 let pose = self
                     .spread_closing
                     .get(closing.stable_id())
@@ -722,143 +687,82 @@ impl<W: LayoutElement> Monitor<W> {
                         loc: closing.pos(),
                         zoom: 1.,
                     });
-                let origin = closing.pos().to_physical_precise_round(scale);
-                for element in
-                    closing.render(ctx.r(), Rectangle::from_size(self.view_size), scale.into())
-                {
-                    let element = RescaleRenderElement::from_element(
-                        MonitorInnerRenderElement::SpreadClosing(element),
-                        origin,
-                        pose.zoom,
-                    );
-                    push(RelocateRenderElement::from_element(
-                        element,
-                        pose.loc.to_physical_precise_round(scale) - origin,
-                        Relocate::Relative,
-                    ));
-                }
-            }
-        }
-        let tiles = self.spread_draw_tiles();
-        let selected = self.spread_selected();
-        let progress = self.overview_backdrop_progress() as f32;
+                (
+                    SpreadClosingPlacement {
+                        source_position: closing.pos(),
+                        position: pose.loc,
+                        zoom: pose.zoom,
+                    },
+                    ClosingRenderSource::new(closing),
+                )
+            })
+            .unzip();
+        let render_idx = self.workspace_switch_idx();
+        let desktop_step = self.view_size.h + self.workspace_gap(1.);
+        let (workspace_placements, workspaces) = self
+            .workspaces
+            .iter()
+            .zip(self.workspaces_render_geo())
+            .enumerate()
+            .map(|(idx, (workspace, geometry))| {
+                let desktop_position = Point::from((0., (idx as f64 - render_idx) * desktop_step))
+                    .to_physical_precise_round(scale)
+                    .to_logical(scale);
+                let desktop_geometry = Rectangle::new(desktop_position, self.view_size);
+                (
+                    SpreadWorkspacePlacement {
+                        id: workspace.id(),
+                        geometry,
+                        zoom: self.workspace_render_zoom(geometry),
+                        visible: geometry.size.w > 0.
+                            && geometry.size.h > 0.
+                            && geometry.intersection(view).is_some(),
+                        desktop_geometry,
+                        desktop_visible: desktop_geometry.intersection(view).is_some(),
+                    },
+                    SpreadWorkspaceSources {
+                        background: workspace.render_background(),
+                        shadow: workspace.scene_shadow_source(),
+                    },
+                )
+            })
+            .unzip();
+        let core = self.core.borrow();
         let title = format!(
             "搜索: {}  |  {} 个窗口  |  方向键选择 · Enter 打开 · Esc 返回",
-            self.core
-                .borrow()
-                .spread()
+            core.spread()
                 .output(&self.output_name)
                 .map_or("", |output| output.query()),
-            self.spread_matching_tiles().count()
+            self.spread_matching_tiles().count(),
         );
-        let renderer_context = ctx.renderer.context_id().erased();
-        let mut cache = self.spread_header.borrow_mut();
-        if cache.as_ref().is_none_or(|(text, s, context, _)| {
-            text != &title || *s != scale.to_bits() || context != &renderer_context
-        }) {
-            // Never keep rendering a texture from a previous renderer context if
-            // regeneration fails (for example while a GPU is being recreated).
-            *cache = None;
-            if let Ok(texture) = crate::ui::mru::generate_title_texture(ctx.renderer, &title, scale)
-            {
-                *cache = Some((title, scale.to_bits(), renderer_context, texture));
-            }
+        SpreadComposition {
+            geometry: SpreadGeometry {
+                scale,
+                view_size: self.view_size,
+                progress: self.overview_backdrop_progress() as f32,
+                shadow_alpha: self
+                    .overview_progress
+                    .as_ref()
+                    .map(|progress| progress.clamped_value().clamp(0., 1.) as f32),
+                tiles: tile_placements,
+                closing: closing_placements,
+                workspaces: workspace_placements,
+            },
+            tiles,
+            closing,
+            workspaces,
+            title,
+            resources: self.resources.lease(),
         }
-        if let Some((_, _, _, texture)) = cache.as_ref() {
-            let element = match texture {
-                crate::ui::mru::MruTexture::Gles(buffer) => {
-                    PrimaryGpuTextureRenderElement::from(TextureRenderElement::from_texture_buffer(
-                        buffer.clone(),
-                        (24., 24.),
-                        progress,
-                        None,
-                        None,
-                        Kind::Unspecified,
-                    ))
-                }
-                crate::ui::mru::MruTexture::Vulkan(buffer) => {
-                    PrimaryGpuTextureRenderElement::from(TextureRenderElement::from_texture_buffer(
-                        buffer.clone(),
-                        (24., 24.),
-                        progress,
-                        None,
-                        None,
-                        Kind::Unspecified,
-                    ))
-                }
-            };
-            push(RelocateRenderElement::from_element(
-                RescaleRenderElement::from_element(
-                    MonitorInnerRenderElement::SpreadText(element),
-                    Point::default(),
-                    1.,
-                ),
-                Point::default(),
-                Relocate::Relative,
-            ));
-        }
-        for (tile, geo, zoom) in tiles {
-            if zoom <= 0. {
-                continue;
-            }
-            tile.render(
-                ctx.r(),
-                Point::default(),
-                XrayPos::new(geo.loc, zoom),
-                selected.as_ref() == Some(tile.window().id()),
-                &mut |element| {
-                    let element = RescaleRenderElement::from_element(
-                        MonitorInnerRenderElement::SpreadTile(element),
-                        Point::default(),
-                        zoom,
-                    );
-                    push(RelocateRenderElement::from_element(
-                        element,
-                        geo.loc.to_physical_precise_round(scale),
-                        Relocate::Relative,
-                    ));
-                },
-            );
-        }
-        // Fade workspace backgrounds with the grid's backdrop, retaining their stable
-        // buffer identities and the exact ordinary-desktop scene at either closed endpoint.
-        if progress < 1. {
-            let render_idx = self.workspace_switch_idx();
-            for (idx, ws) in self.workspaces.iter().enumerate() {
-                let loc = Point::from((
-                    0.,
-                    (idx as f64 - render_idx) * (self.view_size.h + self.workspace_gap(1.)),
-                ))
-                .to_physical_precise_round(scale)
-                .to_logical(scale);
-                let geo = Rectangle::new(loc, self.view_size);
-                if geo
-                    .intersection(Rectangle::from_size(self.view_size))
-                    .is_none()
-                {
-                    continue;
-                }
-                let background = ws.render_background();
-                let color: smithay::backend::renderer::Color32F =
-                    ws.options.layout.background_color.into();
-                let element = SolidColorRenderElement::new(
-                    background.id().clone(),
-                    geo,
-                    background.current_commit(),
-                    color * (1. - progress),
-                    Kind::Unspecified,
-                );
-                push(RelocateRenderElement::from_element(
-                    RescaleRenderElement::from_element(
-                        MonitorInnerRenderElement::SolidColor(element),
-                        Point::default(),
-                        1.,
-                    ),
-                    Point::default(),
-                    Relocate::Relative,
-                ));
-            }
-        }
+    }
+
+    pub(super) fn render_spread<R: ClarionRenderer>(
+        &self,
+        ctx: RenderCtx<R>,
+        push: &mut dyn FnMut(MonitorRenderElement<R>),
+    ) {
+        // The compatibility entry uses the same scene compositor as production.
+        self.spread_composition().render(ctx, push);
     }
 }
 
