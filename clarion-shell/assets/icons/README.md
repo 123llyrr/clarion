@@ -13,3 +13,6 @@ otherwise unmodified.
 upstream SVGs with librsvg. Those SVGs use SVG `<filter>` elements, which the
 Flutter SVG renderer does not implement, so the vector form would render
 without their shading.
+
+`display.png` and `storage.png` are Clarion's own artwork for the About panel's
+monitor and storage sections, alongside the project mark.

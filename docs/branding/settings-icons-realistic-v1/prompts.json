@@ -1,0 +1,38 @@
+{
+  "tool": "built-in image_gen",
+  "subjects": [
+    [
+      "general",
+      "General settings: a refined small silver application preferences window with a blue title bar, three colorful small controls and a miniature gear; no readable text."
+    ],
+    [
+      "window-layout",
+      "Window layout: three overlapping modern application windows arranged neatly into a tiled layout, silver frames, luminous blue, cyan and violet panes, clear layout metaphor."
+    ],
+    [
+      "mission-control",
+      "Mission control / desktop overview: a dark graphite monitor-like rounded frame displaying three clearly separated colorful miniature application windows in an organized spatial overview, blue orange green panes."
+    ],
+    [
+      "display",
+      "Display settings: modern front-facing widescreen monitor, thin graphite bezel, silver aluminum pedestal stand, vivid original blue and violet flowing wallpaper."
+    ],
+    [
+      "keyboard",
+      "Keyboard settings: a compact realistic silver aluminum desktop keyboard viewed from a slightly elevated angle, white sculpted keycaps arranged in convincing regular rows, no readable key legends."
+    ],
+    [
+      "trackpad",
+      "Trackpad settings: a standalone silver aluminum multi-touch trackpad, broad smooth pale silver glass touch surface, softly rounded corners, low angled elevated view, subtle precision bevel."
+    ],
+    [
+      "advanced-settings",
+      "Advanced settings: three handsome metallic adjustment sliders on a compact blue glass inset plate, three circular silver knobs at different positions, clear simple controls metaphor."
+    ],
+    [
+      "configuration",
+      "Configuration file: a thick clean white document with a folded upper-right corner and a prominent dimensional blue code-brackets and slash symbol centered on the page, no other lettering."
+    ]
+  ],
+  "shared_prompt": "Create ONE finished high-end full-color realistic operating-system settings icon for Clarion, part of a coherent eight-icon family. Realistic brushed silver aluminum and refined glass, blue/cyan/violet accents where appropriate, crisp edges, soft studio highlights, subtle depth. Highly legible silhouette, restrained detail, front or slightly elevated product perspective. Centered square genuinely transparent background with safe padding, approximately 75 percent occupancy. Isolated object only; no room, opaque floor, manufacturer logo, watermark, caption or Chinese labels. No icon sheet."
+}

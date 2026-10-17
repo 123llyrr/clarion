@@ -390,6 +390,7 @@ class _MacDockViewState extends State<MacDockView> {
 
   void _reveal([PointerEvent? event]) {
     _hideTimer?.cancel();
+    if (widget.controller.macPreferences.dockHidden) return;
     if (_edgeRevealed ||
         (event is PointerEnterEvent && _needsPointerMove) ||
         _panelBlocked ||
@@ -814,6 +815,14 @@ class _MacDockViewState extends State<MacDockView> {
                 controller.panel != ShellPanel.launcher) ||
             controller.appMenuOpen ||
             controller.shellStyle != ShellStyle.macos;
+        if (preferences.dockHidden) {
+          // A hidden dock leaves no surface, no edge sensor and no input region;
+          // the desktop keeps the space it would otherwise reserve.
+          _baseInputRegion = Rect.zero;
+          _acceptIconInput = false;
+          _reportPresentation(Rect.zero, const [], reduced);
+          return const SizedBox.shrink();
+        }
         final visible =
             !preferences.dockAutoHide ||
             ((_edgeRevealed || _dockOwnsPanel) && (!blocked || _dockOwnsPanel));

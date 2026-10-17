@@ -13,6 +13,10 @@ enum MacDownloadsSort { name, dateAdded, dateModified, dateCreated, kind }
 /// Independent macOS appearance choices. Material keeps its own bar settings.
 /// Explicit constructor values are bounded; untrusted JSON and [copyWith]
 /// normalize numbers and retain usable defaults for malformed values.
+/// How the dock occupies the desktop. [hidden] removes it and its edge sensor;
+/// [autoHide] keeps it one hover away at the screen edge.
+enum MacDockVisibility { always, autoHide, hidden }
+
 class MacShellPreferences {
   const MacShellPreferences({
     this.dockPosition = MacDockPosition.bottom,
@@ -21,6 +25,7 @@ class MacShellPreferences {
     this.magnification = true,
     this.magnificationScale = 1.45,
     this.dockAutoHide = false,
+    this.dockHidden = false,
     this.showRunningIndicators = true,
     this.animateOpeningApplications = true,
     this.showLaunchpad = true,
@@ -68,6 +73,22 @@ class MacShellPreferences {
   final bool magnification;
   final double magnificationScale;
   final bool dockAutoHide;
+
+  /// Removes the dock from the desktop entirely, including its edge sensor.
+  /// Distinct from [dockAutoHide], which keeps it one hover away.
+  final bool dockHidden;
+
+  MacDockVisibility get dockVisibility => dockHidden
+      ? MacDockVisibility.hidden
+      : dockAutoHide
+      ? MacDockVisibility.autoHide
+      : MacDockVisibility.always;
+
+  MacShellPreferences withDockVisibility(MacDockVisibility visibility) =>
+      copyWith(
+        dockHidden: visibility == MacDockVisibility.hidden,
+        dockAutoHide: visibility == MacDockVisibility.autoHide,
+      );
   final bool showRunningIndicators;
   final bool animateOpeningApplications;
   final bool showLaunchpad;
@@ -106,6 +127,7 @@ class MacShellPreferences {
           maxMagnificationScale,
         ),
         dockAutoHide: _boolean(json['dock_auto_hide'], false),
+        dockHidden: _boolean(json['dock_hidden'], false),
         showRunningIndicators: _boolean(json['show_running_indicators'], true),
         animateOpeningApplications: _boolean(
           json['animate_opening_applications'],
@@ -155,6 +177,7 @@ class MacShellPreferences {
     bool? magnification,
     double? magnificationScale,
     bool? dockAutoHide,
+    bool? dockHidden,
     bool? showRunningIndicators,
     bool? animateOpeningApplications,
     bool? showLaunchpad,
@@ -184,6 +207,7 @@ class MacShellPreferences {
       maxMagnificationScale,
     ),
     dockAutoHide: dockAutoHide ?? this.dockAutoHide,
+    dockHidden: dockHidden ?? this.dockHidden,
     showRunningIndicators: showRunningIndicators ?? this.showRunningIndicators,
     animateOpeningApplications:
         animateOpeningApplications ?? this.animateOpeningApplications,
@@ -217,6 +241,7 @@ class MacShellPreferences {
     'magnification': magnification,
     'magnification_scale': magnificationScale,
     'dock_auto_hide': dockAutoHide,
+    'dock_hidden': dockHidden,
     'show_running_indicators': showRunningIndicators,
     'animate_opening_applications': animateOpeningApplications,
     'show_launchpad': showLaunchpad,
@@ -246,6 +271,7 @@ class MacShellPreferences {
           magnification == other.magnification &&
           magnificationScale == other.magnificationScale &&
           dockAutoHide == other.dockAutoHide &&
+          dockHidden == other.dockHidden &&
           showRunningIndicators == other.showRunningIndicators &&
           animateOpeningApplications == other.animateOpeningApplications &&
           showLaunchpad == other.showLaunchpad &&
@@ -272,6 +298,7 @@ class MacShellPreferences {
     magnification,
     magnificationScale,
     dockAutoHide,
+        dockHidden,
     showRunningIndicators,
     animateOpeningApplications,
     showLaunchpad,

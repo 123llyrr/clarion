@@ -429,6 +429,17 @@ class _MacAboutDialogState extends State<MacAboutDialog> {
     );
   }
 
+  /// Section artwork for the monitor and storage pages. The shipped images are
+  /// Clarion's own; a missing asset falls back to the icon glyph.
+  Widget _sectionMark(String asset, IconData fallback, double size) => Image.asset(
+    asset,
+    width: size,
+    height: size,
+    filterQuality: FilterQuality.high,
+    errorBuilder: (_, _, _) =>
+        Icon(fallback, size: size, color: const Color(0xff007aff)),
+  );
+
   Widget _buildDisplaysTab(
     SystemInformation info,
     bool dark,
@@ -437,6 +448,7 @@ class _MacAboutDialogState extends State<MacAboutDialog> {
     if (info.displays.isEmpty) {
       return _buildUnavailableTab(
         icon: Icons.monitor_rounded,
+        asset: 'assets/icons/display.png',
         message: '尚未读取显示器信息',
         button: '显示器偏好设置…',
         dark: dark,
@@ -451,11 +463,7 @@ class _MacAboutDialogState extends State<MacAboutDialog> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(
-                  Icons.monitor_rounded,
-                  size: 28,
-                  color: const Color(0xff007aff),
-                ),
+                _sectionMark('assets/icons/display.png', Icons.monitor_rounded, 32),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Column(
@@ -515,6 +523,7 @@ class _MacAboutDialogState extends State<MacAboutDialog> {
     if (total <= 0) {
       return _buildUnavailableTab(
         icon: Icons.storage_rounded,
+        asset: 'assets/icons/storage.png',
         message: '尚未读取存储信息',
         button: '管理…',
         dark: dark,
@@ -526,7 +535,7 @@ class _MacAboutDialogState extends State<MacAboutDialog> {
     return Column(
       children: [
         const SizedBox(height: 20),
-        Icon(Icons.storage_rounded, size: 44, color: const Color(0xff007aff)),
+        _sectionMark('assets/icons/storage.png', Icons.storage_rounded, 64),
         const SizedBox(height: 10),
         Text(
           info.startupDisk,
@@ -581,10 +590,14 @@ class _MacAboutDialogState extends State<MacAboutDialog> {
     required String message,
     required String button,
     required bool dark,
+    String? asset,
   }) => Column(
     children: [
       const SizedBox(height: 16),
-      Icon(icon, size: 52, color: const Color(0xff007aff)),
+      if (asset != null)
+        _sectionMark(asset, icon, 64)
+      else
+        Icon(icon, size: 52, color: const Color(0xff007aff)),
       const SizedBox(height: 12),
       Text(
         message,

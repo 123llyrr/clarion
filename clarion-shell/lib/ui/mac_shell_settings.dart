@@ -172,13 +172,38 @@ class MacShellSettings extends StatelessWidget {
                   : null,
               '%',
             ),
-            toggle(
-              'mac-dock-auto-hide',
-              '自动隐藏 Dock',
-              p.dockAutoHide,
-              (v) => update(p.copyWith(dockAutoHide: v)),
-              subtitle: '指针移到所选屏幕边缘时显示',
+            DropdownButtonFormField<MacDockVisibility>(
+              key: ValueKey('mac-dock-visibility-${p.dockVisibility.name}'),
+              initialValue: p.dockVisibility,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Dock 显示方式',
+                helperText: '隐藏会连同屏幕边缘的唤起区一起移除',
+                isDense: true,
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: 6,
+                  vertical: 10,
+                ),
+              ),
+              items: const [
+                DropdownMenuItem(
+                  value: MacDockVisibility.always,
+                  child: Text('始终显示'),
+                ),
+                DropdownMenuItem(
+                  value: MacDockVisibility.autoHide,
+                  child: Text('自动隐藏'),
+                ),
+                DropdownMenuItem(
+                  value: MacDockVisibility.hidden,
+                  child: Text('隐藏'),
+                ),
+              ],
+              onChanged: (v) {
+                if (v != null) update(p.withDockVisibility(v));
+              },
             ),
+            const SizedBox(height: 8),
             toggle(
               'mac-dock-indicators',
               '显示运行指示点',

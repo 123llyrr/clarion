@@ -6,6 +6,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:clarion_shell/services/system_information_service.dart';
 import 'package:clarion_shell/ui/mac_about_dialog.dart';
 
+Finder _sectionAsset(String asset) => find.byWidgetPredicate(
+  (widget) => widget is Image && widget.image is AssetImage &&
+      (widget.image as AssetImage).assetName == asset,
+);
+
 void main() {
   final testInfo = SystemInformation(
     compositorVersion: '0.1.0-test',
@@ -62,6 +67,7 @@ void main() {
     expect(find.text('3840 × 2400 · 60 Hz · 340 × 220 mm'), findsOneWidget);
     expect(find.textContaining('缩放 2x'), findsOneWidget);
     expect(find.textContaining('HDR'), findsNothing);
+    expect(_sectionAsset('assets/icons/display.png'), findsOneWidget);
   });
 
   testWidgets('renders startup disk usage with a fill bar', (tester) async {
@@ -76,6 +82,7 @@ void main() {
     expect(find.textContaining('可用 320.4 GB'), findsOneWidget);
     expect(find.textContaining('共 512.1 GB'), findsOneWidget);
     expect(find.byType(FractionallySizedBox), findsOneWidget);
+    expect(_sectionAsset('assets/icons/storage.png'), findsOneWidget);
   });
 
   testWidgets('renders Clarion overview with specs', (tester) async {

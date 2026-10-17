@@ -212,6 +212,52 @@ void main() {
     });
   }
 
+  testWidgets('dock visibility offers hiding and keeps the modes exclusive', (
+    tester,
+  ) async {
+    final controller = ShellController(demo: true);
+    addTearDown(controller.dispose);
+    controller.setBarPosition(BarPosition.bottom);
+    controller.setShellStyle(ShellStyle.macos);
+    // Tall enough for the whole form: this mounts the panel without the
+    // scrolling wrapper the real control center provides.
+    await tester.binding.setSurfaceSize(const Size(520, 2600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AnimatedBuilder(
+            animation: controller,
+            builder: (context, _) =>
+                MacShellSettings(controller: controller),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final always = find.byKey(const ValueKey('mac-dock-visibility-always'));
+    await tester.ensureVisible(always);
+    await tester.pumpAndSettle();
+    await tester.tap(always);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('隐藏').last);
+    await tester.pumpAndSettle();
+    expect(controller.macPreferences.dockHidden, isTrue);
+    expect(controller.macPreferences.dockAutoHide, isFalse);
+
+    final hidden = find.byKey(const ValueKey('mac-dock-visibility-hidden'));
+    await tester.ensureVisible(hidden);
+    await tester.pumpAndSettle();
+    await tester.tap(hidden);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('自动隐藏').last);
+    await tester.pumpAndSettle();
+    expect(controller.macPreferences.dockHidden, isFalse);
+    expect(controller.macPreferences.dockAutoHide, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('centered menu width and edge reveal preserve open panels', (
     tester,
   ) async {
