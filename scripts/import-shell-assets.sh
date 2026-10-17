@@ -13,7 +13,8 @@
 #
 # The source directory may either mirror repository paths
 # (<dir>/clarion-shell/assets/shell/finder.png) or hold a flat set of extracted
-# files, as long as every file name in the manifest is unique.
+# files, as long as every file name in the manifest is unique. Both the
+# neutral tree names and the original Apple file names are accepted.
 set -euo pipefail
 
 repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -65,6 +66,43 @@ fi
 dupes=$(awk '!/^#/ && NF >= 2 {n = $2; sub(/.*\//, "", n); print n}' "$manifest" |
   sort | uniq -d || true)
 
+# The tree stores neutral asset names, but a macOS extraction keeps the
+# original Apple file names. Accept either in the source directory.
+declare -A source_alias=(
+  [logo-dark.png]=apple-logo-black.png
+  [logo-dark.svg]=apple-logo-black.svg
+  [logo-dark-tight.png]=apple-logo-black-tight.png
+  [logo-light.png]=apple-logo-white.png
+  [logo-light.svg]=apple-logo-white.svg
+  [logo-light-tight.png]=apple-logo-white-tight.png
+  [shell-badge-1024.png]=catalina-badge-1024.png
+  [shell-badge-512.png]=catalina-badge-512.png
+  [shell-badge-round.png]=catalina-badge-round.png
+  [search-background.png]=ectl_search_background.png
+  [search-background@2x.png]=ectl_search_background@2x.png
+  [search-cancel.png]=ectl_search_cancel.png
+  [search-cancel-pressed.png]=ectl_search_cancel_pressed.png
+  [search-close.png]=ectl_search_close.png
+  [search-close@2x.png]=ectl_search_close@2x.png
+  [search-loupe.png]=ectl_search_loupe.png
+  [search-loupe@2x.png]=ectl_search_loupe@2x.png
+  [search-loupe-rtl.png]=ectl_search_loupe_rtl.png
+  [search-loupe-rtl@2x.png]=ectl_search_loupe_rtl@2x.png
+  [search-magnify.png]=ectl_search_magnify.png
+  [closebox.png]=ecsb_closebox.png
+  [closebox@2x.png]=ecsb_closebox@2x.png
+  [closebox-pressed.png]=ecsb_closebox_pressed.png
+  [closebox-pressed@2x.png]=ecsb_closebox_pressed@2x.png
+  [cjk-regular.otf]=PingFangSC-Regular.otf
+  [cjk-semibold.otf]=PingFangSC-Semibold.otf
+  [ui-text.ttf]=SFNS.ttf
+  [app-icon.icns]=ProductPageIcon.icns
+  [app-icon-256.tiff]=ProductPageIcon_256x256.tiff
+  [app-icon-512.tiff]=ProductPageIcon_512x512.tiff
+  [logo-dark.pdf]=AKAppleLogoBlack.pdf
+  [logo-light.pdf]=AKAppleLogoWhite.pdf
+)
+
 restored=0
 missing=0
 mismatched=0
@@ -75,10 +113,19 @@ while read -r expected path; do
   [[ -z "${expected:-}" || "${expected:0:1}" == "#" ]] && continue
 
   candidate="$source_dir/$path"
+  base=${path##*/}
   if [[ ! -f "$candidate" ]]; then
-    base=${path##*/}
     if ! grep -qx "$base" <<<"$dupes"; then
       candidate="$source_dir/$base"
+    fi
+  fi
+  if [[ ! -f "$candidate" ]]; then
+    alias=${source_alias[$base]:-}
+    if [[ -n "$alias" ]]; then
+      candidate="$source_dir/$alias"
+      if [[ ! -f "$candidate" ]]; then
+        candidate="$source_dir/${path%/*}/$alias"
+      fi
     fi
   fi
 
