@@ -344,6 +344,85 @@ void main() {
     },
   );
 
+  testWidgets('a trackpad stroke follows the fingers and returns when short', (
+    tester,
+  ) async {
+    final controller = _Controller(count: 220);
+    await _mount(tester, controller, MacLaunchpadLayout(persist: false));
+    final pages = find.byKey(const ValueKey('mac-launchpad-pages'));
+    final point = tester.getCenter(pages);
+    Future<double> offset() async => tester
+        .widget<PageView>(pages)
+        .controller!
+        .offset;
+    for (var i = 0; i < 3; i++) {
+      await tester.sendEventToBinding(
+        PointerScrollEvent(
+          position: point,
+          scrollDelta: const Offset(60, 0),
+          kind: PointerDeviceKind.trackpad,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 8));
+    }
+    // The page moves with the stroke instead of waiting for a threshold: the
+    // fractional page is the stroke's own progress.
+    expect(await offset(), greaterThan(0));
+    expect(_page(tester), lessThan(0.5));
+    // A stroke shorter than a third of a page returns to where it started.
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pumpAndSettle();
+    await tester.pumpAndSettle();
+    expect(_page(tester), 0);
+    expect(await offset(), lessThan(1));
+  });
+
+  testWidgets('a long trackpad stroke commits to the next page', (
+    tester,
+  ) async {
+    final controller = _Controller(count: 220);
+    await _mount(tester, controller, MacLaunchpadLayout(persist: false));
+    final pages = find.byKey(const ValueKey('mac-launchpad-pages'));
+    final point = tester.getCenter(pages);
+    for (var i = 0; i < 10; i++) {
+      await tester.sendEventToBinding(
+        PointerScrollEvent(
+          position: point,
+          scrollDelta: const Offset(80, 0),
+          kind: PointerDeviceKind.trackpad,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 8));
+    }
+    expect(_page(tester), greaterThan(0.3));
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pumpAndSettle();
+    await tester.pumpAndSettle();
+    expect(_page(tester), closeTo(1, .01));
+  });
+
+  testWidgets('a vertical trackpad stroke never pages', (tester) async {
+    final controller = _Controller(count: 220);
+    await _mount(tester, controller, MacLaunchpadLayout(persist: false));
+    final pages = find.byKey(const ValueKey('mac-launchpad-pages'));
+    final point = tester.getCenter(pages);
+    for (var i = 0; i < 10; i++) {
+      await tester.sendEventToBinding(
+        PointerScrollEvent(
+          position: point,
+          scrollDelta: const Offset(12, 90),
+          kind: PointerDeviceKind.trackpad,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 8));
+    }
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pumpAndSettle();
+    expect(_page(tester), 0);
+    expect(tester.widget<PageView>(pages).controller!.offset, 0);
+    expect(controller.launched, isEmpty);
+  });
+
   testWidgets('wall-clock delay does not split an active wheel gesture', (
     tester,
   ) async {
