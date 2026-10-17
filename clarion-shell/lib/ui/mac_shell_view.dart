@@ -1373,7 +1373,9 @@ class _MacMenuBar extends StatelessWidget {
                               controller.toggleOverview();
                             }
                           },
-                          child: const Icon(Icons.window_rounded),
+                          // Overlapping panels, matching the Mission Control
+                          // silhouette instead of a bare window outline.
+                          child: const Icon(Icons.space_dashboard_outlined),
                         ),
                       if (width > 420)
                         _MacBarButton(
