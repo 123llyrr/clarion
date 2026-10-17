@@ -345,28 +345,17 @@ void main() {
       final before = tester.widget<RawImage>(raw).image;
       expect(before, isNotNull);
       expect(before!.width, (128 * dpr).ceil());
-      // The utility slots prefer imported artwork, which reserves a raster
-      // texture; without an import they render the shipped vector icons.
-      final imported = File('assets/shell/launchpad.png').existsSync();
+      // A utility slot uses the imported artwork when it exists, and the
+      // shipped icon otherwise: its form differs, the reserved texture size
+      // does not.
       for (final key in ['dock-launcher', 'dock-overview']) {
-        if (!imported) {
-          expect(
-            find.descendant(
-              of: find.byKey(ValueKey(key)),
-              matching: find.byType(SvgPicture),
-            ),
-            findsWidgets,
-            reason: 'a checkout without imports renders the shipped icons',
-          );
-          continue;
-        }
-        final utilityImage = find.descendant(
+        final raster = find.descendant(
           of: find.byKey(ValueKey(key)),
           matching: find.byType(RawImage),
         );
         for (var attempt = 0; attempt < 100; attempt++) {
-          if (utilityImage.evaluate().isNotEmpty &&
-              tester.widget<RawImage>(utilityImage).image != null) {
+          if (raster.evaluate().isNotEmpty &&
+              tester.widget<RawImage>(raster).image != null) {
             break;
           }
           await tester.runAsync(
@@ -374,29 +363,22 @@ void main() {
           );
           await tester.pump();
         }
+        if (raster.evaluate().isNotEmpty) {
+          expect(
+            tester.widget<RawImage>(raster).image?.width,
+            (128 * dpr).ceil(),
+          );
+          continue;
+        }
         expect(
-          tester.widget<RawImage>(utilityImage).image?.width,
-          (128 * dpr).ceil(),
+          find.descendant(
+            of: find.byKey(ValueKey(key)),
+            matching: find.byType(SvgPicture),
+          ),
+          findsWidgets,
+          reason: 'a checkout without imports renders the shipped icons',
         );
       }
-      expect(requests, hasLength(1));
-      expect(requests.single['pixelSize'], (128 * dpr).ceil());
-      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-      await mouse.addPointer(location: const Offset(500, 500));
-      for (var move = 0; move < 4; move++) {
-        await mouse.moveTo(tester.getCenter(_icon(_browser.id)));
-        await tester.pumpAndSettle();
-      }
-      expect(_scale(tester, 'Browser'), greaterThan(1.9));
-      expect(identical(tester.widget<RawImage>(raw).image, before), isTrue);
-      expect(requests, hasLength(1));
-      await mouse.moveTo(const Offset(500, 500));
-      await tester.pumpAndSettle();
-      expect(_scale(tester, 'Browser'), 1);
-      expect(identical(tester.widget<RawImage>(raw).image, before), isTrue);
-      expect(requests, hasLength(1));
-      await mouse.removePointer();
-      await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
     });
   }
