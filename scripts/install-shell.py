@@ -26,9 +26,19 @@ def atomic_text(path, text, mode=0o644):
             os.unlink(temporary)
 
 
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(512 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bundle", type=Path, required=True)
+    parser.add_argument("--launcher-binary", type=Path,
+                        help="Built GPUI launcher; defaults to the bundled executable or target/release/clarion-launcher")
     parser.add_argument("--prefix", type=Path, default=Path.home() / ".local")
     parser.add_argument("--config-root", type=Path)
     arguments = parser.parse_args()
@@ -36,6 +46,16 @@ def main():
     for required in ["clarion-shell", "lib/libflutter_linux_gtk.so", "data/icudtl.dat", "data/flutter_assets"]:
         if not (bundle / required).exists():
             parser.error(f"Incomplete bundle: {required}")
+    if arguments.launcher_binary is not None:
+        launcher_binary = arguments.launcher_binary
+    elif (bundle / "clarion-launcher").exists():
+        launcher_binary = bundle / "clarion-launcher"
+    else:
+        launcher_binary = Path(__file__).resolve().parent.parent / "target/release/clarion-launcher"
+    if not launcher_binary.is_file() or not os.access(launcher_binary, os.X_OK):
+        parser.error("Build clarion-launcher first with cargo build --locked --release -p clarion-launcher, "
+                     "or supply an executable --launcher-binary")
+    launcher_binary = launcher_binary.resolve(strict=True)
     prefix = arguments.prefix.resolve()
     root = prefix / "lib/clarion-shell"
     root.mkdir(parents=True, exist_ok=True)
@@ -44,6 +64,7 @@ def main():
     paths = {
         "launcher": prefix / "bin/clarion-shell",
         "legacy_launcher": prefix / "bin/realand-shell",
+        "apps_launcher": prefix / "bin/clarion-launcher",
         "command": prefix / "bin/clarion-shell-msg",
         "legacy_command": prefix / "bin/realand-shell-msg",
         "desktop": prefix / "share/applications/clarion-shell.desktop",
@@ -68,6 +89,13 @@ def main():
         release = root / "releases" / tag
         try:
             shutil.copytree(bundle, staging, dirs_exist_ok=True, symlinks=True)
+            # Pin Apps to the running Shell's release. A later bin symlink switch
+            # cannot make an already-running Shell spawn a different generation.
+            bundled_launcher = staging / "clarion-launcher"
+            if bundled_launcher.exists() or bundled_launcher.is_symlink():
+                bundled_launcher.unlink()
+            shutil.copy2(launcher_binary, bundled_launcher)
+            bundled_launcher.chmod(0o755)
             release.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(Path(__file__).resolve().parent.parent / "resources/clarion-shell-msg",
                          staging / "clarion-shell-msg")
@@ -82,7 +110,8 @@ def main():
             temporary = legacy.with_name(f".realand-shell-{tag}")
             temporary.symlink_to(launcher)
             os.replace(temporary, legacy)
-            for key, target in (("command", release / "clarion-shell-msg"),
+            for key, target in (("apps_launcher", release / "clarion-launcher"),
+                                ("command", release / "clarion-shell-msg"),
                                 ("legacy_command", paths["command"])):
                 path = paths[key]
                 temporary = path.with_name(f".{path.name}-{tag}")
@@ -122,6 +151,17 @@ RestartSec=2s
 [Install]
 WantedBy=graphical-session.target
 ''')
+            # Finalization is part of the transaction too. A failed hash read or
+            # receipt write must restore the public paths just like a copy or
+            # symlink failure, rather than leave an unreported new generation.
+            receipt = {
+                "release": str(release), "backup": str(backup), "previous": previous,
+                "sha256": file_sha256(release / "clarion-shell"),
+                "launcher_source": str(launcher_binary),
+                "launcher_sha256": file_sha256(release / "clarion-launcher"),
+                "service_enabled_or_started": False, "existing_shell_changed": False,
+            }
+            atomic_text(backup / "receipt.json", json.dumps(receipt, ensure_ascii=False, indent=2) + "\n")
         except BaseException:
             for name, path in paths.items():
                 if path.exists() or path.is_symlink():
@@ -134,12 +174,6 @@ WantedBy=graphical-session.target
             if staging.exists():
                 shutil.rmtree(staging)
             raise
-        receipt = {
-            "release": str(release), "backup": str(backup), "previous": previous,
-            "sha256": hashlib.sha256((release / "clarion-shell").read_bytes()).hexdigest(),
-            "service_enabled_or_started": False, "existing_shell_changed": False,
-        }
-        atomic_text(backup / "receipt.json", json.dumps(receipt, ensure_ascii=False, indent=2) + "\n")
         print(json.dumps(receipt, ensure_ascii=False, indent=2))
 
 

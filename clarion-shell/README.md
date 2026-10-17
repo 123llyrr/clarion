@@ -242,17 +242,32 @@ macOS 控制中心已接入 MPRIS 媒体控制；锁屏动作仍调用外部锁�
 ## 安装
 
 ```bash
-python3 scripts/install-shell.py --bundle clarion-shell/build/linux/x64/release/bundle
+cargo build --locked --release -p clarion-launcher
+scripts/build-shell.sh --release
+python3 scripts/install-shell.py \
+  --bundle clarion-shell/build/linux/x64/release/bundle \
+  --launcher-binary target/release/clarion-launcher
 ~/.local/bin/clarion-shell --preview
 ```
 
-安装复制完整 bundle 到独立版本目录，备份已有启动器，并安装应用菜单中的
-“Clarion 桌面外壳预览”入口和 user service。安装不改变服务已有的启用状态，
+按目标架构替换 bundle 的 `x64` 路径。安装先验证 Flutter bundle 和可执行的 GPUI Apps
+二进制，再将两者复制到同一个独立版本目录；备份已有入口，并安装应用菜单中的
+“Clarion 桌面外壳预览”入口和 user service。运行中的 Shell 优先使用自身版本目录内的
+`clarion-launcher`，以后安装新版本不会混用新旧进程。`CLARION_LAUNCHER_BIN` 可用绝对
+可执行路径显式覆盖。安装不改变服务已有的启用状态，
 也不会启动服务、停止 Noctalia 或重启 Clarion。首次切换外壳前先用预览验证。
 该服务仅在 `XDG_CURRENT_DESKTOP=clarion` 的登录会话启动，避免影响其他桌面。
 服务排在 `graphical-session.target` 之后、`xdg-desktop-autostart.target` 之前，
 避免 GTK 注册期间同步等待 Portal、Portal 又等待会话就绪的启动环。
 就绪通知等待首帧及有界菜单准备；`CLARION_SHELL_STARTUP_TRACE=1` 可记录原生与 Dock 首帧耗时。
+
+默认 Apps 入口配置为 Rust/GPUI Tahoe 浮动面板；在 `preferences.json` 中设置
+`"use_external_launcher": false` 可在加载偏好时选择保留的 Flutter 启动器。
+新面板的类别/名称、图标/列表和尺寸存于独立的 `apps-view.json`，旧
+`launchpad-layout.json` 文件夹布局保持独立。Phase 0 的隔离窗口、中文输入和 Shell/Dock
+组合验证已通过；完整生产入口的隔离 r6 验收也已通过，包括真实中文输入、Dock 桥接、
+全屏覆盖与焦点恢复。物理多屏、硬件手势和实际发行包构建仍需验证，详见
+[Tahoe Apps 说明](../docs/launcher-apps.md)。
 
 ## 测试
 
@@ -261,6 +276,11 @@ cd clarion-shell
 ~/.cache/clarion/toolchains/flutter/bin/flutter analyze --fatal-infos
 ~/.cache/clarion/toolchains/flutter/bin/flutter test test
 ```
+
+2026-10-18 的完整验证通过了 1,088 个 Flutter 测试、静态分析及 release 构建。
+独立 GPUI 启动器另外通过了 41 个 Rust 测试（含 5 个无显示服务器的 GPUI 交互测试）、
+所有目标的 Clippy `-D warnings`、Rust 1.88 检查和 release 构建；原生运行证据见
+[Tahoe Apps 说明](../docs/launcher-apps.md)。
 
 `integration_test/native_shell_test.dart` 需要 Linux layer-shell 与真实 Clarion IPC。
 在专用嵌套 Clarion 的 `WAYLAND_DISPLAY` 和 `CLARION_SOCKET` 下运行，禁止对当前

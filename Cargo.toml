@@ -1,5 +1,5 @@
 [workspace]
-exclude = ["third_party/smithay"]
+exclude = ["third_party/smithay", "third_party/gpui"]
 members = [
     "clarion-core",
     "clarion-motion",
@@ -9,6 +9,7 @@ members = [
     "clarion-ipc",
     "clarion-visual-tests",
     "clarion-settings",
+    "clarion-launcher",
 ]
 
 [workspace.package]
@@ -182,6 +183,7 @@ version = "0.1.0"
 assets = [
     { source = "target/release/clarion", dest = "/usr/bin/", mode = "755" },
     { source = "target/release/clarion-settings", dest = "/usr/bin/", mode = "755" },
+    { source = "target/release/clarion-launcher", dest = "/usr/bin/", mode = "755" },
     { source = "resources/clarion-session", dest = "/usr/bin/", mode = "755" },
     { source = "resources/clarion.desktop", dest = "/usr/share/wayland-sessions/", mode = "644" },
     { source = "resources/clarion-portals.conf", dest = "/usr/share/xdg-desktop-portal/", mode = "644" },
@@ -203,6 +205,7 @@ depends = "alacritty, fuzzel, python3"
 assets = [
     ["target/release/clarion", "usr/bin/", "755"],
     ["target/release/clarion-settings", "usr/bin/", "755"],
+    ["target/release/clarion-launcher", "usr/bin/", "755"],
     ["resources/clarion-session", "usr/bin/", "755"],
     ["resources/clarion.desktop", "/usr/share/wayland-sessions/", "644"],
     ["resources/clarion-portals.conf", "/usr/share/xdg-desktop-portal/", "644"],
@@ -218,3 +221,6 @@ assets = [
 # Keep the compositor damage/occlusion fix reproducible across machines.
 [patch."https://github.com/Smithay/smithay.git"]
 smithay = { path = "third_party/smithay" }
+
+[patch.crates-io]
+gpui = { path = "third_party/gpui" }

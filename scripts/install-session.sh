@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run after: cargo build --release -p clarion -p clarion-settings
+# Run after: cargo build --locked --release -p clarion -p clarion-settings -p clarion-launcher
 set -euo pipefail
 repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 build_dir=${1:-"$repo_dir/target/release"}
@@ -8,7 +8,7 @@ if [[ -z "$staging_root" && $EUID -ne 0 ]]; then
     echo "Run with sudo: sudo bash $repo_dir/scripts/install-session.sh" >&2
     exit 1
 fi
-for binary in clarion clarion-settings; do
+for binary in clarion clarion-settings clarion-launcher; do
     [[ -x "$build_dir/$binary" ]] || { echo "Build $binary first." >&2; exit 1; }
 done
 scratch_dir=$(mktemp -d)
@@ -29,6 +29,7 @@ install_file() {
 }
 install_file "$build_dir/clarion" /usr/local/bin/clarion 755
 install_file "$build_dir/clarion-settings" /usr/local/bin/clarion-settings 755
+install_file "$build_dir/clarion-launcher" /usr/local/bin/clarion-launcher 755
 install_file "$repo_dir/resources/clarion-session" /usr/local/bin/clarion-session 755
 install_file "$repo_dir/scripts/desktop-health.py" /usr/local/bin/clarion-doctor 755
 install_file "$repo_dir/resources/clarion-shell-msg" /usr/local/bin/clarion-shell-msg 755

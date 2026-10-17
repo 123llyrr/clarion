@@ -5,6 +5,28 @@ presentation scheduling and composition policy are independently compiled Rust
 crates. The compositor executable owns protocol and device resources on its event
 thread; workers receive bounded jobs and resource leases, never the desktop owner.
 
+`clarion-launcher` is an independent Rust/GPUI Tahoe Apps client. Its vendored
+GPUI 0.2.2 patch creates a Wayland layer role instead of an xdg role and retains
+GPUI's input, IME and client GPU ownership. The Phase 0 feasibility gate passed
+isolated geometry/scale, real Chinese IME, same-process window drop/reopen and
+Shell glass/Dock/focus tests. The complete isolated production r6 run also passed
+real IME, Flutter Dock integration, peer ownership, fullscreen layering and native
+focus restoration. The [Phase 0 record](docs/launcher-phase0.md) preserves the
+initial gate; the [Apps implementation record](docs/launcher-apps.md) covers the
+completed process/data/UI/bridge/package code, production evidence and remaining
+physical multi-output, hardware gesture and package-build checks.
+
+The Flutter Shell owns the backdrop, Dock, shared preferences and keyboard
+handoff. A bounded JSON-lines Unix socket carries Show/Hide/Toggle/Reload and
+visibility/launch/error events. GPUI owns the panel, its XDG catalog, search and
+view state; GIO owns Desktop Entry activation, with the existing user-manager
+scope policy. Hiding drops the layer window while an explicit keep-alive policy
+continues IPC processing. `apps-view.json` is independent of the fallback
+Flutter `launchpad-layout.json`; setting `use_external_launcher=false` selects
+that retained implementation. A deployment generation contains both client
+executables, and the bridge resolves the launcher next to the running Shell
+before looking on PATH.
+
 ## Module responsibilities
 
 | Module | Owns | Must not own |
@@ -21,6 +43,7 @@ thread; workers receive bounded jobs and resource leases, never the desktop owne
 | `clarion-ipc` | Versioned requests, responses and diagnostics | Desktop implementation |
 | `clarion-config` | Configuration decoding, schema and identity migration | Device ownership |
 | `clarion-shell`, `clarion-settings` | Desktop UI and configuration UI | Compositor core ownership |
+| `clarion-launcher` | Apps catalog, GPUI panel, bounded launcher IPC and independent view state | Shell backdrop, shared preference writes, compositor GPU resources |
 
 ```mermaid
 flowchart TD

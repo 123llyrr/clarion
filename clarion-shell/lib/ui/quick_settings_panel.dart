@@ -32,6 +32,7 @@ class QuickSettingsPanel extends StatelessWidget {
       controller.doNotDisturb,
       controller.reduceMotion,
       controller.shellStyle,
+      controller.useExternalLauncher,
       controller.themeMode,
       controller.barPosition,
       controller.macPreferences,
@@ -104,6 +105,15 @@ class QuickSettingsPanel extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                if (controller.shellStyle == ShellStyle.macos)
+                  SwitchListTile.adaptive(
+                    key: const ValueKey('use-external-launcher'),
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('新版应用面板'),
+                    subtitle: const Text('关闭后使用经典启动器'),
+                    value: controller.useExternalLauncher,
+                    onChanged: controller.setUseExternalLauncher,
+                  ),
                 Text('界面风格', style: Theme.of(context).textTheme.titleSmall),
                 const SizedBox(height: 10),
                 LayoutBuilder(

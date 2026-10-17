@@ -66,6 +66,12 @@ BuildRequires:  cargo-rpm-macros >= 26
 BuildRequires:  pkgconfig(udev)
 BuildRequires:  pkgconfig(gbm)
 BuildRequires:  pkgconfig(xkbcommon)
+BuildRequires:  pkgconfig(fontconfig)
+BuildRequires:  pkgconfig(freetype2)
+BuildRequires:  pkgconfig(wayland-client)
+BuildRequires:  pkgconfig(egl)
+BuildRequires:  pkgconfig(gl)
+BuildRequires:  pkgconfig(vulkan)
 BuildRequires:  wayland-devel
 BuildRequires:  pkgconfig(libinput)
 BuildRequires:  pkgconfig(dbus-1)
@@ -82,6 +88,11 @@ BuildRequires:  mesa-libEGL
 
 Requires:       mesa-dri-drivers
 Requires:       mesa-libEGL
+Requires:       fontconfig
+Requires:       freetype
+Requires:       vulkan-loader
+Requires:       libwayland-client
+Requires:       libxkbcommon
 
 # Loaded through dlopen
 Requires:       libwayland-server
@@ -130,8 +141,8 @@ sed -i 's/\[env\]/[env]\nCLARION_BUILD_COMMIT="%{version}"/' .cargo/config.toml
 %build
 %cargo_build
 # The standard build macro targets the root package; build the workspace
-# settings GUI explicitly so its binary is present for RPM installation.
-%{__cargo} build %{__cargo_common_opts} --profile rpm --package clarion-settings
+# settings GUI and GPUI launcher explicitly for RPM installation.
+%{__cargo} build %{__cargo_common_opts} --profile rpm --package clarion-settings --package clarion-launcher
 
 target/rpm/clarion completions bash > ./clarion
 target/rpm/clarion completions fish > ./clarion.fish
@@ -139,7 +150,7 @@ target/rpm/clarion completions zsh > ./_clarion
 
 %install
 %cargo_install
-install -Dm755 -t %{buildroot}%{_bindir} target/rpm/clarion-settings
+install -Dm755 -t %{buildroot}%{_bindir} target/rpm/clarion-settings target/rpm/clarion-launcher
 
 install -Dm755 -t %{buildroot}%{_bindir} ./resources/clarion-session
 install -Dm644 -t %{buildroot}%{_datadir}/wayland-sessions ./resources/clarion.desktop
@@ -158,11 +169,14 @@ install -Dm644 -t %{buildroot}%{zsh_completions_dir} ./_clarion
 
 %files
 %license LICENSE
+%license THIRD_PARTY_NOTICES.md
+%license third_party/gpui/LICENSE-APACHE
 %doc README.md
 %doc resources/default-config.kdl
 %doc docs/wiki
 %{_bindir}/clarion
 %{_bindir}/clarion-settings
+%{_bindir}/clarion-launcher
 %{_bindir}/clarion-session
 %{_datadir}/wayland-sessions/clarion.desktop
 %dir %{_datadir}/xdg-desktop-portal

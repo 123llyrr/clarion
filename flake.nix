@@ -15,6 +15,8 @@
           lib,
           cairo,
           dbus,
+          fontconfig,
+          freetype,
           libGL,
           libdisplay-info_0_3,
           libinput,
@@ -28,6 +30,9 @@
           rustPlatform,
           systemd,
           wayland,
+          vulkan-headers,
+          vulkan-loader,
+          xorg,
           installShellFiles,
           withDbus ? true,
           withSystemd ? true,
@@ -50,12 +55,14 @@
               ./clarion-scene
               ./clarion-ipc
               ./clarion-settings
+              ./clarion-launcher
               ./clarion-shell/assets/shell/ui-text.ttf
               ./clarion-shell/assets/shell/cjk-regular.otf
               ./clarion-visual-tests
               ./resources
               ./src
               ./third_party/smithay
+              ./third_party/gpui
               ./Cargo.toml
               ./Cargo.lock
             ];
@@ -87,6 +94,8 @@
             [
               cairo
               dbus
+              fontconfig
+              freetype
               libGL
               libdisplay-info_0_3
               libinput
@@ -95,6 +104,11 @@
               libgbm
               pango
               wayland
+              vulkan-headers
+              vulkan-loader
+              # GPUI's headless test-support also compiles the X11 backend.
+              # xkbcommon-x11 is provided by libxkbcommon above.
+              xorg.libxcb
             ]
             ++ lib.optional (withDbus || withScreencastSupport || withSystemd) dbus
             ++ lib.optional withScreencastSupport pipewire
@@ -122,11 +136,13 @@
           ];
 
           cargoBuildFlags = [
+            "--locked"
             "--workspace"
             "--exclude"
             "clarion-visual-tests"
           ];
           cargoTestFlags = [
+            "--locked"
             "--workspace"
             "--exclude"
             "clarion-visual-tests"
@@ -140,7 +156,8 @@
                 --nushell <($out/bin/clarion completions nushell) \
                 --zsh <($out/bin/clarion completions zsh)
 
-              install -Dm755 target/release/clarion-settings $out/bin/clarion-settings
+              install -Dm755 target/''${cargoBuildType:-release}/clarion-settings $out/bin/clarion-settings
+              install -Dm755 target/''${cargoBuildType:-release}/clarion-launcher $out/bin/clarion-launcher
               install -Dm755 resources/clarion-session $out/bin/clarion-session
               install -Dm755 resources/clarion-shell-msg $out/bin/clarion-shell-msg
               substituteInPlace $out/bin/clarion-shell-msg \
@@ -160,13 +177,17 @@
             '';
 
           env = {
-            # Force linking with libEGL and libwayland-client so they end up in RPATH and
-            # can be discovered by `dlopen()`
+            # Keep compositor and GPUI libraries in the runtime closure/RPATH,
+            # including libraries discovered through `dlopen()` by either client.
             RUSTFLAGS = toString (
               map (arg: "-C link-arg=" + arg) [
                 "-Wl,--push-state,--no-as-needed"
                 "-lEGL"
                 "-lwayland-client"
+                "-lxkbcommon"
+                "-lfontconfig"
+                "-lfreetype"
+                "-lvulkan"
                 "-Wl,--pop-state"
               ]
             );
