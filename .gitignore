@@ -41,6 +41,9 @@ __pycache__/
 /clarion-shell/assets/shell/*.otf
 /clarion-shell/assets/shell/sources/
 /clarion-settings/assets/shell/*.png
+# The project mark is original artwork and ships with the repository.
+!/clarion-shell/assets/shell/clarion-mark-white.png
+!/clarion-shell/assets/shell/clarion-mark-black.png
 
 # Local Shell debug symbols
 /clarion-shell/debug_info/

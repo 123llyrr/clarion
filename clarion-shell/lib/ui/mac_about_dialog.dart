@@ -318,7 +318,18 @@ class _MacAboutDialogState extends State<MacAboutDialog> {
                   ),
                 ],
               ),
-              child: Center(child: ClarionMark(size: isSmallScreen ? 64 : 84)),
+              child: Center(
+                child: Image.asset(
+                  dark
+                      ? 'assets/shell/clarion-mark-white.png'
+                      : 'assets/shell/clarion-mark-black.png',
+                  width: isSmallScreen ? 64 : 84,
+                  height: isSmallScreen ? 64 : 84,
+                  filterQuality: FilterQuality.high,
+                  errorBuilder: (_, _, _) =>
+                      ClarionMark(size: isSmallScreen ? 64 : 84),
+                ),
+              ),
             ),
           ),
         ),
