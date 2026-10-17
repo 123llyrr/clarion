@@ -13,6 +13,7 @@ use smithay::utils::Size;
 
 use crate::clarion_render_elements;
 use crate::layout::workspace::{WorkspaceId, WorkspaceRenderElement};
+use crate::render_helpers::border::BorderRenderElement;
 use crate::render_helpers::offscreen::{NativeOffscreenBuffer, OffscreenBuffer, OffscreenData};
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::ui::mru::MruTexture;
@@ -58,6 +59,7 @@ pub struct MonitorResources {
     pub(crate) stage_rail_text: RefCell<Vec<Option<TextTextureCache>>>,
     pub(crate) stage_rail_buffers: RefCell<Vec<SolidColorBuffer>>,
     pub(crate) stage_borders: RefCell<Vec<[SolidColorBuffer; 4]>>,
+    pub(crate) stage_glass_borders: RefCell<Vec<[BorderRenderElement; 2]>>,
     pub(crate) expo_borders: RefCell<Vec<[SolidColorBuffer; 4]>>,
     pub(crate) insert_hint_element: RefCell<super::insert_hint_element::InsertHintElement>,
 }
@@ -78,6 +80,7 @@ impl Default for MonitorResources {
             stage_rail_text: RefCell::new(Vec::new()),
             stage_rail_buffers: RefCell::new(Vec::new()),
             stage_borders: RefCell::new(Vec::new()),
+            stage_glass_borders: RefCell::new(Vec::new()),
             expo_borders: RefCell::new(Vec::new()),
             insert_hint_element: RefCell::new(Default::default()),
         }

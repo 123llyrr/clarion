@@ -252,6 +252,7 @@ clarion_render_elements! {
         SpreadText = crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement,
         StageText = CropRenderElement<crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement>,
         StageLayer = CropRenderElement<crate::layer::mapped::LayerSurfaceRenderElement<R>>,
+        Border = crate::render_helpers::border::BorderRenderElement,
     }
 }
 

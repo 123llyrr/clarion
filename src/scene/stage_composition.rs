@@ -9,10 +9,13 @@ use smithay::backend::renderer::element::utils::{
 use smithay::backend::renderer::element::Kind;
 use smithay::utils::{Logical, Physical, Point, Rectangle, Size};
 
+use clarion_config::{Color, CornerRadius, GradientInterpolation};
+
 use crate::layout::monitor::{MonitorInnerRenderElement, MonitorRenderElement};
 use crate::layout::scene_source::{InsertHintRenderSource, StageLayers, WorkspaceScene};
 use crate::layout::workspace::{WorkspaceId, WorkspaceRenderElement};
 use crate::layout::LayoutElement;
+use crate::render_helpers::border::BorderRenderElement;
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::renderer::ClarionRenderer;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
@@ -77,7 +80,7 @@ impl<W: LayoutElement> StageComposition<'_, W> {
         let _span = clarion_tracy_span!("Scene::compose_stage");
         self.render_rail(ctx.r(), push);
         for card in &self.cards {
-            self.render_border(card, push);
+            self.render_border(ctx.renderer, card, push);
             self.render_layers(ctx.r(), card, true, layers, push);
             let xray = XrayPos::new(card.geometry.loc, card.zoom);
             for channel in Channel::ORDER {
@@ -159,6 +162,7 @@ impl<W: LayoutElement> StageComposition<'_, W> {
 
     fn render_border<R: ClarionRenderer>(
         &self,
+        renderer: &mut R,
         card: &StageCard<'_, W>,
         push: &mut dyn FnMut(MonitorRenderElement<R>),
     ) {
@@ -167,6 +171,79 @@ impl<W: LayoutElement> StageComposition<'_, W> {
         if geometry.size.w <= width * 2. || geometry.size.h <= width * 2. {
             return;
         }
+        if BorderRenderElement::has_shader(renderer) {
+            self.render_glass_border(card, width, push);
+        } else {
+            self.render_solid_border(card, width, push);
+        }
+    }
+
+    /// Translucent glass edge: a soft accent glow behind a brighter highlight
+    /// line. The stage card shape is unchanged; only the material changes.
+    fn render_glass_border<R: ClarionRenderer>(
+        &self,
+        card: &StageCard<'_, W>,
+        width: f64,
+        push: &mut dyn FnMut(MonitorRenderElement<R>),
+    ) {
+        let geometry = card.geometry;
+        let active = Color::from_array_premul(self.active_color);
+        let tinted = |alpha: f32| Color::new_unpremul(active.r, active.g, active.b, alpha);
+        let white = |alpha: f32| Color::new_unpremul(1., 1., 1., alpha);
+        let angle = (135f32 - 90.).to_radians();
+        let gradient = GradientInterpolation::default();
+
+        let mut cache = self.resources.stage_glass_borders.borrow_mut();
+        cache.resize_with(self.workspace_count, || {
+            [BorderRenderElement::empty(), BorderRenderElement::empty()]
+        });
+        let [glow, line] = &mut cache[card.workspace_index];
+
+        let glow_width = 5.;
+        let glow_loc = geometry.loc - Point::from((glow_width, glow_width));
+        let glow_size = geometry.size + Size::from((glow_width * 2., glow_width * 2.));
+        glow.update(
+            glow_size,
+            Rectangle::from_size(glow_size),
+            gradient,
+            white(0.10),
+            tinted(0.05),
+            angle,
+            Rectangle::from_size(glow_size),
+            glow_width as f32,
+            CornerRadius::default(),
+            self.scale as f32,
+            self.alpha,
+        );
+        line.update(
+            geometry.size,
+            Rectangle::from_size(geometry.size),
+            gradient,
+            white(0.62),
+            tinted(0.34),
+            angle,
+            Rectangle::from_size(geometry.size),
+            width as f32,
+            CornerRadius::default(),
+            self.scale as f32,
+            self.alpha,
+        );
+
+        push(untransformed(MonitorInnerRenderElement::Border(
+            glow.clone().with_location(glow_loc),
+        )));
+        push(untransformed(MonitorInnerRenderElement::Border(
+            line.clone().with_location(geometry.loc),
+        )));
+    }
+
+    fn render_solid_border<R: ClarionRenderer>(
+        &self,
+        card: &StageCard<'_, W>,
+        width: f64,
+        push: &mut dyn FnMut(MonitorRenderElement<R>),
+    ) {
+        let geometry = card.geometry;
         let passive_color = [0.25, 0.25, 0.30, 0.8];
         let color = std::array::from_fn(|index| {
             passive_color[index]
