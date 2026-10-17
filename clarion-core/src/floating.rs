@@ -685,17 +685,19 @@ impl FloatingPolicy {
         let previous = placement.rectangle;
         placement.set_size(size);
         if let Some(edges) = committed_edges {
-            let dx = if edges & 4 != 0 {
-                previous.width - placement.rectangle.width
+            // set_size may clamp an offscreen position for the new size. The
+            // resize anchor belongs to the old rectangle, before that clamp.
+            let x = if edges & 4 != 0 {
+                previous.right() - placement.rectangle.width
             } else {
-                0.0
+                placement.rectangle.x
             };
-            let dy = if edges & 1 != 0 {
-                previous.height - placement.rectangle.height
+            let y = if edges & 1 != 0 {
+                previous.bottom() - placement.rectangle.height
             } else {
-                0.0
+                placement.rectangle.y
             };
-            placement.set_position([placement.rectangle.x + dx, placement.rectangle.y + dy]);
+            placement.set_position([x, y]);
         }
         Some(PlacementChange {
             id,
@@ -1082,6 +1084,37 @@ mod tests {
         assert_eq!(change.current.right(), change.previous.right());
         assert_eq!(change.current.bottom(), change.previous.bottom());
         assert!(policy.verify_invariants());
+    }
+
+    #[test]
+    fn shrinking_from_offscreen_edges_keeps_the_original_opposite_edges() {
+        let area = Rect::new(0., 0., 1000., 800.);
+        for (position, size, edges, expected) in [
+            ([-200., 100.], Size::new(100., 300.), 4, [100., 100.]),
+            ([100., -150.], Size::new(400., 100.), 1, [100., 50.]),
+            ([-200., -150.], Size::new(100., 100.), 5, [100., 50.]),
+        ] {
+            let mut policy = FloatingPolicy::new();
+            policy.insert(
+                1,
+                Placement::new(area, Size::new(400., 300.), position, false),
+                0,
+                true,
+                &[],
+            );
+            // Resize metadata can outlive the grab; its old opposite edge is
+            // still the anchor even when the new size changes reachability.
+            assert!(policy.resize().is_none());
+            let change = policy.commit_tile_size(1, size, Some(edges)).unwrap();
+            assert_eq!(
+                change.current,
+                Rect::new(expected[0], expected[1], size.width, size.height),
+                "edges = {edges}",
+            );
+            assert_eq!(change.current.right(), change.previous.right());
+            assert_eq!(change.current.bottom(), change.previous.bottom());
+            assert!(policy.verify_invariants());
+        }
     }
 
     #[test]

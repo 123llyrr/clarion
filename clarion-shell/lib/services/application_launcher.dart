@@ -72,11 +72,21 @@ class ApplicationLauncher {
   final ApplicationScopeProbe? _injectedProbe;
   Future<ApplicationScope>? _capabilities;
 
-  Future<void> launch(String executable, List<String> arguments) async {
+  /// Wait for short-lived helpers such as GIO to report their exit status.
+  /// Direct GUI applications use [waitForExit] false and retain their process
+  /// after the initial startup-error observation period.
+  Future<void> launch(
+    String executable,
+    List<String> arguments, {
+    bool waitForExit = true,
+  }) async {
     // Probe before invoking the application. Once an invocation is attempted,
     // an error must reach the caller; retrying directly could open it twice.
     final scope = await (_injectedProbe?.call() ?? _scope());
-    final command = _injectedCommand ?? _run;
+    final command =
+        _injectedCommand ??
+        (String program, List<String> argv) =>
+            _run(program, argv, waitForExit: waitForExit);
     if (scope == null) {
       await command(executable, List.of(arguments));
     } else {
@@ -138,7 +148,11 @@ class ApplicationLauncher {
     }
   }
 
-  Future<String> _run(String executable, List<String> arguments) async {
+  Future<String> _run(
+    String executable,
+    List<String> arguments, {
+    required bool waitForExit,
+  }) async {
     // Apps inherit the shell's journal descriptors, rather than temporary
     // command pipes which would close when GIO returns or the shell exits.
     // inheritStdio still exposes exitCode, preserving GIO/scope launch errors.
@@ -149,12 +163,18 @@ class ApplicationLauncher {
       mode: ProcessStartMode.inheritStdio,
     );
     try {
-      final exit = await process.exitCode.timeout(const Duration(seconds: 10));
+      final exit = await process.exitCode.timeout(
+        Duration(seconds: waitForExit ? 10 : 1),
+      );
       if (exit != 0) {
         throw StateError('应用启动失败：$executable ($exit)，详见外壳日志');
       }
       return '';
     } on TimeoutException {
+      // A foreground GUI remains alive until its window closes. Observe early
+      // startup failures, then leave its lifetime to the application/user
+      // manager; a running window is not a failed launch helper.
+      if (!waitForExit) return '';
       // Stop only the launch helper. Any application already placed in its
       // scope remains owned by the user manager, independent of this shell.
       process.kill(ProcessSignal.sigkill);

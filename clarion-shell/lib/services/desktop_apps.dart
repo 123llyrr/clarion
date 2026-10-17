@@ -2,6 +2,7 @@
 import 'dart:io';
 import '../models.dart';
 import 'application_launcher.dart';
+import 'desktop_entry_locale.dart';
 
 class DesktopApps {
   DesktopApps({
@@ -38,13 +39,7 @@ class DesktopApps {
     final desktops = (environment['XDG_CURRENT_DESKTOP'] ?? 'clarion')
         .split(':')
         .toSet();
-    final locale =
-        (environment['LC_ALL'] ??
-                environment['LC_MESSAGES'] ??
-                environment['LANG'] ??
-                '')
-            .split('.')
-            .first;
+    final locale = desktopEntryLocale(environment);
     for (final root in dataRoots) {
       final dir = Directory('$root/applications');
       if (!await dir.exists()) continue;

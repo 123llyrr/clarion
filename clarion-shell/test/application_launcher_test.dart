@@ -144,18 +144,73 @@ void main() {
     'scope client errors keep their exit status with inherited stdio',
     () async {
       final launcher = ApplicationLauncher(scopeProbe: () async => null);
-      await expectLater(
-        launcher.launch('/usr/bin/false', []),
-        throwsA(
-          isA<StateError>().having(
-            (error) => error.message,
-            'exit',
-            contains('(1)'),
+      for (final waitForExit in [true, false]) {
+        await expectLater(
+          launcher.launch('/usr/bin/false', [], waitForExit: waitForExit),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'exit',
+              contains('(1)'),
+            ),
           ),
-        ),
-      );
+        );
+      }
     },
   );
+
+  test('foreground preference applications return while still alive', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'clarion-preferences-lifetime-',
+    );
+    const programs = ['pavucontrol', 'nm-connection-editor', 'blueman-manager'];
+    addTearDown(() async {
+      for (final program in programs) {
+        final pidFile = File('${directory.path}/$program.pid');
+        if (await pidFile.exists()) {
+          final child = int.parse((await pidFile.readAsString()).trim());
+          Process.killPid(child, ProcessSignal.sigkill);
+        }
+      }
+      await directory.delete(recursive: true);
+    });
+    for (final program in programs) {
+      final executable = File('${directory.path}/$program');
+      await executable.writeAsString(
+        '#!/bin/sh\n'
+        r'echo $$ > "$0.pid"'
+        '\nexec /bin/sleep 30\n',
+      );
+      final permissions = await Process.run('/usr/bin/chmod', [
+        '700',
+        executable.path,
+      ]);
+      expect(permissions.exitCode, 0);
+    }
+    final system = SystemService(
+      applicationLauncher: ApplicationLauncher(
+        environment: {'PATH': directory.path},
+        scopeProbe: () async => null,
+      ),
+    );
+    for (final open in [
+      system.openSoundPreferences,
+      system.openNetworkPreferences,
+      system.openBluetoothPreferences,
+    ]) {
+      await open().timeout(const Duration(seconds: 3));
+    }
+    for (final program in programs) {
+      final child = int.parse(
+        (await File('${directory.path}/$program.pid').readAsString()).trim(),
+      );
+      expect(
+        (await Process.run('/bin/kill', ['-0', '$child'])).exitCode,
+        0,
+        reason: '$program must remain open for the user',
+      );
+    }
+  });
 
   test(
     'all Dock GUI folder actions scope GIO; hardware commands stay direct',

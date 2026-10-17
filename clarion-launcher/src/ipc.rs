@@ -214,10 +214,10 @@ fn receive(
             Err(_) => break,
         };
         pending.extend_from_slice(&buffer[..count]);
-        if pending.len() > MAX_LINE {
-            break;
-        }
         while let Some(end) = pending.iter().position(|&byte| byte == b'\n') {
+            if end >= MAX_LINE {
+                break 'receive;
+            }
             let line: Vec<_> = pending.drain(..=end).collect();
             match serde_json::from_slice::<Command>(&line) {
                 Ok(command) => {
@@ -237,6 +237,11 @@ fn receive(
                     },
                 ),
             }
+        }
+        // One read may finish a valid line and begin the next one. Apply the
+        // limit to each complete line above, then to the remaining fragment.
+        if pending.len() > MAX_LINE {
+            break;
         }
     }
     let _ = sender.send_blocking(Input::Disconnected { peer: id });
@@ -296,6 +301,82 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&response).unwrap()["request_id"],
             7
         );
+    }
+
+    #[test]
+    fn line_limit_accepts_a_full_size_command_between_other_commands() {
+        let (stream, mut peer) = UnixStream::pair().unwrap();
+        let (sender, receiver) = async_channel::unbounded();
+        let mut large = serde_json::to_vec(&serde_json::json!({
+            "type": "Show", "request_id": 2, "output": "",
+        }))
+        .unwrap();
+        let padding = MAX_LINE - large.len() - 1;
+        large = serde_json::to_vec(&serde_json::json!({
+            "type": "Show", "request_id": 2, "output": "x".repeat(padding),
+        }))
+        .unwrap();
+        large.push(b'\n');
+        assert_eq!(large.len(), MAX_LINE);
+
+        // The preceding short line makes the full-size line's boundary fall
+        // inside a 4096-byte read shared with the following command.
+        let mut batch = b"{\"type\":\"Hide\",\"request_id\":1}\n".to_vec();
+        batch.extend(large);
+        batch.extend_from_slice(b"{\"type\":\"Hide\",\"request_id\":3}\n");
+        peer.write_all(&batch).unwrap();
+        peer.shutdown(std::net::Shutdown::Write).unwrap();
+        receive(
+            stream,
+            1,
+            sender,
+            Events::default(),
+            Arc::new(AtomicBool::new(true)),
+        );
+
+        let mut request_ids = Vec::new();
+        while let Ok(input) = receiver.try_recv() {
+            match input {
+                Input::Command {
+                    command: Command::Hide { request_id },
+                    ..
+                } => request_ids.push(request_id),
+                Input::Command {
+                    command: Command::Show { presentation },
+                    ..
+                } => request_ids.push(presentation.request_id),
+                Input::Disconnected { .. } => {}
+                _ => panic!("unexpected command"),
+            }
+        }
+        assert_eq!(request_ids, [1, 2, 3]);
+    }
+
+    #[test]
+    fn oversized_lines_disconnect_with_or_without_a_trailing_newline() {
+        for newline in [false, true] {
+            let (stream, mut peer) = UnixStream::pair().unwrap();
+            let (sender, receiver) = async_channel::unbounded();
+            let mut oversized = vec![b' '; MAX_LINE + 1];
+            if newline {
+                oversized.push(b'\n');
+                oversized.extend_from_slice(b"{\"type\":\"Hide\",\"request_id\":3}\n");
+            }
+            peer.write_all(&oversized).unwrap();
+            peer.shutdown(std::net::Shutdown::Write).unwrap();
+            receive(
+                stream,
+                1,
+                sender,
+                Events::default(),
+                Arc::new(AtomicBool::new(true)),
+            );
+            assert!(matches!(
+                receiver.try_recv().unwrap(),
+                Input::Disconnected { peer: 1 }
+            ));
+            assert!(receiver.try_recv().is_err());
+        }
     }
 
     #[test]

@@ -66,6 +66,43 @@ void main() {
   tearDown(() => fixture.root.delete(recursive: true));
 
   test(
+    'empty locale overrides preserve localized names and search text',
+    () async {
+      await fixture.entry(
+        'localized',
+        name: 'Browser',
+        extra:
+            'DBusActivatable=true\n'
+            'Name[zh_CN]=浏览器\nName[fr_FR]=Navigateur\n'
+            'Comment=Browse the web\nComment[zh_CN]=浏览网页\n'
+            'Keywords=web;\nKeywords[zh_CN]=网页;上网;\n',
+      );
+      for (final locale in [
+        {'LC_ALL': '', 'LC_MESSAGES': '', 'LANG': 'zh_CN.UTF-8'},
+        {'LC_ALL': '', 'LC_MESSAGES': 'zh_CN.UTF-8', 'LANG': 'fr_FR.UTF-8'},
+        {'LC_ALL': 'zh_CN.UTF-8', 'LC_MESSAGES': 'fr_FR.UTF-8', 'LANG': 'C'},
+      ]) {
+        final app = (await fixture.service(overrides: locale).load()).single;
+        expect(app.name, '浏览器');
+        expect(app.description, '浏览网页');
+        expect(app.keywords, ['网页', '上网']);
+      }
+      final fallback =
+          (await fixture
+                  .service(
+                    overrides: {
+                      'LC_ALL': 'C',
+                      'LC_MESSAGES': 'zh_CN.UTF-8',
+                      'LANG': 'zh_CN.UTF-8',
+                    },
+                  )
+                  .load())
+              .single;
+      expect(fallback.name, 'Browser');
+    },
+  );
+
+  test(
     'missing launchers are excluded while installed VM, Wine and native apps survive',
     () async {
       final vm = await fixture.executable('winpodx');

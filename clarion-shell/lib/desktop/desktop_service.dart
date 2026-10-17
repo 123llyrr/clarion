@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 import '../models.dart';
 import '../services/application_launcher.dart';
 import '../services/desktop_apps.dart';
+import '../services/desktop_entry_locale.dart';
 import '../services/system_service.dart';
 import 'desktop_entry.dart';
 import 'desktop_file_details.dart';
@@ -238,13 +239,7 @@ class DesktopService extends ChangeNotifier {
           final metadata = parseDesktopEntry(await File(path).readAsString());
           shortcut = metadata['Type'] == 'Application';
           if (shortcut) {
-            final locale =
-                (_environment['LC_ALL'] ??
-                        _environment['LC_MESSAGES'] ??
-                        _environment['LANG'] ??
-                        '')
-                    .split('.')
-                    .first;
+            final locale = desktopEntryLocale(_environment);
             label =
                 metadata['Name[$locale]'] ??
                 metadata['Name[${locale.split('_').first}]'] ??

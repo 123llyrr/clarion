@@ -301,7 +301,7 @@ class SystemService {
   );
 
   Future<void> openSoundPreferences() =>
-      _applicationLauncher.launch('pavucontrol', const []);
+      _applicationLauncher.launch('pavucontrol', const [], waitForExit: false);
 
   Future<void> toggleMute() async {
     await command('wpctl', ['set-mute', '@DEFAULT_AUDIO_SINK@', 'toggle']);
@@ -403,17 +403,33 @@ class SystemService {
 
   Future<void> openNetworkPreferences() async {
     try {
-      await _applicationLauncher.launch('nm-connection-editor', const []);
+      await _applicationLauncher.launch(
+        'nm-connection-editor',
+        const [],
+        waitForExit: false,
+      );
     } catch (_) {
-      await _applicationLauncher.launch('clarion-settings', const []);
+      await _applicationLauncher.launch(
+        'clarion-settings',
+        const [],
+        waitForExit: false,
+      );
     }
   }
 
   Future<void> openBluetoothPreferences() async {
     try {
-      await _applicationLauncher.launch('blueman-manager', const []);
+      await _applicationLauncher.launch(
+        'blueman-manager',
+        const [],
+        waitForExit: false,
+      );
     } catch (_) {
-      await _applicationLauncher.launch('clarion-settings', const []);
+      await _applicationLauncher.launch(
+        'clarion-settings',
+        const [],
+        waitForExit: false,
+      );
     }
   }
 }

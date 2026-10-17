@@ -56,8 +56,6 @@
               ./clarion-ipc
               ./clarion-settings
               ./clarion-launcher
-              ./clarion-shell/assets/shell/ui-text.ttf
-              ./clarion-shell/assets/shell/cjk-regular.otf
               ./clarion-visual-tests
               ./resources
               ./src
