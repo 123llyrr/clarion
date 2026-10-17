@@ -104,7 +104,7 @@ class MacDockAppMenu extends StatelessWidget {
               ),
               _MenuRow(
                 actionKey: 'dock-menu-reveal',
-                label: '在访达中显示',
+                label: '在Home中显示',
                 onPressed: () => controller.revealDockApp(app.id),
               ),
               _LoginItemRow(

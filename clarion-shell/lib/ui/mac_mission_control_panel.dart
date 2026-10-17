@@ -717,7 +717,7 @@ class _WindowSpreadArea extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               OptionalAssetIcon(
-                asset: 'assets/shell/mission-control.png',
+                asset: 'assets/icons/mission-control.svg',
                 fallback: Icons.dashboard_rounded,
                 width: 52,
                 height: 52,

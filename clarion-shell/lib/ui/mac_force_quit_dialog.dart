@@ -45,8 +45,8 @@ class _ForceQuitItem {
 class _MacForceQuitDialogState extends State<MacForceQuitDialog> {
   static const _finderItem = _ForceQuitItem(
     id: 'finder',
-    name: '访达',
-    app: DesktopApp(id: 'finder', name: '访达', desktopFile: ''),
+    name: 'Home',
+    app: DesktopApp(id: 'finder', name: 'Home', desktopFile: ''),
     isFinder: true,
   );
 
@@ -243,7 +243,7 @@ class _MacForceQuitDialogState extends State<MacForceQuitDialog> {
                                               MacAppIcons.isFileManager(
                                                 item.app,
                                               ))
-                                          ? 'assets/shell/finder.png'
+                                          ? 'assets/icons/home.svg'
                                           : null,
                                     ),
                                   ),

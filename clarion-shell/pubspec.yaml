@@ -20,12 +20,13 @@ dev_dependencies:
   flutter_lints: ^6.0.0
 flutter:
   uses-material-design: true
-  # No Apple artwork or fonts are bundled: they cannot be redistributed under
-  # GPL-3.0-or-later. Run scripts/import-shell-assets.sh to restore them from an
-  # image you own; it replaces the block between the markers below.
+  # The icon set ships with the repository. The imported shell artwork and
+  # fonts stay out of the distribution tree: scripts/import-shell-assets.sh
+  # restores them from an image you own, adds - assets/shell/ to the list and
+  # uncomments the fonts between the markers below.
+  assets:
+    - assets/icons/
   # BEGIN shell assets
-  # assets:
-  #   - assets/shell/
   # fonts:
   #   - family: ClarionSystem
   #     fonts:

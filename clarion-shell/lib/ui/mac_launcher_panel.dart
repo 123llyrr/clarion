@@ -984,7 +984,7 @@ class _MacLauncherPanelState extends State<MacLauncherPanel>
             style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
           ),
           content: const Text(
-            '从启动台移除不会卸载应用，可在应用列表或访达中重新打开。',
+            '从启动台移除不会卸载应用，可在应用列表或Home中重新打开。',
             style: TextStyle(fontSize: 12),
           ),
           actions: [

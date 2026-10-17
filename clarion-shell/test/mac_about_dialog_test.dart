@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:clarion_shell/services/system_information_service.dart';
@@ -94,7 +95,7 @@ void main() {
     expect(find.text('C02XYZ123ABC'), findsNothing);
     expect(find.text('系统报告…'), findsNothing);
     expect(find.text('软件更新…'), findsNothing);
-    expect(find.text('好'), findsOneWidget);
+    expect(find.text('好'), findsNothing);
   });
 
   testWidgets('switches to Displays tab and renders display info', (
@@ -126,7 +127,7 @@ void main() {
     expect(find.text('管理…'), findsOneWidget);
   });
 
-  testWidgets('closes dialog when OK button or traffic light is tapped', (
+  testWidgets('closes the dialog with Escape or the traffic light', (
     tester,
   ) async {
     var closed = false;
@@ -152,9 +153,9 @@ void main() {
     await tester.tap(find.text('Open'));
     await tester.pumpAndSettle();
     expect(find.text('Clarion'), findsOneWidget);
+    expect(find.text('好'), findsNothing);
 
-    // Tap OK button
-    await tester.tap(find.text('好'));
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
     expect(closed, isTrue);
     expect(find.text('Clarion'), findsNothing);

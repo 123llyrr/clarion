@@ -35,8 +35,12 @@ class _MacAboutDialogState extends State<MacAboutDialog> {
         const SingleActivator(LogicalKeyboardKey.escape): () =>
             Navigator.pop(context),
       },
-      child: LayoutBuilder(
-        builder: (context, constraints) {
+      // The dialog carries no action button, so it owns the keyboard focus
+      // itself to keep Escape working.
+      child: Focus(
+        autofocus: true,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
           final isSmallScreen = constraints.maxHeight < 340;
           final dialogWidth = math.min(540.0, constraints.maxWidth - 24);
           final dialogMaxHeight = math.min(420.0, constraints.maxHeight - 24);
@@ -107,6 +111,7 @@ class _MacAboutDialogState extends State<MacAboutDialog> {
             ),
           );
         },
+        ),
       ),
     );
   }
@@ -646,26 +651,6 @@ class _MacAboutDialogState extends State<MacAboutDialog> {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
-          ),
-          const SizedBox(width: 8),
-          TextButton(
-            key: const ValueKey('mac-about-ok-button'),
-            autofocus: true,
-            style: TextButton.styleFrom(
-              minimumSize: const Size(56, 22),
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-              backgroundColor: const Color(0xff007aff),
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(5),
-              ),
-              textStyle: const TextStyle(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            onPressed: () => Navigator.pop(context),
-            child: const Text('好'),
           ),
         ],
       ),

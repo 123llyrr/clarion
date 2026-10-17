@@ -14,7 +14,7 @@ DesktopApp _app(String id, {String name = '本地化应用名称', String? iconN
 void main() {
   test('exact desktop identities share original Catalina role icons', () {
     const aliases = <String, List<String>>{
-      'finder': [
+      'home': [
         'files',
         'org.kde.dolphin',
         'org.gnome.Nautilus',
@@ -54,7 +54,7 @@ void main() {
       for (final alias in entry.value) {
         expect(
           MacAppIcons.assetFor(_app('$alias.desktop')),
-          'assets/shell/${entry.key}.png',
+          'assets/icons/${entry.key}.svg',
           reason: alias,
         );
       }
@@ -64,7 +64,7 @@ void main() {
   test('only a desktop suffix is removed and matching ignores letter case', () {
     expect(
       MacAppIcons.assetFor(_app('  ORG.KDE.DOLPHIN.DESKTOP  ')),
-      'assets/shell/finder.png',
+      'assets/icons/home.svg',
     );
     for (final id in [
       'org.kde.dolphin.desktop.bak',
@@ -96,7 +96,7 @@ void main() {
 
   test('freedesktop semantic icon names resolve without an app title', () {
     const names = <String, String>{
-      'system-file-manager': 'finder',
+      'system-file-manager': 'home',
       'utilities-terminal': 'terminal',
       'accessories-text-editor': 'textedit',
       'accessories-calculator': 'calculator',
@@ -104,14 +104,14 @@ void main() {
       'accessories-screenshot': 'screenshot',
       'utilities-system-monitor': 'activity-monitor',
       'web-browser': 'safari',
-      'ORG.KDE.DOLPHIN': 'finder',
+      'ORG.KDE.DOLPHIN': 'home',
     };
     for (final entry in names.entries) {
       expect(
         MacAppIcons.assetFor(
           _app('unregistered-role.desktop', iconName: entry.key),
         ),
-        'assets/shell/${entry.value}.png',
+        'assets/icons/${entry.value}.svg',
       );
     }
     for (final icon in ['my-web-browser', 'terminal-notebook', 'dolphin.svg']) {
@@ -127,7 +127,7 @@ void main() {
       MacAppIcons.assetFor(
         _app('org.kde.kate.desktop', iconName: 'utilities-terminal'),
       ),
-      'assets/shell/textedit.png',
+      'assets/icons/textedit.svg',
     );
   });
 
@@ -213,7 +213,7 @@ void main() {
   test('the generic fallback identifies a real bundled application asset', () {
     expect(
       MacAppIcons.genericApplication,
-      'assets/shell/generic-application.png',
+      'assets/icons/generic-application.svg',
     );
   });
 }

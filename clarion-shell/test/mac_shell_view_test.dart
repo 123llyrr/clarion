@@ -959,7 +959,7 @@ void main() {
       });
       await tester.pumpAndSettle();
 
-      expect(find.text('访达'), findsOneWidget);
+      expect(find.text('Home'), findsOneWidget);
       expect(find.text('文件'), findsOneWidget);
       expect(find.text('编辑'), findsOneWidget);
       expect(find.text('显示'), findsOneWidget);

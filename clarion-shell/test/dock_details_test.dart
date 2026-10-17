@@ -734,7 +734,7 @@ void main() {
     await tester.pump();
     expect(find.text('在程序坞中保留'), findsOneWidget);
     expect(find.text('选项'), findsOneWidget);
-    expect(find.text('在访达中显示'), findsOneWidget);
+    expect(find.text('在Home中显示'), findsOneWidget);
     expect(find.text('退出'), findsOneWidget);
   });
 
@@ -770,7 +770,7 @@ void main() {
   });
 
   testWidgets(
-    'Finder is labeled 访达, running dot is visible, and secondary tap opens Finder menu',
+    'Home is labeled Home, running dot is visible, and secondary tap opens its menu',
     (tester) async {
       final (c, _, _) = await _fixture(tester);
       await tester.pumpWidget(
@@ -786,8 +786,8 @@ void main() {
       // Finder item exists with dock-finder key
       final finder = find.byKey(const ValueKey('dock-finder'));
       expect(finder, findsOneWidget);
-      // Running indicator dot exists for 访达
-      expect(find.byKey(const ValueKey('dock-running-访达')), findsOneWidget);
+      // Running indicator dot exists for Home
+      expect(find.byKey(const ValueKey('dock-running-Home')), findsOneWidget);
 
       // Launchpad slot is labeled 启动台
       expect(find.byKey(const ValueKey('dock-launcher')), findsOneWidget);

@@ -64,6 +64,16 @@ class AppIcon extends StatelessWidget {
   Widget _fallback(BuildContext context) {
     final path = fallbackAssetPath;
     if (path == null) return _missing(context);
+    if (path.toLowerCase().endsWith('.svg')) {
+      return SvgPicture.asset(
+        path,
+        key: ValueKey('fallback:$path'),
+        width: size,
+        height: size,
+        fit: BoxFit.contain,
+        errorBuilder: (_, _, _) => _missing(context),
+      );
+    }
     final pixels =
         ((rasterSize ?? size) * MediaQuery.devicePixelRatioOf(context))
             .ceil()

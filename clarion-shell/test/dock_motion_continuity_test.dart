@@ -249,7 +249,7 @@ void main() {
         await mouse.moveTo(center + const Offset(.5, .5));
         controller.removeApp();
         await tester.pumpAndSettle();
-        for (final label in ['访达', '废纸篓']) {
+        for (final label in ['Home', '废纸篓']) {
           final scale = tester
               .widget<Transform>(find.byKey(ValueKey('dock-scale-$label')))
               .transform

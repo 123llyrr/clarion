@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import 'models.dart';
 
-/// Original Catalina resources for applications with the same desktop role.
+/// Shell role icons for applications with the same desktop role, drawn by
+/// the WhiteSur icon theme (see assets/icons/README.md).
 ///
 /// Matching uses desktop IDs and freedesktop icon names, never translated
 /// display names. An unrelated application whose name contains "terminal" or
@@ -9,21 +10,21 @@ import 'models.dart';
 class MacAppIcons {
   MacAppIcons._();
 
-  static const genericApplication = 'assets/shell/generic-application.png';
+  static const genericApplication = 'assets/icons/generic-application.svg';
 
   static const _desktopIds = <String, String>{
-    'files': 'finder',
-    'finder': 'finder',
-    'com.apple.finder': 'finder',
-    'dolphin': 'finder',
-    'org.kde.dolphin': 'finder',
-    'nautilus': 'finder',
-    'org.gnome.nautilus': 'finder',
-    'thunar': 'finder',
-    'nemo': 'finder',
-    'pcmanfm': 'finder',
-    'pcmanfm-qt': 'finder',
-    'org.lxqt.pcmanfm-qt': 'finder',
+    'files': 'home',
+    'finder': 'home',
+    'com.apple.finder': 'home',
+    'dolphin': 'home',
+    'org.kde.dolphin': 'home',
+    'nautilus': 'home',
+    'org.gnome.nautilus': 'home',
+    'thunar': 'home',
+    'nemo': 'home',
+    'pcmanfm': 'home',
+    'pcmanfm-qt': 'home',
+    'org.lxqt.pcmanfm-qt': 'home',
     'terminal': 'terminal',
     'com.apple.terminal': 'terminal',
     'alacritty': 'terminal',
@@ -103,7 +104,7 @@ class MacAppIcons {
   // System Preferences application or generic preference-pane icon. A sidebar
   // glyph cannot substitute for either application's original resource.
   static const _iconNames = <String, String>{
-    'system-file-manager': 'finder',
+    'system-file-manager': 'home',
     'utilities-terminal': 'terminal',
     'accessories-text-editor': 'textedit',
     'accessories-calculator': 'calculator',
@@ -154,14 +155,14 @@ class MacAppIcons {
   static String? assetFor(DesktopApp app) {
     final id = _desktopId(app.id);
     final desktopIcon = _desktopIds[id];
-    if (desktopIcon != null) return 'assets/shell/$desktopIcon.png';
+    if (desktopIcon != null) return 'assets/icons/$desktopIcon.svg';
     if (_preservedBrands.contains(id)) return null;
     final iconName = app.iconName?.trim().toLowerCase();
     final icon = _desktopIds[iconName] ?? _iconNames[iconName];
-    return icon == null ? null : 'assets/shell/$icon.png';
+    return icon == null ? null : 'assets/icons/$icon.svg';
   }
 
   /// Dock ordering uses the same exact identity rules as its presentation.
   static bool isFileManager(DesktopApp app) =>
-      assetFor(app) == 'assets/shell/finder.png';
+      assetFor(app) == 'assets/icons/home.svg';
 }

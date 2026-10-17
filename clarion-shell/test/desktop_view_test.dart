@@ -234,6 +234,18 @@ Future<void> _mount(
     ),
   );
   await tester.pumpAndSettle();
+  // Theme icons are SVGs and decode asynchronously; wait until the frame stops
+  // gaining pixels so a baseline pixel count describes settled artwork.
+  int? previous;
+  for (var turn = 0; turn < 40; turn++) {
+    await tester.pump();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    final painted = await _paintedPixels(tester);
+    if (previous == painted) return;
+    previous = painted;
+  }
 }
 
 Future<int> _paintedPixels(WidgetTester tester) async {

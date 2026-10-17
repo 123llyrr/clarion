@@ -2199,7 +2199,7 @@ class _DesktopViewState extends State<DesktopView> with WidgetsBindingObserver {
             ? Icons.folder_rounded
             : Icons.insert_drive_file_rounded,
         asset:
-            'assets/shell/${entry.isDirectory ? 'generic-folder' : 'generic-document'}.png',
+            'assets/icons/${entry.isDirectory ? 'generic-folder' : 'generic-document'}.svg',
         width: size,
         height: size,
         filterQuality: FilterQuality.high,

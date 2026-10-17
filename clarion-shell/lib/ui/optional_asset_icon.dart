@@ -2,6 +2,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 /// Appearance assets retain their images; built-in icons cover missing files.
 class OptionalAssetIcon extends StatelessWidget {
@@ -11,6 +12,7 @@ class OptionalAssetIcon extends StatelessWidget {
     required this.fallback,
     required this.width,
     required this.height,
+    this.preferredAsset,
     this.rasterSize,
     this.fallbackColor,
     this.filterQuality = FilterQuality.medium,
@@ -20,12 +22,38 @@ class OptionalAssetIcon extends StatelessWidget {
   final IconData fallback;
   final double width;
   final double height;
+
+  /// A locally imported look-alike rendered ahead of [asset] when present,
+  /// e.g. a user-extracted original kept out of the distribution tree.
+  final String? preferredAsset;
   final int? rasterSize;
   final Color? fallbackColor;
   final FilterQuality filterQuality;
 
-  @override
-  Widget build(BuildContext context) {
+  Widget _fallbackWidget(BuildContext context) => SizedBox(
+    width: width,
+    height: height,
+    child: Icon(
+      fallback,
+      size: math.min(width, height),
+      color: fallbackColor ?? Theme.of(context).colorScheme.primary,
+    ),
+  );
+
+  Widget _assetImage(
+    BuildContext context,
+    String asset,
+    WidgetBuilder onMissing,
+  ) {
+    if (asset.endsWith('.svg')) {
+      return SvgPicture.asset(
+        asset,
+        width: width,
+        height: height,
+        fit: BoxFit.contain,
+        errorBuilder: (_, _, _) => onMissing(context),
+      );
+    }
     final ImageProvider image = rasterSize == null
         ? AssetImage(asset)
         : ResizeImage(
@@ -43,15 +71,20 @@ class OptionalAssetIcon extends StatelessWidget {
       filterQuality: filterQuality,
       gaplessPlayback: true,
       excludeFromSemantics: true,
-      errorBuilder: (context, error, stackTrace) => SizedBox(
-        width: width,
-        height: height,
-        child: Icon(
-          fallback,
-          size: math.min(width, height),
-          color: fallbackColor ?? Theme.of(context).colorScheme.primary,
-        ),
-      ),
+      errorBuilder: (_, _, _) => onMissing(context),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final preferred = preferredAsset;
+    if (preferred == null) {
+      return _assetImage(context, asset, _fallbackWidget);
+    }
+    return _assetImage(
+      context,
+      preferred,
+      (context) => _assetImage(context, asset, _fallbackWidget),
     );
   }
 }

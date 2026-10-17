@@ -1,0 +1,2 @@
+Tool: built-in image_gen
+Design: Original Clarion menu-bar symbol, bold white solid C-shaped crest with a softly sculpted body, clean right opening and tapered upward terminal; compact silhouette intended for 18–22px menu bars; transparent background; no gradients, glass, shading, text, enclosing app tile, apple fruit, bite mark or detached leaf.

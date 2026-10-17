@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 import '../mac_app_icons.dart';
 import '../models.dart';
@@ -37,6 +38,18 @@ class MacAppIcon extends StatelessWidget {
     if (!useOriginalIcons) return _nativeIcon();
     final asset = MacAppIcons.assetFor(app);
     if (asset == null) return _nativeIcon(originalFallback: true);
+    if (asset.endsWith('.svg')) {
+      return SvgPicture.asset(
+        asset,
+        key: ValueKey(asset),
+        width: size,
+        height: size,
+        fit: BoxFit.contain,
+        // A missing or unreadable theme icon degrades to the native resolver
+        // instead of leaving an empty tile.
+        errorBuilder: (_, _, _) => _nativeIcon(originalFallback: true),
+      );
+    }
     final pixelSize =
         ((rasterSize ?? size) * MediaQuery.devicePixelRatioOf(context))
             .ceil()
