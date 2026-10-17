@@ -42,8 +42,8 @@ void main() {
       findsNothing,
     );
     expect(find.text('C02XYZ123ABC'), findsNothing);
-    expect(find.text('系统报告…'), findsOneWidget);
-    expect(find.text('软件更新…'), findsOneWidget);
+    expect(find.text('系统报告…'), findsNothing);
+    expect(find.text('软件更新…'), findsNothing);
     expect(find.text('好'), findsOneWidget);
   });
 

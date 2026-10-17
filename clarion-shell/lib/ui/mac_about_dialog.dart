@@ -383,29 +383,6 @@ class _MacAboutDialogState extends State<MacAboutDialog> {
               _buildSpecRow('处理器', info.processor, dark),
               _buildSpecRow('内存', info.memory, dark),
               _buildSpecRow('系统', info.operatingSystem, dark),
-
-              Divider(
-                height: 16,
-                thickness: 0.5,
-                color: dark ? Colors.white12 : Colors.black12,
-              ),
-
-              // Action buttons: 系统报告 & 软件更新
-              Row(
-                children: [
-                  _buildMacButton(
-                    label: '系统报告…',
-                    onPressed: () => widget.controller?.openSettings(),
-                    dark: dark,
-                  ),
-                  const SizedBox(width: 8),
-                  _buildMacButton(
-                    label: '软件更新…',
-                    onPressed: () => widget.controller?.openSettings(),
-                    dark: dark,
-                  ),
-                ],
-              ),
             ],
           ),
         ),
