@@ -1427,6 +1427,18 @@ pub struct Output {
     pub max_bpc: Option<u8>,
     /// Whether HDR10 metadata and PQ/BT.2020 signaling are active on the output.
     pub hdr_active: bool,
+    /// Whether this connected display and driver support HDR10 signaling.
+    #[serde(default)]
+    pub hdr_supported: bool,
+    /// Why a requested HDR mode is inactive, or its pending transition status.
+    #[serde(default)]
+    pub hdr_status: Option<String>,
+    /// Display HDR peak in cd/m², when known.
+    #[serde(default)]
+    pub hdr_peak_luminance: Option<f32>,
+    /// Active HDR SDR reference white in cd/m².
+    #[serde(default)]
+    pub sdr_white_level: Option<f32>,
 }
 
 /// Output mode.

@@ -1,10 +1,10 @@
 use std::io;
 use std::os::unix::io::{AsFd, BorrowedFd};
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
+use drm::control::{connector, crtc, framebuffer, plane, property, Device as ControlDevice, Mode};
 use drm::Device as BasicDevice;
-use drm::control::{Device as ControlDevice, Mode, connector, crtc, framebuffer, plane};
 
 use libc::dev_t;
 
@@ -340,6 +340,63 @@ impl DrmSurface {
                 handle: self.crtc.into(),
                 name: "VRR_ENABLED",
             }),
+        }
+    }
+
+    /// Stage color-signaling properties together with the next framebuffer.
+    ///
+    /// Callers must first drain previously queued frames and retain creation
+    /// references to property blobs until those values have been replaced.
+    /// Entries are (property, frame value, inactive reset value). The reset is
+    /// included atomically when the CRTC is disabled or released. Frame values
+    /// participate in TEST_ONLY and the real commit and become current only
+    /// after success.
+    pub fn set_connector_properties(
+        &self,
+        connector: connector::Handle,
+        properties: &[(property::Handle, property::RawValue, property::RawValue)],
+    ) -> Result<(), Error> {
+        match &*self.internal {
+            DrmSurfaceInternal::Atomic(surf) => {
+                surf.set_connector_properties(connector, properties);
+                Ok(())
+            }
+            DrmSurfaceInternal::Legacy(_) => Err(Error::UnknownProperty {
+                handle: connector.into(),
+                name: "atomic connector properties",
+            }),
+        }
+    }
+
+    /// Stage CRTC color properties with the next full framebuffer commit.
+    /// Blob ownership and frame-draining rules match `set_connector_properties`.
+    pub fn set_crtc_properties(
+        &self,
+        properties: &[(property::Handle, property::RawValue)],
+    ) -> Result<(), Error> {
+        match &*self.internal {
+            DrmSurfaceInternal::Atomic(surf) => {
+                surf.set_crtc_properties(properties);
+                Ok(())
+            }
+            DrmSurfaceInternal::Legacy(_) => Err(Error::UnknownProperty {
+                handle: self.crtc.into(),
+                name: "atomic CRTC properties",
+            }),
+        }
+    }
+
+    /// Last successfully committed value of a managed connector property.
+    pub fn current_connector_property(
+        &self,
+        connector: connector::Handle,
+        property: property::Handle,
+    ) -> Option<property::RawValue> {
+        match &*self.internal {
+            DrmSurfaceInternal::Atomic(surf) => {
+                surf.current_connector_property(connector, property)
+            }
+            DrmSurfaceInternal::Legacy(_) => None,
         }
     }
 

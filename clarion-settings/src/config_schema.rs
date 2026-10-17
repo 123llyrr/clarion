@@ -208,6 +208,8 @@ pub fn value_default(name: &str, module: &str, ty: &str) -> String {
         "proportion" => "0.5".into(),
         "fixed" => "800".into(),
         "max-bpc" => "8".into(),
+        "sdr-white-level" => "203".into(),
+        "hdr-peak-luminance" => "1000".into(),
         "center-focused-column" => "\"never\"".into(),
         "rounding-power" => "2".into(),
         "epsilon" => "0.0001".into(),
@@ -245,6 +247,8 @@ pub fn sample(module: &str, field: FieldSpec) -> String {
             | "proportion"
             | "fixed"
             | "max-bpc"
+            | "sdr-white-level"
+            | "hdr-peak-luminance"
             | "center-focused-column"
             | "rounding-power"
             | "epsilon"
@@ -294,6 +298,9 @@ pub fn label(name: &str) -> &str {
         "transform" => "旋转与翻转",
         "position" => "显示器位置",
         "variable-refresh-rate" => "可变刷新率",
+        "hdr" => "HDR10 输出",
+        "sdr-white-level" => "HDR 下的桌面参考白（尼特）",
+        "hdr-peak-luminance" => "HDR 峰值覆盖（尼特）",
         "gaps" => "窗口间距",
         "border" => "窗口边框",
         "focus-ring" => "焦点高亮",

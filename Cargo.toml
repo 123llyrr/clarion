@@ -14,7 +14,7 @@ members = [
 
 [workspace.package]
 version = "0.1.0"
-description = "A modern Wayland compositor with an independent desktop core and native Vulkan backend"
+description = "A Rust Wayland compositor with native Vulkan composition, HDR10/scRGB color management and an independent desktop core"
 authors = ["Clarion Contributors", "Realand Contributors"]
 license = "GPL-3.0-or-later"
 edition = "2021"

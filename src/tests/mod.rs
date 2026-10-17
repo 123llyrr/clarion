@@ -6,6 +6,8 @@ mod server;
 
 mod animations;
 mod background_effect;
+mod color_management;
+mod color_management_native;
 mod commit_timing;
 mod content_type;
 mod explicit_sync;
@@ -31,6 +33,7 @@ mod spread_input;
 mod spread_metadata;
 mod stage_input;
 mod stage_render;
+mod swapchain_retry;
 mod touch_grabs;
 mod transactions;
 mod window_opening;

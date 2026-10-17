@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=Clarion
-Comment=A modular Wayland compositor with a native Vulkan backend
+Comment=A Rust Wayland compositor with native Vulkan composition and HDR10/scRGB color management
 Exec=clarion-session
 Type=Application
 DesktopNames=clarion

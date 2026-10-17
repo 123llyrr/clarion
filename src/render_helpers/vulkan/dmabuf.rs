@@ -122,6 +122,8 @@ pub fn fourcc_is_opaque(fourcc: Fourcc) -> bool {
 
 pub fn fourcc_to_vk_format(fourcc: Fourcc) -> Option<(vk::Format, bool)> {
     match fourcc {
+        Fourcc::Abgr16161616f => Some((vk::Format::R16G16B16A16_SFLOAT, true)),
+        Fourcc::Xbgr16161616f => Some((vk::Format::R16G16B16A16_SFLOAT, false)),
         Fourcc::Argb8888 => Some((vk::Format::B8G8R8A8_UNORM, true)),
         Fourcc::Xrgb8888 => Some((vk::Format::B8G8R8A8_UNORM, false)),
         Fourcc::Abgr8888 => Some((vk::Format::R8G8B8A8_UNORM, true)),
@@ -269,6 +271,29 @@ impl DmabufImporter {
         &self,
         dmabuf: &Dmabuf,
         usage: vk::ImageUsageFlags,
+    ) -> Result<VulkanTexture, VulkanImportError> {
+        self.import_dmabuf_with_usage_and_model(dmabuf, usage, None)
+    }
+
+    /// The immutable YCbCr sampler and image view share the declared matrix.
+    pub(super) fn import_color_dmabuf(
+        &self,
+        dmabuf: &Dmabuf,
+        color: crate::color::SurfaceColor,
+    ) -> Result<VulkanTexture, VulkanImportError> {
+        let model = (color.description.primaries == crate::color::Primaries::Bt2020)
+            .then_some(vk::SamplerYcbcrModelConversion::YCBCR_2020);
+        let mut texture =
+            self.import_dmabuf_with_usage_and_model(dmabuf, vk::ImageUsageFlags::SAMPLED, model)?;
+        texture.color = color;
+        Ok(texture)
+    }
+
+    fn import_dmabuf_with_usage_and_model(
+        &self,
+        dmabuf: &Dmabuf,
+        usage: vk::ImageUsageFlags,
+        model_override: Option<vk::SamplerYcbcrModelConversion>,
     ) -> Result<VulkanTexture, VulkanImportError> {
         // Measure actual driver imports, not the cheap shared-texture lookup.
         let _latency =
@@ -452,11 +477,11 @@ impl DmabufImporter {
             // linux-dmabuf itself carries no matrix/range metadata. Follow the
             // conventional SDR video policy until color-management metadata is
             // threaded through the surface importer.
-            let model = if height <= 576 {
+            let model = model_override.unwrap_or(if height <= 576 {
                 vk::SamplerYcbcrModelConversion::YCBCR_601
             } else {
                 vk::SamplerYcbcrModelConversion::YCBCR_709
-            };
+            });
             Some(self.pipeline_mgr.yuv_pipeline(YuvKey {
                 format,
                 model,
@@ -609,6 +634,7 @@ impl DmabufImporter {
             y_inverted: dmabuf.y_inverted(),
             inner: Arc::new(gpu),
             client_buffer: None,
+            color: Default::default(),
         })
     }
 

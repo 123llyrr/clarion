@@ -28,6 +28,7 @@ pub(super) struct YuvDrawPipelines {
     pub quad: vk::Pipeline,
     pub blur: vk::Pipeline,
     pub mesh: vk::Pipeline,
+    pub color: vk::Pipeline,
 }
 
 /// Immutable conversion and sampler shared by every imported image with this
@@ -145,7 +146,7 @@ impl YuvPipeline {
         if !published {
             if let Ok(unused) = built {
                 unsafe {
-                    for pipeline in [unused.quad, unused.blur, unused.mesh] {
+                    for pipeline in [unused.quad, unused.blur, unused.mesh, unused.color] {
                         self.ctx.device.destroy_pipeline(pipeline, None);
                     }
                 }
@@ -175,8 +176,27 @@ impl YuvPipeline {
         guard.pipelines.push(blur);
         let mesh = VulkanPipelineManager::build_mesh_pipeline(device, self.layout, mv, mf, format)?;
         guard.pipelines.push(mesh);
+        let cv = VulkanPipelineManager::create_shader_module(device, COLOR_VERT_SPV)?;
+        guard.shaders.push(cv);
+        let cf = VulkanPipelineManager::create_shader_module(device, COLOR_FRAG_SPV)?;
+        guard.shaders.push(cf);
+        let color = VulkanPipelineManager::build_pipeline_with_blend(
+            device,
+            self.layout,
+            cv,
+            cf,
+            format,
+            vk::ColorComponentFlags::RGBA,
+            false,
+        )?;
+        guard.pipelines.push(color);
         guard.pipelines.clear();
-        let pipelines = YuvDrawPipelines { quad, blur, mesh };
+        let pipelines = YuvDrawPipelines {
+            quad,
+            blur,
+            mesh,
+            color,
+        };
         Ok(pipelines)
     }
 }
@@ -194,6 +214,7 @@ impl Drop for YuvPipeline {
                 self.ctx.device.destroy_pipeline(pipes.quad, None);
                 self.ctx.device.destroy_pipeline(pipes.blur, None);
                 self.ctx.device.destroy_pipeline(pipes.mesh, None);
+                self.ctx.device.destroy_pipeline(pipes.color, None);
             }
             self.ctx.device.destroy_pipeline_layout(self.layout, None);
             self.ctx
@@ -239,6 +260,23 @@ pub struct QuadPushConstants {
     /// Convert the sampled SDR/sRGB scene to PQ HDR10 output when non-zero.
     pub hdr_transfer: f32,
 }
+
+/// A color conversion uses the existing texture descriptor and push range.
+/// Matrices are row major; all transfer function luminances are cd/m².
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub(super) struct ColorPushConstants {
+    pub matrix: [f32; 16],
+    pub uv_bounds: [f32; 4],
+    pub gamut: [[f32; 4]; 3],
+    pub source: [f32; 4],
+    pub target: [f32; 4],
+    pub mapping: [f32; 4],
+    pub tone_gamut: [[f32; 4]; 3],
+}
+
+const _: () =
+    assert!(std::mem::size_of::<ColorPushConstants>() <= std::mem::size_of::<QuadPushConstants>());
 
 impl Default for QuadPushConstants {
     fn default() -> Self {
@@ -383,6 +421,8 @@ pub struct MeshGpuVertex {
 
 const QUAD_VERT_SPV: &[u8] = include_bytes!("shaders/quad.vert.spv");
 const QUAD_FRAG_SPV: &[u8] = include_bytes!("shaders/quad.frag.spv");
+const COLOR_VERT_SPV: &[u8] = include_bytes!("shaders/color.vert.spv");
+const COLOR_FRAG_SPV: &[u8] = include_bytes!("shaders/color.frag.spv");
 const BORDER_VERT_SPV: &[u8] = include_bytes!("shaders/border.vert.spv");
 const BORDER_FRAG_SPV: &[u8] = include_bytes!("shaders/border.frag.spv");
 const SHADOW_VERT_SPV: &[u8] = include_bytes!("shaders/shadow.vert.spv");
@@ -406,6 +446,7 @@ pub struct FormatPipelines {
     pub particle_pipeline: vk::Pipeline,
     pub alpha_one_pipeline: vk::Pipeline,
     pub mesh_pipeline: vk::Pipeline,
+    pub color_pipeline: vk::Pipeline,
 }
 
 pub struct VulkanPipelineManager {
@@ -589,6 +630,7 @@ impl VulkanPipelineManager {
                     pipes.particle_pipeline,
                     pipes.alpha_one_pipeline,
                     pipes.mesh_pipeline,
+                    pipes.color_pipeline,
                 ] {
                     self.ctx.device.destroy_pipeline(pipeline, None);
                 }
@@ -719,6 +761,20 @@ impl VulkanPipelineManager {
             color_format,
         )?;
         guard.pipelines.push(mesh_pipeline);
+        let color_vert = Self::create_shader_module(device, COLOR_VERT_SPV)?;
+        guard.shaders.push(color_vert);
+        let color_frag = Self::create_shader_module(device, COLOR_FRAG_SPV)?;
+        guard.shaders.push(color_frag);
+        let color_pipeline = Self::build_pipeline_with_blend(
+            device,
+            quad_layout,
+            color_vert,
+            color_frag,
+            color_format,
+            vk::ColorComponentFlags::RGBA,
+            false,
+        )?;
+        guard.pipelines.push(color_pipeline);
 
         guard.pipelines.clear(); // Transfer pipeline ownership; modules are temporary.
 
@@ -730,6 +786,7 @@ impl VulkanPipelineManager {
             particle_pipeline,
             alpha_one_pipeline,
             mesh_pipeline,
+            color_pipeline,
         })
     }
 
@@ -1120,6 +1177,7 @@ impl Drop for VulkanPipelineManager {
                     device.destroy_pipeline(pipes.particle_pipeline, None);
                     device.destroy_pipeline(pipes.alpha_one_pipeline, None);
                     device.destroy_pipeline(pipes.mesh_pipeline, None);
+                    device.destroy_pipeline(pipes.color_pipeline, None);
                 }
             }
             device.destroy_pipeline_layout(self.alpha_one_pipeline_layout, None);

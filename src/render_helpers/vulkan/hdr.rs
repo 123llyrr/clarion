@@ -1,10 +1,8 @@
-//! HDR10 colour-transfer helpers.
+//! HDR10 KMS metadata encoding and legacy transfer-function test helpers.
 //!
-//! Vulkan currently composites in the SDR/sRGB scene space.  Keep the transfer
-//! functions here rather than duplicating the constants in output and shader
-//! code so that enabling an HDR output cannot silently use an SDR gamma curve.
-//! The functions operate on normalized RGB channels and absolute luminance in
-//! cd/m² (nits).
+//! The production color pipeline is defined in `crate::color`: each surface is
+//! decoded into an extended floating-point scene, then encoded for its output.
+//! This module keeps the Linux metadata ABI and older CPU PQ regression helpers.
 
 /// HDR10/PQ reference white, in nits.
 pub const HDR10_REFERENCE_WHITE_NITS: f32 = 203.0;
@@ -26,6 +24,20 @@ const PQ_C3: f32 = 2392.0 / 128.0;
 /// The kernel rejects blobs whose length differs from the native UAPI struct.
 /// Values are encoded in the units required by the DRM property.
 pub fn hdr10_metadata_blob() -> [u8; std::mem::size_of::<drm_ffi::hdr_output_metadata>()] {
+    hdr10_metadata_blob_for(1000.0, 0.0001, 400.0)
+}
+
+/// Encode the actual display target's luminance volume, in DRM UAPI units.
+/// Unknown EDID values must be resolved by the output policy before this call.
+pub fn hdr10_metadata_blob_for(
+    peak_luminance: f32,
+    min_luminance: f32,
+    max_fall: f32,
+) -> [u8; std::mem::size_of::<drm_ffi::hdr_output_metadata>()] {
+    let finite = |value: f32, fallback: f32| if value.is_finite() { value } else { fallback };
+    let peak = finite(peak_luminance, 1000.0).clamp(1.0, 10_000.0);
+    let minimum = finite(min_luminance, 0.005).clamp(0.0, peak);
+    let average = finite(max_fall, peak).clamp(0.0, peak);
     let mut metadata = [0u8; std::mem::size_of::<drm_ffi::hdr_output_metadata>()];
     metadata[4] = 2; // SMPTE ST 2084 (PQ) EOTF
     let primaries: [(f32, f32); 3] = [(0.708, 0.292), (0.170, 0.797), (0.131, 0.046)];
@@ -38,10 +50,10 @@ pub fn hdr10_metadata_blob() -> [u8; std::mem::size_of::<drm_ffi::hdr_output_met
     }
     metadata[18..20].copy_from_slice(&((0.3127_f32 * 50_000.0).round() as u16).to_ne_bytes());
     metadata[20..22].copy_from_slice(&((0.3290_f32 * 50_000.0).round() as u16).to_ne_bytes());
-    metadata[22..24].copy_from_slice(&1000u16.to_ne_bytes());
-    metadata[24..26].copy_from_slice(&1u16.to_ne_bytes());
-    metadata[26..28].copy_from_slice(&1000u16.to_ne_bytes());
-    metadata[28..30].copy_from_slice(&400u16.to_ne_bytes());
+    metadata[22..24].copy_from_slice(&(peak.round() as u16).to_ne_bytes());
+    metadata[24..26].copy_from_slice(&((minimum * 10_000.0).round() as u16).to_ne_bytes());
+    metadata[26..28].copy_from_slice(&(peak.round() as u16).to_ne_bytes());
+    metadata[28..30].copy_from_slice(&(average.round() as u16).to_ne_bytes());
     metadata
 }
 
@@ -107,6 +119,19 @@ mod tests {
         let encoded = sdr_linear_to_hdr10(1.0);
         assert!((pq_decode(encoded) - HDR10_REFERENCE_WHITE_NITS).abs() < 0.01);
         assert!((hdr10_to_sdr_linear(encoded) - 1.0).abs() < 2e-4);
+    }
+
+    #[test]
+    fn display_luminance_metadata_preserves_edid_peak_and_black_level() {
+        let metadata = hdr10_metadata_blob_for(616.884, 0.005, 400.0);
+        let read = |offset| u16::from_ne_bytes([metadata[offset], metadata[offset + 1]]);
+        assert_eq!(read(22), 617);
+        assert_eq!(read(24), 50);
+        assert_eq!(read(26), 617);
+        assert_eq!(read(28), 400);
+        let metadata = hdr10_metadata_blob_for(f32::NAN, f32::INFINITY, 20_000.0);
+        assert_eq!(u16::from_ne_bytes([metadata[22], metadata[23]]), 1000);
+        assert_eq!(u16::from_ne_bytes([metadata[28], metadata[29]]), 1000);
     }
 
     #[test]

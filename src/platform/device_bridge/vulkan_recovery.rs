@@ -11,6 +11,14 @@ use smithay::wayland::dmabuf::DmabufFeedbackBuilder;
 use crate::backend::tty::{is_primary_gpu_node, surface_dmabuf_feedback};
 use crate::compositor::State;
 
+fn fallback_policy(tty: &crate::backend::tty::Tty) -> &'static str {
+    if tty.color_management_enabled {
+        "preserving the last color-correct scanout; session restart may be required"
+    } else {
+        "using GLES fallback"
+    }
+}
+
 /// Event-side publication of a prepared device. This callback never creates a
 /// Vulkan instance/device, compiles a pipeline, queries formats or waits on the GPU.
 pub(super) fn on_completion(state: &mut State) {
@@ -45,7 +53,7 @@ pub(super) fn on_completion(state: &mut State) {
                         tty.vulkan_recovery_watchdog = None;
                         tty.vulkan_recovery_generation = None;
                         tty.vulkan_recovery.invalidate();
-                        warn!("Vulkan device recovery timed out; retaining old scanout until GLES migration");
+                        warn!("Vulkan device recovery timed out; {}", fallback_policy(tty));
                         state.clarion.on_native_renderer_replaced();
                     }
                     TimeoutAction::Drop
@@ -53,7 +61,10 @@ pub(super) fn on_completion(state: &mut State) {
             ) {
                 Ok(token) => tty.vulkan_recovery_watchdog = Some(token),
                 Err(error) => {
-                    warn!("cannot attach Vulkan recovery watchdog: {error}; abandoning recovery safely");
+                    warn!(
+                        "cannot attach Vulkan recovery watchdog: {error}; {}",
+                        fallback_policy(tty)
+                    );
                     tty.vulkan_recovery.invalidate();
                     tty.vulkan_recovery_generation = None;
                     state.clarion.on_native_renderer_replaced();
@@ -80,7 +91,10 @@ pub(super) fn on_completion(state: &mut State) {
                     tty.vulkan_recovery.retire(anchor).is_ok(),
                     "reserved Vulkan retirement slot unavailable"
                 );
-                warn!("cannot attach recovered Vulkan renderer: {error:#}; using GLES fallback");
+                warn!(
+                    "cannot attach recovered Vulkan renderer: {error:#}; {}",
+                    fallback_policy(tty)
+                );
                 tty.vulkan_recovery_generation = None;
                 state.clarion.on_native_renderer_replaced();
                 return;
@@ -139,6 +153,7 @@ pub(super) fn on_completion(state: &mut State) {
                 tty.vulkan_recovery_attempt
             );
             if tty.vulkan_recovery_attempt >= 3 {
+                warn!("Vulkan recovery exhausted; {}", fallback_policy(tty));
                 tty.vulkan_recovery_generation = None;
                 state.clarion.on_native_renderer_replaced();
                 return;
@@ -160,7 +175,10 @@ pub(super) fn on_completion(state: &mut State) {
                         }
                         Err(_) => {
                             tty.vulkan_recovery_generation = None;
-                            warn!("cannot queue Vulkan recovery retry; using GLES fallback");
+                            warn!(
+                                "cannot queue Vulkan recovery retry; {}",
+                                fallback_policy(tty)
+                            );
                             state.clarion.on_native_renderer_replaced();
                         }
                     }
@@ -169,7 +187,10 @@ pub(super) fn on_completion(state: &mut State) {
             ) {
                 Ok(_) => (),
                 Err(error) => {
-                    warn!("cannot attach Vulkan recovery retry: {error}; using GLES fallback");
+                    warn!(
+                        "cannot attach Vulkan recovery retry: {error}; {}",
+                        fallback_policy(tty)
+                    );
                     tty.vulkan_recovery_generation = None;
                     state.clarion.on_native_renderer_replaced();
                 }

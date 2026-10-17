@@ -2508,6 +2508,10 @@ impl ClarionSettingsApp {
                     let vrr_supported = self.cached_outputs[i].vrr_supported;
                     let vrr_enabled = self.cached_outputs[i].vrr_enabled;
                     let hdr_active = self.cached_outputs[i].hdr_active;
+                    let hdr_supported = self.cached_outputs[i].hdr_supported;
+                    let hdr_status = self.cached_outputs[i].hdr_status.clone();
+                    let hdr_peak = self.cached_outputs[i].hdr_peak_luminance;
+                    let sdr_white = self.cached_outputs[i].sdr_white_level;
                     let current_mode = self.cached_outputs[i]
                         .current_mode
                         .and_then(|idx| self.cached_outputs[i].modes.get(idx).cloned());
@@ -2559,10 +2563,21 @@ impl ClarionSettingsApp {
                                 "HDR：{}",
                                 if hdr_active {
                                     "已启用（HDR10 / BT.2020）"
+                                } else if hdr_supported {
+                                    "支持，当前未启用"
                                 } else {
-                                    "未启用"
+                                    "当前输出链路不支持"
                                 }
                             ));
+                            if let Some(peak) = hdr_peak {
+                                ui.label(format!("HDR 峰值亮度：{peak:.0} 尼特"));
+                            }
+                            if let Some(white) = sdr_white {
+                                ui.label(format!("SDR 内容参考白：{white:.0} 尼特"));
+                            }
+                            if let Some(status) = &hdr_status {
+                                ui.label(status);
+                            }
                             if icons::button(ui, Icon::Settings, "配置此显示器").clicked() {
                                 match self
                                     .full_config

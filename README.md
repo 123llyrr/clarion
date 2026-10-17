@@ -1,8 +1,20 @@
 # Clarion
 
-**A modern Wayland desktop with a native Vulkan backend.**
+**A modern Wayland desktop with native Vulkan composition and HDR10/scRGB color management.**
 
-Clarion 是用 Rust 写的 Wayland 合成器：Vulkan 原生合成、设备无关的桌面核心、KMS 逐帧预算调度。它融合浮动窗口、滚动平铺与动态平铺，提供液态玻璃视觉、自适应帧调度和细腻动画，专注低延迟交互与流畅的桌面体验。
+Clarion 是用 Rust 编写的 Wayland 合成器，支持 **HDR10/scRGB 色彩管理与 SDR/HDR 混合合成**，采用原生 Vulkan 渲染、设备无关的桌面核心和 KMS 逐帧预算调度。它融合浮动窗口、滚动平铺与动态平铺，提供液态玻璃视觉、自适应帧调度和细腻动画，专注低延迟交互与流畅的桌面体验。
+
+## HDR 与色彩管理
+
+原生 Vulkan 路径支持 SDR、HDR10 PQ 和 Windows scRGB 客户端混合合成，使用持久的
+RGBA16F 场景保留高光，按输出转换到 SDR 或 BT.2020/PQ。支持 Wayland 色彩描述、
+元数据随 surface commit 生效、SDR 输出色调映射及 SDR 截图。
+
+在支持的物理输出上设置 `hdr`，可用 `sdr-white-level 203` 调整桌面参考白；峰值默认读取
+显示器 EDID。HDR 元数据、颜色空间和 10-bit 帧缓冲随同一次 KMS 原子提交切换，
+设置中心和 `clarion msg outputs` 显示实际提交状态及不支持原因。
+
+实现范围、配置和物理显示验证要求见 [HDR 说明](docs/hdr.md)。
 
 ## 原生 Vulkan 合成
 
@@ -26,7 +38,7 @@ clarion --renderer vulkan
 renderer "vulkan"
 ```
 
-渲染器选择在合成器启动时生效。默认使用 Vulkan；驱动、设备或输出不满足要求时自动回退到 GLES，部分兼容与多 GPU 路径也由 GLES 承担。请以启动日志中的实际后端为准。
+渲染器选择在合成器启动时生效。默认使用 Vulkan；初始化时驱动、设备或输出不满足要求可回退到 GLES。已发布色彩管理协议的会话会保留原生渲染语义，设备故障时尝试恢复，并拒绝只能使用 GLES 的新增输出。请以启动日志中的实际后端为准。
 
 [Vulkan 验证说明](docs/vulkan-validation.md) · [性能诊断](docs/latency-diagnostics.md)
 

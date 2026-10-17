@@ -9,6 +9,100 @@ use super::super::device::VulkanContext;
 use super::super::lifecycle;
 use super::super::pipeline::VulkanPipelineManager;
 
+/// Keep deliberately quarantined GPU submissions out of the parent test
+/// process. Only these exact timeout fixtures expect the safe exit 124;
+/// their original resource/pixel assertions still run in the selected GPU child.
+pub(in crate::render_helpers::vulkan) fn run_quarantine_fixture_in_child() -> bool {
+    const CASES: [&str; 5] = [
+        "render_helpers::vulkan::frame::tests::fence_timeout_keeps_completion_owners_alive",
+        "render_helpers::vulkan::hardware_tests::deferred_shm_upload_timeout_keeps_resources_alive",
+        "render_helpers::vulkan::hardware_tests::fence_timeout_keeps_submitted_frame_resources_alive",
+        "render_helpers::vulkan::hardware_tests::fence_timeout_keeps_transfer_texture_alive",
+        "render_helpers::vulkan::hardware_tests::timeout_preserves_submitted_layouts_for_readback_and_retry",
+    ];
+    let thread = std::thread::current();
+    let name = thread.name().expect("named libtest fixture");
+    assert!(
+        CASES.contains(&name),
+        "only exact quarantine cases may expect exit 124"
+    );
+    if let Ok(child) = std::env::var("CLARION_QUARANTINE_TEST_CHILD") {
+        assert_eq!(
+            child, name,
+            "quarantine child must run exactly its requested test"
+        );
+        return false;
+    }
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let directory =
+        std::env::temp_dir().join(format!("clarion-quarantine-{}-{id}", std::process::id()));
+    std::fs::create_dir(&directory).unwrap();
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            name,
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("CLARION_QUARANTINE_TEST_CHILD", name)
+        .stdout(std::fs::File::create(directory.join("stdout.log")).unwrap())
+        .stderr(std::fs::File::create(directory.join("stderr.log")).unwrap())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(45);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("quarantine child exceeded bound: {}", directory.display());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let stdout = std::fs::read_to_string(directory.join("stdout.log")).unwrap();
+    let stderr = std::fs::read_to_string(directory.join("stderr.log")).unwrap();
+    for line in stdout.lines().chain(stderr.lines()) {
+        // Keep device and validation diagnostics visible to the outer checker,
+        // while prefixed child receipts cannot masquerade as the parent result.
+        eprintln!("QUARANTINE_CHILD {name}: {line}");
+    }
+    assert_eq!(
+        status.code(),
+        Some(124),
+        "only a successful quarantine child may exit 124"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.starts_with("test result: ok. 1 passed; 0 failed; 0 ignored;")),
+        "quarantine child must complete its real GPU assertions"
+    );
+    assert!(stdout.contains("HARDWARE:") || stderr.contains("HARDWARE:"));
+    assert!(stderr.contains("skipping unsafe loader teardown (exit 124)"));
+    let diagnostics = format!("{stdout}\n{stderr}").to_ascii_lowercase();
+    for bad in [
+        "validation error",
+        "validation warning",
+        "vuid-",
+        "sync-hazard",
+        "panicked at",
+    ] {
+        assert!(
+            !diagnostics.contains(bad),
+            "quarantine child diagnostic: {bad}"
+        );
+    }
+    eprintln!(
+        "QUARANTINE_EVIDENCE test={name} path={}",
+        directory.display()
+    );
+    true
+}
+
 #[test]
 #[ignore = "requires real DRM render node, Vulkan timestamps and native Wayland server"]
 fn native_event_loop_teardown_releases_device_before_loop_drop() {

@@ -2338,9 +2338,14 @@ where
                     }
                 }
                 Err(err) => {
-                    // Rendering failed at some point, reset the buffers
-                    // as we probably now have some half drawn buffer
-                    self.swapchain.reset_buffers();
+                    // The damage tracker already cleared its history. A deferred
+                    // renderer has not submitted output writes: retain its slots
+                    // so asynchronous target preparation can complete. Replacing
+                    // them here makes every retry allocate another cold target.
+                    // Unknown/hard failures still discard possibly partial images.
+                    if !matches!(&err, OutputDamageTrackerError::Rendering(error) if R::is_render_deferred(error)) {
+                        self.swapchain.reset_buffers();
+                    }
                     return Err(RenderFrameError::from(err));
                 }
             }
@@ -2607,6 +2612,14 @@ where
         };
 
         flip.map_err(FrameError::DrmError)
+    }
+
+    /// Whether a frame can still be submitted using the existing output state.
+    ///
+    /// Drain these frames before staging connector color properties so that an
+    /// already rendered framebuffer cannot acquire a different encoding.
+    pub fn has_pending_frames(&self) -> bool {
+        self.pending_frame.is_some() || self.queued_frame.is_some()
     }
 
     /// Marks the current frame as submitted.

@@ -16,6 +16,7 @@ use smithay::backend::allocator::dmabuf::{Dmabuf, WeakDmabuf};
 use smithay::backend::drm::DrmNode;
 
 pub mod blur;
+mod color;
 pub(crate) mod completion;
 pub mod custom_shader;
 mod damage;
@@ -149,6 +150,7 @@ pub struct VulkanTexture {
     // An attachment lease belongs to this imported handle, not the shared VkImage
     // or DMA-BUF cache. Captured clones preserve the exact old buffer generation.
     client_buffer: Option<smithay::backend::renderer::utils::Buffer>,
+    pub(crate) color: crate::color::SurfaceColor,
 }
 
 impl std::fmt::Debug for VulkanTexture {
@@ -203,6 +205,8 @@ impl smithay::backend::renderer::Texture for VulkanTexture {
         use smithay::backend::allocator::Fourcc;
         Some(
             match (vk::Format::from_raw(self.format as i32), self.has_alpha) {
+                (vk::Format::R16G16B16A16_SFLOAT, true) => Fourcc::Abgr16161616f,
+                (vk::Format::R16G16B16A16_SFLOAT, false) => Fourcc::Xbgr16161616f,
                 (vk::Format::R8G8B8A8_UNORM, true) => Fourcc::Abgr8888,
                 (vk::Format::R8G8B8A8_UNORM, false) => Fourcc::Xbgr8888,
                 (vk::Format::B8G8R8A8_UNORM, true) => Fourcc::Argb8888,
@@ -268,8 +272,7 @@ pub struct CompositionStats {
 struct CachedTarget {
     texture: VulkanTexture,
     scratch: Option<VulkanTexture>,
-    _dmabuf: Dmabuf,
-    last_used: u64,
+    dmabuf_owners: Vec<WeakDmabuf>,
     last_commit: Option<smithay::backend::renderer::utils::CommitCounter>,
 }
 
@@ -300,7 +303,6 @@ pub struct VulkanRenderer {
     target_cache: HashMap<TargetKey, CachedTarget>,
     // Textures retain their context; the context must never own this pool.
     scratch_textures: Arc<std::sync::Mutex<Vec<VulkanTexture>>>,
-    cache_tick: u64,
 }
 
 impl VulkanRenderer {
@@ -313,7 +315,6 @@ impl VulkanRenderer {
             texture_cache: Rc::new(RefCell::new(HashMap::new())),
             target_cache: HashMap::new(),
             scratch_textures: Arc::default(),
-            cache_tick: 0,
         }
     }
 
@@ -459,33 +460,51 @@ impl VulkanRenderer {
     fn cache_target(&mut self, target: &Dmabuf) -> Result<TargetKey, VulkanImportError> {
         self.prune_caches();
         let key = TargetKey::new(target)?;
-        self.cache_tick = self.cache_tick.wrapping_add(1);
+        // Swapchain Slot::export retains the original Dmabuf until that slot
+        // dies. Imported VkImages must follow that lifetime: an LRU eviction
+        // would discard the exact FP16 scene described by a live buffer age.
+        self.target_cache.retain(|old, entry| {
+            entry.dmabuf_owners.retain(|owner| !owner.is_gone());
+            old == &key || !entry.dmabuf_owners.is_empty()
+        });
+        if let Some(entry) = self.target_cache.get_mut(&key) {
+            // A producer may re-export one live allocation into a fresh wrapper.
+            // Our imported Vulkan memory keeps that allocation and inode alive;
+            // refresh its weak wrapper without losing the scene/damage history.
+            let owner = target.weak();
+            if !entry.dmabuf_owners.contains(&owner) {
+                entry.dmabuf_owners.push(owner);
+            }
+        }
         if !self.target_cache.contains_key(&key) {
             let texture = self.import_dmabuf_as_target(target)?;
-            // Retain FDs so an evicted allocation cannot masquerade as a live cache
-            // entry through inode reuse. Bound retained swapchain and scratch memory.
-            if self.target_cache.len() >= 16 {
-                if let Some(oldest) = self
-                    .target_cache
-                    .iter()
-                    .min_by_key(|(_, v)| v.last_used)
-                    .map(|(k, _)| k.clone())
-                {
-                    self.target_cache.remove(&oldest);
-                }
+            const MAX_TARGET_CACHE_BYTES: u64 = 1024 * 1024 * 1024;
+            let retained: u64 = self
+                .target_cache
+                .values()
+                .map(|entry| {
+                    entry.texture.inner.allocation_size
+                        + entry
+                            .scratch
+                            .as_ref()
+                            .map_or(0, |scratch| scratch.inner.allocation_size)
+                })
+                .sum();
+            if retained.saturating_add(texture.inner.allocation_size) > MAX_TARGET_CACHE_BYTES {
+                return Err(VulkanImportError::VkError(
+                    vk::Result::ERROR_OUT_OF_DEVICE_MEMORY,
+                ));
             }
             self.target_cache.insert(
                 key.clone(),
                 CachedTarget {
                     texture,
                     scratch: None,
-                    _dmabuf: target.clone(),
-                    last_used: self.cache_tick,
+                    dmabuf_owners: vec![target.weak()],
                     last_commit: None,
                 },
             );
         }
-        self.target_cache.get_mut(&key).unwrap().last_used = self.cache_tick;
         Ok(key)
     }
 
@@ -818,6 +837,7 @@ fn allocate_texture(
         y_inverted: false,
         inner: Arc::new(gpu),
         client_buffer: None,
+        color: Default::default(),
     })
 }
 

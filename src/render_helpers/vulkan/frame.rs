@@ -11,14 +11,14 @@ use smithay::backend::renderer::utils::Buffer as WlBufferOwner;
 use super::device::{StagingBuffer, VulkanContext};
 use super::dmabuf::{DmabufImporter, VulkanImportError};
 use super::pipeline::{
-    BlurPushConstants, BorderPushConstants, MeshGpuVertex, MeshPushConstants,
+    BlurPushConstants, BorderPushConstants, ColorPushConstants, MeshGpuVertex, MeshPushConstants,
     ParticlePushConstants, QuadPushConstants, ShadowPushConstants, VulkanPipelineManager,
 };
 use super::VulkanTexture;
 use crate::render_helpers::particles::ParticleVertex;
 
 const MAX_IDLE_SCRATCH_IMAGES: usize = 8;
-const MAX_IDLE_SCRATCH_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_IDLE_SCRATCH_BYTES: u64 = 256 * 1024 * 1024;
 
 fn scratch_bytes(texture: &VulkanTexture) -> u64 {
     // Include driver alignment and tiling padding, not only logical pixels.
@@ -51,6 +51,11 @@ fn recycle_scratch(
     drop(discarded);
 }
 
+enum PassConstants {
+    Blur(BlurPushConstants),
+    Color(ColorPushConstants),
+}
+
 enum Draw {
     Clear([f32; 4], Vec<vk::Rect2D>),
     Clip(Option<vk::Rect2D>),
@@ -59,10 +64,10 @@ enum Draw {
     Border(BorderPushConstants),
     Shadow(ShadowPushConstants),
     Blur(VulkanTexture, BlurPushConstants),
-    BlurPass(
+    TexturePass(
         VulkanTexture,
         VulkanTexture,
-        BlurPushConstants,
+        PassConstants,
         Option<vk::Rect2D>,
     ),
     Custom(Arc<super::custom_shader::ShaderDraw>, [f32; 20]),
@@ -123,6 +128,12 @@ struct CaptureRegion {
     scratch: Option<VulkanTexture>,
 }
 
+type ColorOutput = (
+    VulkanTexture,
+    ColorPushConstants,
+    Vec<smithay::utils::Rectangle<i32, smithay::utils::Physical>>,
+);
+
 pub struct VulkanFrame<'frame> {
     pub(super) ctx: Arc<VulkanContext>,
     pipeline_mgr: Arc<VulkanPipelineManager>,
@@ -130,6 +141,12 @@ pub struct VulkanFrame<'frame> {
     importer: DmabufImporter,
     draws: Vec<Draw>,
     snapshot: Option<VulkanTexture>,
+    pub(super) color_scene: crate::color::ColorDescription,
+    color_output_primaries: crate::color::Primaries,
+    color_output_reference: f32,
+    converted: Vec<(VulkanTexture, VulkanTexture)>,
+    initial_output: Option<(VulkanTexture, VulkanTexture, ColorPushConstants)>,
+    output: Option<ColorOutput>,
     pub command_buffer: vk::CommandBuffer,
     target_image: vk::Image,
     target_view: vk::ImageView,
@@ -164,6 +181,148 @@ pub(super) fn color_range() -> vk::ImageSubresourceRange {
 }
 
 impl<'frame> VulkanFrame<'frame> {
+    pub(super) fn set_color_scene(
+        &mut self,
+        description: crate::color::ColorDescription,
+        primaries: crate::color::Primaries,
+        output_reference: f32,
+    ) {
+        self.color_scene = description;
+        self.color_output_primaries = primaries;
+        self.color_output_reference = output_reference;
+    }
+
+    /// Convert client pixels before sampling, clipping, opacity or backdrop effects.
+    /// A source allocation is converted once per frame; attachment metadata stays
+    /// on its imported handle, so retained snapshots never observe a newer commit.
+    pub(super) fn color_texture(
+        &mut self,
+        source: &VulkanTexture,
+    ) -> Result<VulkanTexture, vk::Result> {
+        let absolute_needs_normalization = matches!(
+            source.color.intent,
+            crate::color::RenderingIntent::Absolute
+                | crate::color::RenderingIntent::AbsoluteNoAdaptation
+        ) && self.color_scene.reference_luminance
+            != self.color_output_reference;
+        if !absolute_needs_normalization
+            && super::color::encoding_matches(source.color, self.color_scene)
+        {
+            return Ok(source.clone());
+        }
+        if let Some((_, converted)) = self
+            .converted
+            .iter()
+            .find(|(old, _)| old.image() == source.image() && old.color == source.color)
+        {
+            return Ok(converted.clone());
+        }
+        self.check_texture(source)?;
+        let mut converted = self.acquire_scratch_format(
+            source.width,
+            source.height,
+            true,
+            vk::Format::R16G16B16A16_SFLOAT,
+            vk::ImageUsageFlags::COLOR_ATTACHMENT,
+        )?;
+        converted.color = crate::color::SurfaceColor {
+            description: self.color_scene,
+            intent: crate::color::RenderingIntent::Perceptual,
+        };
+        converted.y_inverted = source.y_inverted;
+        let pc = super::color::constants(
+            source.color,
+            self.color_scene,
+            false,
+            self.color_output_primaries,
+            self.color_output_reference,
+        );
+        self.draws.push(Draw::TexturePass(
+            source.clone(),
+            converted.clone(),
+            PassConstants::Color(pc),
+            None,
+        ));
+        self.scratch_textures.push(converted.clone());
+        self.converted.push((source.clone(), converted.clone()));
+        Ok(converted)
+    }
+
+    pub(super) fn set_color_output(
+        &mut self,
+        output: &VulkanTexture,
+        description: crate::color::ColorDescription,
+        damage: &[smithay::utils::Rectangle<i32, smithay::utils::Physical>],
+    ) {
+        let damage = crate::render_helpers::damage_region::disjoint_damage(
+            damage,
+            (self.width as i32, self.height as i32).into(),
+        );
+        let damage = if self.initial_output.is_some() {
+            vec![smithay::utils::Rectangle::from_size(
+                (self.width as i32, self.height as i32).into(),
+            )]
+        } else {
+            damage.to_vec()
+        };
+        let source = crate::color::SurfaceColor {
+            description: self.color_scene,
+            intent: crate::color::RenderingIntent::Relative,
+        };
+        self.output = Some((
+            output.clone(),
+            super::color::constants(
+                source,
+                description,
+                true,
+                description.primaries,
+                description.reference_luminance,
+            ),
+            damage,
+        ));
+    }
+
+    #[cfg(test)]
+    pub(super) fn disable_output_identity_for_test(&mut self) {
+        self.output.as_mut().unwrap().1.gamut[1][3] = 0.;
+    }
+
+    /// Recover an initialized framebuffer's previous scene before its first
+    /// managed partial repaint. Targets only promise TRANSFER_SRC, so snapshot
+    /// into a sampled image rather than sampling the external attachment.
+    pub(super) fn initialize_color_scene(
+        &mut self,
+        source: &VulkanTexture,
+    ) -> Result<(), vk::Result> {
+        if source.current_layout().get() == vk::ImageLayout::UNDEFINED {
+            return Ok(());
+        }
+        let snapshot = self.acquire_scratch_format(
+            source.width,
+            source.height,
+            source.has_alpha,
+            vk::Format::from_raw(source.format as i32),
+            vk::ImageUsageFlags::empty(),
+        )?;
+        let color = crate::color::SurfaceColor {
+            description: source.color.description,
+            intent: crate::color::RenderingIntent::Relative,
+        };
+        self.initial_output = Some((
+            source.clone(),
+            snapshot.clone(),
+            super::color::constants(
+                color,
+                self.color_scene,
+                false,
+                self.color_output_primaries,
+                self.color_output_reference,
+            ),
+        ));
+        self.scratch_textures.push(snapshot);
+        self.clear_color = None;
+        Ok(())
+    }
     /// Retain a known target owner even if a submitted frame fails its fence wait.
     pub(super) fn retain_target(&mut self, target: &VulkanTexture) {
         debug_assert_eq!(target.image(), self.target_image);
@@ -214,7 +373,7 @@ impl<'frame> VulkanFrame<'frame> {
                 t.image() == texture.image()
             }
             Draw::Custom(draw, _) => draw.textures.iter().any(|t| t.image() == texture.image()),
-            Draw::BlurPass(source, target, _, _) => {
+            Draw::TexturePass(source, target, _, _) => {
                 source.image() == texture.image() || target.image() == texture.image()
             }
             _ => false,
@@ -388,6 +547,12 @@ impl<'frame> VulkanFrame<'frame> {
             importer,
             draws: Vec::new(),
             snapshot: None,
+            color_scene: crate::color::ColorDescription::srgb(),
+            color_output_primaries: crate::color::Primaries::Srgb,
+            color_output_reference: 80.,
+            converted: Vec::new(),
+            initial_output: None,
+            output: None,
             command_buffer,
             target_image,
             target_view,
@@ -515,9 +680,10 @@ impl<'frame> VulkanFrame<'frame> {
         tint: Option<[f32; 4]>,
         radius: f32,
     ) -> Result<(), vk::Result> {
-        self.check_texture(texture)?;
+        let texture = self.color_texture(texture)?;
+        self.check_texture(&texture)?;
         self.draws.push(Draw::Quad(
-            texture.clone(),
+            texture,
             QuadPushConstants {
                 matrix: self.matrix(x, y, w, h),
                 uv_bounds: uv.unwrap_or([0., 0., 1., 1.]),
@@ -538,6 +704,7 @@ impl<'frame> VulkanFrame<'frame> {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(super) fn draw_texture_hdr(&mut self, texture: &VulkanTexture) -> Result<(), vk::Result> {
         self.check_texture(texture)?;
         self.draws.push(Draw::Quad(
@@ -570,7 +737,25 @@ impl<'frame> VulkanFrame<'frame> {
         height: u32,
         has_alpha: bool,
     ) -> Result<VulkanTexture, vk::Result> {
-        let usage = vk::ImageUsageFlags::TRANSFER_SRC
+        self.acquire_scratch_format(
+            width,
+            height,
+            has_alpha,
+            self.target_format,
+            vk::ImageUsageFlags::empty(),
+        )
+    }
+
+    fn acquire_scratch_format(
+        &self,
+        width: u32,
+        height: u32,
+        has_alpha: bool,
+        format: vk::Format,
+        extra_usage: vk::ImageUsageFlags,
+    ) -> Result<VulkanTexture, vk::Result> {
+        let usage = extra_usage
+            | vk::ImageUsageFlags::TRANSFER_SRC
             | vk::ImageUsageFlags::TRANSFER_DST
             | vk::ImageUsageFlags::SAMPLED;
         let mut pool = self.scratch_pool.lock().unwrap();
@@ -580,7 +765,7 @@ impl<'frame> VulkanFrame<'frame> {
                 && !texture.y_inverted
                 && texture.width == width
                 && texture.height == height
-                && texture.format == self.target_format.as_raw() as u32
+                && texture.format == format.as_raw() as u32
                 && texture.has_alpha == has_alpha
                 && texture.inner.usage.contains(usage)
         });
@@ -592,7 +777,7 @@ impl<'frame> VulkanFrame<'frame> {
             &self.ctx,
             width,
             height,
-            self.target_format,
+            format,
             vk::ImageTiling::OPTIMAL,
             usage,
             vk::ImageLayout::UNDEFINED,
@@ -600,6 +785,7 @@ impl<'frame> VulkanFrame<'frame> {
         )
     }
 
+    #[cfg(test)]
     pub(super) fn encode_hdr_output(
         &mut self,
         damage: &[smithay::utils::Rectangle<i32, smithay::utils::Physical>],
@@ -630,8 +816,9 @@ impl<'frame> VulkanFrame<'frame> {
         pc: QuadPushConstants,
         linear: bool,
     ) -> Result<(), vk::Result> {
-        self.check_texture(texture)?;
-        self.draws.push(Draw::Quad(texture.clone(), pc, linear));
+        let texture = self.color_texture(texture)?;
+        self.check_texture(&texture)?;
+        self.draws.push(Draw::Quad(texture, pc, linear));
         Ok(())
     }
     pub fn draw_border(
@@ -658,8 +845,9 @@ impl<'frame> VulkanFrame<'frame> {
         texture: &VulkanTexture,
         pc: BlurPushConstants,
     ) -> Result<(), vk::Result> {
-        self.check_texture(texture)?;
-        self.draws.push(Draw::Blur(texture.clone(), pc));
+        let texture = self.color_texture(texture)?;
+        self.check_texture(&texture)?;
+        self.draws.push(Draw::Blur(texture, pc));
         Ok(())
     }
     pub(super) fn blur_pass(
@@ -669,7 +857,8 @@ impl<'frame> VulkanFrame<'frame> {
         pc: BlurPushConstants,
         region: Option<vk::Rect2D>,
     ) -> Result<(), vk::Result> {
-        self.check_texture(source)?;
+        let source = self.color_texture(source)?;
+        self.check_texture(&source)?;
         self.check_texture(target)?;
         if source.image() == target.image()
             || target.inner.external
@@ -687,8 +876,12 @@ impl<'frame> VulkanFrame<'frame> {
         // Resolve format-specific pipelines before mutating the deferred frame.
         self.pipeline_mgr
             .get_pipelines(vk::Format::from_raw(target.format as i32))?;
-        self.draws
-            .push(Draw::BlurPass(source.clone(), target.clone(), pc, region));
+        self.draws.push(Draw::TexturePass(
+            source.clone(),
+            target.clone(),
+            PassConstants::Blur(pc),
+            region,
+        ));
         Ok(())
     }
 
@@ -706,11 +899,12 @@ impl<'frame> VulkanFrame<'frame> {
         pc: MeshPushConstants,
         vertices: Vec<MeshGpuVertex>,
     ) -> Result<(), vk::Result> {
-        self.check_texture(texture)?;
+        let texture = self.color_texture(texture)?;
+        self.check_texture(&texture)?;
         if vertices.is_empty() || !vertices.len().is_multiple_of(3) {
             return Ok(());
         }
-        self.draws.push(Draw::Mesh(texture.clone(), pc, vertices));
+        self.draws.push(Draw::Mesh(texture, pc, vertices));
         Ok(())
     }
     pub fn draw_texture_dmabuf(
@@ -822,15 +1016,16 @@ impl<'frame> VulkanFrame<'frame> {
     }
 
     pub(super) fn custom_draw(
-        &self,
+        &mut self,
         program: &Arc<super::custom_shader::Program>,
         textures: &std::collections::HashMap<String, VulkanTexture>,
         uniforms: &[smithay::backend::renderer::gles::Uniform<'_>],
     ) -> anyhow::Result<Arc<super::custom_shader::ShaderDraw>> {
-        for texture in textures.values() {
-            self.check_texture(texture)?;
+        let mut converted = std::collections::HashMap::new();
+        for (name, texture) in textures {
+            converted.insert(name.clone(), self.color_texture(texture)?);
         }
-        program.draw(self.target_format, textures, uniforms)
+        program.draw(self.target_format, &converted, uniforms)
     }
 
     /// Find client allocations that will be sampled by this submission. Native
@@ -847,7 +1042,9 @@ impl<'frame> VulkanFrame<'frame> {
                 {
                     textures.push(texture);
                 }
-                Draw::BlurPass(source, _, _, _) if source.inner.external => textures.push(source),
+                Draw::TexturePass(source, _, _, _) if source.inner.external => {
+                    textures.push(source)
+                }
                 Draw::Custom(draw, _) => textures.extend(
                     draw.textures
                         .iter()
@@ -868,7 +1065,7 @@ impl<'frame> VulkanFrame<'frame> {
                 Draw::Quad(source, ..) | Draw::Blur(source, ..) | Draw::Mesh(source, ..) => {
                     (source, self.target_format)
                 }
-                Draw::BlurPass(source, target, ..) => {
+                Draw::TexturePass(source, target, ..) => {
                     (source, vk::Format::from_raw(target.format as i32))
                 }
                 _ => continue,
@@ -897,6 +1094,30 @@ impl<'frame> VulkanFrame<'frame> {
         }
         let _command_lock = self.ctx.command_lock.lock().unwrap();
         let pipes = self.pipeline_mgr.get_pipelines(self.target_format)?;
+        let output_descriptor = if self
+            .output
+            .as_ref()
+            .is_some_and(|(_, _, damage)| !damage.is_empty())
+        {
+            let source = self
+                .target_keepalive
+                .as_ref()
+                .ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
+            Some(
+                self.pipeline_mgr
+                    .get_or_create_texture_descriptor_set(source, false)?,
+            )
+        } else {
+            None
+        };
+        let initial_descriptor = self
+            .initial_output
+            .as_ref()
+            .map(|(_, snapshot, _)| {
+                self.pipeline_mgr
+                    .get_or_create_texture_descriptor_set(snapshot, false)
+            })
+            .transpose()?;
         // Allocate descriptors before recording; failure leaves external buffers untouched.
         let mut textures = Vec::new();
         let mut texture_images = HashSet::new();
@@ -906,7 +1127,7 @@ impl<'frame> VulkanFrame<'frame> {
             match draw {
                 Draw::Quad(t, _, _)
                 | Draw::Blur(t, _)
-                | Draw::BlurPass(t, _, _, _)
+                | Draw::TexturePass(t, _, _, _)
                 | Draw::Mesh(t, _, _) => {
                     descriptors.push(Some(
                         self.pipeline_mgr.get_or_create_texture_descriptor_set(
@@ -945,7 +1166,7 @@ impl<'frame> VulkanFrame<'frame> {
             }
         }
         for draw in &self.draws {
-            if let Draw::BlurPass(_, t, _, _) = draw {
+            if let Draw::TexturePass(_, t, _, _) = draw {
                 if texture_images.insert(t.image()) {
                     textures.push(t);
                 }
@@ -1173,6 +1394,145 @@ impl<'frame> VulkanFrame<'frame> {
                 false,
             );
         }
+        if let (Some((source, snapshot, pc)), Some(descriptor)) =
+            (&self.initial_output, initial_descriptor)
+        {
+            self.barrier(
+                source.image(),
+                source.current_layout().get(),
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                if source.inner.external {
+                    vk::AccessFlags::empty()
+                } else {
+                    vk::AccessFlags::MEMORY_WRITE
+                },
+                vk::AccessFlags::TRANSFER_READ,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::PipelineStageFlags::TRANSFER,
+                source.inner.external,
+                false,
+            );
+            self.barrier(
+                snapshot.image(),
+                snapshot.current_layout().get(),
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::AccessFlags::MEMORY_READ,
+                vk::AccessFlags::TRANSFER_WRITE,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::PipelineStageFlags::TRANSFER,
+                false,
+                false,
+            );
+            let layers = vk::ImageSubresourceLayers::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .layer_count(1);
+            let copy = vk::ImageCopy::default()
+                .src_subresource(layers)
+                .dst_subresource(layers)
+                .extent(vk::Extent3D {
+                    width: self.width,
+                    height: self.height,
+                    depth: 1,
+                });
+            unsafe {
+                device.cmd_copy_image(
+                    self.command_buffer,
+                    source.image(),
+                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                    snapshot.image(),
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    &[copy],
+                );
+            }
+            self.barrier(
+                source.image(),
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                vk::ImageLayout::GENERAL,
+                vk::AccessFlags::TRANSFER_READ,
+                vk::AccessFlags::empty(),
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+                false,
+                source.inner.external,
+            );
+            self.barrier(
+                snapshot.image(),
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                vk::AccessFlags::TRANSFER_WRITE,
+                vk::AccessFlags::SHADER_READ,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+                false,
+                false,
+            );
+            let initial_attachment = [vk::RenderingAttachmentInfo::default()
+                .image_view(self.target_view)
+                .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .load_op(vk::AttachmentLoadOp::DONT_CARE)
+                .store_op(vk::AttachmentStoreOp::STORE)];
+            let full = vk::Rect2D {
+                offset: Default::default(),
+                extent: vk::Extent2D {
+                    width: self.width,
+                    height: self.height,
+                },
+            };
+            let initial = vk::RenderingInfo::default()
+                .render_area(full)
+                .layer_count(1)
+                .color_attachments(&initial_attachment);
+            let layout = self.pipeline_mgr.quad_pipeline_layout;
+            unsafe {
+                device.cmd_begin_rendering(self.command_buffer, &initial);
+                device.cmd_set_viewport(
+                    self.command_buffer,
+                    0,
+                    &[vk::Viewport {
+                        x: 0.,
+                        y: 0.,
+                        width: self.width as f32,
+                        height: self.height as f32,
+                        min_depth: 0.,
+                        max_depth: 1.,
+                    }],
+                );
+                device.cmd_set_scissor(self.command_buffer, 0, &[full]);
+                device.cmd_bind_pipeline(
+                    self.command_buffer,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    pipes.color_pipeline,
+                );
+                device.cmd_bind_descriptor_sets(
+                    self.command_buffer,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    layout,
+                    0,
+                    &[descriptor],
+                    &[],
+                );
+                device.cmd_push_constants(
+                    self.command_buffer,
+                    layout,
+                    vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                    0,
+                    bytemuck::bytes_of(pc),
+                );
+                device.cmd_draw(self.command_buffer, 4, 1, 0, 0);
+                device.cmd_end_rendering(self.command_buffer);
+            }
+            self.barrier(
+                self.target_image,
+                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                vk::AccessFlags::COLOR_ATTACHMENT_READ | vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                false,
+                false,
+            );
+        }
         let attachment = [vk::RenderingAttachmentInfo::default()
             .image_view(self.target_view)
             .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
@@ -1234,7 +1594,7 @@ impl<'frame> VulkanFrame<'frame> {
             let mut first_particle_vertex = 0u32;
             for (draw, ds) in self.draws.iter().zip(descriptors) {
                 let (pipeline, layout, bytes) = match draw {
-                    Draw::BlurPass(source, target, pc, region) => {
+                    Draw::TexturePass(source, target, pc, region) => {
                         bindings = DrawBindings::default();
                         device.cmd_end_rendering(self.command_buffer);
                         self.barrier(
@@ -1282,14 +1642,26 @@ impl<'frame> VulkanFrame<'frame> {
                         );
                         device.cmd_set_scissor(self.command_buffer, 0, &[blur_rect]);
                         let target_format = vk::Format::from_raw(target.format as i32);
+                        let is_color = matches!(pc, PassConstants::Color(_));
                         let (blur_pipeline, layout) = if let Some(yuv) = &source.inner.yuv_pipeline
                         {
-                            (yuv.get_pipelines(target_format)?.blur, yuv.layout)
-                        } else {
+                            let variant = yuv.get_pipelines(target_format)?;
                             (
-                                self.pipeline_mgr
-                                    .get_pipelines(target_format)?
-                                    .blur_pipeline,
+                                if is_color {
+                                    variant.color
+                                } else {
+                                    variant.blur
+                                },
+                                yuv.layout,
+                            )
+                        } else {
+                            let variant = self.pipeline_mgr.get_pipelines(target_format)?;
+                            (
+                                if is_color {
+                                    variant.color_pipeline
+                                } else {
+                                    variant.blur_pipeline
+                                },
                                 self.pipeline_mgr.quad_pipeline_layout,
                             )
                         };
@@ -1311,7 +1683,10 @@ impl<'frame> VulkanFrame<'frame> {
                             layout,
                             vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                             0,
-                            bytemuck::bytes_of(pc),
+                            match pc {
+                                PassConstants::Blur(pc) => bytemuck::bytes_of(pc),
+                                PassConstants::Color(pc) => bytemuck::bytes_of(pc),
+                            },
                         );
                         device.cmd_draw(self.command_buffer, 4, 1, 0, 0);
                         device.cmd_end_rendering(self.command_buffer);
@@ -1768,13 +2143,134 @@ impl<'frame> VulkanFrame<'frame> {
                 );
             }
         }
+        if let (Some((output, pc, damage)), Some(descriptor)) = (&self.output, output_descriptor) {
+            self.barrier(
+                self.target_image,
+                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                vk::AccessFlags::SHADER_READ,
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+                false,
+                false,
+            );
+            self.barrier(
+                output.image(),
+                output.current_layout().get(),
+                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                if output.inner.external {
+                    vk::AccessFlags::empty()
+                } else {
+                    vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE
+                },
+                vk::AccessFlags::COLOR_ATTACHMENT_READ | vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                output.inner.external,
+                false,
+            );
+            let variant = self
+                .pipeline_mgr
+                .get_pipelines(vk::Format::from_raw(output.format as i32))?;
+            let output_attachment = [vk::RenderingAttachmentInfo::default()
+                .image_view(output.image_view())
+                .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .load_op(vk::AttachmentLoadOp::LOAD)
+                .store_op(vk::AttachmentStoreOp::STORE)];
+            let full = vk::Rect2D {
+                offset: Default::default(),
+                extent: vk::Extent2D {
+                    width: self.width,
+                    height: self.height,
+                },
+            };
+            let info = vk::RenderingInfo::default()
+                .render_area(full)
+                .layer_count(1)
+                .color_attachments(&output_attachment);
+            let layout = self.pipeline_mgr.quad_pipeline_layout;
+            unsafe {
+                device.cmd_begin_rendering(self.command_buffer, &info);
+                device.cmd_set_viewport(
+                    self.command_buffer,
+                    0,
+                    &[vk::Viewport {
+                        x: 0.,
+                        y: 0.,
+                        width: self.width as f32,
+                        height: self.height as f32,
+                        min_depth: 0.,
+                        max_depth: 1.,
+                    }],
+                );
+                device.cmd_bind_pipeline(
+                    self.command_buffer,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    variant.color_pipeline,
+                );
+                device.cmd_bind_descriptor_sets(
+                    self.command_buffer,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    layout,
+                    0,
+                    &[descriptor],
+                    &[],
+                );
+                device.cmd_push_constants(
+                    self.command_buffer,
+                    layout,
+                    vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                    0,
+                    bytemuck::bytes_of(pc),
+                );
+                for rect in damage {
+                    let scissor = vk::Rect2D {
+                        offset: vk::Offset2D {
+                            x: rect.loc.x,
+                            y: rect.loc.y,
+                        },
+                        extent: vk::Extent2D {
+                            width: rect.size.w as u32,
+                            height: rect.size.h as u32,
+                        },
+                    };
+                    device.cmd_set_scissor(self.command_buffer, 0, &[scissor]);
+                    device.cmd_draw(self.command_buffer, 4, 1, 0, 0);
+                }
+                device.cmd_end_rendering(self.command_buffer);
+            }
+            self.barrier(
+                output.image(),
+                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                vk::ImageLayout::GENERAL,
+                vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                vk::AccessFlags::MEMORY_READ,
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                false,
+                output.inner.external,
+            );
+        }
         self.barrier(
             self.target_image,
-            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            if output_descriptor.is_some() {
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+            } else {
+                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
+            },
             vk::ImageLayout::GENERAL,
-            vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+            if output_descriptor.is_some() {
+                vk::AccessFlags::SHADER_READ
+            } else {
+                vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+            },
             vk::AccessFlags::MEMORY_READ,
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            if output_descriptor.is_some() {
+                vk::PipelineStageFlags::FRAGMENT_SHADER
+            } else {
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+            },
             vk::PipelineStageFlags::ALL_COMMANDS,
             false,
             self.target_external,
@@ -1812,6 +2308,14 @@ impl<'frame> VulkanFrame<'frame> {
             }
             if let Some(target) = &self.target_keepalive {
                 target.current_layout().set(vk::ImageLayout::GENERAL);
+            }
+            if let Some((output, _, _)) = &self.output {
+                output.current_layout().set(vk::ImageLayout::GENERAL);
+            }
+            if let Some((_, snapshot, _)) = &self.initial_output {
+                snapshot
+                    .current_layout()
+                    .set(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
             }
             // Queue submissions and layout metadata must remain ordered, but a
             // CPU fence wait does not need the queue/command-pool lock. Keeping
@@ -1928,6 +2432,12 @@ impl<'frame> VulkanFrame<'frame> {
         };
         target.current_layout().set(vk::ImageLayout::GENERAL);
         let mut textures = vec![target];
+        if let Some((source, snapshot, _)) = &self.initial_output {
+            textures.extend([source.clone(), snapshot.clone()]);
+        }
+        if let Some((output, _, _)) = &self.output {
+            textures.push(output.clone());
+        }
         for draw in &self.draws {
             if let Draw::Quad(texture, ..)
             | Draw::Blur(texture, ..)
@@ -1938,7 +2448,7 @@ impl<'frame> VulkanFrame<'frame> {
             }
         }
         for draw in &self.draws {
-            if let Draw::BlurPass(source, target, _, _) = draw {
+            if let Draw::TexturePass(source, target, _, _) = draw {
                 textures.extend([source.clone(), target.clone()]);
             }
         }
@@ -2024,6 +2534,10 @@ impl Drop for VulkanFrame<'_> {
                 std::mem::forget(self.snapshot.take());
                 super::lifecycle::record_quarantine();
                 std::mem::forget(self.target_keepalive.take());
+                super::lifecycle::record_quarantine();
+                std::mem::forget(self.output.take());
+                super::lifecycle::record_quarantine();
+                std::mem::forget(self.initial_output.take());
                 super::lifecycle::record_quarantine();
                 std::mem::forget(std::mem::take(&mut self.scratch_textures));
                 super::lifecycle::record_quarantine();
@@ -2469,7 +2983,10 @@ mod tests {
             )
             .unwrap()
         };
-        recycle_scratch(&pool, (0..5).map(|_| make_texture(2048, 2048)));
+        // Five quarter-budget RGBA images exceed the byte budget, independent
+        // of its configured value; driver padding can only increase their cost.
+        let side = (MAX_IDLE_SCRATCH_BYTES / (4 * 4)).isqrt() as u32;
+        recycle_scratch(&pool, (0..5).map(|_| make_texture(side, side)));
         {
             let cached = pool.lock().unwrap();
             assert!(cached.len() < 5);
@@ -2484,7 +3001,7 @@ mod tests {
                 );
             }
         }
-        let oversized = make_texture(4097, 4096);
+        let oversized = make_texture(side * 2 + 1, side * 2);
         assert!(scratch_bytes(&oversized) > MAX_IDLE_SCRATCH_BYTES);
         let weak = Arc::downgrade(&oversized.inner);
         recycle_scratch(&pool, std::iter::once(oversized));
@@ -2628,6 +3145,9 @@ mod tests {
     #[test]
     #[ignore = "requires real DRM render node, Vulkan and native fence export"]
     fn fence_timeout_keeps_completion_owners_alive() {
+        if super::super::hardware_tests::lifecycle::run_quarantine_fixture_in_child() {
+            return;
+        }
         let (renderer, _gles, _allocator) = setup();
         let ctx = renderer.ctx.as_ref().unwrap().clone();
         let target = allocate_texture(

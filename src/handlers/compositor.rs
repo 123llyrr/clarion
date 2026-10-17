@@ -121,6 +121,10 @@ impl CompositorHandler for State {
             }
         }
 
+        // The snapshot above still imports the previous buffer and its previous
+        // color description. Publish the new interpretation on the same tree
+        // boundary where Smithay now replaces those renderer buffers.
+        crate::protocols::color_management::commit_surface_tree_color(self, surface);
         on_commit_buffer_handler::<Self>(surface);
         crate::render_helpers::vulkan::native::record_surface_tree_buffer_owners(surface);
         self.backend.early_import(surface);

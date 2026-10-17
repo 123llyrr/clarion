@@ -25,7 +25,9 @@ use calloop::{
 
 use crate::backend::session::{AsErrno, Event as SessionEvent, Session};
 
-use tracing::{debug, info_span, instrument};
+use tracing::{debug, info_span, instrument, warn};
+
+mod pause;
 
 #[derive(Debug)]
 struct LibSeatSessionImpl {
@@ -225,8 +227,31 @@ impl EventSource for LibSeatSessionNotifier {
                     }
                     SeatEvent::Disable => {
                         internal.active.store(false, Ordering::SeqCst);
-                        internal.seat.borrow_mut().disable().unwrap();
-                        callback(SessionEvent::PauseSession, &mut ());
+                        // The disable acknowledgement permits seatd/logind to revoke
+                        // device access. Let the compositor atomically release HDR
+                        // signaling first. Never hold the seat RefCell borrow across
+                        // its callback, and acknowledge even if that callback unwinds.
+                        let started = std::time::Instant::now();
+                        pause::pause_before_acknowledge(
+                            || callback(SessionEvent::PauseSession, &mut ()),
+                            || {
+                                if started.elapsed() > std::time::Duration::from_secs(1) {
+                                    warn!(
+                                        "Seat handoff cleanup exceeded one second; acknowledging disable now"
+                                    );
+                                }
+                                match internal.seat.try_borrow_mut() {
+                                    Ok(mut seat) => {
+                                        if let Err(error) = seat.disable() {
+                                            warn!(?error, "Failed to acknowledge disabled seat");
+                                        }
+                                    }
+                                    Err(error) => {
+                                        warn!(%error, "Seat remains borrowed during disable acknowledgement")
+                                    }
+                                }
+                            },
+                        );
                     }
                 },
                 channel::Event::Closed => {

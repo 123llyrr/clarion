@@ -10,6 +10,15 @@ use std::time::Duration;
 use calloop::EventLoop;
 use calloop_wayland_source::WaylandSource;
 use single_pixel_buffer::v1::client::wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1;
+use smithay::reexports::wayland_protocols::wp::color_management::v1::client::{
+    wp_color_management_output_v1::{self, WpColorManagementOutputV1},
+    wp_color_management_surface_feedback_v1::{self, WpColorManagementSurfaceFeedbackV1},
+    wp_color_management_surface_v1::WpColorManagementSurfaceV1,
+    wp_color_manager_v1::{self, WpColorManagerV1},
+    wp_image_description_creator_params_v1::WpImageDescriptionCreatorParamsV1,
+    wp_image_description_info_v1::{self, WpImageDescriptionInfoV1},
+    wp_image_description_v1::{self, WpImageDescriptionV1},
+};
 use smithay::reexports::wayland_protocols::wp::commit_timing::v1::client::{
     wp_commit_timer_v1::WpCommitTimerV1, wp_commit_timing_manager_v1::WpCommitTimingManagerV1,
 };
@@ -70,6 +79,12 @@ pub struct State {
     pub content_type_manager: Option<WpContentTypeManagerV1>,
     pub commit_timing_manager: Option<WpCommitTimingManagerV1>,
     pub fifo_manager: Option<WpFifoManagerV1>,
+    pub color_manager: Option<WpColorManagerV1>,
+    pub color_manager_events: Vec<wp_color_manager_v1::Event>,
+    pub color_description_events: Vec<(u32, wp_image_description_v1::Event)>,
+    pub color_information_events: Vec<(u32, wp_image_description_info_v1::Event)>,
+    pub color_feedback_events: Vec<(u32, wp_color_management_surface_feedback_v1::Event)>,
+    pub color_output_events: Vec<(u32, wp_color_management_output_v1::Event)>,
 
     pub windows: Vec<Window>,
     pub layers: Vec<LayerSurface>,
@@ -201,6 +216,12 @@ impl Client {
             content_type_manager: None,
             commit_timing_manager: None,
             fifo_manager: None,
+            color_manager: None,
+            color_manager_events: Vec::new(),
+            color_description_events: Vec::new(),
+            color_information_events: Vec::new(),
+            color_feedback_events: Vec::new(),
+            color_output_events: Vec::new(),
             windows: Vec::new(),
             layers: Vec::new(),
         };
@@ -556,6 +577,8 @@ impl Dispatch<WlRegistry, ()> for State {
                     state.fifo_manager = Some(registry.bind(name, 1, qh, ()));
                 } else if interface == WpContentTypeManagerV1::interface().name {
                     state.content_type_manager = Some(registry.bind(name, 1, qh, ()));
+                } else if interface == WpColorManagerV1::interface().name {
+                    state.color_manager = Some(registry.bind(name, min(version, 3), qh, ()));
                 } else if interface == WlOutput::interface().name {
                     let version = min(version, WlOutput::interface().version);
                     let output = registry.bind(name, version, qh, ());
@@ -577,6 +600,59 @@ impl Dispatch<WlRegistry, ()> for State {
 
 wayland_client::delegate_noop!(State: ignore WpContentTypeManagerV1);
 wayland_client::delegate_noop!(State: ignore WpContentTypeV1);
+wayland_client::delegate_noop!(State: ignore WpColorManagementSurfaceV1);
+wayland_client::delegate_noop!(State: ignore WpImageDescriptionCreatorParamsV1);
+
+impl Dispatch<WpColorManagerV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &WpColorManagerV1,
+        event: wp_color_manager_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        state.color_manager_events.push(event);
+    }
+}
+
+macro_rules! record_color_events {
+    ($resource:ty, $event:ty, $field:ident) => {
+        impl Dispatch<$resource, ()> for State {
+            fn event(
+                state: &mut Self,
+                resource: &$resource,
+                event: $event,
+                _: &(),
+                _: &Connection,
+                _: &QueueHandle<Self>,
+            ) {
+                state.$field.push((resource.id().protocol_id(), event));
+            }
+        }
+    };
+}
+
+record_color_events!(
+    WpImageDescriptionV1,
+    wp_image_description_v1::Event,
+    color_description_events
+);
+record_color_events!(
+    WpImageDescriptionInfoV1,
+    wp_image_description_info_v1::Event,
+    color_information_events
+);
+record_color_events!(
+    WpColorManagementSurfaceFeedbackV1,
+    wp_color_management_surface_feedback_v1::Event,
+    color_feedback_events
+);
+record_color_events!(
+    WpColorManagementOutputV1,
+    wp_color_management_output_v1::Event,
+    color_output_events
+);
 
 impl Dispatch<WlOutput, ()> for State {
     fn event(

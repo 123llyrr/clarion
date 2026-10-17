@@ -267,18 +267,19 @@ output "HDMI-A-1" {
 
 ### `hdr`
 
-Enable experimental HDR10 output signaling for this output when the connector exposes
-`HDR_OUTPUT_METADATA` and `Colorspace`. This currently enables PQ/BT.2020 KMS metadata
-and requires a 10-bit-capable mode. When `max-bpc` is not configured, the compositor
-uses the connector's current bit depth and raises it to 10 if the driver range allows;
-an explicit `max-bpc` below 10 disables HDR. The native Vulkan KMS path applies an
-SDR/sRGB-to-PQ transfer to the final composed frame; GLES-rendered outputs keep HDR
-metadata disabled so SDR content is not misrendered as PQ.
-Production use still requires physical HDR display validation.
+Enable HDR10 on an EDID PQ/BT.2020-capable output with native Vulkan, atomic KMS,
+HDR metadata/colorspace properties and a real 10-bit framebuffer. The compositor
+composes independently described SDR/PQ/scRGB clients through a floating-point
+scene, then encodes the output to BT.2020/PQ. Signaling changes atomically with
+the matching frame. An explicit `max-bpc` below 10 disables HDR.
+GLES sessions retain SDR. See [HDR support and validation limits](../hdr.md).
 
 ```kdl
 output "HDMI-A-1" {
     hdr
+    sdr-white-level 203
+    // Omit the peak override to use the display's EDID.
+    // hdr-peak-luminance 600
     max-bpc 10
 }
 ```
@@ -291,7 +292,10 @@ clarion msg output HDMI-A-1 hdr on
 clarion msg outputs   # shows "HDR: enabled" per output
 ```
 
-The settings app's 显示器 page shows the same HDR status.
+The settings app's 显示器 page shows capability, committed HDR status and any
+rejection reason. `sdr-white-level` accepts 80–500 nits;
+`hdr-peak-luminance` accepts 80–10000 nits. These settings are exposed in the full
+output configuration editor and its existing display preview workflow.
 
 ### `max-bpc`
 

@@ -132,6 +132,43 @@ impl Tty {
                 self.libinput.suspend();
 
                 for device in self.devices.values_mut() {
+                    for surface in device
+                        .surfaces
+                        .values_mut()
+                        .filter(|surface| surface.hdr.manages_color_signaling())
+                    {
+                        // Seat-disable has not been acknowledged yet. Return all
+                        // managed connectors (including initial/failed/disabled HDR
+                        // transitions) to inactive signaling in the same atomic off.
+                        // GPU completion/retained-frame owners stay in their existing
+                        // queues; the epoch rejects those images after they become ready.
+                        surface.frame_epoch = surface.frame_epoch.wrapping_add(1);
+                        let cleanup = surface
+                            .hdr
+                            .prepare_pause(surface.compositor.surface(), surface.connector)
+                            .and_then(|()| surface.compositor.clear().map_err(Into::into));
+                        surface.hdr.resume();
+                        if let Err(error) = cleanup {
+                            let status = format!("seat handoff color cleanup failed; kernel signal state unknown until resume: {error:#}");
+                            warn!("output {}: {status}", surface.name.connector);
+                            surface.hdr.status = Some(status);
+                        } else {
+                            surface.hdr.status = Some(
+                                "seat inactive; color signaling cleared with CRTC off, pending resume"
+                                    .into(),
+                            );
+                        }
+                        if let Some(output) = self
+                            .ipc_outputs
+                            .lock()
+                            .unwrap()
+                            .values_mut()
+                            .find(|output| output.name == surface.name.connector)
+                        {
+                            output.hdr_active = false;
+                            output.hdr_status = surface.hdr.status.clone();
+                        }
+                    }
                     device.drm.pause();
 
                     if let Some(lease_state) = &mut device.drm_lease_state {
@@ -211,18 +248,16 @@ impl Tty {
                     // Apply pending gamma changes and restore our existing gamma.
                     let device = self.devices.get_mut(&node).unwrap();
                     for (crtc, surface) in device.surfaces.iter_mut() {
-                        if let Ok(mut props) =
-                            ConnectorProperties::try_new(&device.drm, surface.connector)
-                        {
-                            let max_bpc = self
-                                .config
-                                .as_ref()
-                                .outputs
-                                .find(&surface.name)
-                                .and_then(|o| o.max_bpc);
-                            set_connector_properties(&mut props, max_bpc, false);
-                        } else {
-                            warn!("failed to get connector properties");
+                        // Resume restores encoding and connector signaling in one
+                        // matching framebuffer commit, never an independent SDR reset.
+                        surface.hdr.resume();
+                        surface.frame_epoch = surface.frame_epoch.wrapping_add(1);
+
+                        if !surface.hdr.gamma_allowed() {
+                            // The first restored HDR frame atomically clears the
+                            // CRTC LUT. Never restore an old SDR/night-light ramp.
+                            surface.pending_gamma_change = None;
+                            continue;
                         }
 
                         if let Some(ramp) = surface.pending_gamma_change.take() {
@@ -877,9 +912,7 @@ impl Tty {
         debug!("picking mode: {mode:?}");
 
         let mut orientation = None;
-        if let Ok(mut props) = ConnectorProperties::try_new(&device.drm, connector.handle()) {
-            set_connector_properties(&mut props, config.max_bpc, config.hdr);
-
+        if let Ok(props) = ConnectorProperties::try_new(&device.drm, connector.handle()) {
             match props.get_panel_orientation() {
                 Ok(x) => orientation = Some(x),
                 Err(err) => {
@@ -1095,6 +1128,14 @@ impl Tty {
             }
         };
 
+        if self.color_management_enabled && !use_native_renderer {
+            let reason = "output cannot use native Vulkan color management; GLES hotplug fallback refused to preserve accepted HDR client colors";
+            self.color_management_rejections
+                .insert(connector_name.clone(), reason.into());
+            bail!("output {connector_name}: {reason}");
+        }
+        self.color_management_rejections.remove(&connector_name);
+
         if use_native_renderer {
             info!(
                 "output {connector_name} uses Vulkan composition on render node {:?}, KMS scanout on {:?}",
@@ -1177,6 +1218,21 @@ impl Tty {
                 )),
             });
 
+        let mut hdr = hdr::HdrOutputState::new(hdr::HdrCapabilities::detect(
+            &device.drm,
+            connector.handle(),
+        ));
+        hdr.configure(
+            &config,
+            use_native_renderer
+                && self
+                    .native_renderer
+                    .as_ref()
+                    .is_some_and(|renderer| renderer.supports_color_management()),
+            compositor.format(),
+            !compositor.surface().is_legacy(),
+        );
+
         let surface = Surface {
             name: output_name,
             connector: connector.handle(),
@@ -1185,6 +1241,7 @@ impl Tty {
             pending_kms: None,
             quarantined_kms: Vec::new(),
             native_swapchain: use_native_renderer,
+            hdr,
             last_gles_migration_warning: None,
             next_gles_migration_attempt: Duration::ZERO,
             dmabuf_feedback,
@@ -1450,6 +1507,12 @@ impl Tty {
         } else {
             clarion.send_frame_callbacks(&output);
         }
+        surface
+            .hdr
+            .refresh_active(surface.compositor.surface(), surface.connector);
+        if mem::take(&mut surface.hdr.ipc_dirty) {
+            self.platform_refresh_ipc_outputs(clarion);
+        }
     }
 
     fn platform_on_estimated_vblank_timer(clarion: &mut Clarion, output: Output) {
@@ -1567,10 +1630,39 @@ impl Tty {
                         .as_unsigned_range()
                         .map(|v| v as u8)
                 });
-                let hdr_active = props
-                    .as_ref()
-                    .and_then(|p| p.find(c"HDR_OUTPUT_METADATA").ok())
-                    .is_some_and(|(_, value)| *value != 0);
+                let capabilities = surface
+                    .map(|surface| surface.hdr.capabilities.clone())
+                    .unwrap_or_else(|| {
+                        hdr::HdrCapabilities::detect(&device.drm, connector.handle())
+                    });
+                let hdr_active = surface.is_some_and(|surface| surface.hdr.active.is_some());
+                let hdr_status = surface
+                    .and_then(|surface| surface.hdr.status.clone())
+                    .or_else(|| {
+                        self.color_management_rejections
+                            .get(&connector_name)
+                            .cloned()
+                    })
+                    .or_else(|| capabilities.reason.clone());
+                let hdr_peak_luminance = surface
+                    .and_then(|surface| {
+                        surface
+                            .hdr
+                            .active
+                            .or(surface.hdr.target)
+                            .or_else(|| surface.hdr.configured_settings())
+                    })
+                    .map(|settings| settings.peak_luminance)
+                    .or(capabilities.peak_luminance);
+                let sdr_white_level = surface
+                    .and_then(|surface| {
+                        surface
+                            .hdr
+                            .active
+                            .or(surface.hdr.target)
+                            .or_else(|| surface.hdr.configured_settings())
+                    })
+                    .map(|settings| settings.sdr_white);
 
                 let ipc_output = clarion_ipc::Output {
                     name: connector_name,
@@ -1586,6 +1678,10 @@ impl Tty {
                     logical,
                     max_bpc,
                     hdr_active,
+                    hdr_supported: capabilities.supported,
+                    hdr_status,
+                    hdr_peak_luminance,
+                    sdr_white_level,
                 };
 
                 ipc_outputs.insert(id, ipc_output);
@@ -1750,21 +1846,29 @@ impl Tty {
                     },
                 };
 
-                if let Ok(mut props) = ConnectorProperties::try_new(&device.drm, surface.connector)
-                {
-                    // PQ encoding only exists on the native Vulkan path;
-                    // sending HDR10 metadata for a GLES-rendered output would
-                    // misrender SDR content as PQ.
-                    let hdr = config.hdr && surface.native_swapchain;
-                    if config.hdr && !surface.native_swapchain {
-                        debug!(
-                            "HDR requested on a GLES-rendered output; \
-                             keeping HDR metadata disabled"
-                        );
+                if surface.hdr.configure(
+                    &config,
+                    surface.native_swapchain
+                        && self
+                            .native_renderer
+                            .as_ref()
+                            .is_some_and(|renderer| renderer.supports_color_management()),
+                    surface.compositor.format(),
+                    !surface.compositor.surface().is_legacy(),
+                ) {
+                    surface.frame_epoch = surface.frame_epoch.wrapping_add(1);
+                    surface.compositor.reset_buffer_ages();
+                    let output = clarion
+                        .global_space
+                        .outputs()
+                        .find(|output| {
+                            let tty: &TtyOutputState = output.user_data().get().unwrap();
+                            tty.node == node && tty.crtc == crtc
+                        })
+                        .cloned();
+                    if let Some(output) = output {
+                        clarion.queue_redraw(&output);
                     }
-                    set_connector_properties(&mut props, config.max_bpc, hdr);
-                } else {
-                    warn!("failed to get connector properties");
                 }
 
                 let change_mode = surface.compositor.pending_mode() != mode;

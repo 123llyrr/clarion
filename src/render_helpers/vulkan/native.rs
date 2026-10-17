@@ -267,6 +267,7 @@ struct SurfaceBufferOwner(Arc<Mutex<Option<WlBufferOwner>>>);
 pub struct OwnedDmabufSource {
     dmabuf: Dmabuf,
     owner: WlBufferOwner,
+    color: crate::color::SurfaceColor,
 }
 
 impl OwnedDmabufSource {
@@ -276,7 +277,11 @@ impl OwnedDmabufSource {
                 "source attachment does not own this DMA-BUF".into(),
             ));
         }
-        Ok(Self { dmabuf, owner })
+        Ok(Self {
+            dmabuf,
+            owner,
+            color: Default::default(),
+        })
     }
 
     pub(crate) fn dmabuf(&self) -> &Dmabuf {
@@ -305,7 +310,10 @@ pub(crate) fn owned_surface_dmabuf(surface: &WlSurface) -> Option<OwnedDmabufSou
         (current_id == Some(owner.id())).then_some(owner)
     })?;
     let dmabuf = get_dmabuf(&owner).ok()?.clone();
-    OwnedDmabufSource::new(dmabuf, owner).ok()
+    let mut source = OwnedDmabufSource::new(dmabuf, owner).ok()?;
+    source.color =
+        crate::protocols::color_management::surface_color_description_for_surface(surface);
+    Some(source)
 }
 
 pub(crate) fn record_surface_tree_buffer_owners(surface: &WlSurface) {
@@ -390,6 +398,16 @@ impl NativeError {
             if error.downcast_ref::<Self>().is_some_and(Self::is_busy) {
                 return true;
             }
+            // Thiserror's transparent damage wrapper exposes the inner error's
+            // source, skipping NativeError itself. A cold output must retain
+            // its frame and retry rather than treating that Busy as GPU loss.
+            if let Some(smithay::backend::renderer::damage::Error::Rendering(native)) =
+                error.downcast_ref::<smithay::backend::renderer::damage::Error<Self>>()
+            {
+                if native.is_busy() {
+                    return true;
+                }
+            }
             current = error.source();
         }
         false
@@ -435,6 +453,7 @@ struct NativeDeviceResources {
     sample_formats: FormatSet,
     target_formats: FormatSet,
     gpu_timings: Option<Arc<super::timing::GpuTimings>>,
+    color_management_supported: bool,
 }
 
 impl NativeDeviceResources {
@@ -442,6 +461,27 @@ impl NativeDeviceResources {
         let white = renderer.create_solid_texture([255; 4])?.inner;
         let sample_formats = dma_formats(renderer, true);
         let target_formats = dma_formats(renderer, false);
+        let ctx = renderer.ctx.as_ref().expect("initialized renderer");
+        let format = unsafe {
+            ctx.instance.get_physical_device_format_properties(
+                ctx.physical_device,
+                vk::Format::R16G16B16A16_SFLOAT,
+            )
+        };
+        let limits = unsafe {
+            ctx.instance
+                .get_physical_device_properties(ctx.physical_device)
+        }
+        .limits;
+        let color_management_supported = format.optimal_tiling_features.contains(
+            vk::FormatFeatureFlags::COLOR_ATTACHMENT
+                | vk::FormatFeatureFlags::COLOR_ATTACHMENT_BLEND
+                | vk::FormatFeatureFlags::SAMPLED_IMAGE
+                | vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR
+                | vk::FormatFeatureFlags::TRANSFER_SRC
+                | vk::FormatFeatureFlags::TRANSFER_DST,
+        ) && limits.max_push_constants_size
+            >= std::mem::size_of::<super::pipeline::ColorPushConstants>() as u32;
         let gpu_timings = match super::timing::GpuTimings::new(
             renderer.ctx.as_ref().expect("initialized renderer").clone(),
         ) {
@@ -462,6 +502,7 @@ impl NativeDeviceResources {
             sample_formats,
             target_formats,
             gpu_timings,
+            color_management_supported,
         })
     }
 }
@@ -519,12 +560,37 @@ pub struct NativeRenderer {
     failed_program_sources: std::collections::HashMap<u8, Vec<String>>,
     shader_compiles: ShaderCompileOwner,
     prepared_output_formats: std::collections::HashSet<vk::Format>,
-    hdr_output: bool,
+    output_color_state: Rc<std::cell::Cell<Option<crate::color::ColorDescription>>>,
+    output_scenes: std::collections::HashMap<u64, OutputScene>,
+    color_management_supported: bool,
 }
+
+#[derive(Debug)]
+struct OutputScene {
+    framebuffer: Weak<super::TextureGpu>,
+    texture: VulkanTexture,
+}
+
+// Covers several 4K outputs with triple buffering. Live swapchain history may
+// never be evicted: buffer age describes that exact scene's retained pixels.
+const MAX_OUTPUT_SCENE_BYTES: u64 = 1024 * 1024 * 1024;
 
 /// Enables deferred cold allocations only inside a retryable frame. Commit,
 /// unmap and explicit capture preparation keep their synchronous lease contract.
 pub(crate) struct AsyncOffscreenScope(Rc<std::cell::Cell<u32>>);
+
+/// Restore the previous color scope on every deferred/error/early return.
+/// Like the offscreen guard this does not borrow the renderer while it is held.
+#[must_use]
+pub struct OutputColorScope {
+    state: Rc<std::cell::Cell<Option<crate::color::ColorDescription>>>,
+    previous: Option<crate::color::ColorDescription>,
+}
+impl Drop for OutputColorScope {
+    fn drop(&mut self) {
+        self.state.set(self.previous);
+    }
+}
 
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct NativeCompatibilityWork {
@@ -638,6 +704,7 @@ pub struct NativeFrame<'a> {
     completion_permit: Option<super::completion::CompletionPermit>,
     completion_export_required: bool,
     hdr_output: bool,
+    output_color: Option<(VulkanTexture, crate::color::ColorDescription)>,
     hdr_damage: Vec<Rectangle<i32, Physical>>,
     shader_compiles: &'a mut ShaderCompileOwner,
     scene_deferred: &'a mut bool,
@@ -645,6 +712,16 @@ pub struct NativeFrame<'a> {
 }
 
 impl NativeRenderer {
+    #[cfg(test)]
+    pub(crate) fn target_cache_count_for_test(&self) -> usize {
+        self.renderer.target_cache.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn output_scene_count_for_test(&self) -> usize {
+        self.output_scenes.len()
+    }
+
     #[cfg(test)]
     pub(crate) fn compatibility_work(&self) -> NativeCompatibilityWork {
         self.compatibility_work
@@ -727,9 +804,58 @@ impl NativeRenderer {
         }
     }
 
-    /// Enable the final PQ transfer for the next output frame only.
+    /// Compatibility entry point for the retained-damage GPU regression suite.
+    #[cfg(test)]
     pub fn set_hdr_output(&mut self, enabled: bool) {
-        self.hdr_output = enabled;
+        self.set_output_color(enabled.then(crate::color::ColorDescription::bt2020_pq));
+    }
+
+    /// Configure the output before preparing its scene. Every source is
+    /// converted into an extended sRGB FP16 scene; only the final output pass
+    /// encodes panel PQ. `None` restores ordinary SDR captures and effects.
+    pub fn set_output_color(&mut self, description: Option<crate::color::ColorDescription>) {
+        self.output_color_state
+            .set(description.filter(|_| self.supports_color_management()));
+    }
+
+    pub fn output_color_scope(
+        &self,
+        description: Option<crate::color::ColorDescription>,
+    ) -> OutputColorScope {
+        let description = description.filter(|_| self.supports_color_management());
+        OutputColorScope {
+            state: self.output_color_state.clone(),
+            previous: self.output_color_state.replace(description),
+        }
+    }
+
+    pub fn supports_color_management(&self) -> bool {
+        self.color_management_supported
+    }
+
+    pub fn scene_color_description(&self) -> crate::color::ColorDescription {
+        super::color::scene_description(self.output_color_state.get())
+    }
+
+    fn required_scene_formats(&self, format: vk::Format) -> Vec<vk::Format> {
+        let mut formats = vec![format, vk::Format::R8G8B8A8_UNORM];
+        if self.supports_color_management() {
+            formats.push(vk::Format::R16G16B16A16_SFLOAT);
+        }
+        formats
+    }
+
+    pub(crate) fn scene_buffer_format(&self, format: Fourcc) -> Fourcc {
+        if self.output_color_state.get().is_some()
+            && matches!(
+                format,
+                Fourcc::Abgr8888 | Fourcc::Argb8888 | Fourcc::Xrgb8888 | Fourcc::Xbgr8888
+            )
+        {
+            Fourcc::Abgr16161616f
+        } else {
+            format
+        }
     }
 
     /// Configured selection is distinct from historical closing-window source lookup.
@@ -1449,6 +1575,7 @@ impl NativeRenderer {
         loop {
             if self.target_programs_ready(format)
                 && self.target_programs_ready(vk::Format::R8G8B8A8_UNORM)
+                && self.target_programs_ready(vk::Format::R16G16B16A16_SFLOAT)
             {
                 return Ok(());
             }
@@ -1513,11 +1640,12 @@ impl NativeRenderer {
     pub fn prepare_output_format(&mut self, format: Fourcc) -> Result<(), NativeError> {
         let (format, _) = super::dmabuf::fourcc_to_vk_format(format)
             .ok_or_else(|| NativeError::Other("unsupported Vulkan output format".into()))?;
+        let required_formats = self.required_scene_formats(format);
         self.shader_compiles
             .desired_formats
-            .extend([format, vk::Format::R8G8B8A8_UNORM]);
+            .extend(required_formats.iter().copied());
         for target in &mut self.shader_compiles.yuv_targets {
-            target.formats.extend([format, vk::Format::R8G8B8A8_UNORM]);
+            target.formats.extend(required_formats.iter().copied());
         }
         if let Some(error) = &self.shader_compiles.format_error {
             return Err(NativeError::Other(error.clone()));
@@ -1550,9 +1678,10 @@ impl NativeRenderer {
         {
             return Ok(());
         }
+        let required_formats = self.required_scene_formats(format);
         self.shader_compiles
             .desired_formats
-            .extend([format, vk::Format::R8G8B8A8_UNORM]);
+            .extend(required_formats.iter().copied());
         if let Some(error) = &self.shader_compiles.format_error {
             return Err(NativeError::Other(error.clone()));
         }
@@ -1646,6 +1775,7 @@ impl NativeRenderer {
         format: Fourcc,
         minimum: Size<i32, Buffer>,
     ) -> Result<VulkanTexture, NativeError> {
+        let format = self.scene_buffer_format(format);
         let (format_vk, alpha) = super::dmabuf::fourcc_to_vk_format(format)
             .ok_or_else(|| NativeError::Other("unsupported Vulkan target format".into()))?;
         if minimum.w <= 0 || minimum.h <= 0 {
@@ -1661,7 +1791,10 @@ impl NativeRenderer {
                 && texture.format == format_vk.as_raw() as u32
                 && texture.has_alpha == alpha
         }) {
-            return Ok(self.offscreen_cache.swap_remove(index));
+            let mut texture = self.offscreen_cache.swap_remove(index);
+            texture.color.description =
+                super::color::scene_description(self.output_color_state.get());
+            return Ok(texture);
         }
         if self.async_offscreen_scopes.get() == 0 {
             return self.create_buffer(format, minimum);
@@ -1755,6 +1888,10 @@ impl NativeRenderer {
                 y_inverted: false,
                 inner: allocation.image.clone(),
                 client_buffer: None,
+                color: crate::color::SurfaceColor {
+                    description: super::color::scene_description(self.output_color_state.get()),
+                    intent: crate::color::RenderingIntent::Perceptual,
+                },
             });
         }
         // Keep another target's ready result. Only evict when both bounded
@@ -1896,6 +2033,7 @@ impl NativeRenderer {
             sample_formats,
             target_formats,
             gpu_timings,
+            color_management_supported,
         } = resources;
         let white = VulkanTexture {
             width: 1,
@@ -1905,6 +2043,7 @@ impl NativeRenderer {
             y_inverted: false,
             inner: white,
             client_buffer: None,
+            color: Default::default(),
         };
         Self {
             backpressured: false,
@@ -1934,14 +2073,16 @@ impl NativeRenderer {
             failed_program_sources: Default::default(),
             shader_compiles: ShaderCompileOwner::new(),
             prepared_output_formats: Default::default(),
-            hdr_output: false,
+            output_color_state: Rc::new(std::cell::Cell::new(None)),
+            output_scenes: Default::default(),
+            color_management_supported,
         }
     }
     /// Retain scratch images for later reuse, without ever overwriting a live snapshot.
-    /// Limit both count and pixel storage (64 MiB of 32-bit pixels, excluding driver overhead).
+    /// Limit both count and actual driver storage, including FP16 effects.
     pub fn recycle_offscreen(&mut self, texture: VulkanTexture) {
         const MAX_IMAGES: usize = 8;
-        const MAX_BYTES: u64 = 64 * 1024 * 1024;
+        const MAX_BYTES: u64 = 256 * 1024 * 1024;
         let Some(ctx) = self.renderer.ctx.as_ref() else {
             return;
         };
@@ -2048,7 +2189,66 @@ impl Renderer for NativeRenderer {
             .as_ref()
             .cloned()
             .ok_or_else(|| NativeError::Other("Vulkan is not initialized".into()))?;
-        let t = &framebuffer.texture;
+        let actual_target = framebuffer.texture.clone();
+        let color_output = self
+            .output_color_state
+            .get()
+            .filter(|_| actual_target.format != vk::Format::R16G16B16A16_SFLOAT.as_raw() as u32);
+        let scene_color = super::color::scene_description(self.output_color_state.get());
+        let scene = if color_output.is_some() {
+            self.output_scenes
+                .retain(|_, scene| scene.framebuffer.strong_count() != 0);
+            let key = actual_target.cache_key();
+            if let Some(scene) = self.output_scenes.get(&key).filter(|scene| {
+                scene
+                    .framebuffer
+                    .upgrade()
+                    .is_some_and(|owner| Arc::ptr_eq(&owner, &actual_target.inner))
+                    && scene.texture.width == actual_target.width
+                    && scene.texture.height == actual_target.height
+            }) {
+                scene.texture.clone()
+            } else {
+                self.ensure_target_format_ready(vk::Format::R16G16B16A16_SFLOAT)?;
+                let used: u64 = self
+                    .output_scenes
+                    .values()
+                    .map(|scene| scene.texture.inner.allocation_size)
+                    .sum();
+                if used.saturating_add(
+                    u64::from(actual_target.width) * u64::from(actual_target.height) * 8,
+                ) > MAX_OUTPUT_SCENE_BYTES
+                {
+                    return Err(self.busy(NativeBusy::OffscreenAllocation));
+                }
+                let mut scene = self.create_exact_frame_target(
+                    if actual_target.has_alpha {
+                        Fourcc::Abgr16161616f
+                    } else {
+                        Fourcc::Xbgr16161616f
+                    },
+                    (size.w, size.h).into(),
+                )?;
+                scene.color = crate::color::SurfaceColor {
+                    description: scene_color,
+                    intent: crate::color::RenderingIntent::Perceptual,
+                };
+                if used.saturating_add(scene.inner.allocation_size) > MAX_OUTPUT_SCENE_BYTES {
+                    return Err(self.busy(NativeBusy::OffscreenAllocation));
+                }
+                self.output_scenes.insert(
+                    key,
+                    OutputScene {
+                        framebuffer: Arc::downgrade(&actual_target.inner),
+                        texture: scene.clone(),
+                    },
+                );
+                scene
+            }
+        } else {
+            actual_target.clone()
+        };
+        let t = &scene;
         if !Arc::ptr_eq(&ctx, &t.inner.ctx) {
             return Err(NativeError::Other("foreign Vulkan framebuffer".into()));
         }
@@ -2071,7 +2271,8 @@ impl Renderer for NativeRenderer {
             t.has_alpha,
             size.w as u32,
             size.h as u32,
-            None,
+            (color_output.is_some() && t.current_layout().get() == vk::ImageLayout::UNDEFINED)
+                .then_some([0.; 4]),
             t.current_layout().get(),
             t.inner.external,
         )?;
@@ -2089,6 +2290,20 @@ impl Renderer for NativeRenderer {
             );
         }
         frame.retain_target(t);
+        frame.set_color_scene(
+            scene_color,
+            self.output_color_state
+                .get()
+                .map_or(crate::color::Primaries::Srgb, |output| output.primaries),
+            self.output_color_state
+                .get()
+                .map_or(scene_color.reference_luminance, |output| {
+                    output.reference_luminance
+                }),
+        );
+        if color_output.is_some() && t.current_layout().get() == vk::ImageLayout::UNDEFINED {
+            frame.initialize_color_scene(&actual_target)?;
+        }
         Ok(NativeFrame {
             completion_permit: Some(completion_permit),
             clip: Default::default(),
@@ -2107,7 +2322,8 @@ impl Renderer for NativeRenderer {
             downscale: self.downscale,
             upscale: self.upscale,
             debug: self.debug,
-            hdr_output: self.hdr_output,
+            hdr_output: color_output.is_some(),
+            output_color: color_output.map(|description| (actual_target, description)),
             hdr_damage: Vec::new(),
             shader_compiles: &mut self.shader_compiles,
             scene_deferred: &mut self.scene_deferred,
@@ -2120,6 +2336,12 @@ impl Renderer for NativeRenderer {
             self.scene_deferred |= error.is_busy();
             error
         })
+    }
+
+    fn is_render_deferred(error: &NativeError) -> bool {
+        // Busy is returned before submission to this output. Any already
+        // submitted offscreen work owns separate images and completion leases.
+        error.is_busy()
     }
 }
 impl Bind<VulkanTexture> for NativeRenderer {
@@ -2195,6 +2417,7 @@ pub(crate) struct PendingNativeReadback {
     output: vk::Format,
     input_alpha: bool,
     output_alpha: bool,
+    color: crate::color::SurfaceColor,
 }
 
 impl PendingNativeReadback {
@@ -2203,6 +2426,18 @@ impl PendingNativeReadback {
     /// texture sampling and must not add another screenshot row reversal.
     pub(crate) fn finish(self) -> Result<Vec<u8>, NativeError> {
         let mut pixels = self.transfer.finish()?;
+        if self.input == vk::Format::R16G16B16A16_SFLOAT {
+            if self.output == self.input {
+                return Ok(pixels);
+            }
+            return Ok(super::color::float_readback_to_packed(
+                &pixels,
+                self.color,
+                self.output,
+                self.input_alpha,
+                self.output_alpha,
+            )?);
+        }
         convert_readback_pixels(
             &mut pixels,
             self.input,
@@ -2226,7 +2461,10 @@ impl NativeRenderer {
         let (output, output_alpha) = super::dmabuf::fourcc_to_vk_format(format)
             .ok_or_else(|| NativeError::Other("unsupported Vulkan readback format".into()))?;
         let input = vk::Format::from_raw(texture.format as i32);
-        if !packed_rgba_readback_format(output) || !packed_rgba_readback_format(input) {
+        if !(packed_rgba_readback_format(output)
+            || output == input && input == vk::Format::R16G16B16A16_SFLOAT)
+            || !(packed_rgba_readback_format(input) || input == vk::Format::R16G16B16A16_SFLOAT)
+        {
             return Err(NativeError::Other(
                 "unsupported Vulkan readback format".into(),
             ));
@@ -2237,6 +2475,7 @@ impl NativeRenderer {
             output,
             input_alpha: texture.has_alpha,
             output_alpha,
+            color: texture.color,
         })
     }
 }
@@ -2367,7 +2606,8 @@ impl ExportMem for NativeRenderer {
             .ctx
             .as_ref()
             .is_some_and(|ctx| Arc::ptr_eq(ctx, &texture.inner.ctx))
-            && packed_rgba_readback_format(vk::Format::from_raw(texture.format as i32))
+            && (packed_rgba_readback_format(vk::Format::from_raw(texture.format as i32))
+                || texture.format == vk::Format::R16G16B16A16_SFLOAT.as_raw() as u32)
             && texture
                 .inner
                 .usage
@@ -2391,7 +2631,13 @@ impl ImportMem for NativeRenderer {
             ));
         }
         let stride = (size.w as usize)
-            .checked_mul(4)
+            .checked_mul(
+                if matches!(format, Fourcc::Abgr16161616f | Fourcc::Xbgr16161616f) {
+                    8
+                } else {
+                    4
+                },
+            )
             .ok_or_else(|| NativeError::Other("memory texture stride overflow".into()))?;
         let permit = self.reserve_upload()?;
         // The upload owns a source snapshot and uses the same ordered graphics
@@ -2415,7 +2661,13 @@ impl ImportMem for NativeRenderer {
         region: Rectangle<i32, Buffer>,
     ) -> Result<(), NativeError> {
         let stride = (texture.width as usize)
-            .checked_mul(4)
+            .checked_mul(
+                if texture.format == vk::Format::R16G16B16A16_SFLOAT.as_raw() as u32 {
+                    8
+                } else {
+                    4
+                },
+            )
             .ok_or_else(|| NativeError::Other("memory texture stride overflow".into()))?;
         let permit = self.reserve_upload()?;
         if let Some(upload) = self
@@ -2433,6 +2685,8 @@ impl ImportMem for NativeRenderer {
             Fourcc::Xrgb8888,
             Fourcc::Abgr8888,
             Fourcc::Xbgr8888,
+            Fourcc::Abgr16161616f,
+            Fourcc::Xbgr16161616f,
         ]
         .into_iter()
         .filter(|code| {
@@ -2495,7 +2749,10 @@ impl ImportDmaWl for NativeRenderer {
     ) -> Result<VulkanTexture, NativeError> {
         let dmabuf = get_dmabuf(buffer)
             .map_err(|_| NativeError::Other("Wayland buffer is not a DMA-BUF".into()))?;
-        let mut texture = self.import_dmabuf(dmabuf, Some(damage))?;
+        let color = surface
+            .map(crate::protocols::color_management::surface_color_description)
+            .unwrap_or_default();
+        let mut texture = self.import_color_dmabuf(dmabuf, color, Some(damage))?;
         if let Some(slot) = surface.and_then(|s| s.data_map.get::<SurfaceBufferOwner>()) {
             let current = slot.0.lock().unwrap();
             if current
@@ -2509,6 +2766,28 @@ impl ImportDmaWl for NativeRenderer {
     }
 }
 impl NativeRenderer {
+    fn import_color_dmabuf(
+        &mut self,
+        dmabuf: &Dmabuf,
+        color: crate::color::SurfaceColor,
+        damage: Option<&[Rectangle<i32, Buffer>]>,
+    ) -> Result<VulkanTexture, NativeError> {
+        let mut texture = if super::dmabuf::is_yuv_format(dmabuf.format().code)
+            && color.description.primaries == crate::color::Primaries::Bt2020
+        {
+            self.renderer
+                .importer
+                .as_ref()
+                .unwrap()
+                .import_color_dmabuf(dmabuf, color)
+                .map_err(|error| NativeError::Other(error.to_string()))?
+        } else {
+            self.import_dmabuf(dmabuf, damage)?
+        };
+        texture.color = color;
+        Ok(texture)
+    }
+
     /// Unlike raw ImportDma, this handle carries the original attachment lease.
     /// Revalidate the pair at the import boundary; GPU completion retains it if
     /// the resulting texture is sampled, including by the one-shot close copy.
@@ -2521,8 +2800,9 @@ impl NativeRenderer {
                 "source attachment no longer matches its DMA-BUF".into(),
             ));
         }
-        let mut texture = self.import_dmabuf(&source.dmabuf, None)?;
+        let mut texture = self.import_color_dmabuf(&source.dmabuf, source.color, None)?;
         texture.client_buffer = Some(source.owner.clone());
+        texture.color = source.color;
         Ok(texture)
     }
 }
@@ -2552,6 +2832,7 @@ impl Offscreen<VulkanTexture> for NativeRenderer {
     ) -> Result<VulkanTexture, NativeError> {
         let _latency =
             crate::utils::latency::Span::new(crate::utils::latency::Operation::NativeAllocation);
+        let format = self.scene_buffer_format(format);
         let (vk_format, alpha) = super::dmabuf::fourcc_to_vk_format(format)
             .ok_or_else(|| NativeError::Other("unsupported Vulkan target format".into()))?;
         if size.w <= 0 || size.h <= 0 {
@@ -2569,7 +2850,10 @@ impl Offscreen<VulkanTexture> for NativeRenderer {
         }) {
             // Keep the actual layout for the next transition. GPU and external
             // owners have released the image before its storage can be reused.
-            return Ok(self.offscreen_cache.swap_remove(pos));
+            let mut texture = self.offscreen_cache.swap_remove(pos);
+            texture.color.description =
+                super::color::scene_description(self.output_color_state.get());
+            return Ok(texture);
         }
         let ctx = self
             .renderer
@@ -2601,7 +2885,7 @@ impl Offscreen<VulkanTexture> for NativeRenderer {
                 "unsupported Vulkan target dimensions".into(),
             ));
         }
-        Ok(allocate_texture(
+        let mut texture = allocate_texture(
             ctx,
             size.w as u32,
             size.h as u32,
@@ -2610,11 +2894,25 @@ impl Offscreen<VulkanTexture> for NativeRenderer {
             usage,
             vk::ImageLayout::UNDEFINED,
             alpha,
-        )?)
+        )?;
+        texture.color.description = super::color::scene_description(self.output_color_state.get());
+        Ok(texture)
     }
 }
 
 impl NativeFrame<'_> {
+    pub(crate) fn scene_buffer_format(&self) -> Fourcc {
+        if self.frame.target_format == vk::Format::R16G16B16A16_SFLOAT {
+            Fourcc::Abgr16161616f
+        } else {
+            Fourcc::Abgr8888
+        }
+    }
+
+    pub fn scene_color_description(&self) -> crate::color::ColorDescription {
+        self.frame.color_scene
+    }
+
     /// Capture attachment pixels without submitting or waiting for the frame.
     /// The region uses untransformed framebuffer coordinates. The destination's
     /// size defines the extent; it must have the same format and must not have
@@ -2790,6 +3088,11 @@ impl NativeFrame<'_> {
         format: Fourcc,
         size: Size<i32, Buffer>,
     ) -> Result<VulkanTexture, NativeError> {
+        let format = if self.frame.target_format == vk::Format::R16G16B16A16_SFLOAT {
+            Fourcc::Abgr16161616f
+        } else {
+            format
+        };
         let (format, alpha) = super::dmabuf::fourcc_to_vk_format(format)
             .ok_or_else(|| NativeError::Other("unsupported Vulkan target format".into()))?;
         let ctx = &self.frame.ctx;
@@ -2816,7 +3119,7 @@ impl NativeFrame<'_> {
                 "unsupported Vulkan target dimensions".into(),
             ));
         }
-        Ok(super::allocate_texture(
+        let mut texture = super::allocate_texture(
             ctx,
             size.w as u32,
             size.h as u32,
@@ -2825,7 +3128,9 @@ impl NativeFrame<'_> {
             usage,
             vk::ImageLayout::UNDEFINED,
             alpha,
-        )?)
+        )?;
+        texture.color.description = self.frame.color_scene;
+        Ok(texture)
     }
 
     pub(crate) fn draw_border(
@@ -3213,8 +3518,9 @@ impl Frame for NativeFrame<'_> {
             *self.scene_deferred |= error.is_busy();
             return Err(error);
         }
-        if self.hdr_output {
-            self.frame.encode_hdr_output(&self.hdr_damage)?;
+        if let Some((output, description)) = &self.output_color {
+            self.frame
+                .set_color_output(output, *description, &self.hdr_damage);
         }
         let mut cold_yuv = false;
         for (variant, format) in self.frame.sampled_yuv_targets() {
@@ -3432,7 +3738,12 @@ fn dma_formats(renderer: &VulkanRenderer, sampled: bool) -> FormatSet {
     // sampled directly when the driver advertises modifier support, but it
     // need not be usable as a compositor render target.
     if sampled {
-        codes.extend([Fourcc::Rgb565, Fourcc::Bgr565]);
+        codes.extend([
+            Fourcc::Rgb565,
+            Fourcc::Bgr565,
+            Fourcc::Abgr16161616f,
+            Fourcc::Xbgr16161616f,
+        ]);
         if ctx.supports_ycbcr_conversion {
             codes.extend([Fourcc::Nv12, Fourcc::Yuv420, Fourcc::P010]);
         }
@@ -3517,6 +3828,34 @@ mod readback_tests {
     use super::super::hardware_tests::setup;
     use super::super::VulkanContext;
     use super::*;
+
+    #[test]
+    fn damage_wrapper_preserves_backpressure_through_render_contexts() {
+        use smithay::backend::renderer::damage::Error as DamageError;
+
+        for kind in [
+            NativeBusy::Frame,
+            NativeBusy::Upload,
+            NativeBusy::Completion,
+            NativeBusy::OutputFormat,
+            NativeBusy::YuvPipelines,
+            NativeBusy::ProducerFence,
+            NativeBusy::OffscreenAllocation,
+        ] {
+            let damage = DamageError::Rendering(NativeError::Busy(kind));
+            assert!(std::error::Error::source(&damage).is_none());
+            assert!(NativeError::is_backpressure(&damage));
+            let context = anyhow::Error::new(damage)
+                .context("render output")
+                .context("headless frame");
+            assert!(NativeError::is_backpressure(context.as_ref()));
+        }
+        let hard = anyhow::Error::new(DamageError::Rendering(NativeError::Other(
+            "OutputFormat is pending; device lost".into(),
+        )))
+        .context("render output");
+        assert!(!NativeError::is_backpressure(hard.as_ref()));
+    }
 
     #[test]
     fn native_vk_errors_preserve_device_loss_and_memory_identity_without_becoming_busy() {
@@ -3766,7 +4105,7 @@ mod readback_tests {
                 let result = std::thread::spawn(move || job.finish()).join().unwrap();
                 assert_eq!(
                     result.unwrap_err().to_string(),
-                    vk::Result::TIMEOUT.to_string()
+                    NativeError::from(vk::Result::TIMEOUT).to_string()
                 );
             } else {
                 let before = std::time::Instant::now();
@@ -5143,5 +5482,49 @@ mod capture_deferred_tests {
             }
             assert!(current);
         }
+    }
+}
+
+#[cfg(test)]
+mod output_color_scope_tests {
+    use super::*;
+
+    #[test]
+    fn output_color_scope_restores_after_early_return_nested_scope_and_unwind() {
+        let state = Rc::new(std::cell::Cell::new(None));
+        let outer = OutputColorScope {
+            state: state.clone(),
+            previous: state.replace(Some(crate::color::ColorDescription::bt2020_pq())),
+        };
+        let early_return = || {
+            let _inner = OutputColorScope {
+                state: state.clone(),
+                previous: state.replace(Some(crate::color::ColorDescription::srgb())),
+            };
+            assert_eq!(state.get(), Some(crate::color::ColorDescription::srgb()));
+            if state.get().is_some() {
+                return;
+            }
+            unreachable!("the nested scope was armed");
+        };
+        early_return();
+        assert_eq!(
+            state.get(),
+            Some(crate::color::ColorDescription::bt2020_pq())
+        );
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _inner = OutputColorScope {
+                state: state.clone(),
+                previous: state.replace(None),
+            };
+            panic!("exercise restoration");
+        }));
+        assert!(result.is_err());
+        assert_eq!(
+            state.get(),
+            Some(crate::color::ColorDescription::bt2020_pq())
+        );
+        drop(outer);
+        assert_eq!(state.get(), None);
     }
 }

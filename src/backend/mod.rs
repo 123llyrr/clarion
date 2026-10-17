@@ -173,17 +173,26 @@ impl Backend {
     /// TTY backends may have a native renderer available globally while an individual KMS
     /// surface has migrated to a GLES-compatible swapchain. Callers that render output-specific
     /// content (snapshots, captures, or grabs) must use this accessor so that backend-owned
-    /// textures and render elements stay compatible with the target surface. Backends with one
-    /// renderer ignore the output argument. Passing `None` preserves the global renderer choice.
+    /// textures and render elements stay compatible with the target surface. Native snapshots
+    /// also inherit its color volume and FP16 precision. Passing `None` preserves the current
+    /// renderer choice and color scope.
     pub fn with_renderer_for_output<T>(
         &mut self,
         output: Option<&Output>,
         f: impl FnOnce(AnyRenderer<'_>) -> T,
     ) -> Option<T> {
+        let color = output.map(|output| self.output_color_description(output));
+        let scoped = |renderer: AnyRenderer<'_>| match renderer {
+            AnyRenderer::Native(native) => {
+                let _color_scope = color.map(|color| native.output_color_scope(Some(color)));
+                f(AnyRenderer::Native(native))
+            }
+            AnyRenderer::Gles(gles) => f(AnyRenderer::Gles(gles)),
+        };
         match self {
-            Backend::Tty(tty) => tty.with_renderer_for_output(output, f),
-            Backend::Winit(winit) => winit.with_renderer(f),
-            Backend::Headless(headless) => headless.with_renderer(f),
+            Backend::Tty(tty) => tty.with_renderer_for_output(output, scoped),
+            Backend::Winit(winit) => winit.with_renderer(scoped),
+            Backend::Headless(headless) => headless.with_renderer(scoped),
         }
     }
 
@@ -193,6 +202,32 @@ impl Backend {
             Backend::Tty(tty) => tty.renderer_backend(),
             Backend::Winit(winit) => winit.renderer_backend(),
             Backend::Headless(headless) => headless.renderer_backend(),
+        }
+    }
+
+    /// Color descriptions may only be advertised when every output can render
+    /// them, including tone mapping HDR clients on an SDR output.
+    pub(crate) fn supports_color_management(&self) -> bool {
+        match self {
+            Self::Tty(tty) => tty.supports_color_management(),
+            Self::Winit(winit) => winit.supports_color_management(),
+            Self::Headless(headless) => headless.supports_color_management(),
+        }
+    }
+
+    pub(crate) fn enable_color_management(&mut self) {
+        if let Self::Tty(tty) = self {
+            tty.enable_color_management();
+        }
+    }
+
+    pub(crate) fn output_color_description(
+        &self,
+        output: &Output,
+    ) -> crate::color::ColorDescription {
+        match self {
+            Self::Tty(tty) => tty.output_color_description(output),
+            Self::Winit(_) | Self::Headless(_) => crate::color::ColorDescription::srgb(),
         }
     }
 

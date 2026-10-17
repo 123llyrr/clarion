@@ -241,6 +241,11 @@ fn native_window_snapshot_deferral_is_atomic_and_parent_flag_survives() {
     options.layout.border.off = true;
     options.layout.focus_ring.off = true;
     options.layout.shadow.on = false;
+    // This fixture asserts opaque RGB inside an unfinished opening pose. The
+    // default Fade deliberately premultiplies both RGB and alpha by progress,
+    // so it cannot satisfy those pixel expectations at 90 ms. Reveal keeps an
+    // opaque interior while still exercising the real cold opening shader.
+    options.animations.window_open.effect = clarion_config::animations::WindowOpenEffect::Reveal;
     let mut clock = Clock::with_time(Duration::ZERO);
     let open_config = options.animations.window_open.clone();
     let state = WindowPresentationState {

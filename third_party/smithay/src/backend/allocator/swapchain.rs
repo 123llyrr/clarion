@@ -242,11 +242,11 @@ where
     /// Resetting the buffer age will discard all damage information and force a
     /// full redraw for the next frame.
     pub fn reset_buffer_ages(&mut self) {
-        for slot in &mut self.slots {
-            match Arc::get_mut(slot) {
-                Some(slot) => slot.age = AtomicU8::new(0),
-                None => *slot = Default::default(),
-            }
+        for slot in &self.slots {
+            // Age is only a damage-history hint. A held front/pending buffer
+            // must stay in this pool and remain acquired until its owner drops;
+            // replacing shared slots turns an age reset into an allocation reset.
+            slot.age.store(0, Ordering::SeqCst);
         }
     }
 

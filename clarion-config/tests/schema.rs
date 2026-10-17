@@ -115,6 +115,22 @@ fn public_catalog_preserves_previous_editor_contract() {
                     .count(),
                 1
             );
+        } else if actual.module == "output" && actual.name == "Output" {
+            let existing: Vec<_> = actual
+                .fields
+                .iter()
+                .filter(|field| !matches!(field.name, "sdr-white-level" | "hdr-peak-luminance"))
+                .collect();
+            assert_eq!(existing, previous.fields.iter().collect::<Vec<_>>());
+            for name in ["sdr-white-level", "hdr-peak-luminance"] {
+                let field = actual
+                    .fields
+                    .iter()
+                    .find(|field| field.name == name)
+                    .unwrap();
+                assert!(field.optional && field.scalar && !field.repeated);
+            }
+            assert_eq!(actual.variants, previous.variants);
         } else if actual.module == "appearance" && actual.name == "BackgroundEffectRule" {
             let added: Vec<_> = actual
                 .fields

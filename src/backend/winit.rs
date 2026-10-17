@@ -269,6 +269,12 @@ impl Winit {
                 logical: Some(logical_output(&output)),
                 max_bpc: None,
                 hdr_active: false,
+                hdr_supported: false,
+                hdr_status: Some(
+                    "HDR physical output requires the native Vulkan KMS backend".into(),
+                ),
+                hdr_peak_luminance: None,
+                sdr_white_level: None,
             },
         )])));
 
@@ -324,6 +330,13 @@ impl Winit {
         match self.backend {
             WinitBackend::Gles(_) => RendererBackendType::Gles,
             WinitBackend::Native(_) => RendererBackendType::Vulkan,
+        }
+    }
+
+    pub(crate) fn supports_color_management(&self) -> bool {
+        match &self.backend {
+            WinitBackend::Native(native) => native.renderer.supports_color_management(),
+            WinitBackend::Gles(_) => false,
         }
     }
 
@@ -714,6 +727,7 @@ pub(crate) fn render_native(
         native.target_valid = false;
     }
     let renderer = native.renderer.as_mut();
+    let _color_scope = renderer.output_color_scope(Some(crate::color::ColorDescription::srgb()));
     renderer.begin_scene();
     let scene = port.prepare_scene(renderer);
     if renderer.scene_was_deferred() {
@@ -870,6 +884,10 @@ mod tests {
             logical: Some(logical_output(&output)),
             max_bpc: None,
             hdr_active: false,
+            hdr_supported: false,
+            hdr_status: Some("HDR physical output requires the native Vulkan KMS backend".into()),
+            hdr_peak_luminance: None,
+            sdr_white_level: None,
         };
         (output, snapshot)
     }
