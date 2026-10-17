@@ -5,19 +5,6 @@ The project has grown quite a bit, and we could use all help that we can.
 
 Open a GitHub issue if you have questions or want to discuss anything: https://github.com/123llyrr/clarion/issues
 
-## Upstream
-
-Clarion derives from [niri](https://github.com/niri-wm/niri) and has since diverged: 112 of the
-122 Rust files that share a path with upstream no longer share an implementation, and 160 files
-exist only here.
-
-This repository is maintained on its own schedule. A single fix may be taken from niri when it is
-useful, but there is no ongoing sync and upstream behaviour is not the reference for what Clarion
-should do. When a change conflicts with an upstream commit, this repository wins.
-
-Keep the provenance and license records (see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)) as
-they are. Attribution is a GPL requirement, not a statement about current dependence.
-
 ## Issues and discussions
 
 This is a good way to help many new and existing users without programming knowledge.

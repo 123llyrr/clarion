@@ -112,14 +112,6 @@ clarion msg frame-timings
 
 软件回归、GPU 验证和真实显示器的帧时间验收分别执行。硬件测试需要相应 render node 和验证层；单机测量不能代表所有显卡、显示器或应用负载。
 
-## 与 niri 的关系
-
-Clarion 派生自 [niri](https://github.com/niri-wm/niri)。此后桌面模型、渲染路径、窗口外壳与配置层均已重写：与上游同名的 122 个 Rust 文件中有 112 个不再共享实现，另有 160 个文件只存在于本仓库。
-
-本仓库自行维护，不跟随上游发布节奏。需要时可以从 niri 取用单个修复，但不做整体同步，行为也不再以上游为准。上游在这里是参考实现与历史来源，不是事实来源。
-
-GPL-3.0-or-later 要求的署名、来源与许可证记录会原样保留，见[来源记录](resources/licenses/realand-origin.txt)。删除这些记录不等于独立，只是违反许可证。
-
 ## 许可证与第三方声明
 
 Clarion 使用 [GPL-3.0-or-later](LICENSE)。依赖、第三方代码与适配部分保留各自的版权及许可证，见 [第三方声明](THIRD_PARTY_NOTICES.md)。
