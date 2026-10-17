@@ -17,7 +17,7 @@ description = "A modern Wayland compositor with an independent desktop core and 
 authors = ["Clarion Contributors", "Realand Contributors"]
 license = "GPL-3.0-or-later"
 edition = "2021"
-repository = "https://github.com/123llyrr/realand"
+repository = "https://github.com/123llyrr/clarion"
 rust-version = "1.88"
 
 [workspace.dependencies]

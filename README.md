@@ -2,7 +2,7 @@
 
 **A modern Wayland desktop with a native Vulkan backend.**
 
-Clarion 是一款采用独立桌面核心与原生 Vulkan 后端的现代 Wayland 合成器，融合浮动窗口、滚动平铺与动态平铺，提供液态玻璃视觉、自适应帧调度和细腻动画，专注低延迟交互与流畅的桌面体验。
+Clarion 是用 Rust 写的 Wayland 合成器：Vulkan 原生合成、设备无关的桌面核心、KMS 逐帧预算调度。它融合浮动窗口、滚动平铺与动态平铺，提供液态玻璃视觉、自适应帧调度和细腻动画，专注低延迟交互与流畅的桌面体验。
 
 ## 原生 Vulkan 合成
 
