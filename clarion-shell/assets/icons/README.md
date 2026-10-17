@@ -16,3 +16,6 @@ without their shading.
 
 `display.png` and `storage.png` are Clarion's own artwork for the About panel's
 monitor and storage sections, alongside the project mark.
+
+`clarion-overview.png` is the circular About-panel artwork supplied by the
+project owner.

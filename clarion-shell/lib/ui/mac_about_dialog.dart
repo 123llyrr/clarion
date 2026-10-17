@@ -323,16 +323,25 @@ class _MacAboutDialogState extends State<MacAboutDialog> {
                   ),
                 ],
               ),
-              child: Center(
+              child: ClipOval(
                 child: Image.asset(
-                  dark
-                      ? 'assets/icons/clarion-mark-white.png'
-                      : 'assets/icons/clarion-mark-black.png',
-                  width: isSmallScreen ? 64 : 84,
-                  height: isSmallScreen ? 64 : 84,
+                  'assets/icons/clarion-overview.png',
+                  width: isSmallScreen ? 94 : 120,
+                  height: isSmallScreen ? 94 : 120,
+                  fit: BoxFit.cover,
                   filterQuality: FilterQuality.high,
-                  errorBuilder: (_, _, _) =>
-                      ClarionMark(size: isSmallScreen ? 64 : 84),
+                  errorBuilder: (_, _, _) => Center(
+                    child: Image.asset(
+                      dark
+                          ? 'assets/icons/clarion-mark-white.png'
+                          : 'assets/icons/clarion-mark-black.png',
+                      width: isSmallScreen ? 64 : 84,
+                      height: isSmallScreen ? 64 : 84,
+                      filterQuality: FilterQuality.high,
+                      errorBuilder: (_, _, _) =>
+                          ClarionMark(size: isSmallScreen ? 64 : 84),
+                    ),
+                  ),
                 ),
               ),
             ),
