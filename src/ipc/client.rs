@@ -206,6 +206,17 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
                 } else {
                     println!("  Render wall time: no samples yet");
                 }
+                match (timing.gpu_frame_work_ms, timing.gpu_frame_work_scope.as_deref()) {
+                    (Some(sample), scope) => println!(
+                        "  GPU frame work: p50 {:.3} ms, p95 {:.3} ms, max {:.3} ms ({} recent samples{})",
+                        sample.p50,
+                        sample.p95,
+                        sample.max,
+                        sample.samples,
+                        scope.map(|s| format!(", {s}")).unwrap_or_default(),
+                    ),
+                    (None, _) => println!("  GPU frame work: unavailable (no GPU timestamps)"),
+                }
                 if let Some(sample) = timing.presentation_error_ms {
                     println!(
                         "  Presentation error: p50 {:+.3} ms, p95 {:+.3} ms ({} recent samples)",
