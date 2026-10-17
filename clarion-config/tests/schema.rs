@@ -11,8 +11,43 @@ mod before {
 #[test]
 fn public_catalog_preserves_previous_editor_contract() {
     assert_eq!(schema::SCHEMA_VERSION, 1);
-    // Approved additive extensions: minimize, window-open styles, and glass.
-    // Compare every pre-existing type, field, variant, and ordering exactly.
+    // Approved additive extensions: minimize, window-open styles, glass, and the
+    // idle section. Compare every pre-existing type, field, variant, and ordering
+    // exactly.
+    let idle: Vec<_> = schema::TYPES
+        .iter()
+        .filter(|spec| spec.module == "idle")
+        .collect();
+    let mut idle_names: Vec<_> = idle.iter().map(|spec| spec.name).collect();
+    idle_names.sort_unstable();
+    assert_eq!(
+        idle_names,
+        [
+            "IdleAction",
+            "IdleAction::Lock",
+            "IdleAction::None",
+            "IdleAction::Suspend",
+            "IdlePart",
+        ],
+        "the idle extension must stay exactly these types"
+    );
+    assert_eq!(
+        schema::spec("idle", "IdleAction").unwrap().variants,
+        ["none", "lock", "suspend"]
+    );
+    let part = schema::spec("idle", "IdlePart").unwrap();
+    for name in [
+        "off",
+        "timeout",
+        "action",
+        "lock-command",
+        "lock-before-suspend",
+    ] {
+        assert!(
+            part.fields.iter().any(|field| field.name == name),
+            "idle part is missing {name}"
+        );
+    }
     let minimized = schema::spec("binds", "Action::MinimizeWindow").unwrap();
     assert_eq!(
         minimized,
@@ -26,7 +61,8 @@ fn public_catalog_preserves_previous_editor_contract() {
     let actual: Vec<_> = schema::TYPES
         .iter()
         .filter(|spec| {
-            spec.name != "Action::MinimizeWindow"
+            spec.module != "idle"
+                && spec.name != "Action::MinimizeWindow"
                 && !(spec.module == "animations"
                     && matches!(
                         spec.name,
@@ -34,7 +70,7 @@ fn public_catalog_preserves_previous_editor_contract() {
                     ))
         })
         .collect();
-    assert_eq!(schema::TYPES.len(), before::TYPES.len() + 4);
+    assert_eq!(schema::TYPES.len(), before::TYPES.len() + 4 + idle.len());
     assert_eq!(actual.len(), before::TYPES.len());
     for (actual, previous) in actual.into_iter().zip(before::TYPES) {
         if actual.module == "binds" && actual.name == "Action" {

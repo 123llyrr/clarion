@@ -35,6 +35,7 @@ pub mod frame_pipeline;
 mod frame_stats;
 pub mod gestures;
 pub mod handlers;
+pub mod idle;
 pub mod input;
 pub mod ipc;
 pub mod layer;

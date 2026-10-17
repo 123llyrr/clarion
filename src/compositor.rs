@@ -392,6 +392,8 @@ pub struct Clarion {
     /// resolution mice.
     pub notified_activity_this_iteration: bool,
     pub last_user_activity: Instant,
+    /// Idle policy: inactivity turns into a lock or a suspend request.
+    pub idle_policy: crate::idle::IdlePolicy,
     hot_corners: crate::input::hot_corner::HotCornerState,
     pub pointer_constraint_position_hint: Option<Point<f64, Logical>>,
     pub tablet_cursor_location: Option<Point<f64, Logical>>,
@@ -3001,6 +3003,7 @@ impl Clarion {
                 Timer::from_duration(Duration::from_secs(1)),
                 |_, _, state| {
                     state.clarion.send_frame_callbacks_on_fallback_timer();
+                    state.clarion.poll_idle();
                     TimeoutAction::ToDuration(Duration::from_secs(1))
                 },
             )
@@ -3063,6 +3066,9 @@ impl Clarion {
             .unwrap();
 
         drop(config_);
+        // Constructed before the literal because the literal moves `config`.
+        let idle_policy =
+            crate::idle::IdlePolicy::new(&config.borrow().idle, Instant::now());
         let mut clarion = Self {
             config,
             config_file_output_config,
@@ -3186,6 +3192,7 @@ impl Clarion {
             pointer_inactivity_timer_got_reset: false,
             notified_activity_this_iteration: false,
             last_user_activity: Instant::now(),
+            idle_policy,
             hot_corners: Default::default(),
             pointer_constraint_position_hint: None,
             tablet_cursor_location: None,
@@ -7651,9 +7658,53 @@ impl Clarion {
         let _span = clarion_tracy_span!("Clarion::notify_activity");
 
         self.last_user_activity = Instant::now();
+        self.idle_policy.activity(self.last_user_activity);
         self.idle_notifier_state.notify_activity(&self.seat);
 
         self.notified_activity_this_iteration = true;
+    }
+
+    /// Runs the idle policy. Called from the compositor's one-second tick, so a
+    /// timeout is honored within a second of expiring.
+    pub fn poll_idle(&mut self) {
+        let inhibited = !self.idle_inhibiting_surfaces.is_empty()
+            || self.is_fdo_idle_inhibited.load(std::sync::atomic::Ordering::Relaxed);
+        let locked = !matches!(self.lock_state, LockState::Unlocked);
+        let Some(action) = self
+            .idle_policy
+            .poll(Instant::now(), inhibited, locked)
+        else {
+            return;
+        };
+        match action {
+            crate::idle::IdleAction::Lock => self.request_lock(),
+            crate::idle::IdleAction::Suspend => self.request_suspend(),
+        }
+    }
+
+    /// Starts the configured locker. The session lock surface belongs to a
+    /// client, so the policy can only ask one to run.
+    fn request_lock(&mut self) {
+        let Some(command) = self.idle_policy.lock_command() else {
+            warn!("idle: lock requested, but idle {{ lock-command }} is not configured");
+            return;
+        };
+        debug!("idle: starting the lock command {command:?}");
+        crate::utils::spawning::spawn(command, None);
+    }
+
+    fn request_suspend(&mut self) {
+        if self.idle_policy.lock_before_suspend() {
+            self.request_lock();
+        }
+        #[cfg(feature = "dbus")]
+        if let Some(dbus) = &self.dbus {
+            if let Err(err) = dbus.suspend() {
+                warn!("idle: suspend request failed: {err:?}");
+            }
+        }
+        #[cfg(not(feature = "dbus"))]
+        warn!("idle: suspend requested, but this build has no D-Bus support");
     }
 
     pub fn close_mru(&mut self, close_request: MruCloseRequest) -> Option<Window> {
