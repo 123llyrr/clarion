@@ -84,7 +84,6 @@ class _MacControlCenterState extends State<MacControlCenter> {
               _MediaControl(controller: controller),
               const SizedBox(height: 8),
               _Footer(
-                controller: controller,
                 onPreferences: () =>
                     _setSubPage(MacControlCenterSubPage.preferences),
               ),
@@ -632,32 +631,25 @@ class _SliderCard extends StatelessWidget {
   }
 }
 
+/// One footer entry into this panel's own preferences. The settings
+/// application keeps its own entry in the system menu, so the control center
+/// does not repeat it here.
 class _Footer extends StatelessWidget {
-  const _Footer({required this.controller, required this.onPreferences});
-  final ShellController controller;
+  const _Footer({required this.onPreferences});
   final VoidCallback onPreferences;
 
   @override
-  Widget build(BuildContext context) => ControllerSelector(
-    controller: controller,
-    select: () => controller.busy.contains('settings'),
-    builder: (context, busy) => Column(
-      key: const ValueKey('mac-control-footer'),
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _FooterAction(
-          actionKey: const ValueKey('mac-control-system-preferences'),
-          label: busy ? '正在打开系统偏好设置…' : '系统偏好设置…',
-          onTap: busy ? null : controller.openSettings,
-        ),
-        _FooterAction(
-          actionKey: const ValueKey('mac-control-desktop-preferences'),
-          label: '桌面偏好设置…',
-          onTap: onPreferences,
-        ),
-      ],
-    ),
+  Widget build(BuildContext context) => Column(
+    key: const ValueKey('mac-control-footer'),
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      _FooterAction(
+        actionKey: const ValueKey('mac-control-desktop-preferences'),
+        label: '桌面偏好设置',
+        onTap: onPreferences,
+      ),
+    ],
   );
 }
 

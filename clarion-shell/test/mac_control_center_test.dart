@@ -225,7 +225,7 @@ void main() {
   );
 
   testWidgets(
-    'quick actions use real controller state and guard settings launch',
+    'quick actions use real controller state',
     (tester) async {
       final controller = await _mount(tester);
       expect(controller.doNotDisturb, isFalse);
@@ -238,16 +238,11 @@ void main() {
       await tester.tap(_key('mac-control-appearance'));
       await tester.pumpAndSettle();
       expect(controller.themeMode, ThemeMode.dark);
-      controller.pending.add('settings');
-      controller.refresh();
-      await tester.pump();
-      await tester.tap(_key('mac-control-system-preferences'));
-      expect(controller.settingsCalls, 0);
-      controller.pending.clear();
-      controller.refresh();
-      await tester.pumpAndSettle();
-      await tester.tap(_key('mac-control-system-preferences'));
-      expect(controller.settingsCalls, 1);
+      // The settings application belongs to the system menu, not to this panel:
+      // the footer offers only this panel's own preferences.
+      expect(_key('mac-control-system-preferences'), findsNothing);
+      expect(find.text('桌面偏好设置'), findsOneWidget);
+      expect(find.text('桌面偏好设置…'), findsNothing);
       expect(tester.takeException(), isNull);
     },
   );
