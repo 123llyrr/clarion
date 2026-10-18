@@ -105,6 +105,11 @@ Future<void> main(List<String> arguments) async {
   unawaited(controller.start());
   if (!preview) {
     unawaited(
+      WidgetsBinding.instance.waitUntilFirstFrameRasterized.then(
+        (_) => controller.warmupExternalLauncher(),
+      ),
+    );
+    unawaited(
       announceShellReady(
         firstFrame: WidgetsBinding.instance.waitUntilFirstFrameRasterized,
         prepareAppMenus: controller.prepareAppMenus,

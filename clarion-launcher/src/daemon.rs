@@ -383,6 +383,8 @@ fn configure_lifetime(parent: Option<u32>) -> Result<()> {
 }
 
 pub fn run(options: Options) -> Result<()> {
+    let started = Instant::now();
+    let trace = std::env::var("GPUI_STARTUP_TRACE").as_deref() == Ok("1");
     anyhow::ensure!(
         std::env::var_os("WAYLAND_DISPLAY").is_some(),
         "clarion-launcher requires a Wayland session with wlr-layer-shell"
@@ -398,10 +400,23 @@ pub fn run(options: Options) -> Result<()> {
     };
     configure_lifetime(options.parent_pid)?;
     let catalog = Arc::new(AppCatalog::load(&environment)?);
+    if trace {
+        eprintln!(
+            "Clarion launcher startup: catalog_ms={:.3} apps={}",
+            started.elapsed().as_secs_f64() * 1000.0,
+            catalog.apps().len(),
+        );
+    }
     let preferences = ShellSnapshot::load(&environment);
     let view = AppsViewState::load(&environment);
     let events = server.events.clone();
     Application::new().run(move |cx: &mut App| {
+        if trace {
+            eprintln!(
+                "Clarion launcher startup: application_ready_ms={:.3}",
+                started.elapsed().as_secs_f64() * 1000.0,
+            );
+        }
         ui::bind_keys(cx);
         let (sender, ui_receiver) = async_channel::unbounded();
         let (view_sender, view_receiver) = async_channel::unbounded::<AppsViewState>();

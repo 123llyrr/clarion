@@ -49,6 +49,11 @@ pub(super) fn constants(
         && source.intent == RenderingIntent::Relative
         && source.description == ColorDescription::srgb()
         && target == ColorDescription::srgb();
+    // HDR's non-zero display black changes the scene's luminance numbers, but
+    // perceptual SDR black/white adaptation cancels its encode normalization.
+    // The shader verifies the sampled premultiplied bounds before using this
+    // identity; malformed alpha and extended float samples need the full path.
+    let scene_identity = !clamp && perceptual_sdr_scene_identity(source, target);
     ColorPushConstants {
         matrix: [
             2., 0., 0., 0., 0., 2., 0., 0., 0., 0., 1., 0., -1., -1., 0., 1.,
@@ -63,6 +68,8 @@ pub(super) fn constants(
                     target.reference_luminance / output_reference
                 } else if i == 1 && output_identity {
                     1.
+                } else if i == 1 && scene_identity {
+                    2.
                 } else {
                     0.
                 },
@@ -83,6 +90,40 @@ pub(super) fn constants(
         tone_gamut: crate::color::primaries_matrix(target.primaries, tone_primaries)
             .map(|row| [row[0], row[1], row[2], 0.]),
     }
+}
+
+pub(super) fn perceptual_sdr_scene_identity(
+    source: SurfaceColor,
+    target: ColorDescription,
+) -> bool {
+    source == SurfaceColor::default()
+        && target.validate()
+        && target.primaries == crate::color::Primaries::Srgb
+        && target.transfer == TransferFunction::Srgb
+        && target.reference_luminance == 80.
+        && target.linear_scale == target.reference_luminance - target.min_luminance
+        // Leave room for floating-point error in the output gamut shoulder
+        // metric. This only admits HDR scenes; default SDR already matches.
+        && target.max_luminance >= target.reference_luminance * 1.001
+}
+
+pub(super) fn opaque_sdr_scene_identity(
+    source: SurfaceColor,
+    target: ColorDescription,
+    format: ash::vk::Format,
+    has_alpha: bool,
+) -> bool {
+    !has_alpha
+        && matches!(
+            format,
+            ash::vk::Format::R8G8B8A8_UNORM
+                | ash::vk::Format::B8G8R8A8_UNORM
+                | ash::vk::Format::A2B10G10R10_UNORM_PACK32
+                | ash::vk::Format::A2R10G10B10_UNORM_PACK32
+                | ash::vk::Format::R5G6B5_UNORM_PACK16
+                | ash::vk::Format::B5G6R5_UNORM_PACK16
+        )
+        && perceptual_sdr_scene_identity(source, target)
 }
 
 pub(super) fn encoding_matches(source: SurfaceColor, target: ColorDescription) -> bool {
@@ -182,6 +223,101 @@ mod identity_tests {
         )
         .gamut[1][3]
             == 1.
+    }
+
+    #[test]
+    fn perceptual_sdr_black_white_adaptation_is_identity_in_hdr_scene() {
+        for min_luminance in [0., 0.0001, 0.005, 0.2, 1., 10.] {
+            let output = crate::color::HdrOutputSettings {
+                min_luminance,
+                ..Default::default()
+            }
+            .description();
+            let scene = scene_description(Some(output));
+            assert!(perceptual_sdr_scene_identity(
+                SurfaceColor::default(),
+                scene
+            ));
+            for value in 0..=1023 {
+                let value = value as f32 / 1023.;
+                let rgb = [value, value * 0.5, 1. - value];
+                let expected = crate::color::convert_color(rgb, SurfaceColor::default(), scene);
+                assert!(expected
+                    .into_iter()
+                    .zip(rgb)
+                    .all(|(a, b)| (a - b).abs() < 2e-6));
+            }
+        }
+    }
+
+    #[test]
+    fn sdr_scene_bypass_requires_opaque_bounded_rgb_and_exact_perceptual_encoding() {
+        use ash::vk;
+        let source = SurfaceColor::default();
+        let scene = scene_description(Some(
+            crate::color::HdrOutputSettings::default().description(),
+        ));
+        for format in [
+            vk::Format::R8G8B8A8_UNORM,
+            vk::Format::A2R10G10B10_UNORM_PACK32,
+        ] {
+            assert!(opaque_sdr_scene_identity(source, scene, format, false));
+            assert!(!opaque_sdr_scene_identity(source, scene, format, true));
+        }
+        for format in [
+            vk::Format::R16G16B16A16_SFLOAT,
+            vk::Format::G8_B8R8_2PLANE_420_UNORM,
+        ] {
+            assert!(!opaque_sdr_scene_identity(source, scene, format, false));
+        }
+        for intent in [
+            RenderingIntent::Relative,
+            RenderingIntent::RelativeBpc,
+            RenderingIntent::Absolute,
+            RenderingIntent::AbsoluteNoAdaptation,
+        ] {
+            assert!(!perceptual_sdr_scene_identity(
+                SurfaceColor { intent, ..source },
+                scene
+            ));
+        }
+        for description in [
+            ColorDescription::bt2020_pq(),
+            ColorDescription::windows_scrgb(),
+            ColorDescription {
+                linear_scale: 100.,
+                ..source.description
+            },
+            ColorDescription {
+                max_luminance: 81.,
+                ..source.description
+            },
+        ] {
+            assert!(!perceptual_sdr_scene_identity(
+                SurfaceColor {
+                    description,
+                    ..source
+                },
+                scene
+            ));
+        }
+        for target in [
+            ColorDescription::bt2020_pq(),
+            ColorDescription {
+                linear_scale: 80.,
+                ..scene
+            },
+            ColorDescription {
+                reference_luminance: 81.,
+                ..scene
+            },
+            ColorDescription {
+                max_luminance: 79.,
+                ..scene
+            },
+        ] {
+            assert!(!perceptual_sdr_scene_identity(source, target));
+        }
     }
 
     #[test]

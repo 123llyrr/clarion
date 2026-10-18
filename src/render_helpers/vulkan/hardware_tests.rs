@@ -548,7 +548,7 @@ fn scaled_capture_pool_reuses_images_and_releases_context() {
                 frame.finish_and_wait().unwrap();
                 let pool = renderer.scratch_textures.lock().unwrap();
                 assert_eq!(pool.len(), 1);
-                let image = pool[0].image();
+                let image = pool.iter().next().unwrap().image();
                 assert_eq!(*pooled_image.get_or_insert(image), image);
             }
             if drop_renderer_before_finish {

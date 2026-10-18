@@ -20,14 +20,110 @@ use crate::render_helpers::particles::ParticleVertex;
 const MAX_IDLE_SCRATCH_IMAGES: usize = 8;
 const MAX_IDLE_SCRATCH_BYTES: u64 = 256 * 1024 * 1024;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScratchClass {
+    Retired,
+    OrderedColor,
+}
+
+#[derive(Debug)]
+struct ScratchEntry {
+    texture: VulkanTexture,
+    class: ScratchClass,
+}
+
+/// Separate reuse classes share one existing 8-image / 256-MiB idle budget.
+#[derive(Debug, Default)]
+pub struct ScratchPool {
+    entries: Vec<ScratchEntry>,
+}
+
+impl ScratchPool {
+    pub(super) fn iter(&self) -> impl Iterator<Item = &VulkanTexture> {
+        self.entries.iter().map(|entry| &entry.texture)
+    }
+
+    pub(super) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+/// Only full-overwrite color intermediates from one ordered graphics queue.
+/// Unlike capture/blur history, these may be written again by a later queued
+/// submission before the earlier completion owner is retired on the CPU.
+#[derive(Debug)]
+pub(super) struct ColorScratchPool {
+    context: std::sync::Weak<VulkanContext>,
+    queue: vk::Queue,
+    textures: Arc<std::sync::Mutex<ScratchPool>>,
+}
+
+impl ColorScratchPool {
+    pub(super) fn new(
+        context: &Arc<VulkanContext>,
+        textures: Arc<std::sync::Mutex<ScratchPool>>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            context: Arc::downgrade(context),
+            queue: context.graphics_queue,
+            textures,
+        })
+    }
+
+    pub(super) fn matches(
+        &self,
+        context: &Arc<VulkanContext>,
+        textures: &Arc<std::sync::Mutex<ScratchPool>>,
+    ) -> bool {
+        self.context.ptr_eq(&Arc::downgrade(context))
+            && self.queue == context.graphics_queue
+            && Arc::ptr_eq(&self.textures, textures)
+    }
+
+    #[cfg(test)]
+    pub(super) fn stats_for_test(&self) -> (usize, usize, u64) {
+        let pool = self.textures.lock().unwrap();
+        (
+            pool.len(),
+            pool.entries
+                .iter()
+                .filter(|entry| entry.class == ScratchClass::OrderedColor)
+                .count(),
+            pool.iter().map(scratch_bytes).sum(),
+        )
+    }
+}
+
+#[cfg(test)]
+static SCRATCH_ALLOCATION_COUNT: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(test)]
+pub(super) fn scratch_allocation_count_for_test() -> u64 {
+    SCRATCH_ALLOCATION_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 fn scratch_bytes(texture: &VulkanTexture) -> u64 {
     // Include driver alignment and tiling padding, not only logical pixels.
     texture.inner.allocation_size
 }
 
 fn recycle_scratch(
-    pool: &std::sync::Mutex<Vec<VulkanTexture>>,
+    pool: &std::sync::Mutex<ScratchPool>,
     textures: impl Iterator<Item = VulkanTexture>,
+) {
+    recycle_scratch_as(pool, textures, ScratchClass::Retired);
+}
+
+fn recycle_scratch_as(
+    pool: &std::sync::Mutex<ScratchPool>,
+    textures: impl Iterator<Item = VulkanTexture>,
+    class: ScratchClass,
 ) {
     let mut discarded = Vec::new();
     let mut idle = pool.lock().unwrap();
@@ -39,12 +135,12 @@ fn recycle_scratch(
             continue;
         }
         while idle.len() >= MAX_IDLE_SCRATCH_IMAGES || bytes + incoming > MAX_IDLE_SCRATCH_BYTES {
-            let oldest = idle.remove(0);
+            let oldest = idle.entries.remove(0).texture;
             bytes -= scratch_bytes(&oldest);
             discarded.push(oldest);
         }
         bytes += incoming;
-        idle.push(texture);
+        idle.entries.push(ScratchEntry { texture, class });
     }
     drop(idle);
     // Image destruction must not hold the shared cache lock.
@@ -137,7 +233,7 @@ type ColorOutput = (
 pub struct VulkanFrame<'frame> {
     pub(super) ctx: Arc<VulkanContext>,
     pipeline_mgr: Arc<VulkanPipelineManager>,
-    scratch_pool: Arc<std::sync::Mutex<Vec<VulkanTexture>>>,
+    scratch_pool: Arc<std::sync::Mutex<ScratchPool>>,
     importer: DmabufImporter,
     draws: Vec<Draw>,
     snapshot: Option<VulkanTexture>,
@@ -145,6 +241,10 @@ pub struct VulkanFrame<'frame> {
     color_output_primaries: crate::color::Primaries,
     color_output_reference: f32,
     converted: Vec<(VulkanTexture, VulkanTexture)>,
+    color_scratch_pool: Option<Arc<ColorScratchPool>>,
+    color_scratch: Vec<VulkanTexture>,
+    #[cfg(test)]
+    force_scene_color_transform_for_test: bool,
     initial_output: Option<(VulkanTexture, VulkanTexture, ColorPushConstants)>,
     output: Option<ColorOutput>,
     pub command_buffer: vk::CommandBuffer,
@@ -170,6 +270,8 @@ pub struct VulkanFrame<'frame> {
     gpu_timing: Option<super::timing::QueryLease>,
     #[cfg(test)]
     sync_export_error_for_test: Option<vk::Result>,
+    #[cfg(test)]
+    queue_submit_error_for_test: Option<vk::Result>,
     _marker: std::marker::PhantomData<&'frame ()>,
 }
 
@@ -181,6 +283,17 @@ pub(super) fn color_range() -> vk::ImageSubresourceRange {
 }
 
 impl<'frame> VulkanFrame<'frame> {
+    pub(super) fn set_color_scratch_pool(
+        &mut self,
+        pool: Arc<ColorScratchPool>,
+    ) -> Result<(), vk::Result> {
+        if !pool.matches(&self.ctx, &self.scratch_pool) || !self.converted.is_empty() {
+            return Err(vk::Result::ERROR_INITIALIZATION_FAILED);
+        }
+        self.color_scratch_pool = Some(pool);
+        Ok(())
+    }
+
     pub(super) fn set_color_scene(
         &mut self,
         description: crate::color::ColorDescription,
@@ -205,9 +318,17 @@ impl<'frame> VulkanFrame<'frame> {
                 | crate::color::RenderingIntent::AbsoluteNoAdaptation
         ) && self.color_scene.reference_luminance
             != self.color_output_reference;
-        if !absolute_needs_normalization
-            && super::color::encoding_matches(source.color, self.color_scene)
-        {
+        let encoding_matches = !absolute_needs_normalization
+            && (super::color::encoding_matches(source.color, self.color_scene)
+                || super::color::opaque_sdr_scene_identity(
+                    source.color,
+                    self.color_scene,
+                    vk::Format::from_raw(source.format as i32),
+                    source.has_alpha,
+                ));
+        #[cfg(test)]
+        let encoding_matches = encoding_matches && !self.force_scene_color_transform_for_test;
+        if encoding_matches {
             return Ok(source.clone());
         }
         if let Some((_, converted)) = self
@@ -218,7 +339,17 @@ impl<'frame> VulkanFrame<'frame> {
             return Ok(converted.clone());
         }
         self.check_texture(source)?;
-        let mut converted = self.acquire_scratch_format(
+        let pool = self
+            .color_scratch_pool
+            .as_ref()
+            .map_or(&*self.scratch_pool, |pool| &*pool.textures);
+        let mut converted = self.acquire_scratch_from_pool(
+            pool,
+            if self.color_scratch_pool.is_some() {
+                ScratchClass::OrderedColor
+            } else {
+                ScratchClass::Retired
+            },
             source.width,
             source.height,
             true,
@@ -237,13 +368,25 @@ impl<'frame> VulkanFrame<'frame> {
             self.color_output_primaries,
             self.color_output_reference,
         );
+        #[cfg(test)]
+        let pc = if self.force_scene_color_transform_for_test {
+            let mut pc = pc;
+            pc.gamut[1][3] = 0.;
+            pc
+        } else {
+            pc
+        };
         self.draws.push(Draw::TexturePass(
             source.clone(),
             converted.clone(),
             PassConstants::Color(pc),
             None,
         ));
-        self.scratch_textures.push(converted.clone());
+        if self.color_scratch_pool.is_some() {
+            self.color_scratch.push(converted.clone());
+        } else {
+            self.scratch_textures.push(converted.clone());
+        }
         self.converted.push((source.clone(), converted.clone()));
         Ok(converted)
     }
@@ -285,6 +428,11 @@ impl<'frame> VulkanFrame<'frame> {
     #[cfg(test)]
     pub(super) fn disable_output_identity_for_test(&mut self) {
         self.output.as_mut().unwrap().1.gamut[1][3] = 0.;
+    }
+
+    #[cfg(test)]
+    pub(super) fn force_scene_color_transform_for_test(&mut self) {
+        self.force_scene_color_transform_for_test = true;
     }
 
     /// Recover an initialized framebuffer's previous scene before its first
@@ -488,7 +636,7 @@ impl<'frame> VulkanFrame<'frame> {
     pub fn begin(
         ctx: Arc<VulkanContext>,
         pipeline_mgr: Arc<VulkanPipelineManager>,
-        scratch_pool: Arc<std::sync::Mutex<Vec<VulkanTexture>>>,
+        scratch_pool: Arc<std::sync::Mutex<ScratchPool>>,
         importer: DmabufImporter,
         target_image: vk::Image,
         target_view: vk::ImageView,
@@ -551,6 +699,10 @@ impl<'frame> VulkanFrame<'frame> {
             color_output_primaries: crate::color::Primaries::Srgb,
             color_output_reference: 80.,
             converted: Vec::new(),
+            color_scratch_pool: None,
+            color_scratch: Vec::new(),
+            #[cfg(test)]
+            force_scene_color_transform_for_test: false,
             initial_output: None,
             output: None,
             command_buffer,
@@ -576,6 +728,8 @@ impl<'frame> VulkanFrame<'frame> {
             gpu_timing: None,
             #[cfg(test)]
             sync_export_error_for_test: None,
+            #[cfg(test)]
+            queue_submit_error_for_test: None,
             _marker: std::marker::PhantomData,
         })
     }
@@ -754,13 +908,36 @@ impl<'frame> VulkanFrame<'frame> {
         format: vk::Format,
         extra_usage: vk::ImageUsageFlags,
     ) -> Result<VulkanTexture, vk::Result> {
+        self.acquire_scratch_from_pool(
+            &self.scratch_pool,
+            ScratchClass::Retired,
+            width,
+            height,
+            has_alpha,
+            format,
+            extra_usage,
+        )
+    }
+
+    fn acquire_scratch_from_pool(
+        &self,
+        pool: &std::sync::Mutex<ScratchPool>,
+        class: ScratchClass,
+        width: u32,
+        height: u32,
+        has_alpha: bool,
+        format: vk::Format,
+        extra_usage: vk::ImageUsageFlags,
+    ) -> Result<VulkanTexture, vk::Result> {
         let usage = extra_usage
             | vk::ImageUsageFlags::TRANSFER_SRC
             | vk::ImageUsageFlags::TRANSFER_DST
             | vk::ImageUsageFlags::SAMPLED;
-        let mut pool = self.scratch_pool.lock().unwrap();
-        let index = pool.iter().position(|texture| {
-            Arc::ptr_eq(&self.ctx, &texture.inner.ctx)
+        let mut pool = pool.lock().unwrap();
+        let index = pool.entries.iter().position(|entry| {
+            let texture = &entry.texture;
+            entry.class == class
+                && Arc::ptr_eq(&self.ctx, &texture.inner.ctx)
                 && !texture.inner.external
                 && !texture.y_inverted
                 && texture.width == width
@@ -770,9 +947,13 @@ impl<'frame> VulkanFrame<'frame> {
                 && texture.inner.usage.contains(usage)
         });
         if let Some(index) = index {
-            return Ok(pool.swap_remove(index));
+            return Ok(pool.entries.remove(index).texture);
         }
         drop(pool);
+        let _latency =
+            crate::utils::latency::Span::new(crate::utils::latency::Operation::NativeAllocation);
+        #[cfg(test)]
+        SCRATCH_ALLOCATION_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         super::allocate_texture(
             &self.ctx,
             width,
@@ -1086,6 +1267,8 @@ impl<'frame> VulkanFrame<'frame> {
     }
 
     fn submit(&mut self, wait: bool) -> Result<(), vk::Result> {
+        let _latency =
+            crate::utils::latency::Span::new(crate::utils::latency::Operation::VulkanRecordSubmit);
         if let Some(error) = self.producer_error {
             return Err(match error {
                 crate::render_helpers::sync::ProducerNotReady::Pending => vk::Result::NOT_READY,
@@ -2295,6 +2478,10 @@ impl<'frame> VulkanFrame<'frame> {
             }
             let signals: Vec<_> = self.signal_semaphore.into_iter().collect();
             submit = submit.signal_semaphores(&signals);
+            #[cfg(test)]
+            if let Some(error) = self.queue_submit_error_for_test.take() {
+                return Err(error);
+            }
             device.queue_submit(self.ctx.graphics_queue, &[submit], fence)?;
             self.fence = Some(fence);
             // Track the queued layout as soon as submission succeeds. A CPU wait
@@ -2316,6 +2503,23 @@ impl<'frame> VulkanFrame<'frame> {
                 snapshot
                     .current_layout()
                     .set(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+            }
+            if let Some(pool) = &self.color_scratch_pool {
+                // Queue submission has succeeded and all layout metadata now
+                // describes its queued reads. The next full color pass uses an
+                // ALL_COMMANDS/MEMORY_READ|WRITE -> attachment-write barrier.
+                // Completion still retains each TexturePass target, so eviction
+                // cannot free GPU storage before its actual fence completes.
+                recycle_scratch_as(
+                    &pool.textures,
+                    self.color_scratch.drain(..).map(|mut texture| {
+                        // This is storage reuse: every texel will be replaced.
+                        // Source inversion is assigned anew by color_texture.
+                        texture.y_inverted = false;
+                        texture
+                    }),
+                    ScratchClass::OrderedColor,
+                );
             }
             // Queue submissions and layout metadata must remain ordered, but a
             // CPU fence wait does not need the queue/command-pool lock. Keeping
@@ -2407,6 +2611,9 @@ impl<'frame> VulkanFrame<'frame> {
             let result = if let Some(error) = injected_error {
                 Err(error)
             } else {
+                let _latency = crate::utils::latency::Span::new(
+                    crate::utils::latency::Operation::VulkanFenceExport,
+                );
                 let api = ash::khr::external_semaphore_fd::Device::new(
                     &self.ctx.instance,
                     &self.ctx.device,
@@ -2580,7 +2787,7 @@ impl Drop for VulkanFrame<'_> {
 pub struct GpuCompletion {
     ctx: Arc<VulkanContext>,
     _pipeline: Arc<VulkanPipelineManager>,
-    scratch_pool: Arc<std::sync::Mutex<Vec<VulkanTexture>>>,
+    scratch_pool: Arc<std::sync::Mutex<ScratchPool>>,
     _textures: Vec<VulkanTexture>,
     _custom: Vec<Arc<super::custom_shader::ShaderDraw>>,
     scratch: Vec<VulkanTexture>,
@@ -2866,6 +3073,132 @@ mod tests {
     use crate::render_helpers::vulkan::hardware_tests::setup;
 
     #[test]
+    #[ignore = "requires real DRM render node and Vulkan validation"]
+    fn ordered_color_pool_publishes_only_successful_submissions_and_separates_reuse_classes() {
+        let (renderer, _, _) = setup();
+        let ctx = renderer.ctx.as_ref().unwrap();
+        let source = renderer.create_solid_texture([32, 64, 96, 128]).unwrap();
+        let target = allocate_texture(
+            ctx,
+            4,
+            3,
+            vk::Format::R16G16B16A16_SFLOAT,
+            vk::ImageTiling::OPTIMAL,
+            vk::ImageUsageFlags::COLOR_ATTACHMENT,
+            vk::ImageLayout::UNDEFINED,
+            true,
+        )
+        .unwrap();
+        let pool = ColorScratchPool::new(ctx, renderer.scratch_textures.clone());
+        let make_frame = || {
+            let mut frame = renderer
+                .render_frame(
+                    target.image(),
+                    target.image_view(),
+                    vk::Format::R16G16B16A16_SFLOAT,
+                    true,
+                    4,
+                    3,
+                    Some([0.; 4]),
+                )
+                .unwrap();
+            frame.retain_target(&target);
+            frame.set_color_scratch_pool(pool.clone()).unwrap();
+            frame.set_color_scene(
+                super::super::color::scene_description(Some(
+                    crate::color::HdrOutputSettings::default().description(),
+                )),
+                crate::color::Primaries::Bt2020,
+                203.,
+            );
+            frame.color_texture(&source).unwrap();
+            frame
+        };
+        let abandoned = make_frame();
+        assert_eq!(pool.stats_for_test().0, 0);
+        drop(abandoned);
+        assert_eq!(
+            pool.stats_for_test().0,
+            0,
+            "an unsubmitted conversion must not become reusable"
+        );
+        let mut failed = make_frame();
+        failed.queue_submit_error_for_test = Some(vk::Result::ERROR_OUT_OF_HOST_MEMORY);
+        assert!(matches!(
+            failed.finish_async_unexported(target.clone()),
+            Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY)
+        ));
+        assert_eq!(
+            pool.stats_for_test().0,
+            0,
+            "failed queue_submit must not publish a color image"
+        );
+        let frame = make_frame();
+        let converted_image = frame.converted[0].1.image();
+        let completion = frame.finish_async_unexported(target.clone()).unwrap();
+        assert_eq!(pool.stats_for_test().1, 1);
+        let mut ordinary_frame = renderer
+            .render_frame(
+                target.image(),
+                target.image_view(),
+                vk::Format::R16G16B16A16_SFLOAT,
+                true,
+                4,
+                3,
+                Some([0.; 4]),
+            )
+            .unwrap();
+        let ordinary = ordinary_frame.acquire_scratch(1, 1, true).unwrap();
+        assert_ne!(
+            ordinary.image(),
+            converted_image,
+            "capture/blur must not acquire a color image before retirement"
+        );
+        recycle_scratch(&renderer.scratch_textures, std::iter::once(ordinary));
+        let foreign_budget = ColorScratchPool::new(ctx, Arc::default());
+        assert!(
+            ordinary_frame
+                .set_color_scratch_pool(foreign_budget)
+                .is_err(),
+            "a wrapper from another shared pool must be rejected"
+        );
+        drop(ordinary_frame);
+        completion.prepare_retirement().unwrap();
+        drop(completion);
+        assert_eq!(
+            pool.stats_for_test().1,
+            1,
+            "completion retirement must not publish color twice"
+        );
+        assert_eq!(pool.stats_for_test().0, 2);
+
+        let mut export_failure = make_frame();
+        let retained = Arc::downgrade(&export_failure.converted[0].1.inner);
+        export_failure.fail_sync_export_for_test(vk::Result::ERROR_INVALID_EXTERNAL_HANDLE);
+        let (owner, error) = export_failure
+            .finish_async_retained(target.clone(), true)
+            .unwrap();
+        assert_eq!(error, Some(vk::Result::ERROR_INVALID_EXTERNAL_HANDLE));
+        assert_eq!(
+            pool.stats_for_test().1,
+            1,
+            "a successful submission remains ordered even if fd export fails"
+        );
+        recycle_scratch(
+            &renderer.scratch_textures,
+            (0..9).map(|_| renderer.create_solid_texture([1, 2, 3, 255]).unwrap()),
+        );
+        assert_eq!(pool.stats_for_test().1, 0);
+        assert!(
+            retained.upgrade().is_some(),
+            "eviction cannot free a queued color image retained by its failed-export completion"
+        );
+        owner.prepare_retirement().unwrap();
+        drop(owner);
+        assert!(retained.upgrade().is_none());
+    }
+
+    #[test]
     fn an_expired_unexported_owner_is_not_an_already_signaled_export_sentinel() {
         use smithay::backend::renderer::sync::Fence;
         let status = Arc::new(std::sync::atomic::AtomicI8::new(0));
@@ -2967,7 +3300,7 @@ mod tests {
     fn scratch_cache_bounds_actual_allocations_and_image_count() {
         let (renderer, _, _) = setup();
         let ctx = renderer.ctx.as_ref().unwrap();
-        let pool = std::sync::Mutex::new(Vec::new());
+        let pool = std::sync::Mutex::new(ScratchPool::default());
         let make_texture = |width, height| {
             allocate_texture(
                 ctx,
@@ -3013,6 +3346,28 @@ mod tests {
         let cached = pool.lock().unwrap();
         assert_eq!(cached.len(), MAX_IDLE_SCRATCH_IMAGES);
         assert!(cached.iter().map(scratch_bytes).sum::<u64>() <= MAX_IDLE_SCRATCH_BYTES);
+        drop(cached);
+        recycle_scratch_as(
+            &pool,
+            (0..9).map(|_| make_texture(16, 16)),
+            ScratchClass::OrderedColor,
+        );
+        recycle_scratch(&pool, (0..4).map(|_| make_texture(16, 16)));
+        let mixed = pool.lock().unwrap();
+        assert_eq!(
+            mixed.len(),
+            MAX_IDLE_SCRATCH_IMAGES,
+            "reuse categories share the image budget"
+        );
+        assert!(mixed.iter().map(scratch_bytes).sum::<u64>() <= MAX_IDLE_SCRATCH_BYTES);
+        assert!(mixed
+            .entries
+            .iter()
+            .any(|entry| entry.class == ScratchClass::Retired));
+        assert!(mixed
+            .entries
+            .iter()
+            .any(|entry| entry.class == ScratchClass::OrderedColor));
     }
 
     #[test]

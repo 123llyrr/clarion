@@ -548,6 +548,7 @@ pub struct NativeRenderer {
     completions: super::completion::CompletionQueue,
     pending_uploads: Vec<Weak<super::memory::PendingUpload>>,
     offscreen_cache: Vec<VulkanTexture>,
+    color_scratch_pool: Arc<super::frame::ColorScratchPool>,
     async_offscreen_scopes: Rc<std::cell::Cell<u32>>,
     compatibility_work: NativeCompatibilityWork,
     pub(super) shm_cache_registrations:
@@ -2026,7 +2027,16 @@ impl NativeRenderer {
             .clone()
     }
 
+    #[cfg(test)]
+    pub(super) fn color_scratch_pool_for_test(&self) -> Arc<super::frame::ColorScratchPool> {
+        self.color_scratch_pool.clone()
+    }
+
     fn assemble(renderer: VulkanRenderer, resources: NativeDeviceResources) -> Self {
+        let color_scratch_pool = super::frame::ColorScratchPool::new(
+            renderer.ctx.as_ref().unwrap(),
+            renderer.scratch_textures.clone(),
+        );
         let NativeDeviceResources {
             completions,
             white,
@@ -2065,6 +2075,7 @@ impl NativeRenderer {
             upscale: TextureFilter::Linear,
             debug: DebugFlags::empty(),
             offscreen_cache: Vec::new(),
+            color_scratch_pool,
             async_offscreen_scopes: Rc::new(std::cell::Cell::new(0)),
             compatibility_work: NativeCompatibilityWork::default(),
             shm_cache_registrations: Default::default(),
@@ -2290,6 +2301,16 @@ impl Renderer for NativeRenderer {
             );
         }
         frame.retain_target(t);
+        // Public device reinitialization also replaces the ordinary scratch
+        // pool. Do not retain an ordered-color wrapper for the old queue.
+        if !self
+            .color_scratch_pool
+            .matches(&ctx, &self.renderer.scratch_textures)
+        {
+            self.color_scratch_pool =
+                super::frame::ColorScratchPool::new(&ctx, self.renderer.scratch_textures.clone());
+        }
+        frame.set_color_scratch_pool(self.color_scratch_pool.clone())?;
         frame.set_color_scene(
             scene_color,
             self.output_color_state
@@ -3824,7 +3845,7 @@ fn dma_formats(renderer: &VulkanRenderer, sampled: bool) -> FormatSet {
 }
 
 #[cfg(test)]
-mod readback_tests {
+pub(super) mod readback_tests {
     use super::super::hardware_tests::setup;
     use super::super::VulkanContext;
     use super::*;
@@ -3968,12 +3989,12 @@ mod readback_tests {
         .is_err());
     }
 
-    pub(super) struct TimelineGate {
+    pub(in crate::render_helpers::vulkan) struct TimelineGate {
         ctx: Arc<VulkanContext>,
         semaphore: vk::Semaphore,
     }
     impl TimelineGate {
-        pub(super) fn new(ctx: Arc<VulkanContext>) -> Self {
+        pub(in crate::render_helpers::vulkan) fn new(ctx: Arc<VulkanContext>) -> Self {
             assert!(ctx.info.supports_timeline_semaphores);
             let mut timeline =
                 vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE);

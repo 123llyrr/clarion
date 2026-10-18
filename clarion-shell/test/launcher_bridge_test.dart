@@ -11,6 +11,7 @@ class _Server {
   final Directory directory;
   ServerSocket? server;
   final clients = <Socket>[];
+  int closedClients = 0;
   final commands = <Map<String, dynamic>>[];
   String get path => '${directory.path}/clarion-launcher.sock';
   Future<void> start() async {
@@ -29,6 +30,7 @@ class _Server {
               Map<String, dynamic>.from(jsonDecode(line) as Map),
             ),
             onError: (Object _) {},
+            onDone: () => closedClients++,
           );
     });
   }
@@ -68,6 +70,124 @@ void main() {
   tearDown(() async {
     await server.dispose();
     await directory.delete(recursive: true);
+  });
+
+  test(
+    'hidden warmup shares startup with Show without issuing commands',
+    () async {
+      final spawned = Completer<void>();
+      var spawns = 0;
+      final bridge = LauncherBridge(
+        environment: {
+          'XDG_RUNTIME_DIR': directory.path,
+          'CLARION_LAUNCHER_BIN': '/bin/true',
+        },
+        spawn: (_, arguments) async {
+          expect(arguments, contains('--serve'));
+          spawns++;
+          await spawned.future;
+          await server.start();
+        },
+      );
+      final warmup = bridge.warmup(output: 'winit');
+      await _until(() => spawns == 1);
+      expect(bridge.requestId, 0);
+      expect(server.commands, isEmpty);
+      final id = bridge.beginRequest();
+      final show = bridge.show(
+        requestId: id,
+        output: 'winit',
+        theme: 'dark',
+        accent: '#123456',
+        recent: [],
+      );
+      spawned.complete();
+      await Future.wait([warmup, show]);
+      await _until(() => server.commands.length == 2);
+      expect(spawns, 1);
+      expect(server.commands.map((command) => command['type']), [
+        'Reload',
+        'Show',
+      ]);
+      expect(
+        server.commands.every((command) => command['request_id'] == id),
+        isTrue,
+      );
+      await bridge.dispose();
+    },
+  );
+
+  test('failed hidden warmup is silent and a later Show retries', () async {
+    var spawns = 0;
+    final bridge = LauncherBridge(
+      environment: {
+        'XDG_RUNTIME_DIR': directory.path,
+        'CLARION_LAUNCHER_BIN': '/bin/true',
+      },
+      spawn: (_, _) async {
+        spawns++;
+        if (spawns == 1) throw StateError('optional warmup failed');
+        await server.start();
+      },
+    );
+    final events = <LauncherEvent>[];
+    final subscription = bridge.events.listen(events.add);
+    await bridge.warmup();
+    expect(events, isEmpty);
+    expect(bridge.requestId, 0);
+    final id = bridge.beginRequest();
+    await bridge.show(
+      requestId: id,
+      theme: 'dark',
+      accent: '#123456',
+      recent: [],
+    );
+    expect(spawns, 2);
+    await subscription.cancel();
+    await bridge.dispose();
+  });
+
+  test(
+    'warmup and Hide retain only one connection to an existing daemon',
+    () async {
+      await server.start();
+      final bridge = LauncherBridge(
+        environment: {'XDG_RUNTIME_DIR': directory.path},
+      );
+      final warmup = bridge.warmup();
+      final id = bridge.beginRequest();
+      await Future.wait([warmup, bridge.hide(id)]);
+      await _until(() => server.commands.length == 1);
+      expect(server.commands.single, {'type': 'Hide', 'request_id': id});
+      await _until(() => server.clients.length - server.closedClients == 1);
+      await bridge.dispose();
+      await _until(() => server.clients.length == server.closedClients);
+    },
+  );
+
+  test('a disposed hidden warmup cannot attach or show a window', () async {
+    final spawned = Completer<void>();
+    var spawns = 0;
+    final bridge = LauncherBridge(
+      environment: {
+        'XDG_RUNTIME_DIR': directory.path,
+        'CLARION_LAUNCHER_BIN': '/bin/true',
+      },
+      spawn: (_, _) async {
+        spawns++;
+        await spawned.future;
+        await server.start();
+      },
+    );
+    final warmup = bridge.warmup();
+    await _until(() => spawns == 1);
+    await bridge.dispose();
+    spawned.complete();
+    await warmup;
+    expect(server.clients, isEmpty);
+    expect(server.commands, isEmpty);
+    await bridge.warmup();
+    expect(spawns, 1);
   });
 
   test(

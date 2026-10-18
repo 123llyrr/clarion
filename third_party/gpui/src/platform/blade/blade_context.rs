@@ -3,13 +3,18 @@ use blade_graphics as gpu;
 use std::sync::Arc;
 use util::ResultExt;
 
+use super::blade_renderer::BladePipelineCache;
+
 #[cfg_attr(target_os = "macos", derive(Clone))]
 pub struct BladeContext {
     pub(super) gpu: Arc<gpu::Context>,
+    pub(super) pipeline_cache: BladePipelineCache,
 }
 
 impl BladeContext {
     pub fn new() -> anyhow::Result<Self> {
+        let started = (std::env::var("GPUI_STARTUP_TRACE").as_deref() == Ok("1"))
+            .then(std::time::Instant::now);
         let device_id_forced = match std::env::var("ZED_DEVICE_ID") {
             Ok(val) => parse_pci_id(&val)
                 .context("Failed to parse device ID from `ZED_DEVICE_ID` environment variable")
@@ -21,18 +26,26 @@ impl BladeContext {
                 None
             }
         };
-        let gpu = Arc::new(
-            unsafe {
-                gpu::Context::init(gpu::ContextDesc {
-                    presentation: true,
-                    validation: false,
-                    device_id: device_id_forced.unwrap_or(0),
-                    ..Default::default()
-                })
-            }
-            .map_err(|e| anyhow::anyhow!("{e:?}"))?,
-        );
-        Ok(Self { gpu })
+        let gpu = unsafe {
+            gpu::Context::init(gpu::ContextDesc {
+                presentation: true,
+                validation: false,
+                device_id: device_id_forced.unwrap_or(0),
+                ..Default::default()
+            })
+        }
+        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        if let Some(started) = started {
+            eprintln!(
+                "GPUI startup: device {:?}, context_ms={:.3}",
+                gpu.device_information(),
+                started.elapsed().as_secs_f64() * 1000.0,
+            );
+        }
+        Ok(Self {
+            gpu: Arc::new(gpu),
+            pipeline_cache: BladePipelineCache::default(),
+        })
     }
 }
 

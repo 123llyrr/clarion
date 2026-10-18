@@ -70,6 +70,21 @@ class LauncherBridge {
     }
   }
 
+  /// Start the hidden daemon while the desktop is idle. The same connection
+  /// future is reused by Show, so a click during warmup never spawns a second
+  /// process. Warmup owns no request, window, focus or catalog refresh command.
+  Future<void> warmup({String? output}) async {
+    if (_disposed) return;
+    try {
+      await (_connecting ??= _connect(
+        output,
+      ).whenComplete(() => _connecting = null));
+    } on Object {
+      // The optional warmup may fail (for example during deployment). A user
+      // Show retries through the normal queue and owns any error presentation.
+    }
+  }
+
   /// Prefer the explicit override and the running deployment generation.
   String resolveBinary() {
     final override = environment['CLARION_LAUNCHER_BIN'];
@@ -193,6 +208,13 @@ class LauncherBridge {
       if (_disposed) {
         socket.destroy();
         return false;
+      }
+      // Warmup runs independently of the command queue. Hide can therefore
+      // connect to an existing daemon while this connect is still pending.
+      // Keep the first live connection and close the redundant peer.
+      if (_socket != null) {
+        socket.destroy();
+        return true;
       }
       _attach(socket);
       return true;

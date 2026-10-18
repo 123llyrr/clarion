@@ -68,6 +68,7 @@ use xkbcommon::xkb::{self, KEYMAP_COMPILE_NO_FLAGS, Keycode};
 
 use super::{
     display::WaylandDisplay,
+    key_repeat::KeyRepeat,
     window::{ImeInput, WaylandWindowStatePtr},
 };
 
@@ -257,13 +258,6 @@ pub struct ClickState {
     current_count: usize,
 }
 
-pub(crate) struct KeyRepeat {
-    characters_per_second: u32,
-    delay: Duration,
-    current_id: u64,
-    current_keycode: Option<xkb::Keycode>,
-}
-
 pub(crate) enum PendingActivation {
     /// URI to open in the web browser.
     Uri(String),
@@ -384,10 +378,14 @@ impl WaylandClientStatePtr {
         {
             state.mouse_focused_window = Some(window);
         }
-        if let Some(window) = state.keyboard_focused_window.take()
-            && !window.ptr_eq(&closed_window)
-        {
-            state.keyboard_focused_window = Some(window);
+        if let Some(window) = state.keyboard_focused_window.take() {
+            if window.ptr_eq(&closed_window) {
+                // Destroyed surfaces may never receive wl_keyboard.leave or
+                // the release of the key that closed them (notably Escape).
+                state.repeat.cancel();
+            } else {
+                state.keyboard_focused_window = Some(window);
+            }
         }
         if state.windows.is_empty() && !state.keep_alive {
             state.common.signal.stop();
@@ -588,12 +586,7 @@ impl WaylandClient {
                 last_location: Point::default(),
                 current_count: 0,
             },
-            repeat: KeyRepeat {
-                characters_per_second: 16,
-                delay: Duration::from_millis(500),
-                current_id: 0,
-                current_keycode: None,
-            },
+            repeat: KeyRepeat::default(),
             modifiers: Modifiers {
                 shift: false,
                 control: false,
@@ -1291,6 +1284,7 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                 this.handle_keyboard_layout_change();
             }
             wl_keyboard::Event::Enter { surface, .. } => {
+                state.repeat.cancel();
                 state.keyboard_focused_window = get_window(&mut state, &surface.id());
                 state.enter_token = Some(());
 
@@ -1304,7 +1298,7 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                 state.keyboard_focused_window = None;
                 state.enter_token.take();
                 // Prevent keyboard events from repeating after opening e.g. a file chooser and closing it quickly
-                state.repeat.current_id += 1;
+                state.repeat.cancel();
 
                 if let Some(window) = keyboard_focused_window {
                     if let Some(ref mut compose) = state.compose_state {
@@ -1355,13 +1349,19 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
             } => {
                 state.serial_tracker.update(SerialKind::KeyPress, serial);
 
+                let keycode = Keycode::from(key + MIN_KEYCODE);
+                if key_state == wl_keyboard::KeyState::Released {
+                    // A window may have been removed by its KeyDown handler.
+                    // Release still owns cancellation when no window is focused.
+                    state.repeat.released(keycode);
+                }
+
                 let focused_window = state.keyboard_focused_window.clone();
                 let Some(focused_window) = focused_window else {
                     return;
                 };
 
                 let keymap_state = state.keymap_state.as_ref().unwrap();
-                let keycode = Keycode::from(key + MIN_KEYCODE);
                 let keysym = keymap_state.key_get_one_sym(keycode);
 
                 match key_state {
@@ -1413,11 +1413,9 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                             is_held: false,
                         });
 
-                        state.repeat.current_id += 1;
-                        state.repeat.current_keycode = Some(keycode);
-
+                        let id = state.repeat.pressed(keycode);
                         let rate = state.repeat.characters_per_second;
-                        let id = state.repeat.current_id;
+                        let surface = focused_window.surface().id();
                         state
                             .loop_handle
                             .insert_source(Timer::from_duration(state.repeat.delay), {
@@ -1428,9 +1426,10 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                                 move |_event, _metadata, this| {
                                     let mut client = this.get_client();
                                     let mut state = client.borrow_mut();
-                                    let is_repeating = id == state.repeat.current_id
-                                        && state.repeat.current_keycode.is_some()
-                                        && state.keyboard_focused_window.is_some();
+                                    let is_repeating = state.repeat.is_active(id)
+                                        && state.keyboard_focused_window.as_ref().is_some_and(
+                                            |window| window.surface().id() == surface,
+                                        );
 
                                     if !is_repeating || rate == 0 {
                                         return TimeoutAction::Drop;
@@ -1454,10 +1453,6 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                         let input = PlatformInput::KeyUp(KeyUpEvent {
                             keystroke: Keystroke::from_xkb(keymap_state, state.modifiers, keycode),
                         });
-
-                        if state.repeat.current_keycode == Some(keycode) {
-                            state.repeat.current_keycode = None;
-                        }
 
                         drop(state);
                         focused_window.handle_input(input);

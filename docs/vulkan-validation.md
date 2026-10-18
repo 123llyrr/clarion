@@ -43,10 +43,36 @@ Scene retention follows framebuffer lifetime and has a 1 GiB allocation budget;
 exhaustion defers a new frame instead of losing live partial-damage history.
 
 HDR and scaled-capture scratch images share a cache keyed by device, dimensions,
-format, alpha and required usage; images return only after GPU completion. Idle
-retention is capped at eight images and 256 MiB of actual Vulkan allocation
-sizes, including driver padding. See [HDR implementation](hdr.md) for protocol,
-brightness, gamut and KMS transition semantics.
+format, alpha, usage and reuse class. Capture/blur images return after GPU
+completion. Private, fully overwritten color intermediates can return after
+successful submission on the same graphics queue: barriers order later writes
+after earlier reads, and completion owners still keep every image alive.
+These intermediates cannot be acquired as capture/blur history. Both classes
+share the existing total of eight cached images and 256 MiB of actual Vulkan
+allocation sizes, including driver padding. Device/queue changes invalidate the
+ordered reuse scope. See [HDR implementation](hdr.md) for protocol, brightness,
+gamut and KMS transition semantics.
+
+Default perceptual SDR can bypass the redundant scene transform on HDR outputs
+whose nonzero black point cancels through black/white adaptation and sRGB
+normalization. A texture bypass requires an opaque, bounded UNORM RGB source;
+alpha sources retain their pass and check premultiplied bounds per sample.
+Extended values, PQ/scRGB and other metadata or intents retain the full transform.
+`hdr_sdr_scene_identity_matches_full_transform_with_alpha_and_extended_samples`
+compares both paths on actual GPUs, including 10-bit, scaled sampling and malformed
+premultiplied pixels. `hdr_sdr_scene_identity_4k_gpu_timing` interleaves both paths
+for opaque, alpha and mixed 3840×2400 scenes, including FP16 composition and the
+unchanged final PQ pass. Its GPU timestamps and fixture CPU measurements do not
+measure physical presentation cadence or input latency.
+`hdr_sdr_scene_identity_three_frames_reuse_scratch_without_hot_allocations`
+retains three real asynchronous completions before retiring their images: at
+3840×2400, two full-screen ARGB sources reuse two ordered color images instead
+of retaining six distinct images that repeatedly overflow the 256 MiB cache.
+It checks allocation counts, alternating source inversion and image reuse after
+warmup without increasing the memory limit.
+`ordered_color_pool_preserves_each_gated_frame_pixels_before_retirement`
+blocks the GPU before submitting three different frames, verifies that their
+fences are pending, then checks each output's pixels after releasing the gate.
 
 ## Hardware check
 

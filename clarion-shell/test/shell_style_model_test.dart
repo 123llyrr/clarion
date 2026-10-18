@@ -49,12 +49,13 @@ class _Apps extends DesktopApps {
   final List<DesktopApp> catalogue;
   final launches = <String>[];
   Completer<void>? launchGate;
+  final launchGates = <String, Completer<void>>{};
   @override
   Future<List<DesktopApp>> load() async => List.of(catalogue);
   @override
   Future<void> launch(DesktopApp app) async {
     launches.add(app.id);
-    await launchGate?.future;
+    await (launchGates[app.id]?.future ?? launchGate?.future);
   }
 }
 
@@ -517,6 +518,68 @@ void main() {
       },
     );
   }
+
+  test('a slow Dock launch does not drop another application click', () async {
+    final ipc = _Ipc();
+    final apps = _Apps([_browser, _editor]);
+    final browserGate = apps.launchGates[_browser.id] = Completer<void>();
+    final editorGate = apps.launchGates[_editor.id] = Completer<void>();
+    final controller = await _start(ipc, apps, pins: [_browser.id, _editor.id]);
+    final browser = controller.focusOrLaunchApp(_browser.id);
+    await Future<void>.delayed(Duration.zero);
+    final duplicate = controller.focusOrLaunchApp(_browser.id);
+    final editor = controller.focusOrLaunchApp(_editor.id);
+    await Future<void>.delayed(Duration.zero);
+    try {
+      expect(apps.launches, [_browser.id, _editor.id]);
+      expect(controller.busy, contains('launch'));
+      editorGate.complete();
+      await editor;
+      expect(controller.busy, contains('launch'));
+    } finally {
+      browserGate.complete();
+      if (!editorGate.isCompleted) editorGate.complete();
+      await Future.wait([browser, duplicate, editor]);
+    }
+    expect(controller.busy, isEmpty);
+  });
+
+  for (final failure in [
+    StateError('launch rejected'),
+    TimeoutException('launch helper timed out'),
+  ]) {
+    test('a failed Dock launch clears its own guard: $failure', () async {
+      final ipc = _Ipc();
+      final apps = _Apps([_browser, _editor]);
+      final gate = apps.launchGates[_browser.id] = Completer<void>();
+      final controller = await _start(ipc, apps, pins: [_browser.id]);
+      final launch = controller.focusOrLaunchApp(_browser.id);
+      await Future<void>.delayed(Duration.zero);
+      gate.completeError(failure);
+      await launch;
+      expect(controller.error, contains('$failure'));
+      expect(controller.busy, isEmpty);
+      apps.launchGates.clear();
+      await controller.focusOrLaunchApp(_browser.id);
+      expect(apps.launches, [_browser.id, _browser.id]);
+      expect(controller.busy, isEmpty);
+    });
+  }
+
+  test('disposing a pending Dock launch cannot dispatch a new app', () async {
+    final ipc = _Ipc();
+    final apps = _Apps([_browser, _editor]);
+    final gate = apps.launchGates[_browser.id] = Completer<void>();
+    final controller = await _start(ipc, apps);
+    final launch = controller.focusOrLaunchApp(_browser.id);
+    await Future<void>.delayed(Duration.zero);
+    controller.dispose();
+    await controller.focusOrLaunchApp(_editor.id);
+    gate.completeError(TimeoutException('disposed launch helper'));
+    await launch;
+    expect(apps.launches, [_browser.id]);
+    expect(controller.busy, isEmpty);
+  });
 
   test(
     'a removed pinned app retains live windows as an unknown app without relaunching',
