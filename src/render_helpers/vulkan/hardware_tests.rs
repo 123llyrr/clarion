@@ -3521,6 +3521,7 @@ mod shm_protocol {
             .unwrap();
         with_states(&surface, |surface| {
             let mut old_image = None;
+            let mut snapshot_storage = None;
             for step in 0..7 {
                 let offset = if step == 0 || step == 2 { 32 } else { 256 };
                 let mut bytes = vec![0x99; 176];
@@ -3570,6 +3571,16 @@ mod shm_protocol {
                     .import_buffer(buffer, Some(surface), &damage)
                     .expect("SHM buffer must be recognized by native ImportAll")
                     .unwrap();
+                assert!(renderer.shm_snapshot.is_empty());
+                let storage = renderer.shm_snapshot.as_ptr();
+                if let Some(previous) = snapshot_storage {
+                    assert_eq!(storage, previous, "full/partial/no-damage snapshot reuse");
+                }
+                snapshot_storage = Some(storage);
+                // Reuse/overwrite the CPU scratch before unblocking the GPU:
+                // queued uploads must own a separate copy of these pixels.
+                renderer.shm_snapshot.resize(128, 0xdd);
+                renderer.shm_snapshot.clear();
                 drop(blocked);
                 if (1..=4).contains(&step) {
                     assert_eq!(old_image, Some(texture.image()));
@@ -3613,6 +3624,24 @@ mod shm_protocol {
                     assert_eq!(*pixel, expected, "SHM step {step}, pixel {i}");
                 }
             }
+            // An invalid SHM resource must preserve reusable storage while
+            // exposing neither stale bytes nor a nonzero initialized length.
+            assert!(smithay::backend::renderer::ImportMemWl::import_shm_buffer(
+                &mut renderer,
+                &dma_buffer,
+                Some(surface),
+                &[],
+            )
+            .is_err());
+            assert!(renderer.shm_snapshot.is_empty());
+            assert_eq!(Some(renderer.shm_snapshot.as_ptr()), snapshot_storage);
+            // A large one-off client must not permanently inflate the cache.
+            renderer.shm_snapshot = Vec::with_capacity(64 * 1024 * 1024 + 1);
+            renderer
+                .import_buffer(&opaque, Some(surface), &[])
+                .unwrap()
+                .unwrap();
+            assert_eq!(renderer.shm_snapshot.capacity(), 0);
         });
         // Exercise the actual committed surface tree and standard render elements.
         let subcompositor: wl_subcompositor::WlSubcompositor =

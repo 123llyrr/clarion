@@ -554,6 +554,9 @@ pub struct NativeRenderer {
     pub(super) shm_cache_registrations:
         std::collections::HashMap<usize, super::shm::ShmCacheRegistration>,
     pub(super) shm_cache_imports: u64,
+    // CPU snapshot storage only. Each deferred upload takes its own staging
+    // copy before import_shm_buffer returns, so this can serve the next surface.
+    pub(super) shm_snapshot: Vec<u8>,
     // Keep a few previous sources alive while closing windows created before a
     // configuration reload finish their animation.
     custom_programs:
@@ -2080,6 +2083,7 @@ impl NativeRenderer {
             compatibility_work: NativeCompatibilityWork::default(),
             shm_cache_registrations: Default::default(),
             shm_cache_imports: 0,
+            shm_snapshot: Vec::new(),
             custom_programs: Default::default(),
             failed_program_sources: Default::default(),
             shader_compiles: ShaderCompileOwner::new(),

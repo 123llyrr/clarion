@@ -125,6 +125,13 @@ Override the DRM device that clarion will use for all rendering.
 
 You can set this to make clarion use a different primary GPU than the default one.
 
+With native Vulkan, this selects one shared rendering GPU for all outputs. It
+does not assign each screen to a separate renderer. An output attached to another
+GPU needs compatible cross-device DMA-BUF import and KMS scanout; selecting that
+GPU can improve its output while exposing compatibility problems on the other
+screen. Once color management is advertised, an incompatible output cannot
+fall back to GLES. See the [HDR/Vulkan audit](../hdr-vulkan-audit-20261018.md).
+
 ```kdl
 debug {
     render-drm-device "/dev/dri/renderD129"

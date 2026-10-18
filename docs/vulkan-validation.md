@@ -1,5 +1,11 @@
 # Vulkan backend validation
 
+The [2026-10-18 HDR audit](hdr-vulkan-audit-20261018.md) records physical-session
+frame timing, Intel/NVIDIA validation results, outstanding NV12 failures and the
+current multi-GPU limitation. Native Vulkan composition is implemented, but
+per-GPU independent native rendering and universal external-display support
+are not implemented or certified.
+
 On a physical TTY, Clarion's primary GPU can use the native Vulkan `Renderer`/`Frame` implementation to draw the desktop into Smithay's DRM compositor. It does not render the scene through GLES first. Secondary GPU outputs try the same primary-GPU Vulkan renderer with linear DMA-BUFs allocated on the primary GPU; connection-time KMS scanout and Vulkan target-import probes select GLES per output if cross-device sharing is unsupported. After the color-management global is published, outputs requiring GLES are rejected and native-device failures use native recovery. Managed composition disables direct scanout and overlays until per-plane color conversion exists. Hardware cursors are allowed only after SDR signaling is confirmed and the cursor uses compatible default sRGB pixels; HDR/unknown transitions and PQ/scRGB/floating-point cursor surfaces remain composited. Headless mode has a native Vulkan offscreen renderer. Nested winit mode creates a Vulkan WSI surface and swapchain directly; it composites to a Vulkan texture and queues a GPU copy for presentation without a GLES scene pass. Its two frame slots avoid a per-frame queue-idle wait.
 
 Select `renderer "vulkan"` in the configuration, or start with `--renderer vulkan`. On TTY, check the startup log for `Native Vulkan desktop renderer ready for direct KMS submission`; nested mode logs `nested native Vulkan WSI renderer initialized` and its first presentation. The requested option alone does not prove that Vulkan initialized. TTY initialization or KMS swapchain format negotiation failures select the GLES fallback; an explicitly requested nested Vulkan backend reports an initialization error if the host cannot support Vulkan WSI.
