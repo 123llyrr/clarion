@@ -2465,6 +2465,9 @@ impl State {
     }
 
     pub fn confirm_screenshot(&mut self, write_to_disk: bool) {
+        if !self.clarion.screenshot_ui.can_confirm() {
+            return;
+        }
         let ScreenshotUi::Open { path, .. } = &self.clarion.screenshot_ui else {
             return;
         };

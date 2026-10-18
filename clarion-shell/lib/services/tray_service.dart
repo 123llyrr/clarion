@@ -55,11 +55,13 @@ class TrayService {
   final _menuChanges = StreamController<String>.broadcast();
   final _registrations = <String, _Registration>{};
   final _items = <String, TrayItem>{};
+  final _itemRegistrations = Expando<_Registration>('tray registration');
   final _itemInterfacesById = <String, String>{};
   final _itemProperties = <String, Map<String, DBusValue>>{};
   final _normalPixmaps = <String, TrayIconPixmap?>{};
   final _attentionPixmaps = <String, TrayIconPixmap?>{};
   final _pending = <String, _PendingRefresh>{};
+  final _refreshing = <String, _Registration>{};
   final _ownerVersions = <String, int>{};
   final _registering = <String>{};
   final _itemRevisions = <String, int>{};
@@ -71,7 +73,6 @@ class TrayService {
   bool _ownsWatcher = false;
   Future<bool>? _startFuture;
   bool _disposed = false;
-  bool _draining = false;
   bool _syncingWatcher = false;
   bool _watcherDirty = false;
   int _watcherRevision = 0;
@@ -94,6 +95,42 @@ class TrayService {
   /// A currently exported menu changed; the host can reload an open menu.
   Stream<String> get menuChanges => _menuChanges.stream;
   List<TrayItem> get items => List.unmodifiable(_ordered());
+
+  /// Stable for metadata snapshots of one live exporter, but invalid after
+  /// removal or owner replacement. No D-Bus request is needed to validate it.
+  Object? registrationToken(TrayItem item) => _registrationForItem(item);
+
+  _Registration? _registrationForItem(TrayItem item) {
+    final registration = _itemRegistrations[item];
+    return registration != null &&
+            _current(registration) &&
+            _items.containsKey(registration.id)
+        ? registration
+        : null;
+  }
+
+  /// A native menu must target the exact current exporter, never a name's next
+  /// owner or an old item retained by a delayed pointer/platform operation.
+  /// Resolving this snapshot does not require another D-Bus round trip.
+  Map<String, String>? nativeMenuTarget(TrayItem item) {
+    final registration = _registrations[item.id];
+    if (registration == null ||
+        !_current(registration) ||
+        !identical(_items[item.id], item) ||
+        !item.menuAvailable ||
+        item.menuPath.isEmpty ||
+        item.menuPath == '/' ||
+        !registration.owner.startsWith(':') ||
+        !_validBusName(registration.owner)) {
+      return null;
+    }
+    try {
+      DBusObjectPath(item.menuPath);
+    } on Object {
+      return null;
+    }
+    return {'busName': registration.owner, 'menuPath': item.menuPath};
+  }
 
   Future<bool> start() =>
       _disposed ? Future.value(false) : _startFuture ??= _start();
@@ -285,9 +322,13 @@ class TrayService {
           .timeout(_readTimeout);
       final addresses = value
           .asStringArray()
-          .take(_maxItems)
           .map((address) => _parseRegistration(address, sender: null)?.address)
           .whereType<String>()
+          // A broken watcher can repeat the same few addresses indefinitely.
+          // Apply the item budget after normalization/deduplication so these
+          // repetitions do not hide a later, different application.
+          .toSet()
+          .take(_maxItems)
           .toSet();
       if (_disposed ||
           _ownsWatcher ||
@@ -501,6 +542,7 @@ class TrayService {
     _normalPixmaps.remove(id);
     _attentionPixmaps.remove(id);
     _pending.remove(id);
+    _refreshing.remove(id);
     _itemRevisions.remove(id);
     if (registration != null) _releaseOwnerVersion(registration.busName);
   }
@@ -559,27 +601,42 @@ class TrayService {
     }
     _coalesce ??= Timer(immediate ? Duration.zero : _coalesceDelay, () {
       _coalesce = null;
-      unawaited(_drain());
+      _drain();
     });
   }
 
-  Future<void> _drain() async {
-    if (_disposed || _draining) return;
-    _draining = true;
+  void _drain() {
+    if (_disposed) return;
+    for (final id in _pending.keys.toList()) {
+      final registration = _registrations[id];
+      if (registration == null) {
+        _pending.remove(id);
+        continue;
+      }
+      if (identical(_refreshing[id], registration)) continue;
+      final pending = _pending.remove(id)!;
+      _refreshing[id] = registration;
+      unawaited(_refreshItem(registration, pending));
+    }
+  }
+
+  Future<void> _refreshItem(
+    _Registration registration,
+    _PendingRefresh pending,
+  ) async {
     try {
-      while (_pending.isNotEmpty && !_disposed) {
-        final batch = Map<String, _PendingRefresh>.of(_pending);
-        _pending.clear();
-        await Future.wait([
-          for (final entry in batch.entries)
-            if (_registrations[entry.key] case final registration?)
-              entry.value.full
-                  ? _refreshAllProperties(registration)
-                  : _refreshProperties(registration, entry.value.properties),
-        ]);
+      if (pending.full) {
+        await _refreshAllProperties(registration);
+      } else {
+        await _refreshProperties(registration, pending.properties);
       }
     } finally {
-      _draining = false;
+      // A replacement using the same public name may already have its own read.
+      // Completing the old owner must not release that new owner's flight.
+      if (identical(_refreshing[registration.id], registration)) {
+        _refreshing.remove(registration.id);
+        _drain();
+      }
     }
   }
 
@@ -618,18 +675,30 @@ class TrayService {
     final preferred = _itemInterfacesById[registration.id];
     for (final interface in {?preferred, ..._itemInterfaces}) {
       final resolved = <MapEntry<String, DBusValue>>[];
-      for (final name in names) {
-        try {
-          resolved.add(
-            MapEntry(
-              name,
-              await object.getProperty(interface, name).timeout(_readTimeout),
-            ),
-          );
-        } on Object {
-          continue;
+      final requested = names.toList();
+      var next = 0;
+      Future<void> readProperties() async {
+        while (next < requested.length && _current(registration)) {
+          final name = requested[next++];
+          try {
+            resolved.add(
+              MapEntry(
+                name,
+                await object.getProperty(interface, name).timeout(_readTimeout),
+              ),
+            );
+          } on Object {
+            continue;
+          }
         }
       }
+
+      // Property getters are independent. Bound requests within each item, but
+      // never put another application behind a slow exporter or property.
+      await Future.wait([
+        for (var worker = 0; worker < requested.length && worker < 4; worker++)
+          readProperties(),
+      ]);
       if (!_current(registration)) return;
       if (revision != (_itemRevisions[registration.id] ?? 0)) {
         _scheduleRefresh(registration.id, full: true);
@@ -680,7 +749,7 @@ class TrayService {
         ? itemId
         : registration.busName;
     final menuPath = _objectPath(properties['Menu']);
-    _items[registration.id] = TrayItem(
+    final item = TrayItem(
       id: registration.id,
       title: title,
       status: status,
@@ -693,6 +762,8 @@ class TrayService {
       primaryOpensMenu: _boolean(properties['ItemIsMenu']),
       menuPath: menuPath ?? '',
     );
+    _itemRegistrations[item] = registration;
+    _items[registration.id] = item;
     _changed();
   }
 
@@ -702,8 +773,8 @@ class TrayService {
     double x = 0,
     double y = 0,
   }) async {
-    final registration = _registrations[item.id];
-    if (registration == null || _disposed) return false;
+    final registration = _registrationForItem(item);
+    if (registration == null) return false;
     final method = switch (action) {
       TrayAction.activate => 'Activate',
       TrayAction.secondaryActivate => 'SecondaryActivate',
@@ -737,7 +808,7 @@ class TrayService {
     int delta, {
     String orientation = 'vertical',
   }) async {
-    final registration = _registrations[item.id];
+    final registration = _registrationForItem(item);
     if (registration == null ||
         !_current(registration) ||
         delta == 0 ||
@@ -763,7 +834,7 @@ class TrayService {
   }
 
   Future<List<TrayMenuEntry>?> loadMenu(TrayItem item) async {
-    final registration = _registrations[item.id];
+    final registration = _registrationForItem(item);
     if (registration == null ||
         _disposed ||
         !item.menuAvailable ||
@@ -823,7 +894,7 @@ class TrayService {
   }
 
   Future<bool> activateMenuEntry(TrayItem item, int entryId) async {
-    final registration = _registrations[item.id];
+    final registration = _registrationForItem(item);
     if (registration == null ||
         _disposed ||
         entryId <= 0 ||
@@ -881,6 +952,7 @@ class TrayService {
     _coalesce?.cancel();
     _externalTimer?.cancel();
     _pending.clear();
+    _refreshing.clear();
     _registrations.clear();
     _items.clear();
     _itemInterfacesById.clear();

@@ -7474,6 +7474,10 @@ fn native_screenshot_selection_pixels_and_pointer() {
                 show_pointer,
                 None,
             ));
+            assert!(!ui.has_selection());
+            assert!(ui.pointer_down(output.clone(), (16, 12).into(), None, false));
+            ui.pointer_motion((47, 35).into(), None);
+            assert_eq!(ui.pointer_up(None), Some(false));
             let (size, pixels) = ui.capture_native(&mut renderer).unwrap();
             assert_eq!(size, (32, 24).into());
             for y in 0..24usize {
@@ -7574,6 +7578,21 @@ fn native_screenshot_selection_survives_output_changes() {
             None
         ));
         assert_eq!(ui.selection_output(), Some(&available));
+        assert!(!ui.has_selection());
+        let ScreenshotUi::Open { selection, .. } = &ui else {
+            unreachable!()
+        };
+        assert_eq!(
+            crate::ui::screenshot_ui::rect_from_corner_points(selection.1, selection.2),
+            expected,
+            "remembered geometry stays clamped but must remain invisible"
+        );
+        assert!(ui.pointer_down(available.clone(), expected.loc, None, false));
+        ui.pointer_motion(
+            expected.loc + expected.size - smithay::utils::Size::from((1, 1)),
+            None,
+        );
+        assert_eq!(ui.pointer_up(None), Some(false));
         let (size, pixels) = ui.capture_native(&mut renderer).unwrap();
         assert_eq!(size, expected.size);
         for y in 0..size.h {

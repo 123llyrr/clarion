@@ -665,7 +665,8 @@ class _MacMenuRevealState extends State<_MacMenuReveal> {
 
   bool get _open =>
       widget.controller.panel != ShellPanel.none ||
-      widget.controller.appMenuOpen;
+      widget.controller.appMenuOpen ||
+      widget.controller.nativeTrayMenuOpen;
 
   @override
   void initState() {

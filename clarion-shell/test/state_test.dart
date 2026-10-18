@@ -273,6 +273,12 @@ void main() {
 }
 
 class _FakeTray extends TrayService {
+  final tokens = <String, Object>{};
+  @override
+  Object? registrationToken(TrayItem item) =>
+      itemsOverride.any((entry) => entry.id == item.id)
+      ? tokens.putIfAbsent(item.id, Object.new)
+      : null;
   final operations = <String>[];
   var itemsOverride = <TrayItem>[];
   var failActivate = false;

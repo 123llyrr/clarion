@@ -466,18 +466,351 @@ void main() {
             'RegisteredStatusNotifierItems',
           )).asStringArray().isEmpty,
         );
-        release.complete();
         await service.registerItem('org.example.Replaceable', null);
         await _waitFor(
           () =>
               service.items.length == 1 && service.items.single.title == '新应用',
         );
+        // The old owner's GetAll is still blocked. Its replacement must not
+        // wait for that flight or be cleared when the stale reply completes.
+        expect(release.isCompleted, isFalse);
+        release.complete();
         expect(oldItem.activated, isEmpty);
         expect(
           await service.invoke(service.items.single, TrayAction.activate),
           isTrue,
         );
         expect(nextItem.activated, hasLength(1));
+      },
+    );
+
+    test('a slow item does not block a later item or its updates', () async {
+      final slowClient = DBusClient(address);
+      addTearDown(slowClient.close);
+      final started = Completer<void>();
+      final release = Completer<void>();
+      final slow = _ItemObject()
+        ..readStarted = started
+        ..readGate = release.future;
+      final fast = _ItemObject()..title = '快速应用';
+      await slowClient.requestName('org.example.Slow');
+      await slowClient.registerObject(slow);
+      await caller.requestName('org.example.Fast');
+      await caller.registerObject(fast);
+      final service = TrayService(bus: DBusClient(address));
+      addTearDown(service.dispose);
+      try {
+        expect(await service.start(), isTrue);
+        await service.registerItem('org.example.Slow', null);
+        await started.future.timeout(const Duration(seconds: 1));
+        await service.registerItem('org.example.Fast', null);
+        await _waitFor(
+          () => service.items.any((item) => item.title == '快速应用'),
+        ).timeout(const Duration(seconds: 1));
+        fast.title = '快速更新';
+        await fast.emitSignal(kdeItemInterface, 'NewTitle');
+        await _waitFor(
+          () => service.items.any((item) => item.title == '快速更新'),
+        ).timeout(const Duration(seconds: 1));
+        expect(release.isCompleted, isFalse);
+        expect(slow.fullReads, 1);
+      } finally {
+        if (!release.isCompleted) release.complete();
+      }
+    });
+
+    test(
+      'property refresh is bounded parallel and dirty signals coalesce',
+      () async {
+        final item = _ItemObject();
+        await caller.requestName('org.example.Downloader');
+        await caller.registerObject(item);
+        final service = TrayService(bus: DBusClient(address));
+        addTearDown(service.dispose);
+        expect(await service.start(), isTrue);
+        await service.registerItem('org.example.Downloader', null);
+        await _waitFor(() => service.items.length == 1);
+        final release = Completer<void>();
+        item.propertyGate = release.future;
+        final revision = service.items.single.iconRevision;
+        try {
+          await item.emitSignal(
+            'org.freedesktop.DBus.Properties',
+            'PropertiesChanged',
+            [
+              const DBusString(kdeItemInterface),
+              DBusDict.stringVariant({}),
+              DBusArray.string([
+                'Title',
+                'Status',
+                'IconName',
+                'AttentionIconName',
+                'IconThemePath',
+                'Menu',
+                'ItemIsMenu',
+                'AttentionIconPixmap',
+              ]),
+            ],
+          );
+          await _waitFor(
+            () => item.activePropertyReads == 4,
+          ).timeout(const Duration(seconds: 1));
+          for (var i = 0; i < 30; i++) {
+            await item.emitSignal(kdeItemInterface, 'NewIcon');
+          }
+          // Allow the coalescing timer to fire while the same item's flight is
+          // blocked; no second flight may start behind the four property getters.
+          await Future<void>.delayed(const Duration(milliseconds: 90));
+          expect(item.maximumPropertyReads, 4);
+          expect(item.propertyReads, 4);
+          expect(item.fullReads, 1);
+          item.title = '合并完成';
+          release.complete();
+          await _waitFor(() => service.items.single.title == '合并完成');
+          expect(service.items.single.iconRevision, greaterThan(revision));
+          expect(item.maximumPropertyReads, lessThanOrEqualTo(4));
+          expect(item.fullReads, 2);
+        } finally {
+          if (!release.isCompleted) release.complete();
+        }
+      },
+    );
+
+    test(
+      'external watcher duplicate aliases remain one owner and path',
+      () async {
+        final external = DBusClient(address);
+        final other = DBusClient(address);
+        addTearDown(external.close);
+        addTearDown(other.close);
+        final watcher = _ExternalWatcher(kdeWatcherInterface);
+        await external.registerObject(watcher);
+        await external.requestName(kdeWatcherName);
+        await caller.requestName('org.example.Downloader');
+        await caller.requestName('org.example.DownloaderAlias');
+        final item = _ItemObject();
+        await caller.registerObject(item);
+        // Equal titles are legitimate for separate exporters. They must not be
+        // deduplicated, or displaced by repeated watcher address strings.
+        await other.registerObject(_ItemObject());
+        final aliases = [
+          'org.example.Downloader',
+          'org.example.DownloaderAlias/StatusNotifierItem',
+          '${caller.uniqueName}/StatusNotifierItem',
+        ];
+        final otherAddress = '${other.uniqueName}/StatusNotifierItem';
+        watcher.addresses = [
+          for (var i = 0; i < 40; i++) ...aliases,
+          otherAddress,
+        ];
+        final service = TrayService(bus: DBusClient(address));
+        addTearDown(service.dispose);
+        expect(await service.start(), isTrue);
+        await _waitFor(() => service.items.length == 2);
+        final retainedId = service.items
+            .firstWhere(
+              (entry) =>
+                  service.nativeMenuTarget(entry)?['busName'] ==
+                  caller.uniqueName,
+            )
+            .id;
+        for (var i = 0; i < 15; i++) {
+          watcher.addresses = [
+            for (var n = 0; n < 40; n++) ...aliases.reversed,
+            otherAddress,
+          ];
+          await watcher.emitSignal(
+            kdeWatcherInterface,
+            'StatusNotifierItemRegistered',
+            [DBusString(aliases[i % aliases.length])],
+          );
+        }
+        await _waitFor(() => watcher.propertyReads >= 2);
+        item.title = '仍然只有一个';
+        await item.emitSignal(kdeItemInterface, 'NewTitle');
+        await _waitFor(
+          () => service.items.any((entry) => entry.title == '仍然只有一个'),
+        );
+        expect(service.items.length, 2);
+        expect(
+          service.items.singleWhere((entry) => entry.title == '仍然只有一个').id,
+          retainedId,
+        );
+        expect(item.fullReads, 1);
+      },
+    );
+
+    test(
+      'native menu target pins a current item to its unique exporter',
+      () async {
+        final item = _ItemObject();
+        await caller.requestName('org.example.Downloader');
+        await caller.registerObject(item);
+        final service = TrayService(bus: DBusClient(address));
+        addTearDown(service.dispose);
+        expect(await service.start(), isTrue);
+        await service.registerItem('org.example.Downloader', null);
+        await _waitFor(() => service.items.length == 1);
+        final old = service.items.single;
+        final reads = item.fullReads + item.propertyReads;
+        expect(service.nativeMenuTarget(old), {
+          'busName': caller.uniqueName,
+          'menuPath': '/Menu',
+        });
+        expect(item.fullReads + item.propertyReads, reads);
+        item.title = '新元数据';
+        await item.emitSignal(kdeItemInterface, 'NewTitle');
+        await _waitFor(() => service.items.single.title == '新元数据');
+        expect(service.nativeMenuTarget(old), isNull);
+        final current = service.items.single;
+        expect(
+          service.nativeMenuTarget(current)?['busName'],
+          caller.uniqueName,
+        );
+        item.menuPathOverride = '/';
+        await item.emitSignal(
+          'org.freedesktop.DBus.Properties',
+          'PropertiesChanged',
+          [
+            const DBusString(kdeItemInterface),
+            DBusDict.stringVariant({'Menu': DBusObjectPath('/')}),
+            DBusArray.string([]),
+          ],
+        );
+        await _waitFor(() => !service.items.single.menuAvailable);
+        expect(service.nativeMenuTarget(current), isNull);
+        expect(service.nativeMenuTarget(service.items.single), isNull);
+        await caller.close();
+        await _waitFor(() => service.items.isEmpty);
+        expect(service.nativeMenuTarget(old), isNull);
+        expect(service.nativeMenuTarget(current), isNull);
+      },
+    );
+
+    test(
+      'registration tokens survive metadata updates during a slow action',
+      () async {
+        final item = _ItemObject();
+        await caller.requestName('org.example.Downloader');
+        await caller.registerObject(item);
+        await caller.registerObject(item.menu);
+        final service = TrayService(bus: DBusClient(address));
+        addTearDown(service.dispose);
+        expect(await service.start(), isTrue);
+        await service.registerItem('org.example.Downloader', null);
+        await _waitFor(() => service.items.length == 1);
+        final old = service.items.single;
+        final token = service.registrationToken(old);
+        expect(token, isNotNull);
+        final reads = item.fullReads + item.propertyReads;
+        expect(service.registrationToken(old), same(token));
+        expect(item.fullReads + item.propertyReads, reads);
+        final release = Completer<void>();
+        item.scrollStarted = Completer<void>();
+        item.scrollGate = release.future;
+        final pending = service.scroll(old, 1);
+        try {
+          await item.scrollStarted!.future.timeout(const Duration(seconds: 2));
+          item.title = '元数据更新';
+          await item.emitSignal(kdeItemInterface, 'NewTitle');
+          await _waitFor(() => service.items.single.title == '元数据更新');
+          final current = service.items.single;
+          expect(current, isNot(same(old)));
+          expect(service.registrationToken(old), same(token));
+          expect(service.registrationToken(current), same(token));
+          expect(service.nativeMenuTarget(old), isNull);
+          expect(service.nativeMenuTarget(current), isNotNull);
+          release.complete();
+          expect(await pending, isTrue);
+          expect(await service.scroll(old, 5), isTrue);
+          expect(await service.invoke(old, TrayAction.activate), isTrue);
+          expect(await service.loadMenu(old), isNotEmpty);
+          expect(await service.activateMenuEntry(old, 2), isTrue);
+          expect(item.scrolled, [(1, 'vertical'), (5, 'vertical')]);
+          expect(item.menu.clicked, [2]);
+        } finally {
+          if (!release.isCompleted) release.complete();
+        }
+        service.dispose();
+        expect(service.registrationToken(old), isNull);
+      },
+    );
+
+    test(
+      'owner replacement rejects old snapshots and late action completions',
+      () async {
+        final next = DBusClient(address);
+        addTearDown(next.close);
+        final oldItem = _ItemObject();
+        final nextItem = _ItemObject()..title = '新应用';
+        await caller.registerObject(oldItem);
+        await caller.registerObject(oldItem.menu);
+        await caller.requestName(
+          'org.example.Replaceable',
+          flags: {DBusRequestNameFlag.allowReplacement},
+        );
+        await next.registerObject(nextItem);
+        await next.registerObject(nextItem.menu);
+        final service = TrayService(bus: DBusClient(address));
+        addTearDown(service.dispose);
+        expect(await service.start(), isTrue);
+        await service.registerItem('org.example.Replaceable', null);
+        await _waitFor(() => service.items.length == 1);
+        final old = service.items.single;
+        final token = service.registrationToken(old);
+        final release = Completer<void>();
+        oldItem.activationStarted = Completer<void>();
+        oldItem.activationGate = release.future;
+        final pending = service.invoke(old, TrayAction.activate);
+        try {
+          await oldItem.activationStarted!.future.timeout(
+            const Duration(seconds: 2),
+          );
+          await next.requestName(
+            'org.example.Replaceable',
+            flags: {
+              DBusRequestNameFlag.replaceExisting,
+              DBusRequestNameFlag.doNotQueue,
+            },
+          );
+          await _waitFor(() => service.items.isEmpty);
+          expect(service.registrationToken(old), isNull);
+          await service.registerItem('org.example.Replaceable', null);
+          await _waitFor(() => service.items.length == 1);
+          final current = service.items.single;
+          expect(current.id, old.id);
+          expect(service.registrationToken(current), isNotNull);
+          expect(service.registrationToken(current), isNot(same(token)));
+          release.complete();
+          expect(await pending, isFalse);
+          expect(await service.invoke(old, TrayAction.activate), isFalse);
+          expect(
+            await service.invoke(old, TrayAction.secondaryActivate),
+            isFalse,
+          );
+          expect(await service.invoke(old, TrayAction.contextMenu), isFalse);
+          expect(await service.scroll(old, 1), isFalse);
+          expect(await service.loadMenu(old), isNull);
+          expect(await service.activateMenuEntry(old, 2), isFalse);
+          expect(nextItem.activated, isEmpty);
+          expect(nextItem.scrolled, isEmpty);
+          expect(nextItem.menu.aboutToShowCalls, 0);
+          expect(nextItem.menu.layoutReads, 0);
+          expect(nextItem.menu.clicked, isEmpty);
+          final forged = TrayItem(id: current.id, title: current.title);
+          expect(service.registrationToken(forged), isNull);
+          expect(await service.invoke(forged, TrayAction.activate), isFalse);
+          expect(await service.invoke(current, TrayAction.activate), isTrue);
+          expect(await service.scroll(current, 2), isTrue);
+          expect(await service.loadMenu(current), isNotEmpty);
+          expect(await service.activateMenuEntry(current, 2), isTrue);
+          expect(nextItem.activated, hasLength(1));
+          expect(nextItem.scrolled, [(2, 'vertical')]);
+          expect(nextItem.menu.clicked, [2]);
+          expect(oldItem.activated, hasLength(1));
+        } finally {
+          if (!release.isCompleted) release.complete();
+        }
       },
     );
 
@@ -628,6 +961,16 @@ class _ItemObject extends DBusObject {
   String status = 'NeedsAttention';
   Future<void>? readGate;
   Completer<void>? readStarted;
+  Future<void>? propertyGate;
+  Future<void>? activationGate;
+  Completer<void>? activationStarted;
+  Future<void>? scrollGate;
+  Completer<void>? scrollStarted;
+  int fullReads = 0;
+  int propertyReads = 0;
+  int activePropertyReads = 0;
+  int maximumPropertyReads = 0;
+  String? menuPathOverride;
 
   Map<String, DBusValue> get _properties => {
     'Id': const DBusString('downloader'),
@@ -637,7 +980,9 @@ class _ItemObject extends DBusObject {
     'AttentionIconName': const DBusString(''),
     'IconThemePath': const DBusString(''),
     'ItemIsMenu': const DBusBoolean(false),
-    'Menu': menu.path,
+    'Menu': menuPathOverride == null
+        ? menu.path
+        : DBusObjectPath(menuPathOverride!),
     'IconPixmap': DBusArray(DBusSignature('(iiay)'), [
       DBusStruct([
         const DBusInt32(1),
@@ -703,6 +1048,10 @@ class _ItemObject extends DBusObject {
         methodCall.values[0].asInt32(),
         methodCall.values[1].asString(),
       ));
+      if (scrollStarted case final started? when !started.isCompleted) {
+        started.complete();
+      }
+      await scrollGate;
       return DBusMethodSuccessResponse();
     }
     if (methodCall.signature != DBusSignature('ii')) {
@@ -716,6 +1065,10 @@ class _ItemObject extends DBusObject {
           methodCall.values[0].asInt32(),
           methodCall.values[1].asInt32(),
         ));
+        if (activationStarted case final started? when !started.isCompleted) {
+          started.complete();
+        }
+        await activationGate;
         return DBusMethodSuccessResponse();
       default:
         return DBusMethodErrorResponse.unknownMethod();
@@ -728,9 +1081,19 @@ class _ItemObject extends DBusObject {
       return DBusMethodErrorResponse.unknownInterface();
     }
     final value = _properties[name];
-    return value == null
-        ? DBusMethodErrorResponse.unknownProperty()
-        : DBusGetPropertyResponse(value);
+    propertyReads++;
+    activePropertyReads++;
+    if (activePropertyReads > maximumPropertyReads) {
+      maximumPropertyReads = activePropertyReads;
+    }
+    try {
+      await propertyGate;
+      return value == null
+          ? DBusMethodErrorResponse.unknownProperty()
+          : DBusGetPropertyResponse(value);
+    } finally {
+      activePropertyReads--;
+    }
   }
 
   @override
@@ -738,6 +1101,7 @@ class _ItemObject extends DBusObject {
     if (interface != this.interface) {
       return DBusMethodErrorResponse.unknownInterface();
     }
+    fullReads++;
     final snapshot = _properties;
     final started = readStarted;
     if (started != null && !started.isCompleted) started.complete();
@@ -749,6 +1113,8 @@ class _ItemObject extends DBusObject {
 class _MenuObject extends DBusObject {
   _MenuObject() : super(DBusObjectPath('/Menu'));
   final clicked = <int>[];
+  int aboutToShowCalls = 0;
+  int layoutReads = 0;
 
   DBusValue get _layout => DBusStruct([
     const DBusInt32(0),
@@ -842,8 +1208,10 @@ class _MenuObject extends DBusObject {
     }
     switch (methodCall.name) {
       case 'AboutToShow':
+        aboutToShowCalls++;
         return DBusMethodSuccessResponse([const DBusBoolean(false)]);
       case 'GetLayout':
+        layoutReads++;
         return DBusMethodSuccessResponse([const DBusUint32(1), _layout]);
       case 'Event':
         clicked.add(methodCall.values.first.asInt32());

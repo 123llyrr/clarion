@@ -23,6 +23,7 @@ add_executable(${BINARY_NAME}
   "shell_application.cc"
   "desktop_windows.cc"
   "window_controller.cc"
+  "native_tray_menu.cc"
   "background_effect.cc"
   "${BACKGROUND_EFFECT_HEADER}"
   "${BACKGROUND_EFFECT_CODE}"
@@ -40,6 +41,8 @@ add_definitions(-DAPPLICATION_ID="${APPLICATION_ID}")
 target_link_libraries(${BINARY_NAME} PRIVATE flutter)
 target_link_libraries(${BINARY_NAME} PRIVATE PkgConfig::GTK)
 target_link_libraries(${BINARY_NAME} PRIVATE PkgConfig::LAYER_SHELL)
+pkg_check_modules(DBUSMENU_GTK REQUIRED IMPORTED_TARGET dbusmenu-gtk3-0.4)
+target_link_libraries(${BINARY_NAME} PRIVATE PkgConfig::DBUSMENU_GTK)
 pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client>=1.20)
 target_link_libraries(${BINARY_NAME} PRIVATE PkgConfig::WAYLAND_CLIENT)
 

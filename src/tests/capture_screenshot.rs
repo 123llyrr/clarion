@@ -162,6 +162,21 @@ fn output_selection_window_pipeline(native: bool) {
             Action::Screenshot(false, Some(path.to_string_lossy().into_owned())),
             false,
         );
+        assert!(!f.clarion().screenshot_ui.has_selection());
+        f.clarion_state().confirm_screenshot(true);
+        assert!(f.clarion().screenshot_ui.is_open());
+        assert!(
+            !path.exists(),
+            "an empty selection must not start a capture"
+        );
+        {
+            let ui = &mut f.clarion().screenshot_ui;
+            assert!(ui.pointer_down(output.clone(), (10, 12).into(), None, false));
+            assert!(!ui.has_selection(), "a press alone must not create a box");
+            ui.pointer_motion((47, 35).into(), None);
+            assert_eq!(ui.pointer_up(None), Some(false));
+            assert!(ui.can_confirm());
+        }
         let ScreenshotUi::Open {
             selection: (_, a, b),
             ..

@@ -107,6 +107,21 @@ WindowController::WindowController(GtkWindow* window, FlView* view, bool preview
       fl_engine_get_binary_messenger(fl_view_get_engine(view_)),
       "clarion.shell/window", FL_METHOD_CODEC(codec));
   fl_method_channel_set_method_call_handler(channel_, MethodCall, this, nullptr);
+  native_tray_menu_ = std::make_unique<NativeTrayMenu>(window_, GTK_WIDGET(view_),
+      [this](bool active) {
+        native_tray_menu_keyboard_ = active;
+        if (!closed_) ConfigureLayerWindow();
+        if (!active && !closed_ && MainKeyboardExclusive() && view_ != nullptr) {
+          gtk_widget_grab_focus(GTK_WIDGET(view_));
+        }
+      },
+      [this](int64_t request_id) {
+        if (closed_ || channel_ == nullptr) return;
+        g_autoptr(FlValue) arguments = fl_value_new_map();
+        fl_value_set_string_take(arguments, "requestId", fl_value_new_int(request_id));
+        fl_method_channel_invoke_method(channel_, "trayMenuClosed", arguments,
+                                       nullptr, nullptr, nullptr);
+      });
 }
 
 WindowController::~WindowController() {
@@ -116,6 +131,7 @@ WindowController::~WindowController() {
     fl_method_channel_set_method_call_handler(channel_, nullptr, nullptr, nullptr);
     g_clear_object(&channel_);
   }
+  native_tray_menu_.reset();
   DestroyDock();
   DestroyReservations();
   panel_glass_region_.reset();
@@ -147,6 +163,7 @@ WindowController::~WindowController() {
 
 void WindowController::SetMonitor(GdkMonitor* monitor) {
   if (monitor_ == monitor) return;
+  if (native_tray_menu_ != nullptr) native_tray_menu_->Dismiss();
   if (monitor_ != nullptr && geometry_handler_ != 0) {
     g_signal_handler_disconnect(monitor_, geometry_handler_);
   }
@@ -180,7 +197,8 @@ bool WindowController::BarBottom() const {
 }
 
 bool WindowController::MainKeyboardExclusive() const {
-  return expanded_ && keyboard_interactivity_override_.value_or(true);
+  return !native_tray_menu_keyboard_ && expanded_ &&
+      keyboard_interactivity_override_.value_or(true);
 }
 
 void WindowController::ConfigureLayerWindow() {
@@ -198,7 +216,11 @@ void WindowController::ConfigureLayerWindow() {
   // input-free surfaces reserve the desktop edges without moving the menu,
   // vertical Dock or full-output modal overlay into a reduced working area.
   gtk_layer_set_exclusive_zone(window_, macos_ ? -1 : BarHeight());
-  gtk_layer_set_keyboard_mode(window_, MainKeyboardExclusive()
+  // The click occurred while a compact bar had keyboard NONE. Switching to
+  // ON_DEMAND afterwards does not focus it; GTK's menu would display without
+  // receiving navigation keys. Own focus for this popup's bounded lifetime,
+  // restoring the bar's previous policy as soon as it closes or is cancelled.
+  gtk_layer_set_keyboard_mode(window_, native_tray_menu_keyboard_ || MainKeyboardExclusive()
       ? GTK_LAYER_SHELL_KEYBOARD_MODE_EXCLUSIVE
       : GTK_LAYER_SHELL_KEYBOARD_MODE_NONE);
 
@@ -357,6 +379,7 @@ bool WindowController::SetTooltipVisible(bool visible, bool dock) {
 bool WindowController::SetBarPosition(bool bottom) {
   if (window_ == nullptr || closed_) return false;
   if (bar_bottom_ == bottom) return true;
+  if (native_tray_menu_ != nullptr) native_tray_menu_->Dismiss();
   DismissTooltip();
   bar_bottom_ = bottom;
   ConfigureLayerWindow();
@@ -462,6 +485,7 @@ bool WindowController::SetShellStyle(bool macos) {
   if (window_ == nullptr || closed_) return false;
   if (macos && !EnsureDock()) return false;
   if (macos_ == macos) return true;
+  if (native_tray_menu_ != nullptr) native_tray_menu_->Dismiss();
   DismissTooltip();
   expanded_ = false;
   keyboard_interactivity_override_.reset();
@@ -660,6 +684,7 @@ void WindowController::StyleUpdated(GtkWidget*, gpointer data) {
 void WindowController::WindowDestroyed(GtkWidget*, gpointer data) {
   auto* self = static_cast<WindowController*>(data);
   self->closed_ = true;
+  if (self->native_tray_menu_ != nullptr) self->native_tray_menu_->Dismiss();
   self->panel_glass_region_.reset();
   self->main_effect_.reset();
   self->DestroyDock();
@@ -723,6 +748,7 @@ void WindowController::PublishOutputGeometry() {
 
 void WindowController::MonitorGeometryChanged(GObject*, GParamSpec*, gpointer data) {
   auto* self = static_cast<WindowController*>(data);
+  if (self->native_tray_menu_ != nullptr) self->native_tray_menu_->Dismiss();
   self->DismissTooltip();
   self->ConfigureLayerWindow();
   self->ConfigureDockWindow();
@@ -754,6 +780,55 @@ void WindowController::MonitorRemoved(GdkDisplay* display, GdkMonitor* monitor,
 
 FlValue* WindowController::WindowState() const {
   g_autoptr(FlValue) state = fl_value_new_map();
+  fl_value_set_string_take(state, "nativeTrayMenuOpen", fl_value_new_bool(
+      native_tray_menu_ != nullptr && native_tray_menu_->active()));
+  fl_value_set_string_take(state, "nativeTrayMenuRequestId", fl_value_new_int(
+      native_tray_menu_ == nullptr ? -1 : native_tray_menu_->request_id()));
+  fl_value_set_string_take(state, "nativeTrayMenuVisibleItems", fl_value_new_int(
+      native_tray_menu_ == nullptr ? 0 : native_tray_menu_->visible_items()));
+  fl_value_set_string_take(state, "nativeTrayMenuVisibleSubmenus", fl_value_new_int(
+      native_tray_menu_ == nullptr ? 0 : native_tray_menu_->visible_submenus()));
+  fl_value_set_string_take(state, "nativeTrayMenuTakeFocus", fl_value_new_bool(
+      native_tray_menu_ != nullptr && native_tray_menu_->takes_focus()));
+  fl_value_set_string_take(state, "nativeTrayMenuHasGtkGrab", fl_value_new_bool(
+      native_tray_menu_ != nullptr && native_tray_menu_->has_gtk_grab()));
+  fl_value_set_string_take(state, "nativeTrayMenuParentKeyEvents", fl_value_new_int(
+      native_tray_menu_ == nullptr ? 0 : native_tray_menu_->parent_key_events()));
+  fl_value_set_string_take(state, "nativeTrayMenuKeyEvents", fl_value_new_int(
+      native_tray_menu_ == nullptr ? 0 : native_tray_menu_->menu_key_events()));
+  if (native_tray_menu_ != nullptr && NativeTrayMenu::trace_enabled()) {
+    g_autoptr(FlValue) keys = fl_value_new_list();
+    for (const auto& key : native_tray_menu_->key_trace()) {
+      g_autoptr(FlValue) record = fl_value_new_map();
+      fl_value_set_string_take(record, "keyval", fl_value_new_int(key.keyval));
+      fl_value_set_string_take(record, "hardwareCode", fl_value_new_int(key.hardware_code));
+      fl_value_set_string_take(record, "state", fl_value_new_int(key.state));
+      fl_value_set_string_take(record, "type", fl_value_new_int(key.type));
+      fl_value_append_take(keys, g_steal_pointer(&record));
+    }
+    fl_value_set_string_take(state, "nativeTrayMenuKeyTrace", g_steal_pointer(&keys));
+    g_autoptr(FlValue) trace = fl_value_new_list();
+    for (const auto& record : native_tray_menu_->state_trace()) {
+      fl_value_append_take(trace, fl_value_new_string(record.c_str()));
+    }
+    fl_value_set_string_take(state, "nativeTrayMenuStateTrace", g_steal_pointer(&trace));
+  }
+  g_autoptr(FlValue) menu_bounds = fl_value_new_list();
+  if (native_tray_menu_ != nullptr) {
+    for (const auto& item : native_tray_menu_->item_bounds()) {
+      g_autoptr(FlValue) record = fl_value_new_map();
+      fl_value_set_string_take(record, "label", fl_value_new_string(item.label.c_str()));
+      fl_value_set_string_take(record, "depth", fl_value_new_int(item.depth));
+      fl_value_set_string_take(record, "index", fl_value_new_int(item.index));
+      fl_value_set_string_take(record, "x", fl_value_new_int(item.x));
+      fl_value_set_string_take(record, "y", fl_value_new_int(item.y));
+      fl_value_set_string_take(record, "width", fl_value_new_int(item.width));
+      fl_value_set_string_take(record, "height", fl_value_new_int(item.height));
+      fl_value_set_string_take(record, "enabled", fl_value_new_bool(item.enabled));
+      fl_value_append_take(menu_bounds, g_steal_pointer(&record));
+    }
+  }
+  fl_value_set_string_take(state, "nativeTrayMenuItemBounds", g_steal_pointer(&menu_bounds));
   fl_value_set_string_take(state, "style", fl_value_new_string(macos_ ? "macos" : "material"));
   fl_value_set_string_take(state, "shellStyle", fl_value_new_string(macos_ ? "macos" : "material"));
   fl_value_set_string_take(state, "mainViewId", view_ == nullptr
@@ -879,7 +954,8 @@ FlValue* WindowController::WindowState() const {
       ? GTK_LAYER_SHELL_KEYBOARD_MODE_NONE
       : gtk_layer_get_keyboard_mode(window_);
   fl_value_set_string_take(state, "keyboard", fl_value_new_string(
-      mode == GTK_LAYER_SHELL_KEYBOARD_MODE_EXCLUSIVE ? "Exclusive" : "None"));
+      mode == GTK_LAYER_SHELL_KEYBOARD_MODE_EXCLUSIVE ? "Exclusive" :
+      mode == GTK_LAYER_SHELL_KEYBOARD_MODE_ON_DEMAND ? "OnDemand" : "None"));
   fl_value_set_string_take(state, "keyboardInteractivityOverride",
       keyboard_interactivity_override_.has_value()
           ? fl_value_new_string(*keyboard_interactivity_override_ ? "exclusive" : "none")
@@ -925,7 +1001,59 @@ void WindowController::MethodCall(FlMethodChannel*, FlMethodCall* call,
   const gchar* method = fl_method_call_get_name(call);
   FlValue* arguments = fl_method_call_get_args(call);
   g_autoptr(FlMethodResponse) response = nullptr;
-  if (strcmp(method, "setExpanded") == 0) {
+  if (strcmp(method, "showTrayMenu") == 0) {
+    const bool map = arguments != nullptr && fl_value_get_type(arguments) == FL_VALUE_TYPE_MAP;
+    FlValue* owner = map ? fl_value_lookup_string(arguments, "busName") : nullptr;
+    FlValue* path = map ? fl_value_lookup_string(arguments, "menuPath") : nullptr;
+    FlValue* request = map ? fl_value_lookup_string(arguments, "requestId") : nullptr;
+    FlValue* button = map ? fl_value_lookup_string(arguments, "button") : nullptr;
+    int x = 0, y = 0;
+    if (owner == nullptr || fl_value_get_type(owner) != FL_VALUE_TYPE_STRING ||
+        path == nullptr || fl_value_get_type(path) != FL_VALUE_TYPE_STRING ||
+        request == nullptr || fl_value_get_type(request) != FL_VALUE_TYPE_INT ||
+        button == nullptr || fl_value_get_type(button) != FL_VALUE_TYPE_INT ||
+        fl_value_get_int(button) < 0 || fl_value_get_int(button) > 3 ||
+        !ReadCoordinate(fl_value_lookup_string(arguments, "x"), &x) ||
+        !ReadCoordinate(fl_value_lookup_string(arguments, "y"), &y)) {
+      response = FL_METHOD_RESPONSE(fl_method_error_response_new(
+          "invalid-argument", "showTrayMenu requires a DBus owner/path, local coordinates, requestId and button", nullptr));
+    } else if (self->closed_ || self->native_tray_menu_ == nullptr) {
+      g_autoptr(FlValue) result = fl_value_new_bool(FALSE);
+      response = FL_METHOD_RESPONSE(fl_method_success_response_new(result));
+    } else {
+      // First DBusMenu layout is asynchronous. Keep the method alive until a
+      // populated GTK menu actually maps, an owner disappears, or the bounded
+      // wait expires. Completion never claims success for an empty popup.
+      g_object_ref(call);
+      self->native_tray_menu_->Show(fl_value_get_string(owner), fl_value_get_string(path),
+          x, y, fl_value_get_int(request), static_cast<unsigned>(fl_value_get_int(button)),
+          [call](NativeTrayMenu::Result outcome) {
+            g_autoptr(FlValue) result = fl_value_new_bool(outcome == NativeTrayMenu::Result::Shown);
+            g_autoptr(FlMethodResponse) completed = outcome == NativeTrayMenu::Result::Cancelled
+                ? FL_METHOD_RESPONSE(fl_method_error_response_new(
+                    "menu-cancelled", "The pending menu was cancelled", nullptr))
+                : FL_METHOD_RESPONSE(fl_method_success_response_new(result));
+            Respond(call, completed);
+            g_object_unref(call);
+          });
+      return;
+    }
+  } else if (strcmp(method, "dismissTrayMenu") == 0) {
+    FlValue* request = arguments != nullptr && fl_value_get_type(arguments) == FL_VALUE_TYPE_MAP
+        ? fl_value_lookup_string(arguments, "requestId") : nullptr;
+    if (arguments != nullptr && fl_value_get_type(arguments) != FL_VALUE_TYPE_NULL &&
+        (fl_value_get_type(arguments) != FL_VALUE_TYPE_MAP || request == nullptr ||
+         fl_value_get_type(request) != FL_VALUE_TYPE_INT)) {
+      response = FL_METHOD_RESPONSE(fl_method_error_response_new(
+          "invalid-argument", "dismissTrayMenu takes an optional requestId map", nullptr));
+    } else {
+      if (self->native_tray_menu_ != nullptr) {
+        if (request != nullptr) self->native_tray_menu_->Dismiss(fl_value_get_int(request));
+        else self->native_tray_menu_->Dismiss();
+      }
+      response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+    }
+  } else if (strcmp(method, "setExpanded") == 0) {
     if (arguments == nullptr || fl_value_get_type(arguments) != FL_VALUE_TYPE_BOOL) {
       response = FL_METHOD_RESPONSE(fl_method_error_response_new(
           "invalid-argument", "setExpanded requires a boolean", nullptr));

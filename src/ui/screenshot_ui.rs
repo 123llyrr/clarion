@@ -37,10 +37,10 @@ const RADIUS: i32 = 16;
 use crate::ui::theme::{FONT, ON_SURFACE, OUTLINE, SURFACE};
 const BORDER: i32 = 4;
 const TEXT_HIDE_P: &str =
-    "Press <span face='mono' bgcolor='#2C2C2C'> Space </span> to save the screenshot.\n\
+    "Drag to select an area, then press <span face='mono' bgcolor='#2C2C2C'> Space </span> to save.\n\
      Press <span face='mono' bgcolor='#2C2C2C'> P </span> to hide the pointer.";
 const TEXT_SHOW_P: &str =
-    "Press <span face='mono' bgcolor='#2C2C2C'> Space </span> to save the screenshot.\n\
+    "Drag to select an area, then press <span face='mono' bgcolor='#2C2C2C'> Space </span> to save.\n\
      Press <span face='mono' bgcolor='#2C2C2C'> P </span> to show the pointer.";
 
 // Ideally the screenshot UI should support cross-output selections. However, that poses some
@@ -57,6 +57,9 @@ pub enum ScreenshotUi {
     },
     Open {
         selection: (Output, Point<i32, Physical>, Point<i32, Physical>),
+        // An output/anchor is needed to route input even before a crop exists.
+        // Remembered geometry never implicitly becomes a visible selection.
+        has_selection: bool,
         output_data: HashMap<Output, OutputData>,
         button: Button,
         show_pointer: bool,
@@ -270,6 +273,7 @@ impl ScreenshotUi {
 
         *self = Self::Open {
             selection,
+            has_selection: false,
             output_data,
             button: Button::Up,
             show_pointer,
@@ -365,6 +369,7 @@ impl ScreenshotUi {
 
         *self = Self::Open {
             selection,
+            has_selection: false,
             output_data,
             button: Button::Up,
             show_pointer,
@@ -456,6 +461,7 @@ impl ScreenshotUi {
 
         *self = Self::Open {
             selection,
+            has_selection: false,
             output_data,
             button: Button::Up,
             show_pointer,
@@ -505,6 +511,7 @@ impl ScreenshotUi {
     pub fn close(&mut self) -> bool {
         let Self::Open {
             selection,
+            has_selection,
             clock,
             config,
             ..
@@ -513,10 +520,12 @@ impl ScreenshotUi {
             return false;
         };
 
-        let last_selection = Some((
-            selection.0.downgrade(),
-            rect_from_corner_points(selection.1, selection.2),
-        ));
+        let last_selection = has_selection.then(|| {
+            (
+                selection.0.downgrade(),
+                rect_from_corner_points(selection.1, selection.2),
+            )
+        });
 
         *self = Self::Closed {
             last_selection,
@@ -537,9 +546,31 @@ impl ScreenshotUi {
         matches!(self, ScreenshotUi::Open { .. })
     }
 
+    pub fn has_selection(&self) -> bool {
+        matches!(
+            self,
+            Self::Open {
+                has_selection: true,
+                ..
+            }
+        )
+    }
+
+    pub fn can_confirm(&self) -> bool {
+        matches!(
+            self,
+            Self::Open {
+                has_selection: true,
+                button: Button::Up,
+                ..
+            }
+        )
+    }
+
     pub fn set_space_down(&mut self, down: bool) {
         if let Self::Open {
             selection,
+            has_selection: true,
             button:
                 Button::Down {
                     move_state,
@@ -571,6 +602,7 @@ impl ScreenshotUi {
     pub fn move_left(&mut self) {
         let Self::Open {
             selection: (output, a, b),
+            has_selection: true,
             output_data,
             ..
         } = self
@@ -591,6 +623,7 @@ impl ScreenshotUi {
     pub fn move_right(&mut self) {
         let Self::Open {
             selection: (output, a, b),
+            has_selection: true,
             output_data,
             ..
         } = self
@@ -611,6 +644,7 @@ impl ScreenshotUi {
     pub fn move_up(&mut self) {
         let Self::Open {
             selection: (output, a, b),
+            has_selection: true,
             output_data,
             ..
         } = self
@@ -631,6 +665,7 @@ impl ScreenshotUi {
     pub fn move_down(&mut self) {
         let Self::Open {
             selection: (output, a, b),
+            has_selection: true,
             output_data,
             ..
         } = self
@@ -720,6 +755,7 @@ impl ScreenshotUi {
     pub fn set_width(&mut self, change: SizeChange) {
         let Self::Open {
             selection: (output, a, b),
+            has_selection: true,
             output_data,
             ..
         } = self
@@ -758,6 +794,7 @@ impl ScreenshotUi {
     pub fn set_height(&mut self, change: SizeChange) {
         let Self::Open {
             selection: (output, a, b),
+            has_selection: true,
             output_data,
             ..
         } = self
@@ -808,12 +845,23 @@ impl ScreenshotUi {
     fn update_buffers(&mut self) {
         let Self::Open {
             selection,
+            has_selection,
             output_data,
             ..
         } = self
         else {
             panic!("screenshot UI must be open to update buffers");
         };
+
+        if !*has_selection {
+            for data in output_data.values_mut() {
+                for buffer in &mut data.buffers {
+                    buffer.resize((0., 0.));
+                }
+                data.locations.fill(Default::default());
+            }
+            return;
+        }
 
         let (selection_output, a, b) = selection;
         let mut rect = rect_from_corner_points(*a, *b);
@@ -888,6 +936,7 @@ impl ScreenshotUi {
 
         let Self::Open {
             output_data,
+            has_selection,
             show_pointer,
             button,
             open_anim,
@@ -920,14 +969,16 @@ impl ScreenshotUi {
             push(elem.into());
         }
 
-        for (buffer, loc) in zip(&output_data.buffers, &output_data.locations) {
-            let elem = SolidColorRenderElement::from_buffer(
-                buffer,
-                loc.to_f64().to_logical(scale),
-                progress,
-                Kind::Unspecified,
-            );
-            push(elem.into());
+        if *has_selection {
+            for (buffer, loc) in zip(&output_data.buffers, &output_data.locations) {
+                let elem = SolidColorRenderElement::from_buffer(
+                    buffer,
+                    loc.to_f64().to_logical(scale),
+                    progress,
+                    Kind::Unspecified,
+                );
+                push(elem.into());
+            }
         }
 
         // The screenshot itself goes last.
@@ -954,12 +1005,13 @@ impl ScreenshotUi {
 
         let Self::Open {
             selection,
+            has_selection: true,
             output_data,
             show_pointer,
             ..
         } = self
         else {
-            anyhow::bail!("screenshot UI is not open");
+            anyhow::bail!("screenshot UI has no selected region");
         };
 
         let data = output_data
@@ -1046,12 +1098,13 @@ impl ScreenshotUi {
 
         let Self::Open {
             selection,
+            has_selection: true,
             output_data,
             show_pointer,
             ..
         } = self
         else {
-            anyhow::bail!("screenshot UI is not open");
+            anyhow::bail!("screenshot UI has no selected region");
         };
 
         let data = output_data
@@ -1116,15 +1169,13 @@ impl ScreenshotUi {
     }
 
     pub fn action(&self, raw: Keysym, mods: ModifiersState) -> Option<Action> {
-        let Self::Open { button, .. } = self else {
+        let Self::Open { .. } = self else {
             return None;
         };
 
-        // Pressing Space while the button is down goes into origin moving rather than capture.
-        if matches!(button, Button::Down { .. }) && raw == Keysym::space {
-            return None;
-        }
-
+        // Keep confirmation keys intercepted even with no crop or during a
+        // drag. The confirmation entry point checks can_confirm(); Space's
+        // drag-origin handling is applied separately by set_space_down().
         action(raw, mods)
     }
 
@@ -1171,6 +1222,7 @@ impl ScreenshotUi {
     pub fn pointer_motion(&mut self, point: Point<i32, Physical>, slot: Option<TouchSlot>) {
         let Self::Open {
             selection,
+            has_selection,
             output_data,
             button:
                 Button::Down {
@@ -1209,6 +1261,7 @@ impl ScreenshotUi {
         } else {
             let size = output_data[&selection.0].size;
             selection.2 = Point::new(point.x.clamp(0, size.w - 1), point.y.clamp(0, size.h - 1));
+            *has_selection = selection.1 != selection.2;
         }
 
         self.update_buffers();
@@ -1223,6 +1276,7 @@ impl ScreenshotUi {
     ) -> bool {
         let Self::Open {
             selection,
+            has_selection,
             output_data,
             show_pointer,
             button,
@@ -1241,7 +1295,7 @@ impl ScreenshotUi {
                 ..
             } = button
             {
-                if move_state.is_none() {
+                if *has_selection && move_state.is_none() {
                     *move_state = Some(MoveState {
                         pointer_offset: last_pos.1 - selection.1,
                         touch_slot: Some(new_slot),
@@ -1255,7 +1309,7 @@ impl ScreenshotUi {
         }
 
         if move_existing {
-            if output != selection.0 {
+            if !*has_selection || output != selection.0 {
                 return false;
             }
 
@@ -1303,6 +1357,7 @@ impl ScreenshotUi {
             point.y.clamp(0, output_data.size.h - 1),
         );
         *selection = (output, point, point);
+        *has_selection = false;
 
         self.update_buffers();
 
@@ -1311,7 +1366,7 @@ impl ScreenshotUi {
 
     pub fn pointer_up(&mut self, slot: Option<TouchSlot>) -> Option<bool> {
         let Self::Open {
-            selection,
+            has_selection,
             output_data,
             button,
             show_pointer,
@@ -1360,26 +1415,12 @@ impl ScreenshotUi {
                 let panel_size = buffer.size();
                 let location = panel_location(output_data, panel_size);
 
-                if is_within_capture_button(output_data.scale, panel_size, point - location) {
+                if *has_selection
+                    && is_within_capture_button(output_data.scale, panel_size, point - location)
+                {
                     return Some(true);
                 }
             }
-        }
-
-        // Check if the resulting selection is zero-sized, and try to come up with a small
-        // default rectangle.
-        let (output, a, b) = selection;
-        let mut rect = rect_from_corner_points(*a, *b);
-        if rect.size.is_empty() || rect.size == Size::from((1, 1)) {
-            let data = &output_data[output];
-            rect = Rectangle::new(
-                Point::from((rect.loc.x - 16, rect.loc.y - 16)),
-                Size::from((32, 32)),
-            )
-            .intersection(Rectangle::from_size(data.size))
-            .unwrap_or_default();
-            *a = rect.loc;
-            *b = rect.loc + rect.size - Size::from((1, 1));
         }
 
         self.update_buffers();
@@ -1700,6 +1741,163 @@ mod tests {
 
     use super::*;
 
+    fn selection_fixture() -> (crate::tests::Fixture, Output) {
+        let mut config = Config::default();
+        config.animations.off = true;
+        config.hotkey_overlay.skip_at_startup = true;
+        let mut fixture = crate::tests::Fixture::with_config(config);
+        fixture.init_gles_renderer();
+        fixture.add_output(1, (320, 240));
+        let output = fixture.clarion_output(1);
+        fixture
+            .clarion_state()
+            .do_action(Action::Screenshot(false, None), false);
+        assert!(fixture.clarion().screenshot_ui.is_open());
+        (fixture, output)
+    }
+
+    fn selected_rect(ui: &ScreenshotUi) -> Rectangle<i32, Physical> {
+        let ScreenshotUi::Open { selection, .. } = ui else {
+            panic!("selection UI should be open");
+        };
+        rect_from_corner_points(selection.1, selection.2)
+    }
+
+    fn assert_no_selection_overlay(ui: &ScreenshotUi, output: &Output) {
+        assert!(!ui.has_selection());
+        assert!(!ui.can_confirm());
+        let ScreenshotUi::Open { output_data, .. } = ui else {
+            panic!("selection UI should be open");
+        };
+        for data in output_data.values() {
+            assert!(data.buffers.iter().all(|buffer| buffer.size().is_empty()));
+        }
+        let mut mask_elements = 0;
+        ui.render_output(output, RenderTarget::Output, &mut |element| {
+            if matches!(element, ScreenshotUiRenderElement::SolidColor(_)) {
+                mask_elements += 1;
+            }
+        });
+        assert_eq!(mask_elements, 0, "an empty crop has no frame or dim mask");
+    }
+
+    #[test]
+    fn initial_selection_has_no_frame_and_confirmation_keys_remain_consumed() {
+        let (mut fixture, output) = selection_fixture();
+        let ui = &mut fixture.clarion().screenshot_ui;
+        assert_no_selection_overlay(ui, &output);
+        for key in [Keysym::space, Keysym::Return] {
+            assert!(matches!(
+                ui.action(key, ModifiersState::default()),
+                Some(Action::ConfirmScreenshot { .. })
+            ));
+        }
+        assert!(matches!(
+            ui.action(
+                Keysym::c,
+                ModifiersState {
+                    ctrl: true,
+                    ..Default::default()
+                }
+            ),
+            Some(Action::ConfirmScreenshot {
+                write_to_disk: false
+            })
+        ));
+        ui.move_left();
+        ui.move_right();
+        ui.move_up();
+        ui.move_down();
+        ui.set_width(SizeChange::SetFixed(100));
+        ui.set_height(SizeChange::SetFixed(100));
+        assert!(!ui.pointer_down(output.clone(), (10, 10).into(), None, true));
+        assert_no_selection_overlay(ui, &output);
+    }
+
+    #[test]
+    fn a_drag_reveals_the_frame_only_after_motion_and_release_retains_it() {
+        let (mut fixture, output) = selection_fixture();
+        let ui = &mut fixture.clarion().screenshot_ui;
+        assert!(ui.pointer_down(output.clone(), (10, 20).into(), None, false));
+        assert_no_selection_overlay(ui, &output);
+        ui.pointer_motion((40, 60).into(), None);
+        assert!(ui.has_selection());
+        assert!(
+            !ui.can_confirm(),
+            "holding the pointer keeps Space in move mode"
+        );
+        assert_eq!(
+            selected_rect(ui),
+            Rectangle::new((10, 20).into(), (31, 41).into())
+        );
+        assert_eq!(ui.pointer_up(None), Some(false));
+        assert!(ui.can_confirm());
+        let ScreenshotUi::Open { output_data, .. } = ui else {
+            unreachable!()
+        };
+        assert!(!output_data[&output].buffers[0].size().is_empty());
+    }
+
+    #[test]
+    fn a_click_does_not_invent_a_default_crop() {
+        let (mut fixture, output) = selection_fixture();
+        let ui = &mut fixture.clarion().screenshot_ui;
+        assert!(ui.pointer_down(output.clone(), (5, 5).into(), None, false));
+        assert_eq!(ui.pointer_up(None), Some(false));
+        assert_no_selection_overlay(ui, &output);
+        // Moving outside the monitor at the same clamped anchor is still empty.
+        assert!(ui.pointer_down(output.clone(), (-5, -5).into(), None, false));
+        ui.pointer_motion((-50, -50).into(), None);
+        assert_eq!(ui.pointer_up(None), Some(false));
+        assert_no_selection_overlay(ui, &output);
+    }
+
+    #[test]
+    fn reverse_drag_clamps_to_output_edges_without_losing_the_last_pixel() {
+        let (mut fixture, output) = selection_fixture();
+        let ui = &mut fixture.clarion().screenshot_ui;
+        assert!(ui.pointer_down(output, (-10, 260).into(), None, false));
+        ui.pointer_motion((999, -200).into(), None);
+        assert_eq!(ui.pointer_up(None), Some(false));
+        assert_eq!(selected_rect(ui), Rectangle::from_size((320, 240).into()));
+        assert!(ui.can_confirm());
+    }
+
+    #[test]
+    fn space_moves_an_existing_drag_without_confirming_or_resizing_it() {
+        let (mut fixture, output) = selection_fixture();
+        let ui = &mut fixture.clarion().screenshot_ui;
+        assert!(ui.pointer_down(output, (10, 20).into(), None, false));
+        ui.pointer_motion((40, 60).into(), None);
+        let old_size = selected_rect(ui).size;
+        ui.set_space_down(true);
+        ui.pointer_motion((100, 120).into(), None);
+        assert_eq!(selected_rect(ui).size, old_size);
+        assert_eq!(selected_rect(ui).loc, (70, 80).into());
+        assert!(!ui.can_confirm());
+        assert!(matches!(
+            ui.action(Keysym::space, ModifiersState::default()),
+            Some(Action::ConfirmScreenshot { .. })
+        ));
+        ui.set_space_down(false);
+        assert_eq!(ui.pointer_up(None), Some(false));
+        assert!(ui.can_confirm());
+    }
+
+    #[test]
+    fn reopening_does_not_reveal_the_previous_crop() {
+        let (mut fixture, output) = selection_fixture();
+        let ui = &mut fixture.clarion().screenshot_ui;
+        assert!(ui.pointer_down(output.clone(), (10, 20).into(), None, false));
+        ui.pointer_motion((40, 60).into(), None);
+        assert_eq!(ui.pointer_up(None), Some(false));
+        assert!(ui.close());
+        fixture
+            .clarion_state()
+            .do_action(Action::Screenshot(false, None), false);
+        assert_no_selection_overlay(&fixture.clarion().screenshot_ui, &output);
+    }
+
     #[test]
     fn screenshot_fade_stops_redrawing_when_its_visible_motion_finishes() {
         for rate in [0.25, 0.73, 1., 2.] {
@@ -1728,6 +1926,7 @@ mod tests {
                     );
                     let ui = ScreenshotUi::Open {
                         selection: (output, (0, 0).into(), (10, 10).into()),
+                        has_selection: true,
                         output_data: HashMap::new(),
                         button: Button::Up,
                         show_pointer: true,

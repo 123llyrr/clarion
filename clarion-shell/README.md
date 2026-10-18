@@ -22,7 +22,8 @@ GLES 兼容路径仍可选用。面板模糊和液态玻璃还需相应的图层
 ## 构建
 
 需要官方 Flutter stable SDK，以及 `clang`、`cmake`、`ninja`、`pkg-config`、
-GTK3 开发文件、`gtk-layer-shell-0 >= 0.6` 和 `wayland-client >= 1.20`。
+GTK3 开发文件、`gtk-layer-shell-0 >= 0.6`、`wayland-client >= 1.20` 和
+`dbusmenu-gtk3-0.4`（libdbusmenu GTK3 开发文件）。
 本次验证使用独立安装的
 Flutter **3.47.6** / Dart **3.13.5**：
 
@@ -164,6 +165,8 @@ Dock 和菜单动效按公开行为实现，尚未用 Catalina 实机录像完�
 | `setTooltipVisible` | `bool` | 为悬停提示临时提供 128 px 透明绘制区；面板优先，输入仍限于 40 px 顶栏 |
 | `outputName` | 无 | 返回明确传入的输出名称，未指定时为 `null` |
 | `surfaceOrigin` | 无 | 返回当前顶栏所在输出的逻辑原点，供托盘动作换算屏幕坐标 |
+| `showTrayMenu` | unique D-Bus owner、menuPath、表面逻辑坐标、requestId、button | 直接用 libdbusmenu-gtk3 呈现应用菜单，保留真实输入事件和 Wayland popup grab |
+| `dismissTrayMenu` | 可选 requestId | 关闭对应原生菜单；迟到的旧请求不会关闭新菜单 |
 | `appIcon` | 图标名称，或 `{name, themePath, size, pixelSize?}` | 返回 GTK 图标文件路径；可选 `pixelSize` 为 16–512 的物理像素整数；自定义目录只影响这次查找，找不到时为 `null` |
 | `windowState` | 无 | 只读返回 runner 的窗口尺寸、模式和键盘状态，供集成验收 |
 
@@ -203,14 +206,22 @@ Material 图标。
 - 截图：顶栏入口提供区域、当前屏幕、当前窗口以及鼠标指针选项，使用合成器原有截图功能。
   截图前等待外壳退场与焦点释放，沿用个人截图路径及剪贴板设置；迟到请求或重新打开面板会取消准备。
   已取消请求的迟到错误不会重新打开截图面板，当前请求失败时可直接重试。
+  区域截图初始不预选范围；按住拖动后才显示选区，松开保留。未选择区域时确认键不保存截图。
 - 壁纸选择器：从 `~/图片/Wallpapers` 加载静态图片，提供缩略图、文件名搜索、
   刷新和当前选中标记；选择后填充所有输出，并在下次登录时恢复。
 - 通知中心：标准 D-Bus 通知服务、替换、关闭、动作和有界历史；不会抢占已有通知服务。
 - 系统托盘：StatusNotifier / AppIndicator 宿主，在顶栏显示图标；左键激活、中键次要激活、
   右键打开 DBusMenu。窄屏或图标较多时提供全部托盘项的展开入口。
-  菜单使用现有展开覆盖面板，支持分隔线、禁用项、复选/单选状态和子菜单。
+  正式 Linux 外壳直接通过 libdbusmenu-gtk3 呈现应用导出的原生 GTK 菜单，
+  不为菜单展开整个 bar。子菜单、复选/单选、快捷键与动态布局由协议客户端处理；
+  关闭后恢复键盘交互，准备期间取消不会再弹出另一个菜单。
+  菜单缓存按唯一 owner/path 限为 8 项，owner 消失时关闭；只有未导出 DBusMenu
+  或原生加载失败时才请求应用自身的 SNI ContextMenu，不重复弹出两套菜单。
+  无原生 runner 的预览和 demo 仍可展示 Flutter 示例面板。
   不会替换已有 `StatusNotifierWatcher`，已有 watcher 时改为注册为 host。
   外部 watcher 重启时重新注册；应用退出后移除项目，菜单与图标跟随 D-Bus 更新。
+  外部重复地址先去重再应用数量上限，合法同名应用保持独立；各应用独立加载，
+  慢服务不阻塞其他项。滚轮保留小数余量并合并在途增量，不与应用激活共用等待锁。
 - 外观：Material 3 语义色和标准控件、深浅主题、减少动态。偏好独立保存于
   `~/.config/clarion-shell/preferences.json`，不改合成器个人 KDL。
 
@@ -277,7 +288,9 @@ cd clarion-shell
 ~/.cache/clarion/toolchains/flutter/bin/flutter test test
 ```
 
-2026-10-18 的完整验证通过了 1,088 个 Flutter 测试、静态分析及 release 构建。
+2026-10-18 的完整验证通过了 1,144 个 Flutter 测试、静态分析及 release 构建。
+区域截图另通过 7 项 UI 状态测试、4 项 GLES PNG 流水线测试，以及 Intel GPU 上
+2 项 Vulkan 截图像素回归；主桌面的 HDR 状态没有为这些离屏测试切换。
 独立 GPUI 启动器另外通过了 41 个 Rust 测试（含 5 个无显示服务器的 GPUI 交互测试）、
 所有目标的 Clippy `-D warnings`、Rust 1.88 检查和 release 构建；原生运行证据见
 [Tahoe Apps 说明](../docs/launcher-apps.md)。
@@ -286,6 +299,15 @@ cd clarion-shell
 在专用嵌套 Clarion 的 `WAYLAND_DISPLAY` 和 `CLARION_SOCKET` 下运行，禁止对当前
 主桌面执行其输出缩放、虚拟键盘和截图步骤。该测试检查首次搜索焦点、关闭后释放
 键盘、概览动作、40 px 预留区，以及 1 / 1.25 / 1.5 缩放下的展开尺寸。
+
+`integration_test/tray_protocol_native_test.dart` 验证正式托盘的 SNI / DBusMenu 路径：
+使用独立嵌套 Clarion、私有 D-Bus 与 XDG 目录，通过隔离输入工具发送真实 GTK
+输入；例如向私有 Xwayland 中的嵌套 winit 注入 XTEST，所测 GTK 菜单仍为 Wayland
+popup。测试检查菜单映射、菜单命令、懒加载子菜单、动态更新、缓存重用及
+owner 退出后的关闭。入口必须提供隔离标记、输入工具和截图目录；缺少隔离条件时
+直接拒绝运行。Flutter 的 `tester.tap` 无法提供 popup grab 所需的 Wayland 输入序号。
+早期 `tray_native_test.dart` 仍包含 Flutter 展开菜单和旧尺寸断言，正式原生托盘以
+新协议测试为准。
 
 `integration_test/wallpaper_native_test.dart` 在独立嵌套会话检查壁纸选择、真实
 背景像素、切换失败后的保留与登录恢复，使用隔离配置目录，禁止对当前主桌面运行。

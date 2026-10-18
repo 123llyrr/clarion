@@ -29,8 +29,8 @@ for dependency in clang cmake ninja pkg-config; do
     exit 1
   fi
 done
-if ! pkg-config --exists gtk+-3.0 'gtk-layer-shell-0 >= 0.6' 'wayland-client >= 1.20'; then
-  printf '%s\n' 'Missing development libraries: GTK3, gtk-layer-shell >= 0.6, and wayland-client >= 1.20.' >&2
+if ! pkg-config --exists gtk+-3.0 'gtk-layer-shell-0 >= 0.6' 'wayland-client >= 1.20' dbusmenu-gtk3-0.4; then
+  printf '%s\n' 'Missing development libraries: GTK3, gtk-layer-shell >= 0.6, wayland-client >= 1.20, and libdbusmenu-gtk3.' >&2
   exit 1
 fi
 

@@ -391,6 +391,9 @@ class ShellController extends ChangeNotifier {
   List<TrayMenuEntry> _trayMenu = const [];
   bool _trayAvailable = false;
   bool _trayMenuLoading = false;
+  bool _nativeTrayMenuOpen = false;
+  final _trayOperations = <Object>{};
+  final _trayScrollWork = <(String, String), _TrayScrollWork>{};
   String? _trayError;
   int _trayMenuRequest = 0;
   int _screenshotRequest = 0;
@@ -510,6 +513,7 @@ class ShellController extends ChangeNotifier {
     }
     _appMenuOpen = open;
     if (open) {
+      _clearTrayMenu();
       _barTooltip = null;
       if (_panel != ShellPanel.none) _setPanel(ShellPanel.none);
     }
@@ -716,6 +720,7 @@ class ShellController extends ChangeNotifier {
     if (_disposed ||
         _panel != ShellPanel.none ||
         _appMenuOpen ||
+        _nativeTrayMenuOpen ||
         message.isEmpty ||
         !anchor.dx.isFinite ||
         !anchor.dy.isFinite) {
@@ -785,6 +790,7 @@ class ShellController extends ChangeNotifier {
   List<TrayMenuEntry> get trayMenu => _trayMenu;
   bool get trayAvailable => demo || _trayAvailable;
   bool get trayMenuLoading => _trayMenuLoading;
+  bool get nativeTrayMenuOpen => _nativeTrayMenuOpen;
   String? get trayError => _trayError;
   String get windowTitle {
     for (final window in _windowState.values) {
@@ -926,12 +932,20 @@ class ShellController extends ChangeNotifier {
             for (final item in _trayItems) {
               if (item.id == selected.id) current = item;
             }
-            if (current == null) {
+            if (current == null ||
+                tray.registrationToken(selected) == null ||
+                !identical(
+                  tray.registrationToken(selected),
+                  tray.registrationToken(current),
+                )) {
               _clearTrayMenu();
               if (_panel == ShellPanel.trayMenu) _setPanel(ShellPanel.none);
             } else {
               _selectedTrayItem = current;
-              if (current.menuPath != selected.menuPath &&
+              if (_nativeTrayMenuOpen &&
+                  current.menuPath != selected.menuPath) {
+                _clearTrayMenu();
+              } else if (current.menuPath != selected.menuPath &&
                   _panel == ShellPanel.trayMenu) {
                 unawaited(openTrayMenu(current));
               }
@@ -1488,7 +1502,10 @@ class ShellController extends ChangeNotifier {
     _menuWindowId = null;
     _screenshotRequest++;
     if (_disposed ||
-        (_panel == ShellPanel.none && _barTooltip == null && !hadAppMenu)) {
+        (_panel == ShellPanel.none &&
+            _barTooltip == null &&
+            !hadAppMenu &&
+            !_nativeTrayMenuOpen)) {
       return;
     }
     _finishSliderGestures();
@@ -3057,11 +3074,37 @@ class ShellController extends ChangeNotifier {
   }
 
   void _clearTrayMenu() {
+    if (_nativeTrayMenuOpen) {
+      unawaited(_dismissNativeTrayMenu(_trayMenuRequest));
+    }
+    _nativeTrayMenuOpen = false;
     _trayMenuRequest++;
     _selectedTrayItem = null;
     _trayMenu = const [];
     _trayMenuLoading = false;
     _trayError = null;
+  }
+
+  Future<void> _dismissNativeTrayMenu(int request) async {
+    try {
+      await _window.invokeMethod<void>('dismissTrayMenu', {
+        'requestId': request,
+      });
+    } on Object {
+      // The window can disappear while the controller is disposing.
+    }
+  }
+
+  /// A delayed close from an earlier popup must not dismiss its replacement.
+  void nativeTrayMenuClosed(int request) {
+    if (_disposed || !_nativeTrayMenuOpen || request != _trayMenuRequest) {
+      return;
+    }
+    _nativeTrayMenuOpen = false;
+    _trayMenuRequest++;
+    _selectedTrayItem = null;
+    _trayMenuLoading = false;
+    _changed();
   }
 
   bool _currentTrayMenu(int request, String id) =>
@@ -3088,8 +3131,11 @@ class ShellController extends ChangeNotifier {
     return Offset(x, y);
   }
 
-  Future<void> _performTray(Future<void> Function() operation) async {
-    if (_disposed || _busy.contains('tray') || demo) return;
+  Future<void> _performTray(
+    Future<void> Function() operation, {
+    Object key = 'menu',
+  }) async {
+    if (_disposed || demo || !_trayOperations.add(key)) return;
     _busy.add('tray');
     _trayError = null;
     _changed();
@@ -3098,7 +3144,8 @@ class ShellController extends ChangeNotifier {
     } on Object catch (error) {
       if (!_disposed) _trayError = '托盘操作失败：$error';
     } finally {
-      _busy.remove('tray');
+      _trayOperations.remove(key);
+      if (_trayOperations.isEmpty) _busy.remove('tray');
       _changed();
     }
   }
@@ -3107,10 +3154,13 @@ class ShellController extends ChangeNotifier {
     TrayItem item, {
     double x = 0,
     double y = 0,
+    int menuButton = 1,
   }) async {
-    if (_disposed) return;
+    if (_disposed || (!demo && _trayService?.registrationToken(item) == null)) {
+      return;
+    }
     if (demo || item.primaryOpensMenu) {
-      await openTrayMenu(item, x: x, y: y);
+      await openTrayMenu(item, x: x, y: y, button: menuButton);
       return;
     }
     final request = _trayMenuRequest;
@@ -3127,14 +3177,14 @@ class ShellController extends ChangeNotifier {
           false;
       if (_disposed || request != _trayMenuRequest) return;
       if (!activated && item.menuAvailable) {
-        await openTrayMenu(item, x: x, y: y);
+        await openTrayMenu(item, x: x, y: y, button: menuButton);
       } else if (activated &&
           (_panel == ShellPanel.trayItems || _panel == ShellPanel.trayMenu)) {
         closePanel();
       } else if (!activated) {
         _trayError = '无法激活托盘项';
       }
-    });
+    }, key: ('activate', _trayService?.registrationToken(item) ?? item.id));
   }
 
   Future<void> secondaryActivateTrayItem(
@@ -3142,7 +3192,11 @@ class ShellController extends ChangeNotifier {
     double x = 0,
     double y = 0,
   }) async {
-    if (_disposed || demo) return;
+    if (_disposed || demo || _trayService?.registrationToken(item) == null) {
+      return;
+    }
+    final token = _trayService?.registrationToken(item);
+    final request = _trayMenuRequest;
     await _performTray(() async {
       final point = await _trayCoordinates(x, y);
       if (_disposed) return;
@@ -3152,8 +3206,13 @@ class ShellController extends ChangeNotifier {
         x: point.dx,
         y: point.dy,
       );
-      if (!_disposed && activated != true) _trayError = '无法执行托盘辅助操作';
-    });
+      if (!_disposed &&
+          request == _trayMenuRequest &&
+          identical(_trayService?.registrationToken(item), token) &&
+          activated != true) {
+        _trayError = '无法执行托盘辅助操作';
+      }
+    }, key: ('secondary', _trayService?.registrationToken(item) ?? item.id));
   }
 
   Future<void> scrollTrayItem(
@@ -3161,15 +3220,179 @@ class ShellController extends ChangeNotifier {
     int delta, {
     String orientation = 'vertical',
   }) async {
-    if (_disposed || demo || delta == 0) return;
-    await _performTray(() async {
-      await _trayService?.scroll(item, delta, orientation: orientation);
-    });
+    if (_disposed ||
+        demo ||
+        delta == 0 ||
+        (orientation != 'vertical' && orientation != 'horizontal')) {
+      return;
+    }
+    final token = _trayService?.registrationToken(item);
+    if (token == null) return;
+    final key = (item.id, orientation);
+    var work = _trayScrollWork[key];
+    if (work == null || !identical(work.token, token)) {
+      work = _TrayScrollWork(item, token, delta);
+      _trayScrollWork[key] = work;
+      unawaited(_drainTrayScroll(key, work));
+    } else {
+      work.pending += delta;
+    }
+    await work.done.future;
   }
 
-  Future<void> openTrayMenu(TrayItem item, {double x = 0, double y = 0}) async {
-    if (_disposed) return;
+  Future<void> _drainTrayScroll(
+    (String, String) key,
+    _TrayScrollWork work,
+  ) async {
+    try {
+      while (!_disposed &&
+          identical(_trayScrollWork[key], work) &&
+          work.pending != 0 &&
+          identical(_trayService?.registrationToken(work.item), work.token)) {
+        final delta = work.pending.clamp(-0x80000000, 0x7fffffff);
+        work.pending -= delta;
+        await _trayService?.scroll(work.item, delta, orientation: key.$2);
+      }
+    } on Object catch (error) {
+      if (!_disposed) {
+        _trayError = '托盘滚动失败：$error';
+        _changed();
+      }
+    } finally {
+      if (identical(_trayScrollWork[key], work)) _trayScrollWork.remove(key);
+      if (!work.done.isCompleted) work.done.complete();
+    }
+  }
+
+  Future<bool> _showNativeTrayMenu(
+    TrayItem item,
+    Map<String, String> target, {
+    required double x,
+    required double y,
+    required int button,
+  }) async {
+    if (_nativeTrayMenuOpen && _selectedTrayItem?.id == item.id) {
+      // Repeated presses while loading coalesce; a later press toggles it shut.
+      if (!_trayMenuLoading) {
+        _clearTrayMenu();
+        _changed();
+      }
+      return true;
+    }
+    _clearTrayMenu();
+    final request = ++_trayMenuRequest;
+    _nativeTrayMenuOpen = true;
+    _selectedTrayItem = item;
+    _trayMenuLoading = true;
+    _barTooltip = null;
+    _changed();
+    try {
+      // Coordinates stay local to the existing GTK surface. Opening a tray
+      // menu never expands the bar or rebuilds a Flutter menu tree.
+      final shown = await _window.invokeMethod<bool>('showTrayMenu', {
+        ...target,
+        'x': x.isFinite ? x : 0.0,
+        'y': y.isFinite ? y : 0.0,
+        'requestId': request,
+        'button': button,
+      });
+      if (_disposed || request != _trayMenuRequest) return true;
+      if (shown == null) {
+        // Plain Flutter previews do not have a native GTK runner.
+        _clearTrayMenu();
+        return false;
+      }
+      if (!shown) {
+        _clearTrayMenu();
+        await _openTrayContextMenu(item, x: x, y: y);
+      }
+      return true;
+    } on MissingPluginException {
+      if (!_disposed && request == _trayMenuRequest) _clearTrayMenu();
+      return false;
+    } on PlatformException catch (error) {
+      if (!_disposed && request == _trayMenuRequest) {
+        _clearTrayMenu();
+        if (error.code != 'menu-cancelled') {
+          _trayError = '原生托盘菜单不可用：${error.message ?? error.code}';
+        }
+        _changed();
+      }
+      return true;
+    } finally {
+      if (!_disposed && request == _trayMenuRequest) {
+        _trayMenuLoading = false;
+        _changed();
+      }
+    }
+  }
+
+  Future<void> _openTrayContextMenu(
+    TrayItem item, {
+    required double x,
+    required double y,
+  }) async {
+    // Capture the origin before any panel/keyboard changes. Some applications
+    // implement ContextMenu without exporting a DBusMenu object at all.
+    final request = _trayMenuRequest;
+    final point = await _trayCoordinates(x, y);
+    if (_disposed || request != _trayMenuRequest) return;
+    await _performTray(() async {
+      final opened = await _trayService?.invoke(
+        item,
+        TrayAction.contextMenu,
+        x: point.dx,
+        y: point.dy,
+      );
+      if (!_disposed && request == _trayMenuRequest) {
+        if (opened != true) _trayError = '无法打开托盘菜单';
+        _changed();
+      }
+    }, key: ('context', _trayService?.registrationToken(item) ?? item.id));
+  }
+
+  Future<void> openTrayMenu(
+    TrayItem item, {
+    double x = 0,
+    double y = 0,
+    int button = 3,
+  }) async {
+    if (_disposed || (!demo && _trayService?.registrationToken(item) == null)) {
+      return;
+    }
     _finishSliderGestures();
+    if (!demo) {
+      final current = _trayItems
+          .where((entry) => entry.id == item.id)
+          .firstOrNull;
+      final target = current == null
+          ? null
+          : _trayService?.nativeMenuTarget(current);
+      if (target != null) {
+        // Release another panel's modal/external keyboard owner first. The
+        // overflow list can remain behind its own native context menu.
+        if (_panel != ShellPanel.none && _panel != ShellPanel.trayItems) {
+          closePanel();
+        }
+        if (await _showNativeTrayMenu(
+          current!,
+          target,
+          x: x,
+          y: y,
+          button: button,
+        )) {
+          return;
+        }
+      }
+      if (_disposed) return;
+      if (!item.menuAvailable ||
+          item.menuPath.isEmpty ||
+          item.menuPath == '/') {
+        _clearTrayMenu();
+        await _openTrayContextMenu(item, x: x, y: y);
+        return;
+      }
+    }
     final request = ++_trayMenuRequest;
     _selectedTrayItem = item;
     _trayError = null;
@@ -3355,6 +3578,10 @@ class ShellController extends ChangeNotifier {
     _barTooltip = null;
     _clearTrayMenu();
     _disposed = true;
+    for (final work in _trayScrollWork.values) {
+      if (!work.done.isCompleted) work.done.complete();
+    }
+    _trayScrollWork.clear();
     unawaited(_windowPreviewService?.dispose());
     _clock?.cancel();
     _externalVisibleDeadline?.cancel();
@@ -3559,6 +3786,14 @@ class _SliderQueue {
     _active.clear();
     _drained.clear();
   }
+}
+
+class _TrayScrollWork {
+  _TrayScrollWork(this.item, this.token, this.pending);
+  final TrayItem item;
+  final Object token;
+  int pending;
+  final done = Completer<void>();
 }
 
 bool _validWindow(Object? window) =>
