@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Filesystem icon-theme resolution without starting another GUI toolkit.
 
-use std::{
-    collections::{HashMap, HashSet},
-    fs::{self, File},
-    io::{Read, Take},
-    path::{Component, Path, PathBuf},
-};
+use std::collections::{HashMap, HashSet};
+use std::fs::{self, File};
+use std::io::{Read, Take};
+use std::path::{Component, Path, PathBuf};
+
 use walkdir::WalkDir;
 
 const MAX_THEME_BYTES: u64 = 256 * 1024;
@@ -493,9 +492,11 @@ fn parse_ini(source: &str) -> Ini {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::os::unix::fs::symlink;
+
     use tempfile::TempDir;
+
+    use super::*;
 
     fn environment(root: &TempDir) -> HashMap<String, String> {
         HashMap::from([

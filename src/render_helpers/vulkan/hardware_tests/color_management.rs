@@ -1,9 +1,10 @@
 //! Numerical HDR acceptance uses the real renderer and GPU readback, without
 //! acquiring DRM master or changing the running display's connector state.
+use smithay::backend::renderer::{ImportMem, Texture};
+
 use super::*;
 use crate::color::{ColorDescription, HdrOutputSettings, RenderingIntent, SurfaceColor};
 use crate::render_helpers::vulkan::native::{NativeBusy, NativeError, NativeRenderer};
-use smithay::backend::renderer::{ImportMem, Texture};
 
 fn half(value: f32) -> u16 {
     let bits = value.to_bits();

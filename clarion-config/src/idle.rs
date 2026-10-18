@@ -5,7 +5,8 @@
 
 use crate::utils::{Flag, MergeWith};
 
-#[derive(Debug, Clone, PartialEq)]
+/// Inert until configured; the shipped default config opts in with a locker command.
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Idle {
     pub off: bool,
     /// Seconds without input before `action` runs. Zero never acts.
@@ -27,21 +28,6 @@ pub enum IdleAction {
     None,
     Lock,
     Suspend,
-}
-
-impl Default for Idle {
-    fn default() -> Self {
-        // Inert until configured: no idle action, no command. The shipped
-        // default config opts in with a locker command.
-        Self {
-            off: false,
-            timeout: 0,
-            blank_timeout: 0,
-            action: IdleAction::default(),
-            lock_command: None,
-            lock_before_suspend: false,
-        }
-    }
 }
 
 #[derive(knuffel::Decode, Debug, PartialEq)]

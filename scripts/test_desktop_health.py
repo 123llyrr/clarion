@@ -113,15 +113,16 @@ class DesktopHealthTests(unittest.TestCase):
                 self.assertEqual(report["failed"], bool(expected))
                 self.assertEqual(report["checks"][0]["status"], status)
 
-    def test_live_version_comparison_uses_install_even_if_path_is_shadowed(self):
+    def test_live_version_uses_same_path_as_validation_and_reports_system_difference(self):
         def runner(command):
             if "show" in command:
                 return 0, "ActiveState=active\nMainPID=123\n"
             return 0, "{}"
 
         with patch.object(health, "check_launcher", return_value=health.Check("mock", "warn", "old copy")), patch.object(health.Path, "is_file", return_value=True), patch.object(health, "check_running_binary", return_value=health.Check("运行版本", "warn", "old session")) as compare:
-            health.collect_checks(runner=runner, which=lambda name: "/fixture/" + name)
-        compare.assert_called_once_with(123, Path("/usr/local/bin/clarion"))
+            checks = health.collect_checks(runner=runner, which=lambda name: "/fixture/" + name)
+        compare.assert_called_once_with(123, "/fixture/clarion")
+        self.assertTrue(any(check.name == "mock" and check.status == "warn" for check in checks))
 
 
 if __name__ == "__main__":

@@ -116,16 +116,25 @@ mod tests {
         let start = Instant::now();
         let mut policy = IdlePolicy::new(&config(300, clarion_config::IdleAction::Lock), start);
 
-        assert_eq!(policy.poll(start + Duration::from_secs(299), false, false), None);
+        assert_eq!(
+            policy.poll(start + Duration::from_secs(299), false, false),
+            None
+        );
         assert_eq!(
             policy.poll(start + Duration::from_secs(300), false, false),
             Some(IdleAction::Lock)
         );
         // One action per idle period, not one per poll.
-        assert_eq!(policy.poll(start + Duration::from_secs(600), false, false), None);
+        assert_eq!(
+            policy.poll(start + Duration::from_secs(600), false, false),
+            None
+        );
 
         policy.activity(start + Duration::from_secs(601));
-        assert_eq!(policy.poll(start + Duration::from_secs(660), false, false), None);
+        assert_eq!(
+            policy.poll(start + Duration::from_secs(660), false, false),
+            None
+        );
         assert_eq!(
             policy.poll(start + Duration::from_secs(901), false, false),
             Some(IdleAction::Lock)
@@ -180,7 +189,10 @@ mod tests {
             Some(IdleAction::Blank)
         );
         // It happens once per idle period.
-        assert_eq!(policy.poll(start + Duration::from_secs(400), false, false), None);
+        assert_eq!(
+            policy.poll(start + Duration::from_secs(400), false, false),
+            None
+        );
         // A locked session still switches its panels off.
         let mut locked_blanking = config(600, clarion_config::IdleAction::Lock);
         locked_blanking.blank_timeout = 300;
@@ -208,7 +220,10 @@ mod tests {
         let mut blanking = config(600, clarion_config::IdleAction::Lock);
         blanking.blank_timeout = 60;
         let mut policy = IdlePolicy::new(&blanking, start);
-        assert_eq!(policy.poll(start + Duration::from_secs(90), true, false), None);
+        assert_eq!(
+            policy.poll(start + Duration::from_secs(90), true, false),
+            None
+        );
         assert_eq!(
             policy.poll(start + Duration::from_secs(90), false, false),
             Some(IdleAction::Blank)
@@ -217,7 +232,10 @@ mod tests {
         let mut disabled = blanking.clone();
         disabled.off = true;
         let mut policy = IdlePolicy::new(&disabled, start);
-        assert_eq!(policy.poll(start + Duration::from_secs(90), false, false), None);
+        assert_eq!(
+            policy.poll(start + Duration::from_secs(90), false, false),
+            None
+        );
         assert!(!policy.activity(start));
     }
 

@@ -3,13 +3,12 @@
 //! Layout captures each visible card once, in front-to-back order. This scene
 //! completes a card's layers, windows, background and shadow before the card
 //! behind it, without retaining a desktop or workspace owner.
+use clarion_config::{Color, CornerRadius, GradientInterpolation};
 use smithay::backend::renderer::element::utils::{
     CropRenderElement, Relocate, RelocateRenderElement, RescaleRenderElement,
 };
 use smithay::backend::renderer::element::Kind;
 use smithay::utils::{Logical, Physical, Point, Rectangle, Size};
-
-use clarion_config::{Color, CornerRadius, GradientInterpolation};
 
 use crate::layout::monitor::{MonitorInnerRenderElement, MonitorRenderElement};
 use crate::layout::scene_source::{InsertHintRenderSource, StageLayers, WorkspaceScene};

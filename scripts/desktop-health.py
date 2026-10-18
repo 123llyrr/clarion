@@ -81,8 +81,8 @@ def check_running_binary(pid, installed, proc_root=Path("/proc")):
         return Check("运行版本", "warn", "没有检测到正在运行的 Clarion 会话")
     try:
         if binary_digest(proc_root / str(pid) / "exe") != binary_digest(installed):
-            return Check("运行版本", "warn", "运行会话与启动版本不同；如需使用该版本，请保存工作后重新登录")
-        return Check("运行版本", "ok", "当前会话与启动版本一致")
+            return Check("运行版本", "warn", "运行会话与 PATH 启动版本不同；如需使用该版本，请保存工作后重新登录")
+        return Check("运行版本", "ok", "当前会话与 PATH 中的启动版本一致")
     except OSError:
         return Check("运行版本", "warn", "当前会话的可执行文件无法核对")
 
@@ -123,8 +123,11 @@ def collect_checks(config=None, runner=run, which=shutil.which):
         elif len(candidates) > 1:
             checks.append(Check("运行版本", "warn", "检测到多个 Clarion 进程，无法确定当前会话版本"))
     if compositor and pid:
-        installed = Path("/usr/local/bin/clarion")
-        checks.append(check_running_binary(pid, installed if installed.is_file() else compositor))
+        # Validate, IPC and --version above use this same resolved entry point.
+        # A managed per-user release can legitimately be newer than /usr/local.
+        # check_launcher separately reports differing system copies; do not
+        # misreport a successfully updated user session as requiring re-login.
+        checks.append(check_running_binary(pid, compositor))
     elif compositor:
         checks.append(Check("运行版本", "warn", "未确定当前会话进程；不据此宣称运行版本已更新"))
     return checks

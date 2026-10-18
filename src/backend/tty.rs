@@ -937,7 +937,10 @@ impl Tty {
                     continue;
                 }
                 if let Err(err) = props.commit() {
-                    warn!("failed to commit the DPMS change for {:?}: {err:?}", surface.name);
+                    warn!(
+                        "failed to commit the DPMS change for {:?}: {err:?}",
+                        surface.name
+                    );
                 }
             }
         }

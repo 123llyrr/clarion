@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Read shared Shell preferences without rewriting them; persist only Apps view state.
 
-use std::{
-    collections::{HashMap, HashSet},
-    fs::{self, File, OpenOptions},
-    io::{Read, Write},
-    os::unix::fs::OpenOptionsExt,
-    path::PathBuf,
-};
+use std::collections::{HashMap, HashSet};
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};

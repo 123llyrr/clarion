@@ -1,10 +1,13 @@
 //! GPUI's test platform supplies windows, text, events and deterministic executors.
 //! These tests connect to no display server, socket, input method or application.
 
-use super::*;
+use std::fs;
+use std::path::PathBuf;
+
 use gpui::{TestAppContext, VisualTestContext};
-use std::{fs, path::PathBuf};
 use tempfile::TempDir;
+
+use super::*;
 
 struct CatalogFixture {
     root: TempDir,

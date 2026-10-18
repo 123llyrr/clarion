@@ -784,7 +784,7 @@ impl ConfigPath {
 
 #[cfg(test)]
 mod tests {
-    use insta::{assert_debug_snapshot, assert_snapshot};
+    use insta::assert_debug_snapshot;
     use pretty_assertions::assert_eq;
 
     use super::*;
