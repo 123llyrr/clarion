@@ -211,14 +211,32 @@ class TrayItemsPanel extends StatelessWidget {
   }
 }
 
-class _TrayListTile extends StatelessWidget {
+class _TrayListTile extends StatefulWidget {
   const _TrayListTile({required this.controller, required this.item});
   final ShellController controller;
   final TrayItem item;
 
   @override
+  State<_TrayListTile> createState() => _TrayListTileState();
+}
+
+class _TrayListTileState extends State<_TrayListTile> {
+  Offset? pressed;
+  Offset? menuPressed;
+
+  @override
+  void didUpdateWidget(covariant _TrayListTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.item.id != widget.item.id ||
+        oldWidget.controller != widget.controller) {
+      pressed = menuPressed = null;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    Offset? pressed;
+    final controller = widget.controller;
+    final item = widget.item;
     Offset center() {
       final box = context.findRenderObject();
       return box is RenderBox
@@ -226,8 +244,13 @@ class _TrayListTile extends StatelessWidget {
           : Offset.zero;
     }
 
-    void openMenu(Offset position) => unawaited(
-      controller.openTrayMenu(item, x: position.dx, y: position.dy),
+    void openMenu(Offset position, {int button = 3}) => unawaited(
+      controller.openTrayMenu(
+        item,
+        x: position.dx,
+        y: position.dy,
+        button: button,
+      ),
     );
     return TrayPointerRegion(
       controller: controller,
@@ -239,24 +262,40 @@ class _TrayListTile extends StatelessWidget {
         onTapDown: (details) => pressed = details.globalPosition,
         onTapCancel: () => pressed = null,
         onTap: () {
+          final menuButton = pressed == null ? 0 : 1;
           final position = pressed ?? center();
           pressed = null;
           unawaited(
-            controller.activateTrayItem(item, x: position.dx, y: position.dy),
+            controller.activateTrayItem(
+              item,
+              x: position.dx,
+              y: position.dy,
+              menuButton: menuButton,
+            ),
           );
         },
         onSecondaryTapUp: (details) => openMenu(details.globalPosition),
-        onLongPress: () => openMenu(pressed ?? center()),
+        onLongPress: () => openMenu(pressed ?? center(), button: 1),
         child: ListTile(
           leading: TrayGlyph(item: item, size: 28),
           title: Text(item.title, maxLines: 2, overflow: TextOverflow.ellipsis),
           subtitle: item.status == TrayStatus.needsAttention
               ? const Text('需要关注')
               : null,
-          trailing: IconButton(
-            tooltip: '${item.title} · 菜单',
-            onPressed: () => openMenu(center()),
-            icon: const Icon(Icons.more_vert_rounded),
+          trailing: Listener(
+            onPointerDown: (event) => menuPressed = event.position,
+            onPointerCancel: (_) => menuPressed = null,
+            onPointerUp: (_) => scheduleMicrotask(() => menuPressed = null),
+            child: IconButton(
+              tooltip: '${item.title} · 菜单',
+              onPressed: () {
+                final point = menuPressed ?? center();
+                final button = menuPressed == null ? 0 : 1;
+                menuPressed = null;
+                openMenu(point, button: button);
+              },
+              icon: const Icon(Icons.more_vert_rounded),
+            ),
           ),
         ),
       ),

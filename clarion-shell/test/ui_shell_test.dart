@@ -132,12 +132,18 @@ class _TrayActionController extends _Controller {
     TrayItem item, {
     double x = 0,
     double y = 0,
+    int menuButton = 1,
   }) async {
     activated.add(item.id);
   }
 
   @override
-  Future<void> openTrayMenu(TrayItem item, {double x = 0, double y = 0}) async {
+  Future<void> openTrayMenu(
+    TrayItem item, {
+    double x = 0,
+    double y = 0,
+    int button = 3,
+  }) async {
     opened.add(item.id);
     menuPositions.add(Offset(x, y));
     selectPanel(ShellPanel.trayMenu);
@@ -193,6 +199,7 @@ class _ManyTrayController extends _Controller {
     TrayItem item, {
     double x = 0,
     double y = 0,
+    int menuButton = 1,
   }) async {
     activated.add(item.id);
   }

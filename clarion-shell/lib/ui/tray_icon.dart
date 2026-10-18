@@ -34,6 +34,10 @@ class _ShellBarTooltipState extends State<ShellBarTooltip> {
   Timer? _wait;
   bool _hovering = false;
 
+  bool get _blocked =>
+      widget.controller.panel != ShellPanel.none ||
+      widget.controller.nativeTrayMenuOpen;
+
   @override
   void initState() {
     super.initState();
@@ -41,11 +45,11 @@ class _ShellBarTooltipState extends State<ShellBarTooltip> {
   }
 
   void _controllerChanged() {
-    if (widget.controller.panel != ShellPanel.none) _cancel();
+    if (_blocked) _cancel();
   }
 
   void _enter(PointerEnterEvent event) {
-    if (widget.controller.panel != ShellPanel.none) return;
+    if (_blocked) return;
     _hovering = true;
     _wait?.cancel();
     _wait = Timer(const Duration(milliseconds: 400), _show);
@@ -53,10 +57,7 @@ class _ShellBarTooltipState extends State<ShellBarTooltip> {
 
   void _show() {
     _wait = null;
-    if (!mounted ||
-        !_hovering ||
-        widget.controller.panel != ShellPanel.none ||
-        widget.message.trim().isEmpty) {
+    if (!mounted || !_hovering || _blocked || widget.message.trim().isEmpty) {
       return;
     }
     final box = context.findRenderObject();
@@ -130,7 +131,7 @@ class _ShellBarTooltipState extends State<ShellBarTooltip> {
 }
 
 /// Secondary mouse buttons and wheel deltas never trigger primary activation.
-class TrayPointerRegion extends StatelessWidget {
+class TrayPointerRegion extends StatefulWidget {
   const TrayPointerRegion({
     super.key,
     required this.controller,
@@ -144,12 +145,73 @@ class TrayPointerRegion extends StatelessWidget {
   final bool forwardWheel;
 
   @override
+  State<TrayPointerRegion> createState() => _TrayPointerRegionState();
+}
+
+class _TrayPointerRegionState extends State<TrayPointerRegion> {
+  double _horizontal = 0;
+  double _vertical = 0;
+
+  @override
+  void didUpdateWidget(covariant TrayPointerRegion oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.item.id != widget.item.id ||
+        oldWidget.controller != widget.controller ||
+        oldWidget.forwardWheel != widget.forwardWheel) {
+      _horizontal = 0;
+      _vertical = 0;
+    }
+  }
+
+  void _scroll(PointerScrollEvent event) {
+    if (!widget.forwardWheel) return;
+    final dx = event.scrollDelta.dx.isFinite ? event.scrollDelta.dx : 0.0;
+    final dy = event.scrollDelta.dy.isFinite ? event.scrollDelta.dy : 0.0;
+    if (dx == 0 && dy == 0) return;
+    GestureBinding.instance.pointerSignalResolver.register(event, (_) {
+      // Only the winning region consumes the signal. Keep both signed axes:
+      // touchpads often send sub-unit deltas, including diagonal movement.
+      _horizontal += dx;
+      _vertical += dy;
+      final horizontal = _wholeUnits(_horizontal);
+      final vertical = _wholeUnits(_vertical);
+      _horizontal -= horizontal;
+      _vertical -= vertical;
+      if (_horizontal.abs() < 1e-9) _horizontal = 0;
+      if (_vertical.abs() < 1e-9) _vertical = 0;
+      if (horizontal != 0) {
+        unawaited(
+          widget.controller.scrollTrayItem(
+            widget.item,
+            horizontal,
+            orientation: 'horizontal',
+          ),
+        );
+      }
+      if (vertical != 0) {
+        unawaited(
+          widget.controller.scrollTrayItem(
+            widget.item,
+            vertical,
+            orientation: 'vertical',
+          ),
+        );
+      }
+    });
+  }
+
+  // Compensate only floating-point summation noise at an integer boundary,
+  // rather than rounding each small event away from zero.
+  int _wholeUnits(double value) =>
+      value >= 0 ? (value + 1e-9).floor() : (value - 1e-9).ceil();
+
+  @override
   Widget build(BuildContext context) => Listener(
     onPointerDown: (event) {
       if (event.buttons == kTertiaryButton) {
         unawaited(
-          controller.secondaryActivateTrayItem(
-            item,
+          widget.controller.secondaryActivateTrayItem(
+            widget.item,
             x: event.position.dx,
             y: event.position.dy,
           ),
@@ -157,27 +219,13 @@ class TrayPointerRegion extends StatelessWidget {
       }
     },
     onPointerSignal: (event) {
-      if (!forwardWheel || event is! PointerScrollEvent) return;
-      final horizontal =
-          event.scrollDelta.dx.abs() > event.scrollDelta.dy.abs();
-      final delta = (horizontal ? event.scrollDelta.dx : event.scrollDelta.dy)
-          .round();
-      if (delta == 0) return;
-      GestureBinding.instance.pointerSignalResolver.register(event, (_) {
-        unawaited(
-          controller.scrollTrayItem(
-            item,
-            delta,
-            orientation: horizontal ? 'horizontal' : 'vertical',
-          ),
-        );
-      });
+      if (event is PointerScrollEvent) _scroll(event);
     },
-    child: child,
+    child: widget.child,
   );
 }
 
-class TrayBarButton extends StatelessWidget {
+class TrayBarButton extends StatefulWidget {
   const TrayBarButton({
     super.key,
     required this.controller,
@@ -187,17 +235,48 @@ class TrayBarButton extends StatelessWidget {
   final TrayItem item;
 
   @override
+  State<TrayBarButton> createState() => _TrayBarButtonState();
+}
+
+class _TrayBarButtonState extends State<TrayBarButton> {
+  Offset? _pressed;
+
+  @override
+  void didUpdateWidget(covariant TrayBarButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller ||
+        oldWidget.item.id != widget.item.id) {
+      _pressed = null;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final controller = widget.controller;
+    final item = widget.item;
     final selected =
-        controller.panel == ShellPanel.trayMenu &&
+        (controller.panel == ShellPanel.trayMenu ||
+            controller.nativeTrayMenuOpen) &&
         controller.selectedTrayItem?.id == item.id;
     final colors = Theme.of(context).colorScheme;
-    Offset? pressed;
     Offset center() {
       final box = context.findRenderObject();
       return box is RenderBox
           ? box.localToGlobal(box.size.center(Offset.zero))
           : Offset.zero;
+    }
+
+    void keyboardActivate() {
+      _pressed = null;
+      final point = center();
+      unawaited(
+        controller.activateTrayItem(
+          item,
+          x: point.dx,
+          y: point.dy,
+          menuButton: 0,
+        ),
+      );
     }
 
     return ShellBarTooltip(
@@ -209,16 +288,38 @@ class TrayBarButton extends StatelessWidget {
         height: 36,
         child: CallbackShortcuts(
           bindings: {
+            const SingleActivator(
+              LogicalKeyboardKey.enter,
+              includeRepeats: false,
+            ): keyboardActivate,
+            const SingleActivator(
+              LogicalKeyboardKey.numpadEnter,
+              includeRepeats: false,
+            ): keyboardActivate,
+            const SingleActivator(
+              LogicalKeyboardKey.space,
+              includeRepeats: false,
+            ): keyboardActivate,
             const SingleActivator(LogicalKeyboardKey.contextMenu): () {
               final point = center();
               unawaited(
-                controller.openTrayMenu(item, x: point.dx, y: point.dy),
+                controller.openTrayMenu(
+                  item,
+                  x: point.dx,
+                  y: point.dy,
+                  button: 0,
+                ),
               );
             },
             const SingleActivator(LogicalKeyboardKey.f10, shift: true): () {
               final point = center();
               unawaited(
-                controller.openTrayMenu(item, x: point.dx, y: point.dy),
+                controller.openTrayMenu(
+                  item,
+                  x: point.dx,
+                  y: point.dy,
+                  button: 0,
+                ),
               );
             },
           },
@@ -242,16 +343,18 @@ class TrayBarButton extends StatelessWidget {
                 child: InkWell(
                   key: ValueKey('tray-${item.id}'),
                   customBorder: const CircleBorder(),
-                  onTapDown: (details) => pressed = details.globalPosition,
-                  onTapCancel: () => pressed = null,
+                  onTapDown: (details) => _pressed = details.globalPosition,
+                  onTapCancel: () => _pressed = null,
                   onTap: () {
-                    final point = pressed ?? center();
-                    pressed = null;
+                    final menuButton = _pressed == null ? 0 : 1;
+                    final point = _pressed ?? center();
+                    _pressed = null;
                     unawaited(
                       controller.activateTrayItem(
                         item,
                         x: point.dx,
                         y: point.dy,
+                        menuButton: menuButton,
                       ),
                     );
                   },
@@ -259,12 +362,18 @@ class TrayBarButton extends StatelessWidget {
                     item,
                     x: details.globalPosition.dx,
                     y: details.globalPosition.dy,
+                    button: 3,
                   ),
                   onLongPress: () {
-                    final point = pressed ?? center();
-                    pressed = null;
+                    final point = _pressed ?? center();
+                    _pressed = null;
                     unawaited(
-                      controller.openTrayMenu(item, x: point.dx, y: point.dy),
+                      controller.openTrayMenu(
+                        item,
+                        x: point.dx,
+                        y: point.dy,
+                        button: 1,
+                      ),
                     );
                   },
                   child: Center(

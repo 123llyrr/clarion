@@ -447,13 +447,23 @@ coordinates follow the same selected edge.
 
 The implementation covers the system bar, workspace selection,
 application launcher, quick settings, notification center, StatusNotifier tray
-and static wallpaper selection. Tray icons live in the compact bar; their
-DBusMenu opens in the existing expanded overlay because the 40 px strip cannot
-host a menu. The shell requests `org.kde.StatusNotifierWatcher` with
+and static wallpaper selection. Tray icons live in the compact bar; exported
+DBusMenu objects are rendered by libdbusmenu-gtk3 as native GtkMenu Wayland
+popups, anchored to the existing surface without expanding the bar. Menus are
+cached by unique D-Bus owner and object path (at most eight entries); the native
+client handles submenus and layout/property updates. Popup grabs retain the
+original GTK input event, temporarily acquire keyboard focus and restore the
+previous interaction mode on close. Cancelled preparation does not open a
+second fallback menu. SNI ContextMenu is used when no menu is exported or native
+loading fails; Flutter menu panels remain for previews without a native runner.
+The shell requests `org.kde.StatusNotifierWatcher` with
 `doNotQueue` only. If that name is already owned it registers as a host and
 imports `RegisteredStatusNotifierItems` instead of replacing the watcher.
 Tray actions translate surface-local pointer positions using the current native
-output origin. Overflow remains accessible on narrow outputs. Pure X11/XEmbed
+output origin. Duplicate watcher addresses are normalized before the item limit;
+per-item refreshes and action queues prevent a slow exporter blocking others.
+In-flight scroll deltas remain associated with the original owner while metadata
+updates preserve fractional wheel input. Overflow remains accessible on narrow outputs. Pure X11/XEmbed
 tray icons are not hosted by this module.
 The wallpaper gallery loads `~/图片/Wallpapers` and manages its own `swaybg`
 child process. Selection is stored independently in `wallpaper.json` and

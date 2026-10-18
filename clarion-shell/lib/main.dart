@@ -656,6 +656,11 @@ class _ShellApplicationState extends State<ShellApplication> {
     _window.setMethodCallHandler((call) async {
       if (mounted && call.method == 'dismissBarTooltip') {
         widget.controller.dismissBarTooltip();
+      } else if (mounted && call.method == 'trayMenuClosed') {
+        final arguments = call.arguments;
+        if (arguments is Map && arguments['requestId'] is int) {
+          widget.controller.nativeTrayMenuClosed(arguments['requestId'] as int);
+        }
       } else if (mounted && call.method == 'outputGeometryChanged') {
         widget.controller.outputGeometryChanged();
         widget.onOutputGeometryChanged?.call();

@@ -10,6 +10,7 @@
 
 #include "shell_geometry.h"
 #include "background_effect.h"
+#include "native_tray_menu.h"
 
 // Lives on the GTK main thread. The Flutter channel owns no window reference,
 // so closing a preview or losing an output cannot leave callbacks with a stale
@@ -79,6 +80,8 @@ class WindowController final {
   // Expanded normally owns the keyboard. An external overlay can temporarily
   // own it while this surface continues drawing its full-output backdrop.
   std::optional<bool> keyboard_interactivity_override_;
+  bool native_tray_menu_keyboard_ = false;
+  std::unique_ptr<NativeTrayMenu> native_tray_menu_;
   bool tooltip_visible_ = false;
   bool bar_bottom_ = false;
   bool macos_ = false;

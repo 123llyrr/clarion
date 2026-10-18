@@ -8,6 +8,7 @@ import 'package:clarion_shell/models.dart';
 import 'package:clarion_shell/services/desktop_apps.dart';
 import 'package:clarion_shell/services/clarion_ipc.dart';
 import 'package:clarion_shell/services/system_service.dart';
+import 'package:clarion_shell/services/tray_service.dart';
 import 'package:clarion_shell/services/wallpaper_service.dart';
 import 'package:clarion_shell/state/shell_controller.dart';
 
@@ -102,6 +103,27 @@ class _Wallpapers extends WallpaperService {
   Future<void> restore({bool applySaved = false}) async {}
 }
 
+class _Tray extends TrayService {
+  static const item = TrayItem(
+    id: 'fixture',
+    title: 'Fixture',
+    menuAvailable: true,
+    menuPath: '/Menu',
+  );
+
+  @override
+  List<TrayItem> get items => const [item];
+  @override
+  Object? registrationToken(TrayItem value) =>
+      identical(value, item) ? this : null;
+  @override
+  Future<bool> start() async => true;
+  @override
+  Future<List<TrayMenuEntry>?> loadMenu(TrayItem item) async => const [
+    TrayMenuEntry(id: 1, label: 'Open'),
+  ];
+}
+
 class _ControllerLifetime extends StatefulWidget {
   const _ControllerLifetime(this.controller);
   final ShellController controller;
@@ -121,10 +143,15 @@ class _ControllerLifetimeState extends State<_ControllerLifetime> {
   }
 }
 
-Future<ShellController> _start(WidgetTester tester, _System system) async {
+Future<ShellController> _start(
+  WidgetTester tester,
+  _System system, {
+  TrayService? tray,
+}) async {
   final controller = ShellController(
     notifications: false,
-    tray: false,
+    tray: tray != null,
+    trayService: tray,
     powerProfilesEnabled: false,
     ipc: _Ipc(),
     desktopApps: _Apps(),
@@ -413,7 +440,11 @@ void main() {
       'leaving control center for $destination flushes drag and resumes external updates',
       (tester) async {
         final system = _System();
-        final controller = await _start(tester, system);
+        final controller = await _start(
+          tester,
+          system,
+          tray: destination == 'tray menu' ? _Tray() : null,
+        );
         controller.selectPanel(ShellPanel.quickSettings);
         controller.beginVolumeAdjustment();
         final pending = controller.setVolume(.8);
@@ -423,11 +454,7 @@ void main() {
           case 'tray items':
             controller.openTrayItems();
           case 'tray menu':
-            unawaited(
-              controller.openTrayMenu(
-                const TrayItem(id: 'fixture', title: 'Fixture'),
-              ),
-            );
+            unawaited(controller.openTrayMenu(_Tray.item));
         }
         expect(system.volumeWrites, [.8]);
         await _drain(tester);

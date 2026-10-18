@@ -148,9 +148,10 @@ void main() {
       addTearDown(controller.dispose);
       await controller.start();
       const item = TrayItem(id: 'native-menu', title: '原生菜单');
+      tray.catalogue = const [_a, _b, item];
       final pending = controller.openTrayMenu(item, x: 124, y: 20);
-      tray.loads.single.complete(null);
       await pending;
+      expect(tray.loads, isEmpty);
       expect(tray.invocations.single, (
         'native-menu',
         TrayAction.contextMenu,
@@ -167,6 +168,370 @@ void main() {
       ));
       await controller.scrollTrayItem(_a, -120, orientation: 'horizontal');
       expect(tray.scrolls.single, ('a', -120, 'horizontal'));
+    },
+  );
+
+  test(
+    'native DBusMenu stays anchored without a Flutter panel or reload storm',
+    () async {
+      final tray = _Tray()..useNative = true;
+      final controller = _controller(tray);
+      addTearDown(controller.dispose);
+      final calls = <MethodCall>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+            const MethodChannel('clarion.shell/window'),
+            (call) async {
+              calls.add(call);
+              return call.method == 'showTrayMenu' ? true : null;
+            },
+          );
+      await controller.start();
+      await controller.openTrayMenu(_a, x: 82.5, y: 19.25, button: 0);
+      expect(controller.panel, ShellPanel.none);
+      expect(controller.nativeTrayMenuOpen, true);
+      expect(controller.trayMenuLoading, false);
+      expect(tray.loads, isEmpty);
+      final show = calls.singleWhere((call) => call.method == 'showTrayMenu');
+      expect(show.arguments, containsPair('busName', ':1.100'));
+      expect(show.arguments, containsPair('menuPath', '/Menu'));
+      expect(show.arguments, containsPair('x', 82.5));
+      expect(show.arguments, containsPair('y', 19.25));
+      expect(show.arguments, containsPair('button', 0));
+      for (var i = 0; i < 30; i++) {
+        tray.menuChanged.add('a');
+      }
+      expect(tray.loads, isEmpty);
+      expect(
+        calls.where((call) => call.method == 'showTrayMenu'),
+        hasLength(1),
+      );
+      final request = (show.arguments as Map)['requestId'] as int;
+      controller.nativeTrayMenuClosed(request - 1);
+      expect(controller.nativeTrayMenuOpen, true);
+      controller.nativeTrayMenuClosed(request);
+      expect(controller.nativeTrayMenuOpen, false);
+      expect(controller.selectedTrayItem, isNull);
+    },
+  );
+
+  test(
+    'native tray menu releases another panel but preserves tray overflow',
+    () async {
+      final tray = _Tray()..useNative = true;
+      final controller = _controller(tray);
+      addTearDown(controller.dispose);
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+            const MethodChannel('clarion.shell/window'),
+            (call) async => call.method == 'showTrayMenu' ? true : null,
+          );
+      await controller.start();
+      controller.selectPanel(ShellPanel.quickSettings);
+      await controller.openTrayMenu(_a);
+      expect(controller.panel, ShellPanel.none);
+      expect(controller.nativeTrayMenuOpen, true);
+      controller.closePanel();
+      controller.openTrayItems();
+      await controller.openTrayMenu(_a);
+      expect(controller.panel, ShellPanel.trayItems);
+      expect(controller.nativeTrayMenuOpen, true);
+    },
+  );
+
+  test(
+    'repeated native opens coalesce while loading and toggle after display',
+    () async {
+      final tray = _Tray()..useNative = true;
+      final controller = _controller(tray);
+      addTearDown(controller.dispose);
+      final ready = Completer<bool>();
+      final calls = <MethodCall>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+            const MethodChannel('clarion.shell/window'),
+            (call) async {
+              calls.add(call);
+              return call.method == 'showTrayMenu' ? ready.future : null;
+            },
+          );
+      await controller.start();
+      final first = controller.openTrayMenu(_a);
+      await Future<void>.delayed(Duration.zero);
+      await controller.openTrayMenu(_a);
+      expect(
+        calls.where((call) => call.method == 'showTrayMenu'),
+        hasLength(1),
+      );
+      ready.complete(true);
+      await first;
+      expect(controller.nativeTrayMenuOpen, true);
+      await controller.openTrayMenu(_a);
+      expect(controller.nativeTrayMenuOpen, false);
+      expect(
+        calls.where((call) => call.method == 'showTrayMenu'),
+        hasLength(1),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        calls.where((call) => call.method == 'dismissTrayMenu'),
+        hasLength(1),
+      );
+    },
+  );
+
+  test('native menu owner removal closes only the matching request', () async {
+    final tray = _Tray()..useNative = true;
+    final controller = _controller(tray);
+    addTearDown(controller.dispose);
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(const MethodChannel('clarion.shell/window'), (
+          call,
+        ) async {
+          calls.add(call);
+          return call.method == 'showTrayMenu' ? true : null;
+        });
+    await controller.start();
+    await controller.openTrayMenu(_a);
+    final first = calls.last.arguments as Map;
+    await controller.openTrayMenu(_b);
+    controller.nativeTrayMenuClosed(first['requestId'] as int);
+    expect(controller.selectedTrayItem, _b);
+    tray.catalogue = const [_a];
+    tray.changed.add(null);
+    await Future<void>.delayed(Duration.zero);
+    expect(controller.nativeTrayMenuOpen, false);
+    expect(controller.panel, ShellPanel.none);
+    expect(
+      calls.where((call) => call.method == 'dismissTrayMenu'),
+      hasLength(2),
+    );
+  });
+
+  test(
+    'owner replacement closes the old native menu even while the old bus lives',
+    () async {
+      final tray = _Tray()..useNative = true;
+      final controller = _controller(tray);
+      addTearDown(controller.dispose);
+      final calls = <MethodCall>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+            const MethodChannel('clarion.shell/window'),
+            (call) async {
+              calls.add(call);
+              return call.method == 'showTrayMenu' ? true : null;
+            },
+          );
+      await controller.start();
+      await controller.openTrayMenu(_a);
+      final shown = calls.singleWhere((call) => call.method == 'showTrayMenu');
+      final request = (shown.arguments as Map)['requestId'];
+      tray.tokens['a'] = Object();
+      tray.catalogue = const [
+        TrayItem(
+          id: 'a',
+          title: 'New owner',
+          menuAvailable: true,
+          menuPath: '/Menu',
+        ),
+        _b,
+      ];
+      tray.changed.add(null);
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.nativeTrayMenuOpen, false);
+      expect(controller.selectedTrayItem, isNull);
+      final dismissed = calls.singleWhere(
+        (call) => call.method == 'dismissTrayMenu',
+      );
+      expect(dismissed.arguments, {'requestId': request});
+      await controller.openTrayMenu(_a);
+      expect(
+        calls.where((call) => call.method == 'showTrayMenu'),
+        hasLength(1),
+      );
+    },
+  );
+
+  test(
+    'slow activation does not block another tray or lose queued wheel deltas',
+    () async {
+      final tray = _Tray()..invokeResult = true;
+      final controller = _controller(tray);
+      addTearDown(controller.dispose);
+      await controller.start();
+      tray.itemWait['a'] = Completer<bool>();
+      tray.scrollWait = Completer<bool>();
+      final first = controller.activateTrayItem(_a);
+      await Future<void>.delayed(Duration.zero);
+      await controller.activateTrayItem(_b);
+      expect(tray.invocations.map((call) => call.$1), ['a', 'b']);
+      final scrolls = [
+        controller.scrollTrayItem(_a, 1),
+        controller.scrollTrayItem(_a, 2),
+        controller.scrollTrayItem(_a, 3),
+      ];
+      expect(tray.scrolls, [('a', 1, 'vertical')]);
+      tray.scrollWait!.complete(true);
+      await Future.wait(scrolls);
+      expect(tray.scrolls, [('a', 1, 'vertical'), ('a', 5, 'vertical')]);
+      tray.itemWait['a']!.complete(true);
+      await first;
+    },
+  );
+
+  test(
+    'a late secondary activation error cannot overwrite another native menu',
+    () async {
+      final tray = _Tray()
+        ..useNative = true
+        ..invokeWait = Completer<bool>();
+      final controller = _controller(tray);
+      addTearDown(controller.dispose);
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+            const MethodChannel('clarion.shell/window'),
+            (call) async => call.method == 'showTrayMenu' ? true : null,
+          );
+      await controller.start();
+      final activation = controller.secondaryActivateTrayItem(_a);
+      await Future<void>.delayed(Duration.zero);
+      await controller.openTrayMenu(_b);
+      tray.invokeWait!.complete(false);
+      await activation;
+      expect(controller.nativeTrayMenuOpen, true);
+      expect(controller.selectedTrayItem, _b);
+      expect(controller.trayError, isNull);
+    },
+  );
+
+  test(
+    'metadata refresh preserves wheel deltas queued for the same owner',
+    () async {
+      final tray = _Tray()..scrollWait = Completer<bool>();
+      final controller = _controller(tray);
+      addTearDown(controller.dispose);
+      await controller.start();
+      final first = controller.scrollTrayItem(_a, 1);
+      const refreshed = TrayItem(
+        id: 'a',
+        title: 'Updated title',
+        menuAvailable: true,
+        menuPath: '/Menu',
+      );
+      tray.catalogue = const [refreshed, _b];
+      tray.changed.add(null);
+      final second = controller.scrollTrayItem(refreshed, 2);
+      final third = controller.scrollTrayItem(refreshed, 3);
+      expect(tray.scrolls, [('a', 1, 'vertical')]);
+      tray.scrollWait!.complete(true);
+      await Future.wait([first, second, third]);
+      expect(tray.scrolls, [('a', 1, 'vertical'), ('a', 5, 'vertical')]);
+    },
+  );
+
+  test(
+    'owner replacement drops old queued wheel input and accepts new input',
+    () async {
+      final tray = _Tray()..scrollWait = Completer<bool>();
+      final controller = _controller(tray);
+      addTearDown(controller.dispose);
+      await controller.start();
+      final first = controller.scrollTrayItem(_a, 1);
+      final queued = controller.scrollTrayItem(_a, 2);
+      const replacement = TrayItem(
+        id: 'a',
+        title: 'Restarted application',
+        menuAvailable: true,
+        menuPath: '/Menu',
+      );
+      tray.tokens['a'] = Object();
+      tray.catalogue = const [replacement, _b];
+      tray.changed.add(null);
+      final next = controller.scrollTrayItem(replacement, 7);
+      await controller.scrollTrayItem(_a, 3);
+      expect(tray.scrolls, [('a', 1, 'vertical'), ('a', 7, 'vertical')]);
+      tray.scrollWait!.complete(true);
+      await Future.wait([first, queued, next]);
+      expect(tray.scrolls, [('a', 1, 'vertical'), ('a', 7, 'vertical')]);
+    },
+  );
+
+  test(
+    'cancelled native preparation never opens a late application menu',
+    () async {
+      final tray = _Tray()..useNative = true;
+      final controller = _controller(tray);
+      addTearDown(controller.dispose);
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+            const MethodChannel('clarion.shell/window'),
+            (call) async {
+              if (call.method == 'showTrayMenu') {
+                throw PlatformException(code: 'menu-cancelled');
+              }
+              return null;
+            },
+          );
+      await controller.start();
+      await controller.openTrayMenu(_a);
+      expect(controller.nativeTrayMenuOpen, false);
+      expect(controller.trayError, isNull);
+      expect(tray.loads, isEmpty);
+      expect(tray.invocations, isEmpty);
+    },
+  );
+
+  test(
+    'native failure uses ContextMenu once without building a second menu',
+    () async {
+      final tray = _Tray()
+        ..useNative = true
+        ..invokeResult = true;
+      final controller = _controller(tray);
+      addTearDown(controller.dispose);
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+            const MethodChannel('clarion.shell/window'),
+            (call) async {
+              if (call.method == 'showTrayMenu') return false;
+              if (call.method == 'surfaceOrigin') return {'x': -1280, 'y': 60};
+              return null;
+            },
+          );
+      await controller.start();
+      await controller.openTrayMenu(_a, x: 124, y: 20);
+      expect(controller.panel, ShellPanel.none);
+      expect(controller.nativeTrayMenuOpen, false);
+      expect(tray.loads, isEmpty);
+      expect(tray.invocations, [('a', TrayAction.contextMenu, -1156.0, 80.0)]);
+    },
+  );
+
+  test(
+    'failed keyboard activation retains keyboard provenance for native menu',
+    () async {
+      final tray = _Tray()..useNative = true;
+      final controller = _controller(tray);
+      addTearDown(controller.dispose);
+      final calls = <MethodCall>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+            const MethodChannel('clarion.shell/window'),
+            (call) async {
+              calls.add(call);
+              if (call.method == 'showTrayMenu') return true;
+              if (call.method == 'surfaceOrigin') return {'x': 0, 'y': 0};
+              return null;
+            },
+          );
+      await controller.start();
+      await controller.activateTrayItem(_a, menuButton: 0);
+      final shown = calls.singleWhere((call) => call.method == 'showTrayMenu');
+      expect(shown.arguments, containsPair('button', 0));
+      expect(tray.loads, isEmpty);
+      expect(tray.invocations.single.$2, TrayAction.activate);
     },
   );
 
@@ -239,6 +604,23 @@ ShellController _controller(_Tray tray) => ShellController(
 );
 
 class _Tray extends TrayService {
+  final tokens = <String, Object>{};
+  final _publishedTokens = Expando<Object>();
+  @override
+  Object? registrationToken(TrayItem item) {
+    if (catalogue.any((entry) => identical(entry, item))) {
+      _publishedTokens[item] ??= tokens.putIfAbsent(item.id, Object.new);
+    }
+    final token = _publishedTokens[item];
+    return catalogue.any((entry) => entry.id == item.id) &&
+            identical(token, tokens[item.id])
+        ? token
+        : null;
+  }
+
+  bool useNative = false;
+  final itemWait = <String, Completer<bool>>{};
+  Completer<bool>? scrollWait;
   final changed = StreamController<void>.broadcast(sync: true);
   final menuChanged = StreamController<String>.broadcast(sync: true);
   List<TrayItem> catalogue = const [_a, _b];
@@ -257,6 +639,11 @@ class _Tray extends TrayService {
   Stream<void> get changes => changed.stream;
   @override
   Stream<String> get menuChanges => menuChanged.stream;
+  @override
+  Map<String, String>? nativeMenuTarget(TrayItem item) =>
+      useNative && catalogue.any((entry) => identical(entry, item))
+      ? {'busName': ':1.100', 'menuPath': item.menuPath}
+      : null;
   @override
   Future<bool> start() async {
     available = true;
@@ -278,7 +665,8 @@ class _Tray extends TrayService {
     double y = 0,
   }) async {
     invocations.add((item.id, action, x, y));
-    return invokeWait == null ? invokeResult : await invokeWait!.future;
+    return await itemWait[item.id]?.future ??
+        (invokeWait == null ? invokeResult : await invokeWait!.future);
   }
 
   @override
@@ -294,7 +682,7 @@ class _Tray extends TrayService {
     String orientation = 'vertical',
   }) async {
     scrolls.add((item.id, delta, orientation));
-    return true;
+    return await scrollWait?.future ?? true;
   }
 
   @override
