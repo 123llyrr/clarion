@@ -2,7 +2,7 @@
 //! Native desktop files and wallpaper. Filesystem scans, image decoding and file
 //! operations run on a bounded worker; rendering uses only immutable snapshots.
 //! The former per-output desktop layout files are intentionally never rewritten.
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Cursor, Read, Write};
@@ -25,6 +25,8 @@ const MAX_ENTRIES: usize = 500;
 const MAX_VISITED: usize = 4096;
 const MAX_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
 const CONFIG_LIMIT: u64 = 65536;
+const MAX_PREVIEW_TEXT: u64 = 256 * 1024;
+const MAX_OPEN_SELECTION: usize = 16;
 
 actions!(
     clarion_desktop,
@@ -32,6 +34,10 @@ actions!(
         OpenSelection,
         RenameSelection,
         TrashSelection,
+        SelectAllEntries,
+        GetInfo,
+        QuickLook,
+        NewFolder,
         Cancel,
         NextSelection,
         PreviousSelection
@@ -69,15 +75,36 @@ struct DesktopSnapshot {
     error: Option<String>,
 }
 
+struct Inspector {
+    title: String,
+    rows: Vec<(String, String)>,
+    image: Option<Arc<Image>>,
+    text: Option<String>,
+}
+
 enum Work {
+    Inspect {
+        generation: u64,
+        paths: Vec<PathBuf>,
+        quick_look: bool,
+    },
+    CreateFolder(String),
     Refresh,
-    Rename { path: PathBuf, name: String },
-    Trash(PathBuf),
+    Rename {
+        path: PathBuf,
+        name: String,
+    },
+    Trash(Vec<PathBuf>),
     Wallpaper(PathBuf),
 }
 enum Update {
     Snapshot(DesktopSnapshot),
     Error(String),
+    Created(PathBuf),
+    Inspector {
+        generation: u64,
+        result: std::result::Result<Inspector, String>,
+    },
 }
 
 pub struct DesktopView {
@@ -88,6 +115,10 @@ pub struct DesktopView {
     directory: Option<PathBuf>,
     wallpaper: Option<Arc<Image>>,
     selected: Option<PathBuf>,
+    selected_many: BTreeSet<PathBuf>,
+    new_folder: bool,
+    inspector: Option<Inspector>,
+    inspection_generation: u64,
     menu: Option<Point<Pixels>>,
     rename: Option<PathBuf>,
     rename_name: String,
@@ -105,6 +136,13 @@ impl DesktopView {
     pub fn bind_keys(cx: &mut App) {
         cx.bind_keys([
             KeyBinding::new("enter", OpenSelection, Some("ClarionDesktop")),
+            KeyBinding::new("super-o", OpenSelection, Some("ClarionDesktop")),
+            KeyBinding::new("super-down", OpenSelection, Some("ClarionDesktop")),
+            KeyBinding::new("super-a", SelectAllEntries, Some("ClarionDesktop")),
+            KeyBinding::new("super-i", GetInfo, Some("ClarionDesktop")),
+            KeyBinding::new("super-y", QuickLook, Some("ClarionDesktop")),
+            KeyBinding::new("super-backspace", TrashSelection, Some("ClarionDesktop")),
+            KeyBinding::new("super-shift-n", NewFolder, Some("ClarionDesktop")),
             KeyBinding::new("f2", RenameSelection, Some("ClarionDesktop")),
             KeyBinding::new("delete", TrashSelection, Some("ClarionDesktop")),
             KeyBinding::new("escape", Cancel, Some("ClarionDesktop")),
@@ -148,6 +186,9 @@ impl DesktopView {
                                 this.directory = snapshot.directory;
                                 this.wallpaper = snapshot.wallpaper;
                                 this.error = snapshot.error;
+                                this.selected_many.retain(|path| {
+                                    this.entries.iter().any(|entry| &entry.path == path)
+                                });
                                 if this.selected.as_ref().is_some_and(|path| {
                                     !this.entries.iter().any(|entry| &entry.path == path)
                                 }) {
@@ -155,6 +196,18 @@ impl DesktopView {
                                 }
                             }
                             Update::Error(error) => this.error = Some(error),
+                            Update::Created(path) => {
+                                this.selected = Some(path.clone());
+                                this.selected_many = [path].into();
+                            }
+                            Update::Inspector { generation, result } => {
+                                if generation == this.inspection_generation {
+                                    match result {
+                                        Ok(inspector) => this.inspector = Some(inspector),
+                                        Err(error) => this.error = Some(error),
+                                    }
+                                }
+                            }
                         }
                         cx.notify();
                     })
@@ -173,6 +226,10 @@ impl DesktopView {
             directory: None,
             wallpaper: None,
             selected: None,
+            selected_many: BTreeSet::new(),
+            new_folder: false,
+            inspector: None,
+            inspection_generation: 0,
             menu: None,
             rename: None,
             rename_name: String::new(),
@@ -247,7 +304,17 @@ impl DesktopView {
     }
 
     fn begin_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.preview || self.busy {
+        if self.busy || self.rename.is_some() || self.new_folder || self.inspector.is_some() {
+            return;
+        }
+        if self.preview {
+            self.error = Some("预览模式不会修改文件".into());
+            cx.notify();
+            return;
+        }
+        if self.selected_many.len() != 1 {
+            self.error = Some("请选择一个项目进行重命名".into());
+            cx.notify();
             return;
         }
         let Some(entry) = self
@@ -268,7 +335,22 @@ impl DesktopView {
     }
 
     fn activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(path) = self.rename.clone() {
+        if self.inspector.is_some() {
+            return;
+        }
+        if self.new_folder {
+            if self.input.read(cx).has_preedit() {
+                return;
+            }
+            if let Err(error) = validate_name(&self.rename_name) {
+                self.error = Some(error.to_string());
+                cx.notify();
+                return;
+            }
+            self.new_folder = false;
+            window.focus(&self.focus);
+            self.enqueue(Work::CreateFolder(self.rename_name.clone()), cx);
+        } else if let Some(path) = self.rename.clone() {
             if self
                 .input
                 .update(cx, |input, cx| input.marked_text_range(window, cx))
@@ -290,16 +372,97 @@ impl DesktopView {
                 },
                 cx,
             );
-        } else if let Some(path) = self.selected.clone() {
-            self.send(DesktopAction::Open(path), cx);
+        } else {
+            let paths = self.selection();
+            if paths.len() > MAX_OPEN_SELECTION {
+                self.error = Some(format!(
+                    "一次最多打开 {MAX_OPEN_SELECTION} 个项目，请缩小选择范围"
+                ));
+                cx.notify();
+                return;
+            }
+            for path in paths {
+                self.send(DesktopAction::Open(path), cx);
+            }
         }
     }
 
+    fn selection(&self) -> Vec<PathBuf> {
+        self.entries
+            .iter()
+            .filter(|entry| self.selected_many.contains(&entry.path))
+            .map(|entry| entry.path.clone())
+            .collect()
+    }
+
+    fn select_all(&mut self, cx: &mut Context<Self>) {
+        if self.rename.is_some() || self.new_folder || self.inspector.is_some() {
+            return;
+        }
+        self.selected_many = self
+            .entries
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect();
+        self.selected = self.entries.first().map(|entry| entry.path.clone());
+        self.menu = None;
+        cx.notify();
+    }
+
+    fn inspect(&mut self, quick_look: bool, cx: &mut Context<Self>) {
+        if self.rename.is_some() || self.new_folder {
+            return;
+        }
+        if quick_look && self.inspector.is_some() {
+            self.inspector = None;
+            self.inspection_generation = self.inspection_generation.wrapping_add(1);
+            cx.notify();
+            return;
+        }
+        let paths = self.selection();
+        if paths.is_empty() {
+            self.error = Some("请先选择桌面项目".into());
+            cx.notify();
+            return;
+        }
+        self.inspection_generation = self.inspection_generation.wrapping_add(1);
+        self.menu = None;
+        self.enqueue(
+            Work::Inspect {
+                generation: self.inspection_generation,
+                paths,
+                quick_look,
+            },
+            cx,
+        );
+    }
+
+    fn begin_new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy || self.rename.is_some() || self.new_folder || self.inspector.is_some() {
+            return;
+        }
+        if self.preview || self.directory.is_none() {
+            self.error = Some("预览模式不会创建文件夹".into());
+            cx.notify();
+            return;
+        }
+        self.rename_name = available_folder_name(&self.entries);
+        self.new_folder = true;
+        self.menu = None;
+        self.selected = None;
+        self.selected_many.clear();
+        self.input
+            .update(cx, |input, cx| input.set_text(&self.rename_name, true, cx));
+        window.focus(&self.input.focus_handle(cx));
+        cx.notify();
+    }
+
     fn trash(&mut self, cx: &mut Context<Self>) {
-        if self.rename.is_none() && !self.busy {
-            if let Some(path) = self.selected.clone() {
+        if self.rename.is_none() && !self.new_folder && self.inspector.is_none() && !self.busy {
+            let paths = self.selection();
+            if !paths.is_empty() {
                 self.menu = None;
-                self.enqueue(Work::Trash(path), cx);
+                self.enqueue(Work::Trash(paths), cx);
             }
         }
     }
@@ -307,13 +470,20 @@ impl DesktopView {
     fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.menu = None;
         self.rename = None;
+        self.new_folder = false;
+        self.inspector = None;
+        self.inspection_generation = self.inspection_generation.wrapping_add(1);
         self.error = None;
         window.focus(&self.focus);
         cx.notify();
     }
 
     fn step(&mut self, forward: bool, cx: &mut Context<Self>) {
-        if self.rename.is_some() || self.entries.is_empty() {
+        if self.rename.is_some()
+            || self.new_folder
+            || self.inspector.is_some()
+            || self.entries.is_empty()
+        {
             return;
         }
         let current = self
@@ -326,6 +496,7 @@ impl DesktopView {
             None => 0,
         };
         self.selected = Some(self.entries[index].path.clone());
+        self.selected_many = [self.entries[index].path.clone()].into();
         self.menu = None;
         cx.notify();
     }
@@ -421,7 +592,11 @@ impl Render for DesktopView {
         let menu_position = self.menu.map(|position| {
             point(
                 px(f32::from(position.x).clamp(left + 8., (width - right - 238.).max(left + 8.))),
-                px(f32::from(position.y).clamp(top + 8., (height - bottom - 310.).max(top + 8.))),
+                px(f32::from(position.y).clamp(
+                    top + 8.,
+                    (height - bottom - if self.selected.is_some() { 430. } else { 270. })
+                        .max(top + 8.),
+                )),
             )
         });
         let mut root = div()
@@ -439,6 +614,12 @@ impl Render for DesktopView {
                 cx.listener(|this, _: &RenameSelection, window, cx| this.begin_rename(window, cx)),
             )
             .on_action(cx.listener(|this, _: &TrashSelection, _, cx| this.trash(cx)))
+            .on_action(cx.listener(|this, _: &SelectAllEntries, _, cx| this.select_all(cx)))
+            .on_action(cx.listener(|this, _: &GetInfo, _, cx| this.inspect(false, cx)))
+            .on_action(cx.listener(|this, _: &QuickLook, _, cx| this.inspect(true, cx)))
+            .on_action(
+                cx.listener(|this, _: &NewFolder, window, cx| this.begin_new_folder(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &Cancel, window, cx| this.cancel(window, cx)))
             .on_action(cx.listener(|this, _: &NextSelection, _, cx| this.step(true, cx)))
             .on_action(cx.listener(|this, _: &PreviousSelection, _, cx| this.step(false, cx)))
@@ -446,8 +627,10 @@ impl Render for DesktopView {
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
                     this.selected = None;
+                    this.selected_many.clear();
                     this.menu = None;
                     this.rename = None;
+                    this.new_folder = false;
                     window.focus(&this.focus);
                     cx.notify();
                 }),
@@ -456,7 +639,9 @@ impl Render for DesktopView {
                 MouseButton::Right,
                 cx.listener(|this, event: &MouseDownEvent, window, cx| {
                     this.selected = None;
+                    this.selected_many.clear();
                     this.rename = None;
+                    this.new_folder = false;
                     this.menu = Some(event.position);
                     window.focus(&this.focus);
                     cx.notify();
@@ -494,10 +679,35 @@ impl Render for DesktopView {
             .flex_wrap()
             .content_start()
             .gap_2();
+        if self.new_folder {
+            grid = grid.child(
+                div()
+                    .w(px(140.))
+                    .min_h(px(90.))
+                    .p_2()
+                    .rounded(px(8.))
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap_2()
+                    .bg(rgba(0x0a84ff66))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(Self::file_icon(EntryKind::Directory))
+                    .child(
+                        div()
+                            .w_full()
+                            .px_1()
+                            .py_1()
+                            .rounded(px(4.))
+                            .bg(rgb(0x202b37))
+                            .child(self.input.clone()),
+                    ),
+            );
+        }
         for (index, entry) in self.entries.iter().enumerate() {
             let path = entry.path.clone();
             let context_path = path.clone();
-            let selected = self.selected.as_ref() == Some(&path);
+            let selected = self.selected_many.contains(&path);
             let editing = self.rename.as_ref() == Some(&path);
             let mut icon = div()
                 .id(("desktop-file", index))
@@ -533,7 +743,16 @@ impl Render for DesktopView {
                         if this.rename.as_ref() != Some(&path) {
                             this.rename = None;
                         }
-                        this.selected = Some(path.clone());
+                        this.new_folder = false;
+                        if event.modifiers.platform || event.modifiers.control {
+                            if !this.selected_many.remove(&path) {
+                                this.selected_many.insert(path.clone());
+                            }
+                            this.selected = this.selected_many.last().cloned();
+                        } else {
+                            this.selected = Some(path.clone());
+                            this.selected_many = [path.clone()].into();
+                        }
                         if event.click_count >= 2 && this.rename.is_none() {
                             this.send(DesktopAction::Open(path.clone()), cx);
                         }
@@ -546,7 +765,11 @@ impl Render for DesktopView {
                         cx.stop_propagation();
                         window.focus(&this.focus);
                         this.rename = None;
+                        this.new_folder = false;
                         this.selected = Some(context_path.clone());
+                        if !this.selected_many.contains(&context_path) {
+                            this.selected_many = [context_path.clone()].into();
+                        }
                         this.menu = Some(event.position);
                         cx.notify();
                     }),
@@ -611,6 +834,8 @@ impl Render for DesktopView {
                 .left(position.x)
                 .top(position.y)
                 .w(px(230.))
+                .max_h(px((height - top - bottom - 16.).max(80.)))
+                .overflow_y_scroll()
                 .p_1()
                 .rounded(px(10.))
                 .bg(rgba(0x202b38f5))
@@ -626,11 +851,19 @@ impl Render for DesktopView {
                     .child(self.context_button(
                         "desktop-open",
                         "打开",
-                        |this, _, cx| {
-                            if let Some(path) = this.selected.clone() {
-                                this.send(DesktopAction::Open(path), cx)
-                            }
-                        },
+                        |this, window, cx| this.activate(window, cx),
+                        cx,
+                    ))
+                    .child(self.context_button(
+                        "desktop-info",
+                        "显示简介",
+                        |this, _, cx| this.inspect(false, cx),
+                        cx,
+                    ))
+                    .child(self.context_button(
+                        "desktop-quick-look",
+                        "快速查看",
+                        |this, _, cx| this.inspect(true, cx),
                         cx,
                     ))
                     .child(self.context_button(
@@ -666,6 +899,12 @@ impl Render for DesktopView {
             }
             root = root.child(
                 menu.child(self.context_button(
+                    "desktop-new-folder",
+                    "新建文件夹…",
+                    |this, window, cx| this.begin_new_folder(window, cx),
+                    cx,
+                ))
+                .child(self.context_button(
                     "desktop-refresh",
                     "刷新桌面",
                     |this, _, cx| {
@@ -698,14 +937,340 @@ impl Render for DesktopView {
                 )),
             );
         }
+        if let Some(inspector) = &self.inspector {
+            let panel_width = (width - 64.).clamp(220., 760.);
+            let panel_height = (height - top - bottom - 32.).clamp(180., 640.);
+            let mut content = div()
+                .id("desktop-inspector-content")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .p_5();
+            if let Some(image) = &inspector.image {
+                content = content.child(
+                    img(image.clone())
+                        .w_full()
+                        .h(px((panel_height - 140.).max(80.)))
+                        .object_fit(ObjectFit::Contain),
+                );
+            }
+            if let Some(text) = &inspector.text {
+                content =
+                    content.child(div().text_sm().font_family("monospace").child(text.clone()));
+            }
+            for (label, value) in &inspector.rows {
+                content = content.child(
+                    div()
+                        .flex()
+                        .gap_4()
+                        .text_sm()
+                        .child(
+                            div()
+                                .w(px(82.))
+                                .flex_none()
+                                .text_color(rgb(0xaab6c7))
+                                .child(label.clone()),
+                        )
+                        .child(div().flex_1().min_w_0().child(value.clone())),
+                );
+            }
+            root = root.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .bg(rgba(0x00000032))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.inspector = None;
+                            this.inspection_generation = this.inspection_generation.wrapping_add(1);
+                            cx.notify();
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .id("desktop-inspector")
+                            .w(px(panel_width))
+                            .max_h(px(panel_height))
+                            .rounded(px(16.))
+                            .overflow_hidden()
+                            .bg(rgba(0x202b38f5))
+                            .border_1()
+                            .border_color(rgba(0xffffff32))
+                            .shadow_lg()
+                            .flex()
+                            .flex_col()
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_3()
+                                    .px_4()
+                                    .py_3()
+                                    .border_b_1()
+                                    .border_color(rgba(0xffffff18))
+                                    .child(
+                                        div()
+                                            .id("desktop-inspector-close")
+                                            .size(px(12.))
+                                            .rounded_full()
+                                            .bg(rgb(0xff5f57))
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.inspector = None;
+                                                this.inspection_generation =
+                                                    this.inspection_generation.wrapping_add(1);
+                                                cx.notify();
+                                            })),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .text_sm()
+                                            .overflow_hidden()
+                                            .child(inspector.title.clone()),
+                                    ),
+                            )
+                            .child(content),
+                    ),
+            );
+        }
         root
     }
 }
 
+fn available_folder_name(entries: &[DesktopEntry]) -> String {
+    for index in 1..=MAX_ENTRIES + 1 {
+        let name = if index == 1 {
+            "未命名文件夹".into()
+        } else {
+            format!("未命名文件夹 {index}")
+        };
+        if !entries.iter().any(|entry| entry.name == name) {
+            return name;
+        }
+    }
+    unreachable!("the bounded entry list always leaves a candidate")
+}
+
+fn create_folder(directory: &Path, name: &str) -> Result<PathBuf> {
+    validate_name(name)?;
+    let path = directory.join(name);
+    fs::create_dir(&path).context("创建文件夹失败，现有同名项目不会被覆盖")?;
+    Ok(path)
+}
+
+fn trash_entries(
+    directory: &Path,
+    paths: &[PathBuf],
+    environment: &HashMap<String, String>,
+) -> Result<()> {
+    anyhow::ensure!(
+        !paths.is_empty() && paths.len() <= MAX_ENTRIES,
+        "选择的项目数量无效"
+    );
+    // Validate the complete batch before handing literal paths to GIO. A single
+    // bounded process avoids one service startup and timeout per selected file.
+    for path in paths {
+        validate_source(directory, path)?;
+    }
+    let mut child = Command::new("gio")
+        .arg("trash")
+        .arg("--")
+        .args(paths)
+        .env_clear()
+        .envs(environment)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("无法启动废纸篓服务")?;
+    let deadline = Instant::now() + Duration::from_secs(4);
+    loop {
+        match child.try_wait()? {
+            Some(status) => {
+                anyhow::ensure!(
+                    status.success(),
+                    "部分项目可能已移到废纸篓，请刷新桌面检查；未使用直接删除"
+                );
+                return Ok(());
+            }
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                anyhow::bail!("废纸篓操作超时，请刷新检查项目是否已移走")
+            }
+            None => std::thread::sleep(Duration::from_millis(10)),
+        }
+    }
+}
+
+fn display_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} 字节")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB（{bytes} 字节）", bytes as f64 / 1024.)
+    } else {
+        format!("{:.1} MB（{bytes} 字节）", bytes as f64 / (1024. * 1024.))
+    }
+}
+
+fn inspect_paths(directory: &Path, paths: &[PathBuf], quick_look: bool) -> Result<Inspector> {
+    anyhow::ensure!(
+        !paths.is_empty() && paths.len() <= MAX_ENTRIES,
+        "请选择桌面项目"
+    );
+    for path in paths {
+        validate_source(directory, path)?;
+    }
+    if quick_look {
+        anyhow::ensure!(
+            paths.len() == 1,
+            "快速查看一次只预览一个项目，请缩小选择范围"
+        );
+    }
+    let mut inspector = Inspector {
+        title: "显示简介".into(),
+        rows: Vec::new(),
+        image: None,
+        text: None,
+    };
+    if paths.len() > 1 {
+        let mut bytes = 0u64;
+        let mut files = 0;
+        let mut directories = 0;
+        let mut links = 0;
+        for path in paths {
+            let metadata = fs::symlink_metadata(path)?;
+            if metadata.is_symlink() {
+                links += 1;
+            } else if metadata.is_dir() {
+                directories += 1;
+            } else if metadata.is_file() {
+                files += 1;
+                bytes = bytes.saturating_add(metadata.len());
+            }
+        }
+        inspector.title = format!("{} 个项目的简介", paths.len());
+        inspector.rows = vec![
+            (
+                "包含".into(),
+                format!("{files} 个文件、{directories} 个文件夹、{links} 个符号链接"),
+            ),
+            ("文件大小".into(), display_size(bytes)),
+            (
+                "统计范围".into(),
+                "仅统计选中文件，不递归读取文件夹内容".into(),
+            ),
+            ("位置".into(), directory.display().to_string()),
+        ];
+        return Ok(inspector);
+    }
+    let path = &paths[0];
+    let metadata = fs::symlink_metadata(path)?;
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let kind = if metadata.is_symlink() {
+        "符号链接"
+    } else if metadata.is_dir() {
+        "文件夹"
+    } else if metadata.is_file() {
+        "文件"
+    } else {
+        "特殊文件"
+    };
+    inspector.title = if quick_look {
+        name.clone()
+    } else {
+        format!("{name} 简介")
+    };
+    inspector.rows = vec![
+        ("名称".into(), name),
+        ("种类".into(), kind.into()),
+        ("位置".into(), path.display().to_string()),
+    ];
+    if metadata.is_file() {
+        inspector
+            .rows
+            .push(("大小".into(), display_size(metadata.len())));
+    }
+    if let Ok(modified) = metadata.modified() {
+        let modified: chrono::DateTime<chrono::Local> = modified.into();
+        inspector.rows.push((
+            "修改时间".into(),
+            modified.format("%Y年%m月%d日 %H:%M:%S").to_string(),
+        ));
+    }
+    inspector.rows.push((
+        "权限".into(),
+        format!(
+            "{:03o}{}",
+            metadata.permissions().mode() & 0o777,
+            if metadata.permissions().readonly() {
+                "（只读）"
+            } else {
+                ""
+            }
+        ),
+    ));
+    if metadata.is_symlink() {
+        inspector.rows.push((
+            "链接目标".into(),
+            fs::read_link(path)?.display().to_string(),
+        ));
+    }
+    if quick_look {
+        anyhow::ensure!(
+            metadata.is_file(),
+            "快速查看支持普通图片和 UTF-8 文本；该项目是{kind}，可使用显示简介查看属性"
+        );
+        let extension = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if matches!(extension.as_str(), "png" | "jpg" | "jpeg") {
+            inspector.image = Some(
+                decode_image(path, 16 * 1024 * 1024, 1600, 1000, libc::O_NOFOLLOW)
+                    .context("无法快速查看此图片")?,
+            );
+        } else {
+            let bytes = read_regular_with_flags(path, MAX_PREVIEW_TEXT, libc::O_NOFOLLOW)
+                .context("文本快速查看上限为256 KB；较大文件请使用默认应用打开")?;
+            let text = String::from_utf8(bytes)
+                .context("该格式不支持快速查看，目前支持 PNG、JPEG 和 UTF-8 文本")?;
+            anyhow::ensure!(
+                !text
+                    .chars()
+                    .any(|ch| ch.is_control() && !matches!(ch, '\n' | '\r' | '\t')),
+                "该文件包含二进制内容，不能作为文本快速查看"
+            );
+            inspector.text = Some(text);
+        }
+    }
+    Ok(inspector)
+}
+
 fn read_regular(path: &Path, limit: u64) -> Result<Vec<u8>> {
+    read_regular_with_flags(path, limit, 0)
+}
+
+fn read_regular_with_flags(path: &Path, limit: u64, flags: i32) -> Result<Vec<u8>> {
     let file = OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC | flags)
         .open(path)?;
     let metadata = file.metadata()?;
     anyhow::ensure!(
@@ -834,7 +1399,7 @@ fn validate_name(name: &str) -> Result<()> {
 fn validate_source(directory: &Path, path: &Path) -> Result<()> {
     anyhow::ensure!(
         path.parent() == Some(directory) && path.file_name().is_some(),
-        "只能修改桌面文件夹中的项目"
+        "只能操作桌面文件夹中的项目"
     );
     fs::symlink_metadata(path).context("项目已被移动或删除")?;
     Ok(())
@@ -864,39 +1429,24 @@ fn rename_entry(directory: &Path, path: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn trash_entry(directory: &Path, path: &Path, environment: &HashMap<String, String>) -> Result<()> {
-    validate_source(directory, path)?;
-    let mut child = Command::new("gio")
-        .arg("trash")
-        .arg("--")
-        .arg(path)
-        .env_clear()
-        .envs(environment)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("无法启动废纸篓服务")?;
-    let deadline = Instant::now() + Duration::from_secs(4);
-    loop {
-        match child.try_wait()? {
-            Some(status) => {
-                anyhow::ensure!(status.success(), "无法移到废纸篓，原文件未直接删除");
-                return Ok(());
-            }
-            None if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                anyhow::bail!("废纸篓操作超时，请检查项目是否已移走")
-            }
-            None => std::thread::sleep(Duration::from_millis(10)),
-        }
-    }
+    trash_entries(directory, &[path.to_path_buf()], environment)
 }
 
 fn image_data(path: &Path) -> Result<Arc<Image>> {
-    anyhow::ensure!(path.is_absolute(), "壁纸必须使用绝对路径");
-    let bytes = read_regular(path, MAX_IMAGE_BYTES)?;
+    decode_image(path, MAX_IMAGE_BYTES, 3840, 2160, 0)
+}
+
+fn decode_image(
+    path: &Path,
+    byte_limit: u64,
+    width: u32,
+    height: u32,
+    flags: i32,
+) -> Result<Arc<Image>> {
+    anyhow::ensure!(path.is_absolute(), "图像必须使用绝对路径");
+    let bytes = read_regular_with_flags(path, byte_limit, flags)?;
     let mut reader = ImageReader::new(Cursor::new(&bytes)).with_guessed_format()?;
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(16384);
@@ -908,7 +1458,7 @@ fn image_data(path: &Path) -> Result<Arc<Image>> {
         u64::from(image.width()) * u64::from(image.height()) <= 32 * 1024 * 1024,
         "壁纸像素尺寸过大"
     );
-    let image = image.thumbnail(3840, 2160);
+    let image = image.thumbnail(width, height);
     let mut output = Cursor::new(Vec::new());
     image.write_to(&mut output, image::ImageFormat::Png)?;
     Ok(Arc::new(Image::from_bytes(
@@ -1037,7 +1587,20 @@ fn worker(
                     let result = match work {
                         Work::Refresh => Ok(()),
                         Work::Rename { path, name } => rename_entry(&directory, &path, &name),
-                        Work::Trash(path) => trash_entry(&directory, &path, &environment),
+                        Work::Trash(paths) => trash_entries(&directory, &paths, &environment),
+                        Work::CreateFolder(name) => create_folder(&directory, &name).map(|path| {
+                            let _ = updates.send_blocking(Update::Created(path));
+                        }),
+                        Work::Inspect {
+                            generation,
+                            paths,
+                            quick_look,
+                        } => {
+                            let result = inspect_paths(&directory, &paths, quick_look)
+                                .map_err(|error| format!("{error:#}"));
+                            let _ = updates.send_blocking(Update::Inspector { generation, result });
+                            continue;
+                        }
                         Work::Wallpaper(path) => save_wallpaper(&environment, &path),
                     };
                     if let Err(error) = result {
@@ -1085,6 +1648,7 @@ fn worker(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ::core::prelude::v1::test;
     fn env(root: &Path) -> HashMap<String, String> {
         [
             ("HOME".into(), root.to_string_lossy().into_owned()),
@@ -1095,6 +1659,207 @@ mod tests {
         ]
         .into()
     }
+    #[::core::prelude::v1::test]
+    fn new_folder_is_literal_and_never_replaces_an_existing_entry() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("Desktop");
+        fs::create_dir(&directory).unwrap();
+        let first = create_folder(&directory, "未命名文件夹").unwrap();
+        fs::write(first.join("keep.txt"), b"keep").unwrap();
+        assert!(create_folder(&directory, "未命名文件夹").is_err());
+        assert_eq!(
+            available_folder_name(&scan(&directory).unwrap()),
+            "未命名文件夹 2"
+        );
+        let literal = create_folder(&directory, "$(touch nothing) with spaces").unwrap();
+        assert!(literal.is_dir());
+        for name in ["", ".", "..", "../outside", "nested/folder"] {
+            assert!(create_folder(&directory, name).is_err());
+        }
+        assert_eq!(fs::read(first.join("keep.txt")).unwrap(), b"keep");
+        assert!(!root.path().join("outside").exists());
+    }
+
+    #[::core::prelude::v1::test]
+    fn info_is_read_only_and_does_not_follow_links_or_scan_directory_contents() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("Desktop");
+        fs::create_dir(&directory).unwrap();
+        let file = directory.join("hello.txt");
+        fs::write(&file, "你好，Clarion").unwrap();
+        let folder = create_folder(&directory, "folder").unwrap();
+        fs::write(folder.join("not-counted"), b"nested bytes").unwrap();
+        let link = directory.join("external link");
+        std::os::unix::fs::symlink(root.path().join("missing target"), &link).unwrap();
+        let info = inspect_paths(&directory, std::slice::from_ref(&link), false).unwrap();
+        assert!(info
+            .rows
+            .iter()
+            .any(|(label, value)| label == "种类" && value == "符号链接"));
+        assert!(info.rows.iter().any(|(label, _)| label == "链接目标"));
+        let info = inspect_paths(&directory, &[file.clone(), folder, link.clone()], false).unwrap();
+        assert!(info
+            .rows
+            .iter()
+            .any(|(_, value)| value == "1 个文件、1 个文件夹、1 个符号链接"));
+        assert!(info
+            .rows
+            .iter()
+            .any(|(label, value)| label == "文件大小" && value.starts_with("16 字节")));
+        assert!(inspect_paths(&directory, &[link], true).is_err());
+        assert!(inspect_paths(&directory, &[root.path().join("outside")], false).is_err());
+        assert_eq!(fs::read_to_string(file).unwrap(), "你好，Clarion");
+    }
+
+    #[::core::prelude::v1::test]
+    fn quick_look_previews_bounded_text_and_png_and_rejects_binary_special_and_large_files() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("Desktop");
+        fs::create_dir(&directory).unwrap();
+        let text = directory.join("text.txt");
+        fs::write(&text, "Hello\n你好\tClarion").unwrap();
+        let preview = inspect_paths(&directory, std::slice::from_ref(&text), true).unwrap();
+        assert_eq!(preview.text.as_deref(), Some("Hello\n你好\tClarion"));
+        assert!(preview.image.is_none());
+        let image = directory.join("sample.png");
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([20, 80, 100, 255]))
+            .save(&image)
+            .unwrap();
+        assert!(inspect_paths(&directory, &[image], true)
+            .unwrap()
+            .image
+            .is_some());
+        let binary = directory.join("binary.pdf");
+        fs::write(&binary, [0, 1, 2, 3]).unwrap();
+        assert!(inspect_paths(&directory, &[binary], true).is_err());
+        let large = directory.join("large.txt");
+        File::create(&large)
+            .unwrap()
+            .set_len(MAX_PREVIEW_TEXT + 1)
+            .unwrap();
+        assert!(inspect_paths(&directory, &[large], true).is_err());
+        let fifo = directory.join("fifo.txt");
+        let raw = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
+        assert!(inspect_paths(&directory, &[fifo], true).is_err());
+        assert!(inspect_paths(&directory, &[text.clone(), text], true).is_err());
+    }
+
+    #[gpui::test]
+    fn forwarded_desktop_shortcuts_dispatch_real_actions_and_inline_folder_creation(
+        cx: &mut TestAppContext,
+    ) {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("Desktop");
+        fs::create_dir(&directory).unwrap();
+        for name in ["first.txt", "second.txt"] {
+            fs::write(directory.join(name), name).unwrap();
+        }
+        let entries = scan(&directory).unwrap();
+        let (actions, received_actions) = async_channel::unbounded();
+        let (work, received_work) = mpsc::sync_channel(16);
+        cx.update(|cx| {
+            TextInput::bind_keys(cx);
+            DesktopView::bind_keys(cx);
+        });
+        let (view, visual) = cx.add_window_view(|window, cx| {
+            let input = cx.new(TextInput::new);
+            cx.subscribe(
+                &input,
+                |this: &mut DesktopView, _, QueryChanged(name), cx| {
+                    this.rename_name = name.clone();
+                    cx.notify();
+                },
+            )
+            .detach();
+            let focus = cx.focus_handle();
+            window.focus(&focus);
+            window.activate_window();
+            DesktopView {
+                output: "isolated".into(),
+                actions,
+                preview: false,
+                entries,
+                directory: Some(directory.clone()),
+                wallpaper: None,
+                selected: None,
+                selected_many: BTreeSet::new(),
+                new_folder: false,
+                inspector: None,
+                inspection_generation: 0,
+                menu: None,
+                rename: None,
+                rename_name: String::new(),
+                input,
+                focus,
+                error: None,
+                busy: false,
+                work,
+                alive: Arc::new(AtomicBool::new(true)),
+                scroll: ScrollHandle::new(),
+                reserved_edges: [0.; 4],
+            }
+        });
+        visual.simulate_keystrokes("super-a");
+        assert_eq!(
+            view.read_with(visual, |view, _| view.selected_many.len()),
+            2
+        );
+        for shortcut in ["super-o", "super-down"] {
+            visual.simulate_keystrokes(shortcut);
+            for name in ["first.txt", "second.txt"] {
+                assert!(
+                    matches!(received_actions.try_recv(), Ok(DesktopAction::Open(path)) if path == directory.join(name))
+                );
+            }
+        }
+        visual.simulate_keystrokes("super-i");
+        assert!(
+            matches!(received_work.try_recv(), Ok(Work::Inspect { quick_look: false, paths, .. }) if paths.len() == 2)
+        );
+        view.update(visual, |view, _| view.busy = false);
+        visual.simulate_keystrokes("super-y");
+        assert!(
+            matches!(received_work.try_recv(), Ok(Work::Inspect { quick_look: true, paths, .. }) if paths.len() == 2)
+        );
+        assert!(
+            received_actions.try_recv().is_err(),
+            "Quick Look must not silently launch an app"
+        );
+        view.update(visual, |view, _| view.busy = false);
+        visual.simulate_keystrokes("super-backspace");
+        assert!(matches!(received_work.try_recv(), Ok(Work::Trash(paths)) if paths.len() == 2));
+        view.update(visual, |view, _| view.busy = false);
+        visual.simulate_keystrokes("super-shift-n");
+        assert!(view.read_with(visual, |view, _| view.new_folder));
+        visual.update(|window, cx| {
+            let input = view.read(cx).input.clone();
+            input.update(cx, |input, cx| {
+                input.replace_and_mark_text_in_range(None, "资料", None, window, cx)
+            });
+        });
+        visual.simulate_keystrokes("enter");
+        assert!(view.read_with(visual, |view, _| view.new_folder));
+        assert!(
+            received_work.try_recv().is_err(),
+            "IME confirmation must not create a folder"
+        );
+        visual.update(|window, cx| {
+            let input = view.read(cx).input.clone();
+            input.update(cx, |input, cx| input.unmark_text(window, cx));
+        });
+        visual.simulate_keystrokes("ctrl-a");
+        visual.simulate_input("新建工作资料");
+        visual.simulate_keystrokes("enter");
+        assert!(
+            matches!(received_work.try_recv(), Ok(Work::CreateFolder(name)) if name == "新建工作资料")
+        );
+        assert!(
+            !directory.join("新建工作资料").exists(),
+            "headless test queues commands without a filesystem worker"
+        );
+    }
+
     #[::core::prelude::v1::test]
     fn localized_xdg_path_is_parsed_as_data_without_executing_shell() {
         let root = tempfile::tempdir().unwrap();
@@ -1179,6 +1944,32 @@ mod tests {
             ]
         );
         assert_eq!(fs::read(&path).unwrap(), b"original");
+        let second = directory.join("another literal --filename");
+        fs::write(&second, b"second").unwrap();
+        trash_entries(&directory, &[path.clone(), second.clone()], &environment).unwrap();
+        let batch: Vec<String> = serde_json::from_slice(&fs::read(&capture).unwrap()).unwrap();
+        assert_eq!(
+            batch,
+            vec![
+                "trash".to_string(),
+                "--".into(),
+                path.to_string_lossy().into_owned(),
+                second.to_string_lossy().into_owned()
+            ]
+        );
+        let before = fs::read(&capture).unwrap();
+        assert!(trash_entries(
+            &directory,
+            &[path.clone(), root.path().join("outside")],
+            &environment
+        )
+        .is_err());
+        assert_eq!(
+            fs::read(&capture).unwrap(),
+            before,
+            "the complete batch must validate before GIO starts"
+        );
+        assert_eq!(fs::read(second).unwrap(), b"second");
         assert!(trash_entry(&directory, &root.path().join("outside"), &environment).is_err());
     }
 
@@ -1222,7 +2013,15 @@ mod tests {
         let worker_alive = alive.clone();
         let thread =
             std::thread::spawn(move || worker(environment, true, incoming, updates, worker_alive));
-        work.send(Work::Trash(path.clone())).unwrap();
+        work.send(Work::Trash(vec![path.clone()])).unwrap();
+        work.send(Work::CreateFolder("must-not-exist".into()))
+            .unwrap();
+        work.send(Work::Inspect {
+            generation: 1,
+            paths: vec![path.clone()],
+            quick_look: true,
+        })
+        .unwrap();
         let deadline = Instant::now() + Duration::from_secs(1);
         let snapshot = loop {
             if let Ok(Update::Snapshot(snapshot)) = received.try_recv() {
@@ -1238,6 +2037,7 @@ mod tests {
             .all(|entry| entry.path.starts_with("/clarion-preview")));
         assert_eq!(fs::read(path).unwrap(), b"unchanged");
         assert!(!root.path().join("config").exists());
+        assert!(!root.path().join("must-not-exist").exists());
         alive.store(false, Ordering::Relaxed);
         drop(work);
         thread.join().unwrap();
