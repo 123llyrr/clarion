@@ -6,6 +6,7 @@ import 'power_mode_card.dart';
 import 'panel_components.dart';
 import 'mac_shell_settings.dart';
 import 'controller_selector.dart';
+import 'screenshot_icon.dart';
 
 class QuickSettingsPanel extends StatelessWidget {
   const QuickSettingsPanel({
@@ -481,7 +482,7 @@ class _ConnectivityTiles extends StatelessWidget {
       final screenshot = _QuickTile(
         label: '屏幕截图',
         subtitle: '截取屏幕',
-        icon: Icons.screenshot_monitor_rounded,
+        iconWidget: const ScreenshotIcon(),
         active: controller.panel == ShellPanel.screenshot,
         busy: false,
         onPressed: () => controller.selectPanel(ShellPanel.screenshot),
@@ -583,14 +584,16 @@ class _QuickTile extends StatelessWidget {
   const _QuickTile({
     required this.label,
     required this.subtitle,
-    required this.icon,
+    this.icon,
+    this.iconWidget,
     required this.active,
     required this.busy,
     this.onPressed,
-  });
+  }) : assert((icon == null) != (iconWidget == null));
   final String label;
   final String subtitle;
-  final IconData icon;
+  final IconData? icon;
+  final Widget? iconWidget;
   final bool active;
   final bool busy;
   final VoidCallback? onPressed;
@@ -637,7 +640,10 @@ class _QuickTile extends StatelessWidget {
                               color: foreground,
                             ),
                           )
-                        : Icon(icon, color: foreground, size: 20),
+                        : IconTheme.merge(
+                            data: IconThemeData(color: foreground, size: 20),
+                            child: iconWidget ?? Icon(icon!),
+                          ),
                   ),
                 ),
                 const SizedBox(width: 12),

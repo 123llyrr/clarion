@@ -11,6 +11,7 @@ import 'mac_volume_menu.dart';
 import 'mac_control_center.dart';
 import 'mac_system_menu.dart';
 import 'screenshot_panel.dart';
+import 'screenshot_icon.dart';
 import 'tray_menu_panel.dart';
 import 'wallpaper_panel.dart';
 import 'mac_dock_app_menu.dart';
@@ -143,7 +144,7 @@ class _SystemMenu extends StatelessWidget {
         ),
         _MenuAction(
           actionKey: 'system-menu-screenshot',
-          icon: Icons.screenshot_monitor_rounded,
+          iconWidget: const ScreenshotIcon(size: 20),
           label: '截图',
           onTap: () => controller.selectPanel(ShellPanel.screenshot),
         ),
@@ -239,19 +240,21 @@ class _DockAppMenu extends StatelessWidget {
 class _MenuAction extends StatelessWidget {
   const _MenuAction({
     required this.actionKey,
-    required this.icon,
+    this.icon,
+    this.iconWidget,
     required this.label,
     required this.onTap,
-  });
+  }) : assert((icon == null) != (iconWidget == null));
   final String actionKey;
-  final IconData icon;
+  final IconData? icon;
+  final Widget? iconWidget;
   final String label;
   final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) => ListTile(
     key: ValueKey(actionKey),
-    leading: Icon(icon, size: 20),
+    leading: iconWidget ?? Icon(icon!, size: 20),
     title: Text(label, maxLines: 2, overflow: TextOverflow.ellipsis),
     dense: true,
     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),

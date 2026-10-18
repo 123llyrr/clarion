@@ -49,8 +49,6 @@ pub(crate) fn render_opening_window_gles(
     scale: Scale<f64>,
     alpha: f32,
 ) -> anyhow::Result<(OpeningWindowRenderElement, OffscreenData)> {
-    let clamped_progress = pose.clamped_progress;
-
     let (elem, _sync_point, mut data) = buffers
         .gles
         .render(renderer, scale, elements)
@@ -91,7 +89,7 @@ pub(crate) fn render_opening_window_gles(
         return Ok((elem.into(), data));
     }
 
-    let elem = elem.with_alpha(clamped_progress as f32 * alpha);
+    let elem = elem.with_alpha(pose.opacity as f32 * alpha);
 
     let current_scale = pose.texture_scale;
 
@@ -104,7 +102,7 @@ pub(crate) fn render_opening_window_gles(
 
     let elem = RelocateRenderElement::from_element(
         elem,
-        location.to_physical_precise_round(scale),
+        (location + Point::new(0., pose.offset_y)).to_physical_precise_round(scale),
         Relocate::Relative,
     );
 
@@ -153,7 +151,7 @@ pub(crate) fn render_opening_window_native(
         let elem = TextureRenderElement::from_texture_buffer(
             buffer,
             offset,
-            pose.clamped_progress as f32 * alpha,
+            pose.opacity as f32 * alpha,
             Some(Rectangle::from_size(texture_size)),
             Some(texture_size),
             Kind::Unspecified,
@@ -168,7 +166,7 @@ pub(crate) fn render_opening_window_native(
         );
         let elem = RelocateRenderElement::from_element(
             elem,
-            location.to_physical_precise_round(scale),
+            (location + Point::new(0., pose.offset_y)).to_physical_precise_round(scale),
             Relocate::Relative,
         );
         let data = OffscreenData {
@@ -309,6 +307,8 @@ mod tests {
             progress: 0.5,
             clamped_progress: 0.5,
             scale: 1.,
+            opacity: 0.5,
+            offset_y: 0.,
             texture_scale: 1.,
             shader_popin_ratio: 1.,
             denial_reveal,

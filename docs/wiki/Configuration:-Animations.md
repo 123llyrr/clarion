@@ -27,9 +27,10 @@ animations {
     }
 
     window-open {
-        spring damping-ratio=0.62 stiffness=600 epsilon=0.0015
+        duration-ms 220
+        curve "cubic-bezier" 0.22 0.0 0.26 1.0
         effect "fade"
-        popin 0.94
+        popin 0.965
         glide { off; }
     }
 
@@ -237,26 +238,33 @@ the pointer remain flat.
 
 #### `window-open`
 
-Window opening defaults to a spring from 94% size: lightly underdamped, so it
-overshoots a few percent before settling. Because the duration comes from the
-spring rather than a fixed timeline, a window that is closed and reopened while
-still moving keeps its velocity instead of restarting from rest. Opacity stays at
-full strength during the rebound. The animation starts with the first mapped
-buffer. The complete window snapshot is cached and redrawn only on damage; the
-fade uses the ordinary texture pipeline on both Vulkan and GLES. These spring
-parameters are a Clarion choice, not a measured macOS curve. Turning animations
-off or enabling reduced motion removes the complete transform immediately.
+Window opening defaults to a 220 ms monotonic curve with zero initial and final
+speed. A small 96.5% to 100% growth and an 8 logical-pixel rise replace the old
+larger scale rebound. Group opacity starts at 18% on the first mapped buffer and
+reaches full strength before the geometry settles; there is no fixed capture
+delay. The complete window snapshot redraws only on damage and uses the ordinary
+texture pipeline on Vulkan and GLES. Native snapshot preparation keeps its
+asynchronous retry and producer synchronization. These values are Clarion
+tuning, not measured macOS defaults.
 
-Setting `duration-ms` and `curve` replaces the spring with a fixed timeline;
-`effect "reveal"` keeps its first-arrival completion behavior either way.
+Native snapshot targets register with the renderer's bounded image pool. Once
+the scene and completed GPU/snapshot owners release a target, a later opening
+can reuse its capacity without another allocation. A live retained snapshot
+prevents reuse. The first cold allocation can still defer a frame while the
+worker prepares it; this does not promise zero waiting or bypass producer fences.
+
+Explicit `spring`, `duration-ms`, `curve`, and `popin` settings remain
+authoritative. User springs can still show a bounded rebound; `effect "reveal"`
+keeps its first-arrival completion behavior. Turning animations off or enabling
+reduced motion removes opacity and geometry changes immediately.
 
 ```kdl
 animations {
     window-open {
-        duration-ms 200
-        curve "cubic-bezier" 0.16 1.4 0.30 1.0
+        duration-ms 220
+        curve "cubic-bezier" 0.22 0.0 0.26 1.0
         effect "fade"
-        popin 0.94
+        popin 0.965
         glide { off; }
     }
 }

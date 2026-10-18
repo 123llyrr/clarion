@@ -24,6 +24,7 @@ import 'mac_spotlight_panel.dart';
 import 'mac_mission_control_panel.dart';
 import 'global_app_menu_bar.dart';
 import 'shell_panel_content.dart';
+import 'screenshot_icon.dart';
 import 'mac_volume_menu.dart';
 import 'mac_force_quit_dialog.dart';
 import 'mac_control_center.dart';
@@ -1391,7 +1392,7 @@ class _MacMenuBar extends StatelessWidget {
                           selected: controller.panel == ShellPanel.screenshot,
                           onPressed: () =>
                               controller.selectPanel(ShellPanel.screenshot),
-                          child: const Icon(Icons.screenshot_monitor_rounded),
+                          child: const ScreenshotIcon(),
                         ),
                       if (width > 620 && controller.batteryFraction != null)
                         ShellBarTooltip(

@@ -1,7 +1,9 @@
 //! Opt-in real GPU regression tests. No display master or running session is required.
 
 mod color_management;
+mod desktop_motion;
 pub(super) mod lifecycle;
+mod opening_cache;
 mod window_snapshot;
 mod yuv_cold;
 
@@ -10376,9 +10378,13 @@ fn lightweight_window_open_matches_gles_and_preserves_group_opacity() {
                 "scale={scale} ms={millis}: GLES mismatch {worst}"
             );
             // An opaque foreground covering another opaque surface still fades once.
-            let index =
-                (((26. * scale) as usize) * ((80. * scale) as usize) + (32. * scale) as usize) * 4;
-            let alpha = (255. * native_open.progress() * 0.75).round() as u8;
+            let pose = native_open.pose();
+            // Follow a point inside the opaque foreground through its small
+            // scale and rise rather than sampling the old fixed position.
+            let x = (16. + 20. + (18. - 20.) * pose.scale) * scale;
+            let y = (16. + 12. + (14. - 12.) * pose.scale + pose.offset_y) * scale;
+            let index = ((y as usize) * ((80. * scale) as usize) + (x as usize)) * 4;
+            let alpha = (255. * pose.opacity * 0.75).round() as u8;
             let expected = if millis >= 135 {
                 [0, 0, alpha, alpha]
             } else {

@@ -1,16 +1,30 @@
 //! Pure scene deformation shared by every rendering device.
 //!
-//! Genie uses recovered geometry-dependent temporal phases, with a separately
-//! designed, monotonic spatial contour. It does not reproduce the complete
-//! private Apple warp. Mesh generation allocates only its final triangle list.
+//! Genie uses Clarion's continuous, progressive row narrowing. Window travel
+//! starts immediately and the far row finishes last, avoiding an early uniform
+//! thin rectangle. A fixed grid bounds CPU work at every output scale. This is
+//! an independent visual design, not a reconstruction of Apple's full warp.
 
 use crate::geometry::Rect;
 
-/// A tessellation target in physical output pixels. This is Clarion's rendering
-/// policy, not a constant recovered from Dock. Extreme inputs can reach the
-/// hard segment cap before meeting this target; their shape stays unchanged.
-pub const GENIE_MAX_ERROR_PX: f64 = 0.5;
-pub const GENIE_MAX_SEGMENTS: usize = 1024;
+/// A bounded two-dimensional grid keeps texture interpolation smooth without
+/// making per-frame CPU/GPU work depend on window size or output scaling.
+pub const GENIE_LONG_SEGMENTS: usize = 32;
+pub const GENIE_CROSS_SEGMENTS: usize = 4;
+pub const GENIE_MAX_VERTICES: usize = GENIE_LONG_SEGMENTS * GENIE_CROSS_SEGMENTS * 6;
+
+// Clarion's own progressive neck timing, not a recovered Apple warp. Rows at
+// the Dock finish first, while the far row remains in motion until progress 1.
+const NECK_COMPLETION: f64 = 0.75;
+const ROW_COMPLETION_INVERSE: [f64; GENIE_LONG_SEGMENTS + 1] = {
+    let mut inverse = [0.; GENIE_LONG_SEGMENTS + 1];
+    let mut row = 0;
+    while row <= GENIE_LONG_SEGMENTS {
+        inverse[row] = 1. / (1. - (1. - NECK_COMPLETION) * row as f64 / GENIE_LONG_SEGMENTS as f64);
+        row += 1;
+    }
+    inverse
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Edge {
@@ -36,8 +50,7 @@ pub fn smoothstep(t: f64) -> f64 {
     t * t * (3. - 2. * t)
 }
 
-/// Sample at logical scale 1. Render adapters should use
-/// [`minimize_vertices_with_scale`] for the actual output's pixel budget.
+/// Sample the same geometry on every output.
 pub fn minimize_vertices(
     source: Rect,
     target: Rect,
@@ -48,39 +61,16 @@ pub fn minimize_vertices(
     minimize_vertices_with_scale(source, target, progress, edge, effect, 1.)
 }
 
-/// The output scale affects tessellation, not animation state or UVs. Scale
-/// retains its aspect fitting and existing smoothstep interpolation because the
-/// report did not establish Big Sur Scale's complete timing function.
+/// The fixed mesh is output-scale independent. Keep this adapter entry point so
+/// callers can retain their frozen output/texture identity without changing the
+/// shape or increasing the work at fractional and high-DPI scales.
 pub fn minimize_vertices_with_scale(
     source: Rect,
     target: Rect,
     progress: f64,
     edge: Edge,
     effect: Effect,
-    physical_scale: f64,
-) -> (Rect, Vec<MeshVertex>) {
-    minimize_vertices_with_geometry(
-        source,
-        target,
-        source,
-        progress,
-        edge,
-        effect,
-        physical_scale,
-    )
-}
-
-/// Render the whole source texture while deriving temporal phases only from
-/// the frozen window frame. Shadow padding and per-output texture rounding
-/// must not change the geometry-dependent stage weights.
-pub fn minimize_vertices_with_geometry(
-    source: Rect,
-    target: Rect,
-    phase_source: Rect,
-    progress: f64,
-    edge: Edge,
-    effect: Effect,
-    physical_scale: f64,
+    _physical_scale: f64,
 ) -> (Rect, Vec<MeshVertex>) {
     let source = source.sanitized();
     let target = target.sanitized();
@@ -92,83 +82,7 @@ pub fn minimize_vertices_with_geometry(
     if effect == Effect::Scale {
         return scale_vertices(source, target, p);
     }
-    genie_vertices(
-        source,
-        target,
-        phase_source.sanitized(),
-        p,
-        edge,
-        physical_scale,
-    )
-}
-
-/// Interpret the recovered signed geometry directly in Wayland's downwards Y
-/// coordinates. Reflection maps Top/Bottom and Left/Right symmetrically; the
-/// report's raw numeric direction values are not reused as platform enums.
-fn genie_phases(
-    source: Rect,
-    target: Rect,
-    edge: Edge,
-) -> Option<clarion_motion::genie::GeniePhases> {
-    let (delta_left, delta_right, gap, length, extent) = match edge {
-        Edge::Top => {
-            let gap = (target.bottom() - source.y).max(0.);
-            (
-                target.x - source.x,
-                target.right() - source.right(),
-                gap,
-                if gap > 0. {
-                    -source.height
-                } else {
-                    target.bottom() - source.bottom()
-                },
-                -source.height,
-            )
-        }
-        Edge::Bottom => {
-            let gap = (target.y - source.bottom()).min(0.);
-            (
-                target.x - source.x,
-                target.right() - source.right(),
-                gap,
-                if gap < 0. {
-                    source.height
-                } else {
-                    target.y - source.y
-                },
-                source.height,
-            )
-        }
-        Edge::Left => {
-            let gap = (target.right() - source.x).max(0.);
-            (
-                target.y - source.y,
-                target.bottom() - source.bottom(),
-                gap,
-                if gap > 0. {
-                    -source.width
-                } else {
-                    target.right() - source.right()
-                },
-                -source.width,
-            )
-        }
-        Edge::Right => {
-            let gap = (target.x - source.right()).min(0.);
-            (
-                target.y - source.y,
-                target.bottom() - source.bottom(),
-                gap,
-                if gap < 0. {
-                    source.width
-                } else {
-                    target.x - source.x
-                },
-                source.width,
-            )
-        }
-    };
-    clarion_motion::genie::GeniePhases::new(delta_left, delta_right, gap, length, extent)
+    genie_vertices(source, target, p, edge)
 }
 
 #[derive(Clone, Copy, Default)]
@@ -177,42 +91,15 @@ struct ContourNode {
     edges: [f64; 2],
 }
 
-/// A strip with an affine longitudinal coordinate cannot fold: every row stays
-/// ordered and both boundary widths are convex combinations of positive source
-/// and target widths. Cross-only narrowing must not move all rows to one place.
-///
-/// The cubic *spatial* contour below is an independent Clarion approximation.
-/// Recovered half-cosines are evaluated only by the two temporal phases. Shared
-/// rows are evaluated once, with two cross-axis vertices and original UVs.
-fn genie_vertices(
-    source: Rect,
-    target: Rect,
-    phase_source: Rect,
-    progress: f64,
-    edge: Edge,
-    physical_scale: f64,
-) -> (Rect, Vec<MeshVertex>) {
-    let p = if progress.is_nan() {
-        0.
-    } else {
-        progress.clamp(0., 1.)
-    };
-    // Rectangular endpoints need no tessellation and retain the original
-    // geometry exactly, including negative/fractional output coordinates.
+fn genie_vertices(source: Rect, target: Rect, p: f64, edge: Edge) -> (Rect, Vec<MeshVertex>) {
+    // Exact rectangular endpoints do not need a deformation mesh.
     if p == 0. {
         return rectangle_vertices(source);
     }
     if p == 1. {
         return rectangle_vertices(target);
     }
-    let (cross, travel) = genie_phases(phase_source, target, edge)
-        .map(|phases| phases.sample(p))
-        // The recovered phase formula is undefined for certain overlapping or
-        // zero-sized geometries. A single half-cosine is our finite fallback.
-        .unwrap_or_else(|| {
-            let t = clarion_motion::genie::half_cosine(p);
-            (t, t)
-        });
+    let travel = smoothstep(p);
     let horizontal = matches!(edge, Edge::Left | Edge::Right);
     let positive = matches!(edge, Edge::Bottom | Edge::Right);
     let (source_start, source_length, target_start, target_length, source_edges, target_edges) =
@@ -239,62 +126,27 @@ fn genie_vertices(
         target_edges[0] - source_edges[0],
         target_edges[1] - source_edges[1],
     ];
-    let scale = if physical_scale.is_finite() && physical_scale > 0. {
-        physical_scale
-    } else {
-        1.
-    };
-    let maximum_delta_px = delta[0].abs().max(delta[1].abs()) * scale;
-    let width_delta_px = (delta[1] - delta[0]).abs() * scale;
-    let amplitude = cross * (1. - cross);
-    let baseline = cross * cross;
-    let contour = |along: f64| {
-        let towards = if positive { along } else { 1. - along };
-        let blend = baseline + amplitude * smoothstep(towards);
-        ContourNode {
+    let mut nodes = [ContourNode::default(); GENIE_LONG_SEGMENTS + 1];
+    for (row, node) in nodes.iter_mut().enumerate() {
+        let along = row as f64 / GENIE_LONG_SEGMENTS as f64;
+        let towards = if positive {
+            row
+        } else {
+            GENIE_LONG_SEGMENTS - row
+        };
+        // One interpolation per row; division is precomputed and no transcendental
+        // functions, recursive subdivision or temporary allocations are needed.
+        // smoothstep reaches each row's completion with zero velocity, so there
+        // is no motion kink when a Dock-facing row finishes before its neighbor.
+        let narrow = smoothstep(p * ROW_COMPLETION_INVERSE[towards]);
+        *node = ContourNode {
             along,
             edges: [
-                source_edges[0] + delta[0] * blend,
-                source_edges[1] + delta[1] * blend,
+                source_edges[0] + delta[0] * narrow,
+                source_edges[1] + delta[1] * narrow,
             ],
-        }
-    };
-    let error_bound = |left: f64, right: f64| {
-        // The boundary error is M*h²/8. GPU triangles also approximate the
-        // bilinear product of row position and across-axis UV: |Δwidth|/4.
-        // Omitting that mixed term would validate the outline but allow visible
-        // texture distortion inside otherwise straight-sided trapezoids.
-        let curvature = (6. - 12. * left).abs().max((6. - 12. * right).abs());
-        let boundary = maximum_delta_px * amplitude * curvature * (right - left).powi(2) / 8.;
-        let mixed = width_delta_px * amplitude * (smoothstep(right) - smoothstep(left)).abs() / 4.;
-        boundary + mixed
-    };
-    // Depth-first bisection produces ordered rows without a temporary Vec or
-    // recursive allocations. At most 1024 segments fit the fixed stack scratch.
-    // At the hard cap the original contour takes priority over the error target:
-    // extreme inputs keep their shape and receive best-effort tessellation.
-    let mut pending = [(0., 0.); 11];
-    let mut pending_count = 1;
-    pending[0] = (0., 1.);
-    let mut nodes = [ContourNode::default(); GENIE_MAX_SEGMENTS + 1];
-    nodes[0] = contour(0.);
-    let mut node_count = 1;
-    while pending_count > 0 {
-        pending_count -= 1;
-        let (left, right) = pending[pending_count];
-        if error_bound(left, right) > GENIE_MAX_ERROR_PX
-            && right - left > 1. / GENIE_MAX_SEGMENTS as f64
-        {
-            let middle = (left + right) / 2.;
-            pending[pending_count] = (middle, right);
-            pending[pending_count + 1] = (left, middle);
-            pending_count += 2;
-        } else {
-            nodes[node_count] = contour(right);
-            node_count += 1;
-        }
+        };
     }
-    let nodes = &nodes[..node_count];
     let long_start = source_start + (target_start - source_start) * travel;
     let long_length = source_length + (target_length - source_length) * travel;
     let min_cross = nodes
@@ -310,31 +162,37 @@ fn genie_vertices(
     } else {
         Rect::new(min_cross, long_start, max_cross - min_cross, long_length)
     };
-    let vertex = |node: &ContourNode, across: usize| {
-        let normalized_cross =
-            (node.edges[across] - min_cross) / (max_cross - min_cross).max(f64::EPSILON);
-        let (position, uv) = if horizontal {
-            ([node.along, normalized_cross], [node.along, across as f64])
-        } else {
-            ([normalized_cross, node.along], [across as f64, node.along])
-        };
-        MeshVertex {
-            position: position.map(|v| v as f32),
-            uv: uv.map(|v| v as f32),
-        }
+    let cross_length = (max_cross - min_cross).max(f64::EPSILON);
+    let row_vertices = |node: &ContourNode| {
+        std::array::from_fn::<_, { GENIE_CROSS_SEGMENTS + 1 }, _>(|column| {
+            let across = column as f64 / GENIE_CROSS_SEGMENTS as f64;
+            let cross = node.edges[0] + (node.edges[1] - node.edges[0]) * across;
+            let normalized_cross = (cross - min_cross) / cross_length;
+            let (position, uv) = if horizontal {
+                ([node.along, normalized_cross], [node.along, across])
+            } else {
+                ([normalized_cross, node.along], [across, node.along])
+            };
+            MeshVertex {
+                position: position.map(|v| v as f32),
+                uv: uv.map(|v| v as f32),
+            }
+        })
     };
-    let mut vertices = Vec::with_capacity((node_count - 1) * 6);
-    let mut previous = [vertex(&nodes[0], 0), vertex(&nodes[0], 1)];
+    let mut vertices = Vec::with_capacity(GENIE_MAX_VERTICES);
+    let mut previous = row_vertices(&nodes[0]);
     for node in &nodes[1..] {
-        // Adjacent strips share a row. Normalize it once without changing the
-        // triangle order, UVs, or numerical calculation for either endpoint.
-        let next = [vertex(node, 0), vertex(node, 1)];
-        let [a, b] = previous;
-        let [c, d] = next;
-        if horizontal {
-            vertices.extend([a, c, b, c, d, b]);
-        } else {
-            vertices.extend([a, b, c, b, d, c]);
+        let next = row_vertices(node);
+        for column in 0..GENIE_CROSS_SEGMENTS {
+            let a = previous[column];
+            let b = previous[column + 1];
+            let c = next[column];
+            let d = next[column + 1];
+            if horizontal {
+                vertices.extend([a, c, b, c, d, b]);
+            } else {
+                vertices.extend([a, b, c, b, d, c]);
+            }
         }
         previous = next;
     }
@@ -464,7 +322,7 @@ mod tests {
             for scale in [1., 1.25, 1.5, 2.] {
                 for progress in [0., 0.1, 0.3, 0.6, 0.85, 0.99, 1.] {
                     let (area, vertices) = sample(source, target, progress, edge, scale);
-                    assert!(vertices.len() <= GENIE_MAX_SEGMENTS * 6);
+                    assert!(vertices.len() <= GENIE_MAX_VERTICES);
                     assert!(vertices.iter().all(|v| v
                         .position
                         .iter()
@@ -502,172 +360,45 @@ mod tests {
     }
 
     #[test]
-    fn adaptive_strip_stays_within_physical_pixel_budget() {
-        let source = Rect::new(-480., -320., 1200., 800.);
-        for (edge, target) in targets() {
-            let horizontal = matches!(edge, Edge::Left | Edge::Right);
-            let positive = matches!(edge, Edge::Bottom | Edge::Right);
-            for scale in [1., 1.25, 1.5, 2.] {
-                for progress in [0.1, 0.3, 0.5, 0.7, 0.9] {
-                    let (cross, _) = genie_phases(source, target, edge).unwrap().sample(progress);
-                    let (area, vertices) = sample(source, target, progress, edge, scale);
-                    let source_edges = if horizontal {
-                        [source.y, source.bottom()]
-                    } else {
-                        [source.x, source.right()]
-                    };
-                    let target_edges = if horizontal {
-                        [target.y, target.bottom()]
-                    } else {
-                        [target.x, target.right()]
-                    };
-                    let amplitude = cross * (1. - cross);
-                    for segment in vertices.as_chunks::<6>().0 {
-                        // Locate both boundaries of this strip independent of
-                        // the triangle winding chosen for horizontal outputs.
-                        let longitudinal = if horizontal { 0 } else { 1 };
-                        let cross_axis = 1 - longitudinal;
-                        let left = segment
-                            .iter()
-                            .map(|v| v.uv[longitudinal] as f64)
-                            .fold(f64::INFINITY, f64::min);
-                        let right = segment
-                            .iter()
-                            .map(|v| v.uv[longitudinal] as f64)
-                            .fold(f64::NEG_INFINITY, f64::max);
-                        for boundary in [0, 1] {
-                            let endpoint = |at: f64| {
-                                *segment
-                                    .iter()
-                                    .find(|v| {
-                                        v.uv[longitudinal] as f64 == at
-                                            && v.uv[cross_axis] == boundary as f32
-                                    })
-                                    .unwrap()
-                            };
-                            let a = world(area, endpoint(left))[cross_axis];
-                            let b = world(area, endpoint(right))[cross_axis];
-                            for fraction in [0.25, 0.5, 0.75] {
-                                let t = left + (right - left) * fraction;
-                                let towards = if positive { t } else { 1. - t };
-                                let k = cross * cross + amplitude * smoothstep(towards);
-                                let exact = source_edges[boundary]
-                                    + (target_edges[boundary] - source_edges[boundary]) * k;
-                                let rendered = a + (b - a) * fraction;
-                                assert!(
-                                    (exact - rendered).abs() * scale <= GENIE_MAX_ERROR_PX + 0.0002,
-                                    "error {} at {edge:?}, progress {progress}, scale {scale}",
-                                    (exact - rendered).abs() * scale
-                                );
-                            }
-                        }
-                    }
-                }
-            }
+    fn progressive_neck_retains_a_taper_and_continues_traveling_until_completion() {
+        let source = Rect::new(0., 0., 1000., 700.);
+        let target = Rect::new(450., 1000., 48., 48.);
+        let mut last_start = f64::NEG_INFINITY;
+        for progress in [0.05, 0.25, 0.5, 0.65, 0.75, 0.85, 0.95] {
+            let (area, vertices) = sample(source, target, progress, Edge::Bottom, 2.);
+            let corner = |uv| world(area, *vertices.iter().find(|v| v.uv == uv).unwrap());
+            let far_width = corner([1., 0.])[0] - corner([0., 0.])[0];
+            let near_width = corner([1., 1.])[0] - corner([0., 1.])[0];
+            assert!(
+                far_width > near_width,
+                "premature straight strip at {progress}"
+            );
+            assert!(
+                far_width > target.width,
+                "far row completed early at {progress}"
+            );
+            assert!(area.y > last_start, "travel stalled at {progress}");
+            last_start = area.y;
         }
     }
 
     #[test]
-    fn interior_gpu_triangle_interpolation_obeys_the_pixel_budget() {
-        let source = Rect::new(-480., -320., 1600., 1000.);
-        for (edge, target) in targets() {
-            let horizontal = matches!(edge, Edge::Left | Edge::Right);
-            let positive = matches!(edge, Edge::Bottom | Edge::Right);
-            let source_edges = if horizontal {
-                [source.y, source.bottom()]
-            } else {
-                [source.x, source.right()]
-            };
-            let target_edges = if horizontal {
-                [target.y, target.bottom()]
-            } else {
-                [target.x, target.right()]
-            };
-            let delta = [
-                target_edges[0] - source_edges[0],
-                target_edges[1] - source_edges[1],
-            ];
-            for scale in [1., 1.25, 1.5, 2.] {
-                for progress in [0.1, 0.3, 0.5, 0.7, 0.9] {
-                    let (cross, travel) =
-                        genie_phases(source, target, edge).unwrap().sample(progress);
-                    let amplitude = cross * (1. - cross);
-                    let (area, vertices) = sample(source, target, progress, edge, scale);
-                    for triangle in vertices.as_chunks::<3>().0 {
-                        for weights in [
-                            [1. / 3.; 3],
-                            [0.5, 0.5, 0.],
-                            [0.2, 0.3, 0.5],
-                            [0.1, 0.8, 0.1],
-                        ] {
-                            let mut uv = [0.; 2];
-                            let mut rendered = [0.; 2];
-                            for (vertex, weight) in triangle.iter().zip(weights) {
-                                let point = world(area, *vertex);
-                                for axis in 0..2 {
-                                    uv[axis] += vertex.uv[axis] as f64 * weight;
-                                    rendered[axis] += point[axis] * weight;
-                                }
-                            }
-                            let (along, across) = if horizontal {
-                                (uv[0], uv[1])
-                            } else {
-                                (uv[1], uv[0])
-                            };
-                            let towards = if positive { along } else { 1. - along };
-                            let k = cross * cross + amplitude * smoothstep(towards);
-                            let left = source_edges[0] + delta[0] * k;
-                            let right = source_edges[1] + delta[1] * k;
-                            let cross_position = left + (right - left) * across;
-                            let (source_start, source_length, target_start, target_length) =
-                                if horizontal {
-                                    (source.x, source.width, target.x, target.width)
-                                } else {
-                                    (source.y, source.height, target.y, target.height)
-                                };
-                            let long = source_start
-                                + (target_start - source_start) * travel
-                                + (source_length + (target_length - source_length) * travel)
-                                    * along;
-                            let exact = if horizontal {
-                                [long, cross_position]
-                            } else {
-                                [cross_position, long]
-                            };
-                            let error = ((exact[0] - rendered[0]).powi(2)
-                                + (exact[1] - rendered[1]).powi(2))
-                            .sqrt()
-                                * scale;
-                            assert!(
-                                error <= GENIE_MAX_ERROR_PX + 0.0005,
-                                "interior {error}px at {edge:?}/{progress}/{scale}"
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn scale_is_part_of_adaptive_tessellation_and_extreme_inputs_are_bounded() {
-        let source = Rect::new(0., 0., 1600., 900.);
+    fn work_budget_is_fixed_for_large_windows_and_fractional_outputs() {
         let target = Rect::new(750., 1100., 48., 48.);
-        let counts: Vec<_> = [1., 1.25, 1.5, 2.]
-            .map(|scale| sample(source, target, 0.1, Edge::Bottom, scale).1.len())
-            .into();
-        assert!(counts.windows(2).all(|w| w[0] <= w[1]));
-        assert!(counts[3] > counts[0]);
         for source in [
+            Rect::new(0., 0., 1600., 900.),
             Rect::new(0., 0., 0., 0.),
             Rect::new(-1e9, -1e9, 1e9, 1e9),
             Rect::new(f64::NAN, f64::INFINITY, -2., 1.),
         ] {
             for p in [f64::NAN, f64::NEG_INFINITY, 0., 0.5, 1., f64::INFINITY] {
                 for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
-                    for scale in [f64::NAN, -1., 0., 2., 1e9] {
+                    let reference = sample(source, target, p, edge, 1.);
+                    for scale in [f64::NAN, -1., 0., 1.25, 1.5, 2., 1e9] {
                         let (area, vertices) = sample(source, target, p, edge, scale);
-                        assert!(vertices.len() <= GENIE_MAX_SEGMENTS * 6);
+                        assert_eq!(reference.0, area);
+                        assert_eq!(reference.1, vertices);
+                        assert!(vertices.len() <= GENIE_MAX_VERTICES);
                         assert!([area.x, area.y, area.width, area.height]
                             .iter()
                             .all(|v| v.is_finite()));
@@ -738,27 +469,40 @@ mod tests {
     }
 
     #[test]
-    fn fractional_outputs_share_the_same_spatial_contour_for_wide_windows() {
+    fn fractional_outputs_share_the_exact_mesh_for_wide_windows() {
         let source = Rect::new(-2000., -300., 3200., 1800.);
         for (edge, target) in targets() {
             for progress in [0.1, 0.3, 0.5, 0.7, 0.9] {
-                let (base_area, base_vertices) = sample(source, target, progress, edge, 1.);
+                let reference = sample(source, target, progress, edge, 1.);
                 for scale in [1.25, 1.5, 2.] {
-                    let (area, vertices) = sample(source, target, progress, edge, scale);
-                    assert_eq!(base_area, area);
-                    let by_uv: std::collections::HashMap<_, _> = vertices
-                        .iter()
-                        .map(|v| ([v.uv[0].to_bits(), v.uv[1].to_bits()], v))
-                        .collect();
-                    for base in &base_vertices {
-                        let at_same_uv = by_uv[&[base.uv[0].to_bits(), base.uv[1].to_bits()]];
-                        // Refinement may add rows but cannot change any existing
-                        // point of the frozen shape, even near the node budget.
-                        assert_eq!(base.position, at_same_uv.position);
-                        assert_eq!(world(base_area, *base), world(area, *at_same_uv));
-                    }
+                    assert_eq!(reference, sample(source, target, progress, edge, scale));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn each_row_finishes_narrowing_with_continuous_velocity() {
+        let source = Rect::new(0., 0., 100., 100.);
+        let target = Rect::new(45., 150., 10., 10.);
+        let h = 0.0005;
+        for row in 0..=GENIE_LONG_SEGMENTS {
+            let along = row as f32 / GENIE_LONG_SEGMENTS as f32;
+            let completion = 1. - (1. - NECK_COMPLETION) * row as f64 / GENIE_LONG_SEGMENTS as f64;
+            let at = |p| {
+                let (area, vertices) = sample(source, target, p, Edge::Bottom, 1.);
+                world(
+                    area,
+                    *vertices.iter().find(|v| v.uv == [0., along]).unwrap(),
+                )[0]
+            };
+            let before = at(completion - h);
+            let middle = at(completion);
+            let after = at(completion + h);
+            assert!(
+                ((middle - before) / h - (after - middle) / h).abs() < 1.,
+                "row {row} has a velocity kink"
+            );
         }
     }
 }
