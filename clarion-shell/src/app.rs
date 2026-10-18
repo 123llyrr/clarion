@@ -401,7 +401,7 @@ impl Host {
         cx.notify();
         let state = Arc::new(self.snapshot());
         for view in self.outputs.values() {
-            let count = self.dock_apps().len().clamp(1, 18) as f32
+            let count = self.dock_apps().len().min(18) as f32
                 + 1.
                 + u8::from(self.prefs.show_launcher) as f32;
             let vertical = self.prefs.dock_position != DockPosition::Bottom;
@@ -412,9 +412,9 @@ impl Host {
             });
             let thickness = self.prefs.dock_size as f32 + 32.;
             let dimensions = if vertical {
-                size(px(thickness), px(length))
+                size(px(thickness + 12.), px(length + 24.))
             } else {
-                size(px(length), px(thickness))
+                size(px(length + 24.), px(thickness + 12.))
             };
             let _ = view.bar.update(cx, |v, window, cx| {
                 v.state = state.clone();
@@ -573,7 +573,7 @@ impl Host {
                 self.save(cx);
             }
             Action::DockSize(value) => {
-                self.prefs.dock_size = value.clamp(32., 64.);
+                self.prefs.dock_size = value.clamp(32., 64.).round();
                 self.save(cx);
             }
             Action::BarHeight(value) => {
@@ -1091,9 +1091,8 @@ impl Host {
         height: f32,
         cx: &mut Context<Self>,
     ) -> Option<WindowHandle<ShellView>> {
-        let n = self.dock_apps().len().clamp(1, 18) as f32
-            + 1.
-            + u8::from(self.prefs.show_launcher) as f32;
+        let n =
+            self.dock_apps().len().min(18) as f32 + 1. + u8::from(self.prefs.show_launcher) as f32;
         let item = self.prefs.dock_size as f32 + 12.;
         let vertical = self.prefs.dock_position != DockPosition::Bottom;
         let length = (n * item + 20.).min(if vertical { height - 90. } else { width - 32. });
@@ -1105,9 +1104,9 @@ impl Host {
             DockPosition::Right => anchor.right = true,
         };
         let size = if vertical {
-            size(px(thickness), px(length))
+            size(px(thickness + 12.), px(length + 24.))
         } else {
-            size(px(length), px(thickness))
+            size(px(length + 24.), px(thickness + 12.))
         };
         let bounds = Bounds::centered(Some(display), size, cx);
         let host = cx.entity();
@@ -1217,16 +1216,15 @@ impl Host {
                 let vertical = self.prefs.dock_position != DockPosition::Bottom;
                 let item = self.prefs.dock_size + 12.;
                 let thickness = self.prefs.dock_size + 32.;
-                let length = ((apps.len().clamp(1, 18) as f64
-                    + 1.
-                    + u8::from(self.prefs.show_launcher) as f64)
-                    * item
-                    + 20.)
-                    .min(if vertical {
-                        output.height as f64 - 90.
-                    } else {
-                        output.width as f64 - 32.
-                    });
+                let length =
+                    ((apps.len().min(18) as f64 + 1. + u8::from(self.prefs.show_launcher) as f64)
+                        * item
+                        + 20.)
+                        .min(if vertical {
+                            output.height as f64 - 90.
+                        } else {
+                            output.width as f64 - 32.
+                        });
                 let visible = dock_visible_count(
                     length as f32,
                     self.prefs.dock_size as f32,
@@ -1400,6 +1398,8 @@ impl AssetSource for ShellAssets {
             "sliders.svg" => include_bytes!("../assets/icons/sliders.svg"),
             "bell.svg" => include_bytes!("../assets/icons/bell.svg"),
             "circle.svg" => include_bytes!("../assets/icons/circle.svg"),
+            "control-center.svg" => include_bytes!("../assets/icons/control-center.svg"),
+            "moon.svg" => include_bytes!("../assets/icons/moon.svg"),
             _ => return Ok(None),
         };
         Ok(Some(std::borrow::Cow::Borrowed(bytes)))

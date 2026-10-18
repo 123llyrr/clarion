@@ -31,8 +31,8 @@ project owner.
 
 ## Native action icons
 
-`bell.svg`, `circle.svg`, `clipboard.svg`, `grid.svg`, `scan.svg`, `sliders.svg`
-and `x.svg` are compact geometric action marks authored for the native Shell and
+`bell.svg`, `circle.svg`, `clipboard.svg`, `grid.svg`, `scan.svg`, `sliders.svg`,
+`x.svg`, `control-center.svg` and `moon.svg` are compact geometric action marks authored for the native Shell and
 distributed under the project GPL-3.0-or-later license. The native GPUI interface
 uses a single macOS-inspired appearance; the retired Flutter and Material UIs
 are not shipped as alternative styles.

@@ -62,6 +62,7 @@ pub struct SystemSnapshot {
     pub brightness: Option<f64>,
     pub battery: Option<f64>,
     pub charging: bool,
+    pub trash_full: bool,
     pub clock: String,
     pub date: String,
 }
@@ -743,6 +744,19 @@ fn system_worker(options: Options, events: Sender<Event>, alive: Arc<AtomicBool>
             let (battery, charging) = battery_snapshot(Path::new("/sys/class/power_supply"));
             hardware.battery = battery;
             hardware.charging = charging;
+            let data = options
+                .environment
+                .get("XDG_DATA_HOME")
+                .map(PathBuf::from)
+                .or_else(|| {
+                    options
+                        .environment
+                        .get("HOME")
+                        .map(|home| PathBuf::from(home).join(".local/share"))
+                });
+            hardware.trash_full = data
+                .and_then(|data| fs::read_dir(data.join("Trash/files")).ok())
+                .is_some_and(|mut files| files.next().is_some());
             hardware_due = Instant::now() + Duration::from_secs(3);
         }
         let now = chrono::Local::now();

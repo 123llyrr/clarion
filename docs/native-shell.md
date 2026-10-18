@@ -76,3 +76,19 @@ python3 scripts/test-native-shell.py \
 
 嵌套读回截图不证明父显示器持续呈现，也不覆盖物理 HDR、多屏热插拔、硬件手势或桌面文件操作。
 旧 Flutter/独立 Apps 的验收记录仅属于历史实现，不能作为当前 GPUI Shell 的通过证据。
+
+## Big Sur 顶栏与 Dock
+
+顶栏和 Dock 以真实 macOS 11.7.2（20G1020）的本地静态分析为依据，保留 Clarion 品牌；
+Rust/GPUI 界面不提供全局应用菜单或调度中心入口。视觉参照见 [Apple 官方 Big Sur 介绍](https://www.apple.com/newsroom/2020/06/apple-introduces-macos-big-sur-with-a-beautiful-new-design/)。
+顶栏采用现代分支的 24pt：SkyLight `default_menu_bar_rect` 的 `0x184c6374c..0x184c6376c`
+同时保留 22/24 两分支，因此24不是所有系统状态的统一常量。
+菜单默认字号13pt来自 `menuBarFontOfSize:0` 调用链与 UIFoundation 表项 `0x7fff8041b680`。
+Dock 运行标记依据 `DOCKIndicatorLayer updateIndicatorForSize:` 的 `0x10001f064..0x10001f07c`：
+tile尺寸小于33时直径3，否则4；圆角半径为直径的一半。
+本机使用私有字体 family `Clarion Big Sur Text` 与 `PingFang SC`；前者由同版本SFNS派生
+四个静态字重，固定合法最小光学轴opsz17，13pt仍是UI字号。字体仅在当前用户
+`~/.local/share/fonts/clarion-bigsur-text/`、`clarion-bigsur/` 注册，不随公开源码或安装包分发；缺失时回退到系统可用字体。
+固定tint、圆角和模糊等视觉值仍是工程选择，尚待同缩放、壁纸及色彩条件的实机像素基准核对，不能宣称全部像素已验证。
+桌面已接入 Super+A、Super+O/Down、Super+Backspace、Super+Shift+N、Super+I/Y；
+Quick Look支持有大小与解码预算限制的PNG/JPEG和UTF-8文本。上文列出的四项Dock相关交互仍未迁移，本轮未实现。

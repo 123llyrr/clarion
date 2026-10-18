@@ -43,13 +43,9 @@ impl ResolvedLayerRules {
 
         let mut resolved = ResolvedLayerRules::default();
 
-        // Integrated Shell materials also get their default when an existing
-        // user config predates liquid glass. Only surfaces with a nonempty
-        // protocol blur mask render it; Material and Launchpad stay unchanged.
-        // User layer rules below can override this with liquid-glass false.
-        if matches!(surface.namespace(), "clarion-shell" | "clarion-shell-dock") {
-            resolved.background_effect.liquid_glass = Some(true);
-        }
+        // Shell surfaces request their frosted backdrop through a protocol mask.
+        // Refraction remains an explicit user effect, rather than changing the
+        // Big Sur menu bar's material implicitly based on its namespace.
 
         for rule in rules {
             let matches = |m: &Match| {

@@ -10,6 +10,8 @@ use crate::{
 use gpui::{prelude::*, *};
 use std::{path::PathBuf, sync::Arc};
 
+mod macos_dock;
+
 actions!(shell, [Dismiss, Activate, Previous, Next]);
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
@@ -45,7 +47,6 @@ pub struct ShellView {
 }
 #[derive(Clone, Copy)]
 struct Palette {
-    bg: Hsla,
     panel: Hsla,
     card: Hsla,
     fg: Hsla,
@@ -60,23 +61,21 @@ impl Palette {
             u32::from_str_radix(host.prefs.accent.trim_start_matches('#'), 16).unwrap_or(0x0a84ff);
         if dark {
             Self {
-                bg: rgb(0x242426).into(),
-                panel: rgba(0x252527ed).into(),
+                panel: rgba(0x24242bb8).into(),
                 card: rgba(0xffffff0d).into(),
                 fg: rgb(0xf3f3f5).into(),
                 muted: rgb(0xaaaab0).into(),
-                line: rgba(0xffffff18).into(),
+                line: rgba(0xffffff26).into(),
                 accent: rgb(accent).into(),
             }
         } else {
             Self {
-                bg: rgb(0xf6f6f8).into(),
-                panel: rgba(0xf6f6f8f0).into(),
+                panel: rgba(0xf4f4f7bd).into(),
                 card: rgba(0x3449660d).into(),
                 fg: rgb(0x242426).into(),
                 muted: rgb(0x7a7a80).into(),
                 line: rgba(0x263f5e20).into(),
-                accent: rgb(0x007aff).into(),
+                accent: rgb(accent).into(),
             }
         }
     }
@@ -351,7 +350,9 @@ impl ShellView {
             .child(self.glyph_button("panel-close", "x", Action::Close, p))
             .into_any_element()
     }
-    fn bar(&self, host: &ViewState, p: Palette, width: f32) -> AnyElement {
+    fn bar(&self, host: &ViewState, p: Palette, width: f32, cx: &App) -> AnyElement {
+        // Menu-bar content sits on the compositor's live backdrop. In particular,
+        // do not cover it with the old opaque application-panel background.
         let focused = host.desktop.windows.iter().find(|w| w.is_focused);
         let appname = focused
             .and_then(|w| w.app_id.as_deref())
@@ -363,71 +364,71 @@ impl ShellView {
                     .map(|app| app.name.clone())
                     .unwrap_or_else(|| id.to_owned())
             })
-            .unwrap_or_else(|| "桌面".into());
-        let workspaces = host
-            .desktop
-            .workspaces
-            .iter()
-            .filter(|w| w.output.as_deref() == Some(self.output.as_str()))
-            .take(if width < 800. { 4 } else { 8 });
+            .unwrap_or_else(|| "访达".into());
+        let mark = image_path(if host.dark() {
+            "clarion-mark-white.png"
+        } else {
+            "clarion-mark-black.png"
+        });
+        let h = self.host.clone();
         let mut row = div()
+            .id("macos-menu-bar")
             .size_full()
             .flex()
             .items_center()
-            .gap_2()
-            .px_3()
-            .bg(p.bg)
-            .border_b_1()
-            .border_color(p.line)
+            .px(px(10.))
+            .gap(px(0.))
+            .bg(if host.dark() {
+                rgba(0x14141a45)
+            } else {
+                rgba(0xffffff38)
+            })
             .text_color(p.fg)
-            .text_sm()
-            .child(self.glyph_button("clarion-apps", "grid", Action::Panel(Panel::Apps), p));
-        for workspace in workspaces {
-            let active = workspace.is_active;
-            let id = workspace.id;
-            let h = self.host.clone();
-            row = row.child(
+            .text_size(px(13.))
+            .line_height(px(18.))
+            .child(
                 div()
-                    .id(("workspace", id))
-                    .w(px(26.))
-                    .h(px(20.))
-                    .rounded(px(6.))
-                    .text_center()
-                    .text_xs()
-                    .bg(if active { p.accent } else { p.card })
-                    .text_color(if active { p.bg } else { p.muted })
+                    .id("clarion-menu-mark")
+                    .w(px(32.))
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.))
                     .cursor_pointer()
-                    .child(workspace.idx.to_string())
+                    .hover(move |s| s.bg(p.line))
+                    .child(
+                        img(mark)
+                            .w(px(24.5))
+                            .h(px(26.5))
+                            .flex_shrink_0()
+                            .object_fit(ObjectFit::Contain),
+                    )
                     .on_click(move |_, _, cx| {
-                        h.update(cx, |h, cx| {
-                            h.handle(
-                                Action::Core(clarion_ipc::Action::FocusWorkspace {
-                                    reference: clarion_ipc::WorkspaceReferenceArg::Id(id),
-                                }),
-                                cx,
-                            )
-                        })
+                        h.update(cx, |h, cx| h.handle(Action::Panel(Panel::Preferences), cx))
                     }),
-            );
-        }
-        row = row.child(div().w(px(1.)).h(px(14.)).mx_1().bg(p.line));
-        if width > 600. {
-            row = row.child(
+            )
+            .child(
                 div()
-                    .max_w(px(width * 0.24))
+                    .max_w(px(width * 0.28))
+                    .px(px(9.))
+                    .h_full()
+                    .flex()
+                    .items_center()
                     .overflow_hidden()
                     .text_ellipsis()
-                    .text_xs()
-                    .child(appname),
-            );
-        }
-        row = row.child(div().flex_1());
-        if width > 800. {
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(menu_text(appname, FontWeight::SEMIBOLD, p.fg, cx)),
+            )
+            .child(div().flex_1());
+        // This is deliberately an activity area, never application-exported
+        // File/Edit/View menus or a Mission Control/workspace switcher.
+        if width > 680. {
             for item in host
                 .tray
                 .iter()
                 .filter(|item| item.status != "Passive")
-                .take(5)
+                .take(6)
             {
                 let id = item.id.clone();
                 let action = if item.item_is_menu {
@@ -442,18 +443,24 @@ impl ShellView {
                 let h = self.host.clone();
                 let menu = id.clone();
                 let icon = if let Some(image) = self.image_cache.get(&format!("tray:{}", item.id)) {
-                    img(image.clone()).size(px(18.)).into_any_element()
+                    img(image.clone())
+                        .size(px(16.))
+                        .object_fit(ObjectFit::Contain)
+                        .into_any_element()
                 } else {
-                    self.symbol("circle", 16., p)
+                    self.symbol("circle", 14., p)
                 };
                 row = row.child(
                     div()
                         .id(SharedString::from(format!("tray-{id}")))
-                        .size(px(26.))
+                        .w(px(28.))
+                        .h_full()
                         .flex()
                         .items_center()
                         .justify_center()
+                        .rounded(px(4.))
                         .cursor_pointer()
+                        .hover(move |s| s.bg(p.line))
                         .child(icon)
                         .on_click(move |_, _, cx| {
                             h.update(cx, |h, cx| h.handle(action.clone(), cx))
@@ -469,177 +476,119 @@ impl ShellView {
                 );
             }
         }
-        row = row.child(self.glyph_button("recent", "clipboard", Action::Panel(Panel::Recent), p));
+        row = row.child(self.status_button("recent", "clipboard", Action::Panel(Panel::Recent), p));
         if width > 520. {
-            row = row.child(self.glyph_button(
+            row = row.child(self.status_button(
                 "capture",
                 "scan",
                 Action::Panel(Panel::Screenshot),
                 p,
             ));
         }
-        row = row
-            .child(self.glyph_button(
-                "notifications",
-                "bell",
-                Action::Panel(Panel::Notifications),
-                p,
-            ))
-            .child(self.glyph_button("controls", "sliders", Action::Panel(Panel::Controls), p));
-        if width > 900. {
+        if host.dnd {
+            row =
+                row.child(self.status_button("dnd-active", "moon", Action::DoNotDisturb(false), p));
+        }
+        if width > 800. {
             if let Some(battery) = host.system.battery {
                 let fill = div()
-                    .w(px((20. * battery.clamp(0., 1.)) as f32))
-                    .h(px(8.))
+                    .w(px((19. * battery.clamp(0., 1.)) as f32))
+                    .h(px(7.))
                     .rounded(px(1.))
                     .bg(if host.system.charging {
                         rgb(0x30d158).into()
                     } else {
-                        p.muted
+                        p.fg
                     });
-                row = row.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(2.))
-                        .child(
-                            div()
-                                .w(px(24.))
-                                .h(px(12.))
-                                .p(px(1.))
-                                .border_1()
-                                .border_color(p.muted)
-                                .rounded(px(3.))
-                                .child(fill),
-                        )
-                        .child(div().w(px(2.)).h(px(5.)).rounded(px(1.)).bg(p.muted)),
-                );
+                let mut indicator = div()
+                    .id("menu-battery")
+                    .h_full()
+                    .px(px(6.))
+                    .flex()
+                    .items_center()
+                    .gap(px(5.));
                 if host.prefs.show_battery_percentage {
-                    row = row.child(
+                    indicator = indicator.child(
                         div()
-                            .text_xs()
-                            .text_color(p.muted)
+                            .text_size(px(12.))
                             .child(format!("{}%", (battery * 100.).round())),
                     );
                 }
+                row = row.child(
+                    indicator.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(1.5))
+                            .child(
+                                div()
+                                    .w(px(23.))
+                                    .h(px(11.))
+                                    .p(px(1.))
+                                    .border_1()
+                                    .border_color(p.fg.opacity(0.65))
+                                    .rounded(px(2.5))
+                                    .child(fill),
+                            )
+                            .child(
+                                div()
+                                    .w(px(1.5))
+                                    .h(px(4.))
+                                    .rounded(px(0.75))
+                                    .bg(p.fg.opacity(0.65)),
+                            ),
+                    ),
+                );
             }
         }
-        let clock = if host.prefs.clock_show_date && width > 1080. {
+        row = row.child(self.status_button(
+            "controls",
+            "control-center",
+            Action::Panel(Panel::Controls),
+            p,
+        ));
+        let clock = if host.prefs.clock_show_date && width > 880. {
             format!("{}  {}", host.system.date, host.system.clock)
         } else {
             host.system.clock.clone()
         };
-        row.child(div().text_xs().px_1().child(clock))
-            .into_any_element()
-    }
-    fn dock(&self, host: &ViewState, p: Palette, window: &mut Window) -> AnyElement {
-        let vertical = host.prefs.dock_position != DockPosition::Bottom;
-        let icon_size = host.prefs.dock_size as f32;
-        let item = icon_size + 12.;
-        let available = if vertical {
-            f32::from(window.viewport_size().height)
-        } else {
-            f32::from(window.viewport_size().width)
-        };
-        let visible =
-            crate::app::dock_visible_count(available, icon_size, host.prefs.show_launcher);
         let h = self.host.clone();
-        let mut dock = div()
-            .id("dock-surface")
-            .on_hover(move |hovered, _, cx| {
-                let h = h.clone();
-                let hovered = *hovered;
-                cx.defer(move |cx| h.update(cx, |h, cx| h.handle(Action::DockHover(hovered), cx)));
-            })
-            .size_full()
-            .p(px(10.))
-            .flex()
-            .items_center()
-            .gap(px(0.))
-            .rounded(px(18.))
-            .bg(p.panel)
-            .border_1()
-            .border_color(p.line);
-        if vertical {
-            dock = dock.flex_col();
-        }
-        if host.prefs.show_launcher {
-            let apps = self.glyph_button("dock-apps", "grid", Action::Panel(Panel::Apps), p);
-            dock = dock.child(
-                div()
-                    .w(px(item))
-                    .h(px(item))
-                    .flex()
-                    .justify_center()
-                    .items_center()
-                    .child(apps),
-            );
-        }
-        for app in host.dock_apps().into_iter().take(visible) {
-            let h = self.host.clone();
-            let activate = app.clone();
-            let id = app.id.clone();
-            let context = id.clone();
-            let running = !app.windows.is_empty();
-            let focused = app.windows.iter().any(|w| w.is_focused);
-            dock = dock.child(
-                div()
-                    .id(SharedString::from(format!("dock-{id}")))
-                    .w(px(item))
-                    .h(px(item))
-                    .rounded(px(12.))
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .justify_center()
-                    .gap(px(3.))
-                    .cursor_pointer()
-                    .bg(if focused {
-                        p.card
-                    } else {
-                        Hsla::transparent_black()
-                    })
-                    .hover(move |s| s.bg(p.line))
-                    .child(self.icon(app.icon, icon_size, p))
-                    .child(
-                        div()
-                            .w(px(if running { 12. } else { 0. }))
-                            .h(px(2.))
-                            .rounded_full()
-                            .bg(if !host.prefs.show_running_indicators {
-                                Hsla::transparent_black()
-                            } else if focused {
-                                p.accent
-                            } else {
-                                p.muted
-                            }),
-                    )
-                    .on_click(move |_, _, cx| h.update(cx, |h, cx| h.activate_app(&activate, cx)))
-                    .on_mouse_down(MouseButton::Right, {
-                        let h = self.host.clone();
-                        move |_, _, cx| {
-                            h.update(cx, |h, cx| {
-                                h.handle(Action::Panel(Panel::Dock(context.clone())), cx)
-                            })
-                        }
-                    }),
-            );
-        }
-        dock.child(
+        row.child(
             div()
-                .w(px(item))
-                .h(px(item))
+                .id("menu-clock")
+                .h_full()
+                .px(px(8.))
                 .flex()
                 .items_center()
-                .justify_center()
-                .child(self.glyph_button(
-                    "dock-settings",
-                    "sliders",
-                    Action::Panel(Panel::Controls),
-                    p,
-                )),
+                .text_size(px(13.))
+                .font_weight(FontWeight::MEDIUM)
+                .cursor_pointer()
+                .rounded(px(4.))
+                .hover(move |s| s.bg(p.line))
+                .child(menu_text(clock, FontWeight::NORMAL, p.fg, cx))
+                .on_click(move |_, _, cx| {
+                    h.update(cx, |h, cx| {
+                        h.handle(Action::Panel(Panel::Notifications), cx)
+                    })
+                }),
         )
         .into_any_element()
+    }
+    fn status_button(&self, id: &str, name: &str, action: Action, p: Palette) -> AnyElement {
+        let h = self.host.clone();
+        div()
+            .id(SharedString::from(id.to_owned()))
+            .w(px(28.))
+            .h_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(4.))
+            .cursor_pointer()
+            .hover(move |s| s.bg(p.line))
+            .child(self.symbol(name, 15., p))
+            .on_click(move |_, _, cx| h.update(cx, |h, cx| h.handle(action.clone(), cx)))
+            .into_any_element()
     }
     fn apps(&self, host: &ViewState, p: Palette) -> AnyElement {
         let found = host.catalog.search(&self.query);
@@ -1512,8 +1461,8 @@ impl Render for ShellView {
         let width = f32::from(window.viewport_size().width);
         let height = f32::from(window.viewport_size().height);
         let content = match self.kind {
-            Surface::Bar => self.bar(host, p, width),
-            Surface::Dock => self.dock(host, p, window),
+            Surface::Bar => self.bar(host, p, width, cx),
+            Surface::Dock => self.macos_dock(host, p, window),
             Surface::Panel => self.panel(host, p, cx),
             Surface::Toast(id) => {
                 if let Some(item) = host.notifications.iter().find(|n| n.id == id) {
@@ -1567,14 +1516,26 @@ impl Render for ShellView {
             self.kind,
             Surface::Dock | Surface::Panel | Surface::Toast(_)
         ) {
-            let radius = 16.;
-            let regions = rounded_region(width, height, radius);
+            let (x, y, w, h, radius) = if matches!(self.kind, Surface::Dock) {
+                match host.prefs.dock_position {
+                    DockPosition::Bottom => (12., 12., width - 24., height - 12., 20.),
+                    DockPosition::Left => (0., 12., width - 12., height - 24., 20.),
+                    DockPosition::Right => (12., 12., width - 12., height - 24., 20.),
+                }
+            } else {
+                (0., 0., width, height, 16.)
+            };
+            let mut regions = rounded_region(w, h, radius);
+            for region in &mut regions {
+                region.origin.x += px(x);
+                region.origin.y += px(y);
+            }
             window.set_input_region(Some(&regions));
         }
         div()
             .id("clarion-surface")
             .size_full()
-            .font_family("Noto Sans CJK SC")
+            .font_family(shell_font(cx))
             .text_color(p.fg)
             .key_context("ClarionPanel")
             .track_focus(&self.focus)
@@ -1614,6 +1575,74 @@ impl Render for ShellView {
             .child(content)
     }
 }
+fn menu_text(text: String, weight: FontWeight, color: Hsla, cx: &App) -> StyledText {
+    static CJK: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let cjk = CJK.get_or_init(|| {
+        let names = cx.text_system().all_font_names();
+        let family = if names.iter().any(|name| name == "PingFang SC") {
+            "PingFang SC".to_owned()
+        } else {
+            "Noto Sans CJK SC".to_owned()
+        };
+        eprintln!("Clarion UI CJK font: {family}");
+        family
+    });
+    let latin = shell_font(cx);
+    let mut runs: Vec<TextRun> = Vec::new();
+    // Linux GPUI does not honor Font::fallbacks yet. Explicit UTF-8 runs keep
+    // Chinese menu glyphs in PingFang rather than a random fontconfig fallback.
+    for character in text.chars() {
+        let family = if matches!(character as u32,
+            0x2e80..=0xa4cf | 0xac00..=0xd7af | 0xf900..=0xfaff |
+            0xff00..=0xffef | 0x20000..=0x3134f)
+        {
+            SharedString::from(cjk.clone())
+        } else {
+            latin.clone()
+        };
+        if let Some(last) = runs.last_mut().filter(|run| run.font.family == family) {
+            last.len += character.len_utf8();
+        } else {
+            let mut face = font(family);
+            face.weight = weight;
+            runs.push(TextRun {
+                len: character.len_utf8(),
+                font: face,
+                color,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            });
+        }
+    }
+    StyledText::new(text).with_runs(runs)
+}
+
+fn shell_font(cx: &App) -> SharedString {
+    static FAMILY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    FAMILY
+        .get_or_init(|| {
+            let available = cx.text_system().all_font_names();
+            let family = [
+                "Clarion Big Sur Text",
+                "SF Pro Text",
+                ".SF NS Text",
+                "System Font",
+                ".SF NS",
+                "SF Pro",
+                "Inter",
+                "Noto Sans",
+            ]
+            .into_iter()
+            .find(|wanted| available.iter().any(|name| name == wanted))
+            .unwrap_or("Noto Sans CJK SC")
+            .to_owned();
+            eprintln!("Clarion UI Latin font: {family}");
+            family
+        })
+        .clone()
+        .into()
+}
 pub fn rounded_region(width: f32, height: f32, radius: f32) -> Vec<Bounds<Pixels>> {
     if width <= 0. || height <= 0. {
         return vec![];
@@ -1634,7 +1663,9 @@ pub fn rounded_region(width: f32, height: f32, radius: f32) -> Vec<Bounds<Pixels
     regions
 }
 fn icon_path(name: &str) -> PathBuf {
-    let filename = format!("{name}.svg");
+    image_path(&format!("{name}.svg"))
+}
+fn image_path(filename: &str) -> PathBuf {
     let prefix = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().and_then(|p| p.parent()).map(|p| p.to_path_buf()));
@@ -1645,7 +1676,7 @@ fn icon_path(name: &str) -> PathBuf {
         PathBuf::from("/usr/share/clarion-shell/icons"),
         PathBuf::from("/usr/local/share/clarion-shell/icons"),
     ]) {
-        let path = root.join(&filename);
+        let path = root.join(filename);
         if path.is_file() {
             return path;
         }

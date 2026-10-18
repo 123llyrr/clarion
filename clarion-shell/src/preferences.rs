@@ -67,7 +67,7 @@ impl Default for Preferences {
             reduce_motion: false,
             pinned_app_ids: None,
             recent_app_ids: Vec::new(),
-            bar_height: 28.,
+            bar_height: 24.,
             bar_auto_hide: false,
             show_battery_percentage: false,
             clock_show_date: true,
@@ -181,7 +181,7 @@ impl Preferences {
         p.pinned_app_ids = ids(json.get("pinned_app_ids"), 256);
         p.recent_app_ids = ids(json.get("recent_app_ids"), 24).unwrap_or_default();
         p.bar_height = number("bar_height", "menu_bar_height", p.bar_height, 22., 48.).round();
-        p.dock_size = number("dock_size", "dock_size", p.dock_size, 32., 64.);
+        p.dock_size = number("dock_size", "dock_size", p.dock_size, 32., 64.).round();
         p.magnification_scale = number(
             "magnification_scale",
             "magnification_scale",

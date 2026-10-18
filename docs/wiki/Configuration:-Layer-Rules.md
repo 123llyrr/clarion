@@ -241,17 +241,18 @@ layer-rule {
 }
 ```
 
-Clarion enables liquid glass by default for the integrated `clarion-shell` and
-`clarion-shell-dock` namespaces, including with older user configuration files.
-Material Shell and Launchpad do not request these glass regions. Each separated
-region has its own bounded background capture; no continuous animation is added.
-Highly fragmented masks and surfaces with an additional window clip retain the
-ordinary background effect. To disable the material while keeping normal blur:
+Clarion's native Shell uses ordinary frosted background blur for its requested
+protocol regions. Liquid glass is not enabled automatically by a surface's
+namespace; users can opt into refraction with an explicit layer rule. Existing
+user rules continue to control the effect. Each separated region has its own
+bounded background capture; no continuous animation is added. Highly fragmented
+masks and surfaces with an additional window clip retain ordinary background blur.
+To enable liquid glass for the native menu bar and Dock:
 
 ```kdl
 layer-rule {
-    match namespace="^clarion-shell(-dock)?$"
-    background-effect { liquid-glass false; }
+    match namespace="^clarion-(shell|dock)$"
+    background-effect { liquid-glass true; }
 }
 ```
 

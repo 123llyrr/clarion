@@ -14,10 +14,10 @@ use crate::compositor::KeyboardFocus;
 use crate::tests::client::{ClientId, LayerConfigureProps, LayerMargin};
 
 #[test]
-fn integrated_shell_glass_default_keeps_explicit_overrides_and_namespace_scope() {
+fn integrated_shell_refraction_requires_explicit_rules_and_keeps_namespace_scope() {
     for override_value in [None, Some(false), Some(true)] {
         let config = override_value.map_or_else(String::new, |value| format!(
-            "layer-rule {{ match namespace=\"^clarion-shell(-dock)?$\"; background-effect {{ liquid-glass {value}; }}; }}"
+            "layer-rule {{ match namespace=\"^clarion-(shell(-dock)?|dock)$\"; background-effect {{ liquid-glass {value}; }}; }}"
         ));
         let mut f = Fixture::with_config(clarion_config::Config::parse_mem(&config).unwrap());
         f.add_output(1, (1280, 800));
@@ -25,7 +25,9 @@ fn integrated_shell_glass_default_keeps_explicit_overrides_and_namespace_scope()
         for namespace in [
             "clarion-shell",
             "clarion-shell-dock",
+            "clarion-dock",
             "clarion-shell-other",
+            "clarion-dock-edge",
             "waybar",
         ] {
             map_focus_layer(
@@ -42,8 +44,11 @@ fn integrated_shell_glass_default_keeps_explicit_overrides_and_namespace_scope()
                 .find(|(surface, _)| surface.namespace() == namespace)
                 .unwrap()
                 .1;
-            let expected = if matches!(namespace, "clarion-shell" | "clarion-shell-dock") {
-                Some(override_value.unwrap_or(true))
+            let expected = if matches!(
+                namespace,
+                "clarion-shell" | "clarion-shell-dock" | "clarion-dock"
+            ) {
+                override_value
             } else {
                 None
             };

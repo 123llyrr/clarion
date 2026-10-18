@@ -17,10 +17,12 @@ import shutil
 import signal
 import socket
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
 import time
+import zlib
 from xml.sax.saxutils import escape
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -115,7 +117,42 @@ def guarded_worker_environment(private):
     return env, runtime, parent
 
 
-def seed_catalog(private, env):
+def write_visual_wallpaper(path, width=1280, height=1280):
+    """Original deterministic blur target, encoded without imaging packages.
+
+    Broad diagonal colors expose unwanted opaque material; the high-frequency
+    checks at both edges distinguish backdrop blur from a translucent overlay.
+    This is a diagnostic pattern, not a macOS wallpaper or reference image.
+    """
+    palette = ((44, 97, 189), (66, 174, 183), (225, 199, 145),
+               (224, 104, 118), (120, 81, 177), (44, 97, 189))
+    color_row = []
+    for x in range(width):
+        scaled = x * (len(palette) - 1) / width
+        index = min(int(scaled), len(palette) - 2)
+        amount = scaled - index
+        color_row.append(tuple(round(a + (b - a) * amount)
+                               for a, b in zip(palette[index], palette[index + 1])))
+    pixels = bytearray()
+    for y in range(height):
+        pixels.append(0)  # PNG row filter: None.
+        edge = y < 96 or y >= height - 160
+        for x in range(width):
+            color = color_row[(x + y // 3) % width]
+            texture = (1 if ((x // 8) + (y // 8)) % 2 else -1) * (30 if edge else 5)
+            pixels.extend(max(0, min(255, channel + texture)) for channel in color)
+
+    def chunk(kind, payload):
+        return struct.pack(">I", len(payload)) + kind + payload + struct.pack(
+            ">I", zlib.crc32(kind + payload) & 0xffffffff)
+
+    path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(
+        b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)) + chunk(
+        b"tEXt", b"Description\0Original Clarion backdrop-blur QA fixture; not Apple artwork") + chunk(
+        b"IDAT", zlib.compress(pixels, 6)) + chunk(b"IEND", b""))
+
+
+def seed_catalog(private, env, theme="dark", visual=False):
     """Use only disposable entries; none of their Exec commands are invoked."""
     applications = Path(env["XDG_DATA_HOME"]) / "applications"
     applications.mkdir(parents=True)
@@ -123,12 +160,20 @@ def seed_catalog(private, env):
     icons.mkdir()
     identifiers = []
     colors = ("#4f8ff0", "#b16ae5", "#56ad7e", "#db9a42", "#db6876")
+    roles = ("safari.svg", "terminal.svg", "home.svg", "textedit.svg", "calculator.svg",
+             "calendar.svg", "font-book.svg", "preview.png", "activity-monitor.png", "screenshot.png")
     for index in range(20):
         identifier = f"org.clarion.SmokeApp{index:02}.desktop"
-        icon = icons / f"app-{index:02}.svg"
-        icon.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">'
-                        f'<rect x="4" y="4" width="120" height="120" rx="28" fill="{colors[index % len(colors)]}"/>'
-                        f'<circle cx="64" cy="64" r="{18 + index % 12}" fill="white" fill-opacity=".9"/></svg>')
+        if visual:
+            source = ROOT / "clarion-shell/assets/icons" / roles[index % len(roles)]
+            require(source.is_file(), f"Missing open icon fixture: {source}")
+            icon = icons / f"app-{index:02}{source.suffix}"
+            shutil.copyfile(source, icon)
+        else:
+            icon = icons / f"app-{index:02}.svg"
+            icon.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">'
+                            f'<rect x="4" y="4" width="120" height="120" rx="28" fill="{colors[index % len(colors)]}"/>'
+                            f'<circle cx="64" cy="64" r="{18 + index % 12}" fill="white" fill-opacity=".9"/></svg>')
         (applications / identifier).write_text(
             f'[Desktop Entry]\nType=Application\nName=测试应用 {index + 1:02}\n'
             f'Name[en]=Fixture App {index + 1:02}\nIcon={icon}\nExec=/usr/bin/true\n'
@@ -137,8 +182,13 @@ def seed_catalog(private, env):
     preferences = Path(env["XDG_CONFIG_HOME"]) / "clarion-shell"
     preferences.mkdir(parents=True)
     (preferences / "preferences.json").write_text(json.dumps(
-        {"theme": "dark", "pinned_app_ids": identifiers[:6], "recent_app_ids": identifiers[6:9]},
+        {"theme": theme, "pinned_app_ids": identifiers[:6], "recent_app_ids": identifiers[6:9]},
         ensure_ascii=False) + "\n")
+    if visual:
+        wallpaper = private / "visual-wallpaper.png"
+        write_visual_wallpaper(wallpaper)
+        (preferences / "wallpaper.json").write_text(json.dumps(
+            {"version": 1, "path": str(wallpaper)}, ensure_ascii=False) + "\n")
     desktop = Path(env["HOME"]) / "Desktop"
     desktop.mkdir()
     (desktop / "测试文档.txt").write_text("Owned native Shell fixture.\n")
@@ -249,11 +299,18 @@ def exercise(args):
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
     try:
-        report["catalog_fixture_count"] = len(seed_catalog(private, env))
+        report["catalog_fixture_count"] = len(seed_catalog(private, env, args.theme, args.visual_fixture))
+        report["theme"] = args.theme
+        report["visual_fixture"] = args.visual_fixture
+        if args.visual_fixture:
+            shutil.copyfile(private / "visual-wallpaper.png", artifacts / "wallpaper-fixture.png")
+            report["visual_fixture_scope"] = "original blur pattern and shipped open icons; not Apple reference evidence"
         config = private / "nested.kdl"
         config.write_text('input { keyboard { xkb { layout "us"; }; }; }\n'
                           'output "winit" { scale 1; }\nxwayland-satellite { off; }\n'
-                          'hotkey-overlay { skip-at-startup; }\n')
+                          'hotkey-overlay { skip-at-startup; }\n'
+                          'layer-rule { match namespace="^clarion-(shell|dock)$"; '
+                          'background-effect { liquid-glass false; }; }\n')
         shutil.copyfile(config, artifacts / "nested.kdl")
         core_env = env | {"WAYLAND_DISPLAY": str(parent),
                           "RUST_LOG": os.environ.get("CLARION_NATIVE_SMOKE_RUST_LOG", "clarion=info")}
@@ -344,6 +401,8 @@ def exercise(args):
             run([sys.executable, str(ROOT / "resources/clarion-shell-msg"), command], env)
 
         report["panel_timings"] = {}
+        if args.capture:
+            run(["grim", "-o", "winit", str(artifacts / "desktop.png")], env)
         for command in ("launcher", "control-center", "notifications", "screenshot", "preferences", "recent-content"):
             started = time.monotonic()
             send(command)
@@ -371,6 +430,8 @@ def exercise(args):
             report["panel_timings"][command] = timing
             report["checks"][command] = True
             require_no_legacy_launcher({core.pid, shell.pid})
+        if args.capture:
+            run(["grim", "-o", "winit", str(artifacts / "desktop.png")], env)
         require(not (runtime / "clarion-launcher.sock").exists(),
                 "Apps unexpectedly spawned the retired standalone launcher")
         report["checks"]["integrated_apps"] = True
@@ -422,8 +483,11 @@ def main():
     parser.add_argument("--shell-bin", type=Path, default=ROOT / "target/debug/clarion-shell")
     parser.add_argument("--artifacts", type=Path, required=True)
     parser.add_argument("--renderer", choices=("vulkan", "gles"), default="gles")
+    parser.add_argument("--theme", choices=("dark", "light"), default="dark")
     parser.add_argument("--timeout", type=int, default=20)
     parser.add_argument("--capture", action="store_true", help="Capture owned nested panels with grim")
+    parser.add_argument("--visual-fixture", action="store_true",
+                        help="Seed owned diagnostic wallpaper and shipped open app icons for visual QA")
     parser.add_argument("--diagnose-ipc", action="store_true",
                         help="Stop after READY and private IPC/thread/syscall diagnostics; no full acceptance")
     parser.add_argument("--worker-root", type=Path, help=argparse.SUPPRESS)
@@ -463,10 +527,12 @@ def main():
         command = ["dbus-run-session", f"--config-file={config}", "--", sys.executable,
                    str(Path(__file__).resolve()), "--worker-root", str(private),
                    "--clarion-bin", str(args.clarion_bin), "--shell-bin", str(args.shell_bin),
-                   "--artifacts", str(args.artifacts), "--renderer", args.renderer,
+                   "--artifacts", str(args.artifacts), "--renderer", args.renderer, "--theme", args.theme,
                    "--timeout", str(args.timeout)]
         if args.capture:
             command.append("--capture")
+        if args.visual_fixture:
+            command.append("--visual-fixture")
         if args.diagnose_ipc:
             command.append("--diagnose-ipc")
         child = subprocess.Popen(command, env=env, start_new_session=True)
