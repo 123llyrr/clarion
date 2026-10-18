@@ -93,6 +93,8 @@ Requires:       freetype
 Requires:       vulkan-loader
 Requires:       libwayland-client
 Requires:       libxkbcommon
+Requires:       glib2
+Requires:       python3
 
 # Loaded through dlopen
 Requires:       libwayland-server
@@ -141,8 +143,8 @@ sed -i 's/\[env\]/[env]\nCLARION_BUILD_COMMIT="%{version}"/' .cargo/config.toml
 %build
 %cargo_build
 # The standard build macro targets the root package; build the workspace
-# settings GUI and GPUI launcher explicitly for RPM installation.
-%{__cargo} build %{__cargo_common_opts} --profile rpm --package clarion-settings --package clarion-launcher
+# settings GUI and integrated GPUI Shell explicitly for RPM installation.
+%{__cargo} build %{__cargo_common_opts} --profile rpm --package clarion-settings --package clarion-shell
 
 target/rpm/clarion completions bash > ./clarion
 target/rpm/clarion completions fish > ./clarion.fish
@@ -150,12 +152,18 @@ target/rpm/clarion completions zsh > ./_clarion
 
 %install
 %cargo_install
-install -Dm755 -t %{buildroot}%{_bindir} target/rpm/clarion-settings target/rpm/clarion-launcher
+install -Dm755 -t %{buildroot}%{_bindir} target/rpm/clarion-settings target/rpm/clarion-shell
 
 install -Dm755 -t %{buildroot}%{_bindir} ./resources/clarion-session
 install -Dm644 -t %{buildroot}%{_datadir}/wayland-sessions ./resources/clarion.desktop
 install -Dm644 -t %{buildroot}%{_datadir}/xdg-desktop-portal ./resources/clarion-portals.conf
-install -Dm644 -t %{buildroot}%{_userunitdir} ./resources/clarion.service
+install -Dm644 -t %{buildroot}%{_userunitdir} ./resources/clarion.service ./resources/clarion-shell.service
+install -Dm644 -t %{buildroot}%{_datadir}/applications ./resources/clarion-shell.desktop
+install -dm755 %{buildroot}%{_datadir}/clarion-shell/icons
+install -m644 clarion-shell/assets/icons/* %{buildroot}%{_datadir}/clarion-shell/icons/
+install -Dm755 ./resources/clarion-shell-msg %{buildroot}%{_bindir}/clarion-shell-msg
+install -Dm755 ./resources/compat/realand-shell %{buildroot}%{_bindir}/realand-shell
+install -Dm755 ./resources/compat/realand-shell-msg %{buildroot}%{_bindir}/realand-shell-msg
 install -Dm644 -t %{buildroot}%{_userunitdir} ./resources/clarion-shutdown.target
 
 install -Dm644 -t %{buildroot}%{bash_completions_dir} ./clarion
@@ -176,7 +184,13 @@ install -Dm644 -t %{buildroot}%{zsh_completions_dir} ./_clarion
 %doc docs/wiki
 %{_bindir}/clarion
 %{_bindir}/clarion-settings
-%{_bindir}/clarion-launcher
+%{_bindir}/clarion-shell
+%{_bindir}/clarion-shell-msg
+%{_bindir}/realand-shell
+%{_bindir}/realand-shell-msg
+%{_datadir}/applications/clarion-shell.desktop
+%{_datadir}/clarion-shell
+%{_userunitdir}/clarion-shell.service
 %{_bindir}/clarion-session
 %{_datadir}/wayland-sessions/clarion.desktop
 %dir %{_datadir}/xdg-desktop-portal

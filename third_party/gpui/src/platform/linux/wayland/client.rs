@@ -67,7 +67,11 @@ use xkbcommon::xkb::ffi::XKB_KEYMAP_FORMAT_TEXT_V1;
 use xkbcommon::xkb::{self, KEYMAP_COMPILE_NO_FLAGS, Keycode};
 
 use super::{
+    background_effect::client::{
+        ext_background_effect_manager_v1, ext_background_effect_surface_v1,
+    },
     display::WaylandDisplay,
+    gtk_shell::client::{gtk_shell1, gtk_surface1},
     key_repeat::KeyRepeat,
     window::{ImeInput, WaylandWindowStatePtr},
 };
@@ -119,7 +123,10 @@ pub struct Globals {
         Option<wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1>,
     pub decoration_manager: Option<zxdg_decoration_manager_v1::ZxdgDecorationManagerV1>,
     pub blur_manager: Option<org_kde_kwin_blur_manager::OrgKdeKwinBlurManager>,
+    pub background_effect_manager:
+        Option<ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1>,
     pub text_input_manager: Option<zwp_text_input_manager_v3::ZwpTextInputManagerV3>,
+    pub gtk_shell: Option<gtk_shell1::GtkShell1>,
     pub executor: ForegroundExecutor,
 }
 
@@ -157,7 +164,9 @@ impl Globals {
             fractional_scale_manager: globals.bind(&qh, 1..=1, ()).ok(),
             decoration_manager: globals.bind(&qh, 1..=1, ()).ok(),
             blur_manager: globals.bind(&qh, 1..=1, ()).ok(),
+            background_effect_manager: globals.bind(&qh, 1..=1, ()).ok(),
             text_input_manager: globals.bind(&qh, 1..=1, ()).ok(),
+            gtk_shell: globals.bind(&qh, 1..=1, ()).ok(),
             executor,
             qh,
         }
@@ -978,8 +987,15 @@ delegate_noop!(WaylandClientStatePtr: ignore wl_buffer::WlBuffer);
 delegate_noop!(WaylandClientStatePtr: ignore wl_region::WlRegion);
 delegate_noop!(WaylandClientStatePtr: ignore wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1);
 delegate_noop!(WaylandClientStatePtr: ignore zxdg_decoration_manager_v1::ZxdgDecorationManagerV1);
+// Effects are desired state. The protocol's compositor applies capability
+// changes automatically, including restoring a previously requested blur.
+delegate_noop!(WaylandClientStatePtr: ignore ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1);
+delegate_noop!(WaylandClientStatePtr: ignore ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1);
 delegate_noop!(WaylandClientStatePtr: ignore org_kde_kwin_blur_manager::OrgKdeKwinBlurManager);
 delegate_noop!(WaylandClientStatePtr: ignore zwp_text_input_manager_v3::ZwpTextInputManagerV3);
+// Metadata identity only: no capability-driven menu integration.
+delegate_noop!(WaylandClientStatePtr: ignore gtk_shell1::GtkShell1);
+delegate_noop!(WaylandClientStatePtr: ignore gtk_surface1::GtkSurface1);
 delegate_noop!(WaylandClientStatePtr: ignore org_kde_kwin_blur::OrgKdeKwinBlur);
 delegate_noop!(WaylandClientStatePtr: ignore wp_viewporter::WpViewporter);
 delegate_noop!(WaylandClientStatePtr: ignore wp_viewport::WpViewport);
@@ -1427,9 +1443,10 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                                     let mut client = this.get_client();
                                     let mut state = client.borrow_mut();
                                     let is_repeating = state.repeat.is_active(id)
-                                        && state.keyboard_focused_window.as_ref().is_some_and(
-                                            |window| window.surface().id() == surface,
-                                        );
+                                        && state
+                                            .keyboard_focused_window
+                                            .as_ref()
+                                            .is_some_and(|window| window.surface().id() == surface);
 
                                     if !is_repeating || rate == 0 {
                                         return TimeoutAction::Drop;

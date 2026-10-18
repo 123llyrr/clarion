@@ -1785,6 +1785,18 @@ impl Window {
         self.platform_window.set_app_id(app_id);
     }
 
+    /// Set pointer input in logical surface coordinates. Desktop clients must
+    /// exclude their transparent margins so windows below remain interactive.
+    pub fn set_input_region(&self, rectangles: Option<&[Bounds<Pixels>]>) {
+        self.platform_window.set_input_region(rectangles);
+    }
+
+    /// Change the reserved edge of a layer-shell surface in logical pixels.
+    /// Other window roles and platforms ignore this request.
+    pub fn set_layer_exclusive_zone(&self, zone: i32) {
+        self.platform_window.set_layer_exclusive_zone(zone);
+    }
+
     /// Sets the window background appearance.
     pub fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance) {
         self.platform_window

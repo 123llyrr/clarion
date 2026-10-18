@@ -5,27 +5,22 @@ presentation scheduling and composition policy are independently compiled Rust
 crates. The compositor executable owns protocol and device resources on its event
 thread; workers receive bounded jobs and resource leases, never the desktop owner.
 
-`clarion-launcher` is an independent Rust/GPUI Tahoe Apps client. Its vendored
-GPUI 0.2.2 patch creates a Wayland layer role instead of an xdg role and retains
-GPUI's input, IME and client GPU ownership. The Phase 0 feasibility gate passed
-isolated geometry/scale, real Chinese IME, same-process window drop/reopen and
-Shell glass/Dock/focus tests. The complete isolated production r6 run also passed
-real IME, Flutter Dock integration, peer ownership, fullscreen layering and native
-focus restoration. The [Phase 0 record](docs/launcher-phase0.md) preserves the
-initial gate; the [Apps implementation record](docs/launcher-apps.md) covers the
-completed process/data/UI/bridge/package code, production evidence and remaining
-physical multi-output, hardware gesture and package-build checks.
+`clarion-shell` is one native Rust/GPUI desktop process with a macOS-inspired
+interface and Clarion branding. The vendored GPUI patch provides explicit
+Wayland layer-shell roles while retaining GPUI's input, IME and client GPU
+ownership. Bar, Dock and panels share state and services across outputs.
+The compositor remains the owner of desktop policy, background effects and
+output presentation; the Shell does not borrow compositor GPU resources.
 
-The Flutter Shell owns the backdrop, Dock, shared preferences and keyboard
-handoff. A bounded JSON-lines Unix socket carries Show/Hide/Toggle/Reload and
-visibility/launch/error events. GPUI owns the panel, its XDG catalog, search and
-view state; GIO owns Desktop Entry activation, with the existing user-manager
-scope policy. Hiding drops the layer window while an explicit keep-alive policy
-continues IPC processing. `apps-view.json` is independent of the fallback
-Flutter `launchpad-layout.json`; setting `use_external_launcher=false` selects
-that retained implementation. A deployment generation contains both client
-executables, and the bridge resolves the launcher next to the running Shell
-before looking on PATH.
+`clarion-launcher` is a shared library for the XDG app catalog, icon resolution,
+Desktop Entry activation and view preferences. Apps is an integrated Shell
+panel, so opening it does not create a second launcher process or use a separate
+launcher socket. The Shell command socket remains compatible with
+`clarion-shell-msg` and legacy Realand names. A release contains the Shell binary
+and open-license icon assets; deployment preserves earlier generations.
+See the [native Shell record](docs/native-shell.md) for current boundaries and
+isolated acceptance. Earlier Flutter/independent Apps records remain historical
+evidence and do not establish current native Shell correctness.
 
 ## Module responsibilities
 
@@ -43,7 +38,7 @@ before looking on PATH.
 | `clarion-ipc` | Versioned requests, responses and diagnostics | Desktop implementation |
 | `clarion-config` | Configuration decoding, schema and identity migration | Device ownership |
 | `clarion-shell`, `clarion-settings` | Desktop UI and configuration UI | Compositor core ownership |
-| `clarion-launcher` | Apps catalog, GPUI panel, bounded launcher IPC and independent view state | Shell backdrop, shared preference writes, compositor GPU resources |
+| `clarion-launcher` | Apps catalog, icons, launch policy and view preference library | Shell windows, service lifetime, compositor GPU resources |
 
 ```mermaid
 flowchart TD

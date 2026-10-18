@@ -1,5 +1,7 @@
 # GPUI launcher Phase 0
 
+> 历史实现记录：本文针对已退役的独立 GPUI Apps / Flutter Shell 桥接。当前应用面板已集成到原生 Rust Shell，构建、安装与验收以 [原生 Shell](native-shell.md) 为准。
+
 The Tahoe Apps launcher plan has a hard feasibility gate before the data layer,
 full UI, Flutter integration, or deployment. **The Phase 0 gate was accepted on
 2026-10-18** after the isolated native and Flutter composition checks below.

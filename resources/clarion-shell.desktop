@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Clarion Shell Preview
+Comment=Preview the native GPUI desktop Shell
+Exec=clarion-shell --preview
+Icon=preferences-desktop
+Terminal=false
+Categories=System;Settings;

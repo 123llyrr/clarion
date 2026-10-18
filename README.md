@@ -57,7 +57,7 @@ renderer "vulkan"
 | `src/platform` | 客户端、输入、协议及设备事件适配 |
 | `src/render_helpers/vulkan` | 原生 Vulkan 渲染、同步与完成回收 |
 | `clarion-shell` | 顶部栏、Dock、启动器与桌面界面 |
-| `clarion-launcher` | 独立 Rust/GPUI Tahoe Apps 面板、XDG 应用目录与启动服务 |
+| `clarion-launcher` | Shell 共享的 XDG 应用目录、启动与视图偏好模块 |
 | `clarion-settings` | 配置、窗口管理与性能诊断 |
 | `clarion-ipc` | 合成器、Shell 与工具间的接口 |
 
@@ -71,37 +71,26 @@ renderer "vulkan"
 - **空间组织**：工作区、舞台概览、二维工作区总览、窗口搜索与展开。
 - **自由画布**：二维平移、触控板惯性和视口恢复。
 - **可打断动效**：弹簧、贝塞尔曲线、缩放过渡及窗口开关效果；提供减少动态选项。
-- **日常集成**：Xwayland、截图、录屏、全局应用菜单、窗口与工作区 IPC。
+- **日常集成**：Xwayland、截图、录屏、窗口与工作区 IPC。
 
 [功能与配置](docs/wiki/Clarion-Features.md) · [默认配置](resources/default-config.kdl) · [配置文档](docs/wiki/Configuration:-Introduction.md)
 
 ## 集成 Shell
 
-Clarion Shell 提供顶部栏、Dock、应用启动器、控制中心、通知中心、托盘与桌面文件视图。
-支持 Material 与玻璃风格界面，通过 layer-shell 和 Clarion IPC 连接合成器。
-Flutter 负责客户端界面绘制；桌面合成、背景模糊和液态玻璃由合成器渲染后端处理。
+Clarion Shell 使用 Rust/GPUI，提供统一的 macOS 风格界面，在同一进程中管理顶部栏、Dock、应用面板、控制中心、
+通知、托盘和最近内容。所有输出共享一份服务与状态，原生 layer-shell 表面分别承担
+栏、Dock 和交互面板；应用目录与启动逻辑复用 `clarion-launcher` 库。
+应用面板与 Dock 直接共享状态，无需独立启动器进程或 Flutter 运行时。
+合成器负责桌面合成、模糊、窗口动画、颜色管理和输入路由。
 
-[Shell 构建与使用](clarion-shell/README.md) · [设置中心](clarion-settings/README.md)
-
-应用入口默认配置为独立的 Rust/GPUI **Tahoe Apps** 浮动面板，初始尺寸
-980×680，使用固定类别、Suggested、名称排序及图标/列表视图。Shell 保留背景玻璃、
-Dock 和焦点交接，通过 `$XDG_RUNTIME_DIR/clarion-launcher.sock` 连接独立进程。
-GPUI 0.2.2 已 vendor；Phase 0 和完整生产入口的隔离原生验收已通过，覆盖真实中文输入、
-Dock 桥接、全屏覆盖与焦点恢复、启动失败和旧入口回退。物理多屏、硬件手势和实际发行包构建
-仍需验证；当前会话不会因源码或安装文件更新而自动切换。
-实现、构建与分阶段验收见 [Tahoe Apps 说明](docs/launcher-apps.md)，
-最初的隔离可行性证据见 [GPUI 启动器验证](docs/launcher-phase0.md)。
-
-在 Shell 的 `preferences.json` 中设置 `"use_external_launcher": false` 可选择保留的
-Flutter 启动器。新面板的排序模式、视图和尺寸单独保存到同一配置目录的 `apps-view.json`，
-不会读取或改写旧的 `launchpad-layout.json` 文件夹布局。已有 `realand-shell` 配置继续按迁移规则读取。
+[Shell 构建与使用](clarion-shell/README.md) · [原生 Shell 架构与验收](docs/native-shell.md) · [设置中心](clarion-settings/README.md)
 
 ## 构建与运行
 
 在 Linux 上安装 Rust 工具链及所需的图形、输入和系统库后：
 
 ```sh
-cargo build --locked --release -p clarion -p clarion-settings -p clarion-launcher
+cargo build --locked --release -p clarion -p clarion-settings -p clarion-shell
 ```
 
 已有图形会话中可嵌套测试；在可用 TTY 上可启动独立物理会话：
@@ -125,19 +114,18 @@ systemctl --user daemon-reload
 
 保存工作后，在下次登录时选择 **Clarion**。安装入口不会自动重启当前桌面。
 
-安装 Flutter Shell 时，把同一次构建的 Apps 二进制放入同一版本目录：
+仅安装当前用户的原生 Shell，可先检查产物再生成可回滚版本：
 
 ```sh
 scripts/build-shell.sh --release
-python3 scripts/install-shell.py \
-  --bundle clarion-shell/build/linux/x64/release/bundle \
-  --launcher-binary target/release/clarion-launcher
+python3 scripts/install-shell.py --check-only
+python3 scripts/install-shell.py --binary target/release/clarion-shell
 ```
 
-架构不同的机器请替换 bundle 的 `x64` 路径。安装器会先验证两个产物，保留旧版本与备份，
-再原子更新入口；它不会重启 Shell 或启用服务。运行中的 Shell 始终优先使用自身版本目录中的
-`clarion-launcher`，新安装版本不会混入旧进程。诊断时可用绝对可执行路径
-`CLARION_LAUNCHER_BIN` 显式覆盖。
+安装器把二进制、命令入口及开放许可图标放入同一版本目录，验证内容后原子切换入口。
+原生版本与入口事务备份可用于失败恢复；安装动作不会启动、启用或重启服务，也不改写个人偏好。
+正式迁移在原生版本验收后替换运行进程，并清理已托管的退役 Flutter 运行时。使用统一桌面版本目录的部署应将新二进制与图标一起放入
+该版本，再统一切换 `current`，避免独立更新改变已有的桌面版本配对。
 
 ### 运行时依赖（字体与图标主题）
 
@@ -152,11 +140,10 @@ sudo pacman -S noto-fonts-cjk ttf-dejavu
 sudo apt install fonts-noto-cjk fonts-dejavu-core
 ```
 
-SF、PingFang 与微软雅黑等专有字体不会被请求或加载；`scripts/import-shell-assets.sh` 只导入
-图形素材，不再导入字体。
+安装产物仅包含仓库中标明开放许可的图标；不包含从其他系统提取的图形素材或专有字体。
 
-Dock 与启动器优先保留应用自身的图标；GPUI Apps 按 GTK 图标主题配置、主题继承、
-`hicolor` 和 pixmaps 查找 PNG/SVG，Shell 的图标仍由 GTK 解析。因此
+Dock 与应用面板保留应用自身的图标，按图标主题配置、主题继承、
+`hicolor` 和 pixmaps 查找 PNG/SVG。因此
 无图标主题的最小系统会显示通用占位图标：
 
 ```sh

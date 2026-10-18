@@ -64,8 +64,8 @@ Finally, the [Xwayland](./Xwayland.md) page explains how to run X11 applications
 ### Desktop environments
 
 Clarion Shell integrates the launcher, Dock, control center, notifications and desktop
-controls. It supports Material and macOS-inspired appearances; compositing and liquid
-glass are handled by the Clarion renderer. The compositor also works with external
+controls in one native Rust/GPUI process with a macOS-inspired interface. Compositing
+and liquid glass are handled by the Clarion renderer. The compositor also works with external
 Wayland desktop components:
 
 - Many [XFCE](https://www.xfce.org/) components work on Wayland. See [their wiki](https://wiki.xfce.org/releng/wayland_roadmap#component_specific_status).

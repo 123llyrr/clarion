@@ -15,7 +15,7 @@ This index accompanies those records; it does not replace source headers or depe
 | GTK-related interfaces | [LGPL text](resources/licenses/gtk-COPYING.txt), source-file notices |
 | Removed Apple-derived assets | [Removal manifest](resources/licenses/removed-apple-assets.sha256), [policy and restore path](clarion-shell/assets/shell/README.txt) |
 
-Other Rust, Flutter and system-library dependencies are identified by their manifests, lockfiles and retained source notices.
+Other Rust and system-library dependencies are identified by their manifests, lockfiles and retained source notices.
 
 ## Apple-derived assets
 

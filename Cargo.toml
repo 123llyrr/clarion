@@ -10,6 +10,7 @@ members = [
     "clarion-visual-tests",
     "clarion-settings",
     "clarion-launcher",
+    "clarion-shell",
 ]
 
 [workspace.package]
@@ -181,15 +182,19 @@ version = "0.1.0"
 assets = [
     { source = "target/release/clarion", dest = "/usr/bin/", mode = "755" },
     { source = "target/release/clarion-settings", dest = "/usr/bin/", mode = "755" },
-    { source = "target/release/clarion-launcher", dest = "/usr/bin/", mode = "755" },
+    { source = "target/release/clarion-shell", dest = "/usr/bin/", mode = "755" },
     { source = "resources/clarion-session", dest = "/usr/bin/", mode = "755" },
     { source = "resources/clarion.desktop", dest = "/usr/share/wayland-sessions/", mode = "644" },
     { source = "resources/clarion-portals.conf", dest = "/usr/share/xdg-desktop-portal/", mode = "644" },
     { source = "resources/clarion.service", dest = "/usr/lib/systemd/user/", mode = "644" },
+    { source = "resources/clarion-shell.service", dest = "/usr/lib/systemd/user/", mode = "644" },
+    { source = "resources/clarion-shell.desktop", dest = "/usr/share/applications/", mode = "644" },
+    { source = "clarion-shell/assets/icons/*", dest = "/usr/share/clarion-shell/icons/", mode = "644" },
     { source = "resources/clarion-shutdown.target", dest = "/usr/lib/systemd/user/", mode = "644" },
     { source = "resources/compat/realand", dest = "/usr/bin/realand", mode = "755" },
     { source = "resources/compat/realand-session", dest = "/usr/bin/realand-session", mode = "755" },
     { source = "resources/compat/realand-settings", dest = "/usr/bin/realand-settings", mode = "755" },
+    { source = "resources/compat/realand-shell", dest = "/usr/bin/realand-shell", mode = "755" },
     { source = "resources/clarion-shell-msg", dest = "/usr/bin/clarion-shell-msg", mode = "755" },
     { source = "resources/compat/realand-shell-msg", dest = "/usr/bin/realand-shell-msg", mode = "755" },
 ]
@@ -197,21 +202,26 @@ assets = [
 alacritty = "*"
 fuzzel = "*"
 python3 = "*"
+glib2 = "*"
 
 [package.metadata.deb]
-depends = "alacritty, fuzzel, python3"
+depends = "alacritty, fuzzel, python3, libglib2.0-bin"
 assets = [
     ["target/release/clarion", "usr/bin/", "755"],
     ["target/release/clarion-settings", "usr/bin/", "755"],
-    ["target/release/clarion-launcher", "usr/bin/", "755"],
+    ["target/release/clarion-shell", "usr/bin/", "755"],
     ["resources/clarion-session", "usr/bin/", "755"],
     ["resources/clarion.desktop", "/usr/share/wayland-sessions/", "644"],
     ["resources/clarion-portals.conf", "/usr/share/xdg-desktop-portal/", "644"],
     ["resources/clarion.service", "/usr/lib/systemd/user/", "644"],
+    ["resources/clarion-shell.service", "/usr/lib/systemd/user/", "644"],
+    ["resources/clarion-shell.desktop", "/usr/share/applications/", "644"],
+    ["clarion-shell/assets/icons/*", "/usr/share/clarion-shell/icons/", "644"],
     ["resources/clarion-shutdown.target", "/usr/lib/systemd/user/", "644"],
     ["resources/compat/realand", "usr/bin/realand", "755"],
     ["resources/compat/realand-session", "usr/bin/realand-session", "755"],
     ["resources/compat/realand-settings", "usr/bin/realand-settings", "755"],
+    ["resources/compat/realand-shell", "usr/bin/realand-shell", "755"],
     ["resources/clarion-shell-msg", "usr/bin/clarion-shell-msg", "755"],
     ["resources/compat/realand-shell-msg", "usr/bin/realand-shell-msg", "755"],
 ]

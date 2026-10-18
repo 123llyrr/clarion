@@ -28,6 +28,10 @@ use wayland_protocols::{
 use wayland_protocols_plasma::blur::client::org_kde_kwin_blur;
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
+use super::background_effect::{
+    self, client::ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1,
+};
+use super::gtk_shell::{self, client::gtk_surface1::GtkSurface1};
 use crate::{
     AnyWindowHandle, Bounds, Decorations, Globals, GpuSpecs, LayerShellAnchor,
     LayerShellKeyboardInteractivity, LayerShellLayer, Modifiers, Output, Pixels, PlatformDisplay,
@@ -96,8 +100,12 @@ pub struct WaylandWindowState {
     app_id: Option<String>,
     appearance: WindowAppearance,
     blur: Option<org_kde_kwin_blur::OrgKdeKwinBlur>,
+    background_effect: Option<ExtBackgroundEffectSurfaceV1>,
+    gtk_surface: Option<GtkSurface1>,
     toplevel: Option<xdg_toplevel::XdgToplevel>,
     layer_surface: Option<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1>,
+    input_region: Option<Vec<Bounds<Pixels>>>,
+    exclusive_zone_override: Option<i32>,
     viewport: Option<wp_viewport::WpViewport>,
     outputs: HashMap<ObjectId, Output>,
     display: Option<(ObjectId, Output)>,
@@ -173,8 +181,12 @@ impl WaylandWindowState {
             decoration,
             app_id: None,
             blur: None,
+            background_effect: None,
+            gtk_surface: None,
             toplevel,
             layer_surface,
+            input_region: None,
+            exclusive_zone_override: None,
             viewport,
             globals,
             outputs: HashMap::default(),
@@ -259,7 +271,13 @@ impl Drop for WaylandWindow {
         if let Some(decoration) = &state.decoration {
             decoration.destroy();
         }
-        if let Some(blur) = &state.blur {
+        if let Some(gtk_surface) = state.gtk_surface.take() {
+            gtk_shell::destroy_surface(gtk_surface);
+        }
+        if let Some(effect) = state.background_effect.take() {
+            effect.destroy();
+        }
+        if let Some(blur) = state.blur.take() {
             blur.release();
         }
         if let Some(toplevel) = &state.toplevel {
@@ -391,7 +409,7 @@ impl WaylandWindow {
             .as_ref()
             .map(|viewporter| viewporter.get_viewport(&surface, &globals.qh, ()));
 
-        let state = WaylandWindowState::new(
+        let mut state = WaylandWindowState::new(
             handle,
             surface.clone(),
             xdg_surface.clone(),
@@ -426,6 +444,22 @@ impl WaylandWindow {
             surface.destroy();
             error
         })?;
+        if let Some(application_id) =
+            layer_options.and_then(|options| gtk_shell::desktop_application_id(options.namespace))
+        {
+            if let Some(manager) = &state.globals.gtk_shell {
+                let identity = manager.get_gtk_surface(&surface, &state.globals.qh, ());
+                identity.set_dbus_properties(
+                    Some(application_id.to_owned()),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                );
+                state.gtk_surface = Some(identity);
+            }
+        }
         let this = Self(WaylandWindowStatePtr {
             state: Rc::new(RefCell::new(state)),
             callbacks: Rc::new(RefCell::new(Callbacks::default())),
@@ -833,6 +867,7 @@ impl WaylandWindowStatePtr {
             }
             let device_bounds = state.bounds.to_device_pixels(state.scale);
             state.renderer.update_drawable_size(device_bounds.size);
+            sync_background_effect(&mut state);
             (state.bounds.size, state.scale)
         };
 
@@ -1010,6 +1045,45 @@ impl PlatformWindow for WaylandWindow {
             .executor
             .spawn(async move { state_ptr.resize(size) })
             .detach();
+    }
+
+    fn set_layer_exclusive_zone(&self, zone: i32) {
+        let mut state = self.borrow_mut();
+        let zone = zone.clamp(-1, 16384);
+        if state.closed || state.exclusive_zone_override == Some(zone) {
+            return;
+        }
+        if let Some(layer) = &state.layer_surface {
+            layer.set_exclusive_zone(zone);
+            state.surface.commit();
+            state.exclusive_zone_override = Some(zone);
+        }
+    }
+
+    fn set_input_region(&self, rectangles: Option<&[Bounds<Pixels>]>) {
+        let mut state = self.borrow_mut();
+        let requested =
+            rectangles.map(|rectangles| rectangles.iter().take(256).copied().collect::<Vec<_>>());
+        if state.closed || state.input_region == requested {
+            return;
+        }
+        state.input_region = requested;
+        if let Some(rectangles) = state.input_region.as_deref() {
+            let region = state
+                .globals
+                .compositor
+                .create_region(&state.globals.qh, ());
+            for [x, y, width, height] in background_effect::rectangles(rectangles) {
+                region.add(x, y, width, height);
+            }
+            state.surface.set_input_region(Some(&region));
+            region.destroy();
+        } else {
+            state.surface.set_input_region(None);
+        }
+        // The glass and hit testing share one surface-local shape and commit.
+        sync_background_effect(&mut state);
+        state.surface.commit();
     }
 
     fn scale_factor(&self) -> f32 {
@@ -1313,22 +1387,65 @@ fn update_window(mut state: RefMut<WaylandWindowState>) {
         state.surface.set_opaque_region(None);
     }
 
-    if let Some(ref blur_manager) = state.globals.blur_manager {
-        if state.background_appearance == WindowBackgroundAppearance::Blurred {
-            if state.blur.is_none() {
-                let blur = blur_manager.create(&state.surface, &state.globals.qh, ());
-                state.blur = Some(blur);
+    sync_background_effect(&mut state);
+
+    region.destroy();
+}
+
+/// Request glass only for explicitly Blurred windows. Transparent preview,
+/// desktop, and edge-sensor surfaces never acquire an effect object.
+fn sync_background_effect(state: &mut WaylandWindowState) {
+    if state.closed {
+        return;
+    }
+    if state.background_appearance != WindowBackgroundAppearance::Blurred {
+        if let Some(effect) = state.background_effect.take() {
+            effect.destroy();
+        }
+        if let Some(blur) = state.blur.take() {
+            if let Some(manager) = &state.globals.blur_manager {
+                manager.unset(&state.surface);
             }
-            state.blur.as_ref().unwrap().commit();
-        } else {
-            // It probably doesn't hurt to clear the blur for opaque windows
-            blur_manager.unset(&state.surface);
-            if let Some(b) = state.blur.take() {
-                b.release()
-            }
+            blur.release();
+        }
+        return;
+    }
+    let region = state
+        .globals
+        .compositor
+        .create_region(&state.globals.qh, ());
+    if let Some(rectangles) = &state.input_region {
+        for [x, y, width, height] in background_effect::rectangles(rectangles) {
+            region.add(x, y, width, height);
+        }
+    } else {
+        // Protocol coordinates are logical and surface-local, independent of
+        // output position and fractional buffer scale.
+        let bounds = Bounds::new(crate::point(px(0.), px(0.)), state.bounds.size);
+        for [x, y, width, height] in background_effect::rectangles(&[bounds]) {
+            region.add(x, y, width, height);
         }
     }
-
+    if let Some(manager) = &state.globals.background_effect_manager {
+        if state.background_effect.is_none() {
+            state.background_effect =
+                Some(manager.get_background_effect(&state.surface, &state.globals.qh, ()));
+        }
+        state
+            .background_effect
+            .as_ref()
+            .unwrap()
+            .set_blur_region(Some(&region));
+    } else if let Some(manager) = &state.globals.blur_manager {
+        // Retain the existing KWin fallback on compositors without the standard
+        // protocol, with the same exact rounded region rather than full-screen.
+        if state.blur.is_none() {
+            state.blur = Some(manager.create(&state.surface, &state.globals.qh, ()));
+        }
+        let blur = state.blur.as_ref().unwrap();
+        blur.set_region(Some(&region));
+        blur.commit();
+    }
     region.destroy();
 }
 

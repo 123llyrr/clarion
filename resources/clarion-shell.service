@@ -1,0 +1,17 @@
+[Unit]
+Description=Clarion native GPUI desktop Shell
+ConditionEnvironment=XDG_CURRENT_DESKTOP=clarion
+PartOf=graphical-session.target
+After=clarion.service graphical-session.target
+Before=xdg-desktop-autostart.target
+
+[Service]
+Type=notify
+NotifyAccess=all
+TimeoutStartSec=30s
+ExecStart=clarion-shell --monitor=0
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=graphical-session.target

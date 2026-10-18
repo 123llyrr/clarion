@@ -17,6 +17,7 @@
           dbus,
           fontconfig,
           freetype,
+          glib,
           libGL,
           libdisplay-info_0_3,
           libinput,
@@ -34,6 +35,7 @@
           vulkan-loader,
           xorg,
           installShellFiles,
+          makeWrapper,
           withDbus ? true,
           withSystemd ? true,
           withScreencastSupport ? true,
@@ -56,6 +58,7 @@
               ./clarion-ipc
               ./clarion-settings
               ./clarion-launcher
+              ./clarion-shell
               ./clarion-visual-tests
               ./resources
               ./src
@@ -86,6 +89,7 @@
             rustPlatform.bindgenHook
             pkg-config
             installShellFiles
+            makeWrapper
           ];
 
           buildInputs =
@@ -155,12 +159,22 @@
                 --zsh <($out/bin/clarion completions zsh)
 
               install -Dm755 target/''${cargoBuildType:-release}/clarion-settings $out/bin/clarion-settings
-              install -Dm755 target/''${cargoBuildType:-release}/clarion-launcher $out/bin/clarion-launcher
+              install -Dm755 target/''${cargoBuildType:-release}/clarion-shell $out/bin/clarion-shell
+              wrapProgram $out/bin/clarion-shell \
+                --prefix PATH : "${lib.makeBinPath ([ glib ] ++ lib.optional withSystemd systemd)}:$out/bin"
+              install -Dm644 resources/clarion-shell.service -t $out/lib/systemd/user
+              substituteInPlace $out/lib/systemd/user/clarion-shell.service \
+                --replace-fail 'ExecStart=clarion-shell' "ExecStart=$out/bin/clarion-shell"
+              install -Dm644 resources/clarion-shell.desktop -t $out/share/applications
+              substituteInPlace $out/share/applications/clarion-shell.desktop \
+                --replace-fail 'Exec=clarion-shell' "Exec=$out/bin/clarion-shell"
+              install -dm755 $out/share/clarion-shell/icons
+              cp clarion-shell/assets/icons/* $out/share/clarion-shell/icons/
               install -Dm755 resources/clarion-session $out/bin/clarion-session
               install -Dm755 resources/clarion-shell-msg $out/bin/clarion-shell-msg
               substituteInPlace $out/bin/clarion-shell-msg \
                 --replace-fail '#!/usr/bin/env python3' '#!${python3}/bin/python3'
-              for legacy in realand realand-session realand-settings realand-shell-msg; do
+              for legacy in realand realand-session realand-settings realand-shell realand-shell-msg; do
                 install -Dm755 resources/compat/$legacy $out/bin/$legacy
               done
               install -Dm644 resources/clarion.desktop -t $out/share/wayland-sessions

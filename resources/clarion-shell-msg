@@ -9,7 +9,7 @@ import sys
 
 COMMANDS = (
     "spotlight", "launcher", "close", "spaces", "mission-control", "control-center",
-    "quick-settings", "notifications", "overview",
+    "quick-settings", "notifications", "overview", "recent-content", "clipboard", "preferences", "screenshot", "reload",
 )
 
 

@@ -463,6 +463,11 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn window_bounds(&self) -> WindowBounds;
     fn content_size(&self) -> Size<Pixels>;
     fn resize(&mut self, size: Size<Pixels>);
+    /// Logical surface rectangles accepting pointer input; None restores the
+    /// whole surface, and an empty slice makes a desktop layer pass through.
+    fn set_input_region(&self, _rectangles: Option<&[Bounds<Pixels>]>) {}
+    /// Update a layer surface's reserved edge without destroying its window.
+    fn set_layer_exclusive_zone(&self, _zone: i32) {}
     fn scale_factor(&self) -> f32;
     fn appearance(&self) -> WindowAppearance;
     fn display(&self) -> Option<Rc<dyn PlatformDisplay>>;

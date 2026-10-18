@@ -73,6 +73,8 @@ wayland = [
     "calloop-wayland-source",
     "wayland-backend",
     "wayland-client",
+    "wayland-scanner",
+    "bitflags",
     "wayland-cursor",
     "wayland-protocols",
     "wayland-protocols-plasma",
@@ -523,6 +525,14 @@ optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.wayland-client]
 version = "0.31.2"
+optional = true
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.bitflags]
+version = "2"
+optional = true
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.wayland-scanner]
+version = "0.31"
 optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.wayland-cursor]

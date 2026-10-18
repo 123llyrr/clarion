@@ -1,0 +1,32 @@
+[package]
+name = "clarion-shell"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Clarion native Rust desktop shell powered by GPUI"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+gpui = { version = "=0.2.2", default-features = false, features = ["wayland"] }
+clarion-launcher = { path = "../clarion-launcher" }
+clarion-ipc = { path = "../clarion-ipc" }
+async-channel = "2.5"
+libc = "0.2"
+zbus = "5.18"
+async-io = "2.6"
+futures-lite = "2.6"
+wayland-client = "0.31.15"
+wayland-protocols = { version = "0.32.13", features = ["client", "staging"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+sha2 = "0.10"
+chrono = "0.4"
+unicode-segmentation = "1"
+tempfile = "3"
+uuid = { version = "1", features = ["v5"] }
+
+[dev-dependencies]
+gpui = { version = "=0.2.2", default-features = false, features = ["wayland", "test-support"] }

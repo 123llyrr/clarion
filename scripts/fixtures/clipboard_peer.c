@@ -32,8 +32,8 @@ struct fixture {
   struct ext_data_control_device_v1* device;
   struct ext_data_control_source_v1* source;
   struct offer* offers[64];
-  int offer_count, done, failed, offer_mode, primary, sensitive, screenshot;
-  const char *mime, *file, *ready, *requests;
+  int offer_count, done, failed, offer_mode, primary, sensitive, screenshot, delay_ms;
+  const char *mime, *file, *ready, *requests, *require_mime;
   unsigned char* bytes;
   size_t size;
 };
@@ -59,6 +59,7 @@ static void source_send(void* data, struct ext_data_control_source_v1* source, c
   struct fixture* f = data;
   if (f->requests) { FILE* log = fopen(f->requests, "a"); if (log) { fprintf(log, "%s\n", mime); fclose(log); } }
   if (strcmp(mime, f->mime)) { close(fd); return; }
+  if (f->delay_ms) { struct timespec delay = {f->delay_ms / 1000, (f->delay_ms % 1000) * 1000000L}; while (nanosleep(&delay, &delay) && errno == EINTR) {} }
   fcntl(fd, F_SETFL, O_NONBLOCK);
   size_t sent = 0; const int64_t deadline = now_ms() + 5000;
   while (sent < f->size && now_ms() < deadline) {
@@ -91,6 +92,7 @@ static void consume(struct fixture* f, struct ext_data_control_offer_v1* proxy) 
   for (int i = 0; i < f->offer_count; ++i) if (f->offers[i]->proxy == proxy) offer = f->offers[i];
   int supported = 0;
   if (offer) for (int i = 0; i < offer->count; ++i) if (!strcmp(offer->mimes[i], f->mime)) supported = 1;
+  if (f->require_mime) { int matched = 0; if (offer) for (int i = 0; i < offer->count; ++i) if (!strcmp(offer->mimes[i], f->require_mime)) matched = 1; if (!matched) return; }
   if (!supported) return;
   int fds[2]; if (pipe2(fds, O_CLOEXEC)) fail("pipe failed");
   fcntl(fds[0], F_SETFL, O_NONBLOCK);
@@ -142,10 +144,12 @@ int main(int argc, char** argv) {
     if (!strcmp(argv[i], "--primary")) f.primary = 1;
     else if (!strcmp(argv[i], "--sensitive")) f.sensitive = 1;
     else if (!strcmp(argv[i], "--screenshot")) f.screenshot = 1;
+    else if (!strcmp(argv[i], "--delay-ms") && i + 1 < argc) { f.delay_ms = atoi(argv[++i]); if (f.delay_ms < 0 || f.delay_ms > 2000) fail("invalid delay"); }
     else if (!strcmp(argv[i], "--mime") && i + 1 < argc) f.mime = argv[++i];
     else if (!strcmp(argv[i], "--file") && i + 1 < argc) f.file = argv[++i];
     else if (!strcmp(argv[i], "--ready") && i + 1 < argc) f.ready = argv[++i];
     else if (!strcmp(argv[i], "--requests") && i + 1 < argc) f.requests = argv[++i];
+    else if (!strcmp(argv[i], "--require-mime") && i + 1 < argc) f.require_mime = argv[++i];
     else fail("unexpected fixture argument");
   }
   if (!f.mime || !f.file || strlen(f.mime) > 255) fail("missing MIME/file");
@@ -167,7 +171,7 @@ int main(int argc, char** argv) {
     if (f.screenshot) ext_data_control_source_v1_offer(f.source, "application/x-clarion-screenshot");
     if (f.primary) ext_data_control_device_v1_set_primary_selection(f.device, f.source);
     else ext_data_control_device_v1_set_selection(f.device, f.source);
-    if (wl_display_roundtrip(f.display) < 0) fail("private selection setup failed");
+    if (f.delay_ms ? wl_display_flush(f.display) < 0 : wl_display_roundtrip(f.display) < 0) fail("private selection setup failed");
     if (f.ready) { int fd = open(f.ready, O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0600); if (fd < 0 || write(fd, "ready\n", 6) != 6) fail("cannot create readiness marker"); close(fd); }
   }
   const int64_t deadline = now_ms() + (f.offer_mode ? 180000 : 10000);

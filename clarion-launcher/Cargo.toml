@@ -1,23 +1,16 @@
 [package]
+autobins = false
 name = "clarion-launcher"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Clarion Tahoe Apps launcher with a GPUI Wayland overlay"
+description = "Shared XDG application catalog and safe launch services for Clarion"
 
 [dependencies]
 anyhow.workspace = true
-clap.workspace = true
-gpui = { version = "=0.2.2", default-features = false, features = ["wayland"] }
-async-channel = "2.5"
 libc = "0.2"
-serde.workspace = true
-serde_json.workspace = true
 tempfile = "3"
 walkdir = "2.5"
-unicode-segmentation = "1"
-uuid = { version = "1", features = ["v5"] }
 
 [dev-dependencies]
-gpui = { version = "=0.2.2", default-features = false, features = ["wayland", "test-support"] }

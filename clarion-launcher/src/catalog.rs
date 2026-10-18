@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! XDG desktop application catalog, compatible with the Flutter Shell scanner.
+//! Toolkit-independent XDG application catalog for the native Clarion Shell.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
@@ -15,7 +15,7 @@ pub type CatalogEnvironment = HashMap<String, String>;
 const MAX_DESKTOP_BYTES: u64 = 1024 * 1024;
 const CATALOG_ICON_PIXELS: u32 = 128;
 
-/// Tahoe's seven stable primary groups, in their presentation order.
+/// Stable semantic application groups; presentation belongs to the Shell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum AppCategory {
     Utilities,

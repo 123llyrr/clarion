@@ -68,18 +68,17 @@ class IdentityCompatibilityTests(unittest.TestCase):
     def test_shell_install_preserves_alias_and_does_not_start_a_service(self):
         with tempfile.TemporaryDirectory(prefix="clarion shell install ") as temporary:
             root = Path(temporary)
-            bundle = root / "bundle"
-            (bundle / "lib").mkdir(parents=True)
-            (bundle / "data/flutter_assets").mkdir(parents=True)
-            for relative in ("clarion-shell", "lib/libflutter_linux_gtk.so", "data/icudtl.dat"):
-                (bundle / relative).write_bytes(b"fixture")
-            (bundle / "clarion-shell").chmod(0o755)
-            (bundle / "clarion-launcher").write_bytes(b"launcher fixture")
-            (bundle / "clarion-launcher").chmod(0o755)
+            binary = root / "clarion-shell"
+            binary.write_bytes(b"native shell fixture")
+            binary.chmod(0o755)
+            assets = root / "icons"
+            assets.mkdir()
+            (assets / "LICENSE").write_text("test open license\n")
+            (assets / "app.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
             prefix = root / "local"
             result = subprocess.run(
                 [sys.executable, str(ROOT / "scripts/install-shell.py"),
-                 "--bundle", str(bundle), "--prefix", str(prefix),
+                 "--binary", str(binary), "--assets", str(assets), "--prefix", str(prefix),
                  "--config-root", str(root / "config")],
                 check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10,
             )

@@ -1,7 +1,9 @@
+mod background_effect;
 mod client;
 mod clipboard;
 mod cursor;
 mod display;
+mod gtk_shell;
 mod key_repeat;
 mod serial;
 mod window;
