@@ -27,6 +27,9 @@ git-version = "0.3.9"
 clarion-ipc = { path = "../clarion-ipc" }
 clarion-config = { path = "../clarion-config" }
 
+[dev-dependencies]
+winit = { version = "0.30.13", default-features = false, features = ["wayland"] }
+
 [lints.clippy]
 collapsible_if = "allow"
 single_char_pattern = "allow"

@@ -8,6 +8,7 @@ use eframe::egui::{
 
 use crate::appearance_controls::{BlurOverrides, CloseEffect, CloseState};
 use crate::command_palette::{Command, CommandPalette, Sources as CommandSources};
+use crate::common_settings::CommonSettings;
 use crate::config_manager::{ConfigManager, MotionPreset, ValidationStatus};
 use crate::editor::{
     highlight_kdl, SNIPPET_ANIMATED_BORDER, SNIPPET_HOT_CORNERS, SNIPPET_KEYBIND,
@@ -70,6 +71,47 @@ pub struct ClarionSettingsApp {
     command_palette: CommandPalette,
     pending_window_focus: Option<PendingWindowFocus>,
     desktop_theme: crate::theme::DesktopThemeWatcher,
+    common: CommonPreferencesState,
+}
+
+struct CommonPreferencesState {
+    settings: Option<CommonSettings>,
+    baseline: Option<CommonSettings>,
+    source: Option<(std::path::PathBuf, String)>,
+    due: Option<std::time::Instant>,
+    worker: crate::autosave::AutoSave,
+    status: CommonSaveStatus,
+    close_after_save: bool,
+    retry: Option<(CommonSettings, CommonSettings)>,
+    confirm_close: bool,
+}
+
+enum CommonSaveStatus {
+    Ready,
+    Pending,
+    Saving,
+    Applied,
+    Error(String),
+}
+
+impl CommonPreferencesState {
+    fn new(ctx: egui::Context) -> Self {
+        Self {
+            settings: None,
+            baseline: None,
+            source: None,
+            due: None,
+            worker: crate::autosave::AutoSave::new(ctx),
+            status: CommonSaveStatus::Ready,
+            close_after_save: false,
+            retry: None,
+            confirm_close: false,
+        }
+    }
+
+    fn pending(&self) -> bool {
+        self.settings != self.baseline
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -85,6 +127,265 @@ struct PendingWindowFocus {
 }
 
 impl ClarionSettingsApp {
+    fn is_common_pane(tab: ActiveTab) -> bool {
+        matches!(
+            tab,
+            ActiveTab::Appearance
+                | ActiveTab::Layout
+                | ActiveTab::InputHotCorners
+                | ActiveTab::Trackpad
+        )
+    }
+
+    fn sync_common_preferences(&mut self) {
+        if self.common.pending()
+            || self.common.worker.is_busy()
+            || self.config_mgr.is_dirty()
+            || self.full_config.has_pending()
+        {
+            return;
+        }
+        let source = (
+            self.config_mgr.config_path().to_owned(),
+            self.config_mgr.raw_content().to_owned(),
+        );
+        if self.common.source.as_ref() == Some(&source) {
+            return;
+        }
+        self.common.source = Some(source);
+        match CommonSettings::read(&self.config_mgr) {
+            Ok(settings) => {
+                self.common.baseline = Some(settings.clone());
+                self.common.settings = Some(settings);
+            }
+            Err(error) => {
+                self.common.settings = None;
+                self.common.baseline = None;
+                self.common.status = CommonSaveStatus::Error(format!("{error:#}"));
+            }
+        }
+    }
+
+    /// Refresh effective includes on the existing three-second polling cadence.
+    /// A live control or advanced draft always keeps ownership of its contents.
+    fn refresh_common_preferences_from_disk(&mut self) {
+        if !Self::is_common_pane(self.active_tab)
+            || self.common.pending()
+            || self.common.worker.is_busy()
+            || self.common.retry.is_some()
+            || self.config_mgr.is_dirty()
+            || self.full_config.has_pending()
+            || self.config_mgr.preview_pending()
+        {
+            return;
+        }
+        match self.config_mgr.reload_from_disk() {
+            Ok(()) => {
+                // Includes may change while the root file stays byte-identical.
+                // Invalidate the form's root-only cache before resolving again.
+                self.full_config = Default::default();
+                self.common.source = None;
+                self.common.status = CommonSaveStatus::Ready;
+                self.sync_common_preferences();
+            }
+            Err(error) => {
+                self.common.status =
+                    CommonSaveStatus::Error(format!("无法刷新配置，当前状态已保留：{error:#}"));
+            }
+        }
+    }
+
+    fn start_common_save(&mut self) {
+        if self.common.worker.is_busy()
+            || self.config_mgr.is_dirty()
+            || self.full_config.has_pending()
+            || self.config_mgr.preview_pending()
+        {
+            return;
+        }
+        let request = if self.common.pending() {
+            self.common
+                .baseline
+                .clone()
+                .zip(self.common.settings.clone())
+        } else {
+            self.common.retry.clone()
+        };
+        let Some((before, after)) = request else {
+            return;
+        };
+        self.common.due = None;
+        self.common.retry = Some((before.clone(), after.clone()));
+        match self
+            .common
+            .worker
+            .submit(self.config_mgr.root_path().to_owned(), before, after)
+        {
+            Ok(()) => self.common.status = CommonSaveStatus::Saving,
+            Err(error) => {
+                self.common.status = CommonSaveStatus::Error(format!("{error:#}"));
+                self.common.close_after_save = false;
+            }
+        }
+    }
+
+    fn clear_common_after_manual_save(&mut self) {
+        self.common.retry = None;
+        self.common.settings = None;
+        self.common.baseline = None;
+        self.common.source = None;
+        self.common.due = None;
+        self.common.status = CommonSaveStatus::Ready;
+    }
+
+    fn poll_common_save(&mut self, ctx: &egui::Context) {
+        if let Some(result) = self.common.worker.poll() {
+            match result {
+                Ok(settings) => {
+                    self.common.retry = None;
+                    self.common.settings = Some(settings.clone());
+                    self.common.baseline = Some(settings);
+                    self.common.due = None;
+                    match self.config_mgr.reload_from_disk() {
+                        Ok(()) => {
+                            self.common.source = None;
+                            self.common.status = CommonSaveStatus::Applied;
+                            if self.common.close_after_save {
+                                self.common.close_after_save = false;
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            }
+                        }
+                        Err(error) => {
+                            self.common.status = CommonSaveStatus::Error(format!(
+                                "桌面已应用，但读取更新后的配置失败：{error:#}"
+                            ));
+                            self.common.close_after_save = false;
+                        }
+                    }
+                }
+                Err(error) => {
+                    // Restore controls from disk rather than pretending the requested state
+                    // reached the compositor. A saved-but-unconfirmed change stays explicit.
+                    self.common.due = None;
+                    self.common.close_after_save = false;
+                    if self.config_mgr.reload_from_disk().is_ok() {
+                        self.common.settings = None;
+                        self.common.baseline = None;
+                        self.common.source = None;
+                        self.sync_common_preferences();
+                    }
+                    self.common.status = CommonSaveStatus::Error(error);
+                }
+            }
+        }
+        if self.common.pending() || self.common.worker.is_busy() {
+            ctx.request_repaint_after(Duration::from_millis(50));
+        }
+    }
+
+    fn submit_common_if_ready(&mut self, ctx: &egui::Context) {
+        if self.common.pending()
+            && !self.common.worker.is_busy()
+            && self.common.due.is_some_and(|due| {
+                std::time::Instant::now() >= due || !Self::is_common_pane(self.active_tab)
+            })
+            && !ctx.input(|input| input.pointer.any_down())
+            && !ctx.output(|output| output.ime.is_some())
+        {
+            self.start_common_save();
+        }
+    }
+
+    fn ui_common_preferences(&mut self, ui: &mut Ui) {
+        self.sync_common_preferences();
+        let manual_draft = self.config_mgr.is_dirty() || self.full_config.has_pending();
+        if manual_draft {
+            ui.label("高级配置还有未保存的修改，请先处理草稿，再调整常用设置。");
+            ui.horizontal(|ui| {
+                if ui.button("保存现有草稿").clicked() {
+                    self.save_changes();
+                }
+                if ui.button("查看高级配置").clicked() {
+                    self.switch_tab(ActiveTab::FullConfig);
+                }
+            });
+            ui.add_space(12.);
+        }
+        if let Some(error) = &self.connection_error {
+            ui.colored_label(
+                palette::muted(),
+                format!("桌面连接恢复后可自动应用设置：{error}"),
+            );
+            ui.add_space(10.);
+        }
+        let enabled = !manual_draft
+            && !self.common.worker.is_busy()
+            && self.connection_error.is_none()
+            && !self.config_mgr.preview_pending();
+        let Some(settings) = self.common.settings.as_mut() else {
+            ui.label("无法读取常用设置，请在高级配置中检查配置错误。");
+            return;
+        };
+        let before = settings.clone();
+        let tab = self.active_tab;
+        ui.add_enabled_ui(enabled, |ui| match tab {
+            ActiveTab::Appearance => crate::common_preferences::appearance(ui, settings),
+            ActiveTab::Layout => crate::common_preferences::layout(ui, settings),
+            ActiveTab::InputHotCorners => crate::common_preferences::keyboard(ui, settings),
+            ActiveTab::Trackpad => crate::common_preferences::trackpad(ui, settings),
+            _ => unreachable!(),
+        });
+        if before != *settings {
+            self.common.retry = None;
+            if self.common.pending() {
+                self.common.due = Some(std::time::Instant::now() + Duration::from_millis(350));
+                self.common.status = CommonSaveStatus::Pending;
+            } else {
+                self.common.due = None;
+                self.common.status = CommonSaveStatus::Ready;
+            }
+        }
+    }
+
+    fn ui_common_save_status(&mut self, ui: &mut Ui) {
+        let (title, color) = match &self.common.status {
+            CommonSaveStatus::Ready => ("更改会自动保存并应用", palette::muted()),
+            CommonSaveStatus::Pending => ("等待保存…", palette::muted()),
+            CommonSaveStatus::Saving => ("正在保存并应用…", palette::accent()),
+            CommonSaveStatus::Applied => ("已自动保存并应用", palette::success()),
+            CommonSaveStatus::Error(_) => ("设置更新遇到问题", palette::error()),
+        };
+        ui.horizontal_wrapped(|ui| {
+            if self.common.worker.is_busy() {
+                ui.spinner();
+            } else {
+                icons::icon(
+                    ui,
+                    if matches!(self.common.status, CommonSaveStatus::Error(_)) {
+                        Icon::Warning
+                    } else {
+                        Icon::Check
+                    },
+                    16.,
+                    color,
+                );
+            }
+            ui.label(RichText::new(title).size(12.5).color(color));
+            if let CommonSaveStatus::Error(error) = &self.common.status {
+                ui.menu_button("查看原因", |ui| {
+                    ui.set_max_width(360.);
+                    ui.add(egui::Label::new(error).wrap());
+                });
+            }
+            if self.common.retry.is_some()
+                && matches!(self.common.status, CommonSaveStatus::Error(_))
+                && ui.button("重试应用").clicked()
+            {
+                self.start_common_save();
+            }
+        });
+    }
+
     pub fn new(
         _cc: &eframe::CreationContext<'_>,
         toggle_flag: Option<crate::instance::Signal>,
@@ -130,6 +431,7 @@ impl ClarionSettingsApp {
             command_palette: Default::default(),
             pending_window_focus: None,
             desktop_theme: Default::default(),
+            common: CommonPreferencesState::new(_cc.egui_ctx.clone()),
         };
 
         app.refresh_ipc_data();
@@ -301,6 +603,8 @@ impl ClarionSettingsApp {
             && !self.confirm_close
             && !self.confirm_reload
             && !self.show_hot_corners
+            && !self.common.confirm_close
+            && !self.common.worker.is_busy()
     }
 
     pub fn open_command_palette(&mut self) {
@@ -476,6 +780,48 @@ impl ClarionSettingsApp {
         Ok(())
     }
     fn close_guard(&mut self, ctx: &egui::Context) {
+        let manual_draft = self.config_mgr.is_dirty() || self.full_config.has_pending();
+        if ctx.input(|input| input.viewport().close_requested()) {
+            if self.common.worker.is_busy()
+                || (self.common.pending() && !manual_draft && self.common.due.is_some())
+            {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.common.close_after_save = true;
+                self.start_common_save();
+                return;
+            }
+            if self.common.retry.is_some() && !manual_draft {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.common.confirm_close = true;
+            }
+        }
+        if self.common.confirm_close {
+            egui::Window::new("设置尚未成功应用")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.label(
+                        "可以重试后退出，或保留当前文件并关闭。未保存的这次调整仍可继续编辑。",
+                    );
+                    ui.horizontal(|ui| {
+                        if ui.button("重试并退出").clicked() {
+                            self.common.confirm_close = false;
+                            self.common.close_after_save = true;
+                            self.start_common_save();
+                        }
+                        if ui.button("关闭").clicked() {
+                            self.common.confirm_close = false;
+                            self.common.retry = None;
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                        if ui.button("继续编辑").clicked() {
+                            self.common.confirm_close = false;
+                        }
+                    });
+                });
+            return;
+        }
         if self.config_mgr.preview_pending() {
             if ctx.input(|i| i.viewport().close_requested()) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -509,6 +855,7 @@ impl ClarionSettingsApp {
                                 Ok(()) => {
                                     self.confirm_close = false;
                                     if !self.config_mgr.preview_pending() {
+                                        self.clear_common_after_manual_save();
                                         self.allow_close = true;
                                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                                     } else {
@@ -648,6 +995,7 @@ impl ClarionSettingsApp {
 
     fn refresh_ipc_data(&mut self) {
         self.last_ipc_poll = std::time::Instant::now();
+        self.refresh_common_preferences_from_disk();
         self.ipc.refresh();
         let Some(snapshot) = self.ipc.take_snapshot() else {
             return;
@@ -690,6 +1038,9 @@ impl ClarionSettingsApp {
             match result {
                 Ok(message) => {
                     let confirmed = message.contains("已确认并保存");
+                    if confirmed {
+                        self.clear_common_after_manual_save();
+                    }
                     self.set_status(message, false);
                     // The first successful reply only starts the countdown.
                     // Preserve the exit intent until confirmation or cancellation finishes.
@@ -715,6 +1066,7 @@ impl ClarionSettingsApp {
         // A desktop light/dark switch applies to the settings window in place,
         // without waiting for the next launch.
         self.desktop_theme.poll(ctx);
+        self.poll_common_save(ctx);
         let previous_ui = (
             self.active_tab,
             self.show_hot_corners,
@@ -828,15 +1180,23 @@ impl ClarionSettingsApp {
         // Dismissal and a newer command take priority over a ready focus reply.
         self.poll_window_focus(ctx);
 
-        let blocked = self.config_mgr.preview_pending()
+        let blocked_by_state = self.config_mgr.preview_pending()
             || palette_was_open
             || self.command_palette.is_open()
             || self.confirm_close
             || self.confirm_reload
             || self.show_hot_corners
-            || ctx.input(|input| input.viewport().close_requested());
+            || self.common.confirm_close
+            || self.common.worker.is_busy();
+        let close_requested = ctx.input(|input| input.viewport().close_requested());
+        let blocked = blocked_by_state || close_requested;
         let mut save_requested = !blocked
             && ctx.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::S));
+        crate::settings_widgets::set_numeric_commit(
+            ctx,
+            Self::is_common_pane(self.active_tab)
+                && (save_requested || ctx.input(|input| input.viewport().close_requested())),
+        );
         let mut check_requested = false;
 
         // Apply navigation after the current page has processed TextEdit/IME
@@ -867,10 +1227,20 @@ impl ClarionSettingsApp {
                     .inner_margin(Margin::symmetric(14., 8.)),
             )
             .show(ctx, |ui| {
-                if blocked {
+                if blocked || self.common.worker.is_busy() {
                     ui.disable();
                 }
                 let dirty = self.config_mgr.is_dirty() || self.full_config.has_pending();
+                if !dirty
+                    && (Self::is_common_pane(self.active_tab)
+                        || self.active_tab == ActiveTab::Dashboard
+                        || self.common.pending()
+                        || self.common.worker.is_busy()
+                        || self.common.retry.is_some())
+                {
+                    self.ui_common_save_status(ui);
+                    return;
+                }
                 let invalid = matches!(
                     self.config_mgr.validation_status(),
                     ValidationStatus::Error(_)
@@ -954,7 +1324,7 @@ impl ClarionSettingsApp {
                     .inner_margin(Margin::same(20.)),
             )
             .show(ctx, |ui| {
-                if blocked {
+                if blocked_by_state || (close_requested && !Self::is_common_pane(self.active_tab)) {
                     ui.disable();
                 }
                 if let Some((ref message, is_error, time)) = self.status_message {
@@ -992,10 +1362,10 @@ impl ClarionSettingsApp {
                 match self.active_tab {
                     ActiveTab::Dashboard => self.ui_dashboard(ui),
                     ActiveTab::Windows => self.ui_windows(ui),
-                    ActiveTab::Layout => self.ui_layout(ui),
-                    ActiveTab::Appearance => self.ui_appearance(ui),
-                    ActiveTab::InputHotCorners => self.ui_input_hot_corners(ui),
-                    ActiveTab::Trackpad => self.ui_trackpad(ui),
+                    ActiveTab::Layout
+                    | ActiveTab::Appearance
+                    | ActiveTab::InputHotCorners
+                    | ActiveTab::Trackpad => self.ui_common_preferences(ui),
                     ActiveTab::Outputs => self.ui_outputs(ui),
                     ActiveTab::FullConfig => self.ui_full_config(ui),
                     ActiveTab::ConfigEditor => self.ui_config_editor(ui),
@@ -1035,6 +1405,10 @@ impl ClarionSettingsApp {
         if save_requested {
             self.save_changes();
         }
+        // Process edits from this frame before committing a debounced change.
+        // Starting at frame entry would disable the control on its release
+        // event and lose a last slider/key/toggle update.
+        self.submit_common_if_ready(ctx);
         let title = preferences_home::title(self.active_tab);
         if ctx.input(|input| input.viewport().title.as_deref() != Some(title)) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.into()));
@@ -1102,6 +1476,14 @@ impl eframe::App for ClarionSettingsApp {
 
 impl ClarionSettingsApp {
     fn save_changes(&mut self) {
+        if self.common.worker.is_busy() {
+            return;
+        }
+        let manual_draft = self.config_mgr.is_dirty() || self.full_config.has_pending();
+        if !manual_draft && (self.common.pending() || self.common.retry.is_some()) {
+            self.start_common_save();
+            return;
+        }
         if !self.command_palette_available() || self.command_palette.is_open() {
             return;
         }
@@ -1113,7 +1495,10 @@ impl ClarionSettingsApp {
             Ok(()) if self.config_mgr.preview_pending() => {
                 self.set_status("正在预览显示设置，请确认保留后完成保存", false)
             }
-            Ok(()) => self.set_status("配置已保存，已请求桌面应用修改", false),
+            Ok(()) => {
+                self.clear_common_after_manual_save();
+                self.set_status("配置已保存，已请求桌面应用修改", false);
+            }
             Err(error) => {
                 let message = if had_changes
                     && !self.config_mgr.is_dirty()
@@ -2958,6 +3343,14 @@ mod tests {
             command_palette: Default::default(),
             pending_window_focus: None,
             desktop_theme: Default::default(),
+            common: {
+                let mut common = CommonPreferencesState::new(egui::Context::default());
+                common.worker = crate::autosave::AutoSave::with_socket_for_test(
+                    egui::Context::default(),
+                    tempfile::tempdir().unwrap().path().join("no-ipc.sock"),
+                );
+                common
+            },
         }
     }
     fn close(app: &mut ClarionSettingsApp) -> egui::FullOutput {

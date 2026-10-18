@@ -3,7 +3,126 @@ use eframe::egui::{Color32, Event, Id, ImeEvent, Key, Modifiers, Pos2, RawInput,
 
 use super::*;
 
+#[test]
+fn invalid_advanced_save_preserves_a_failed_common_request() {
+    let (directory, mut app, context) = fixture(ActiveTab::Appearance);
+    frame(&mut app, &context, vec![]);
+    let before = app.common.baseline.clone().unwrap();
+    let mut after = before.clone();
+    after.gaps += 3.;
+    app.common.retry = Some((before, after));
+    app.common.status = CommonSaveStatus::Error("not applied".into());
+    let request = app.common.retry.clone();
+    app.active_tab = ActiveTab::ConfigEditor;
+    app.config_mgr
+        .set_raw_content("layout { gaps \"invalid\"; }\n".into());
+    app.save_changes();
+    assert_eq!(app.common.retry, request);
+    assert!(app.config_mgr.is_dirty());
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join("config.kdl")).unwrap(),
+        SOURCE
+    );
+    assert!(!directory.path().join("config.kdl.bak").exists());
+}
+
 const SOURCE: &str = "// preserve this comment\nlayout { gaps 8; }\n";
+
+fn focus_common_duration_editor(app: &mut ClarionSettingsApp, context: &egui::Context) {
+    frame(app, context, vec![]);
+    let output = frame(app, context, vec![]);
+    let position = text_rects(&output, "1.00 ×")[0].center();
+    frame(
+        app,
+        context,
+        vec![Event::PointerMoved(position), pointer(position, true)],
+    );
+    frame(app, context, vec![pointer(position, false)]);
+    let output = frame(app, context, vec![]);
+    assert!(output.platform_output.ime.is_some());
+}
+
+#[test]
+fn pending_common_change_waits_for_numeric_edit_to_commit() {
+    let (directory, mut app, context) = fixture(ActiveTab::Appearance);
+    focus_common_duration_editor(&mut app, &context);
+    app.common
+        .settings
+        .as_mut()
+        .unwrap()
+        .window_movement_enabled = !app
+        .common
+        .baseline
+        .as_ref()
+        .unwrap()
+        .window_movement_enabled;
+    app.common.due = Some(std::time::Instant::now() - Duration::from_secs(2));
+    frame(
+        &mut app,
+        &context,
+        vec![key(Key::A, Modifiers::CTRL), Event::Text("0.".into())],
+    );
+    for _ in 0..3 {
+        frame(&mut app, &context, vec![]);
+        assert!(
+            !app.common.worker.is_busy(),
+            "numeric text editing must defer an older pending save"
+        );
+        assert_eq!(app.common.settings.as_ref().unwrap().animation_speed, 1.);
+    }
+    frame(&mut app, &context, vec![Event::Text("75".into())]);
+    frame(&mut app, &context, vec![key(Key::Enter, Modifiers::NONE)]);
+    assert_eq!(app.common.settings.as_ref().unwrap().animation_speed, 0.75);
+    app.common.due = Some(std::time::Instant::now() - Duration::from_secs(2));
+    frame(&mut app, &context, vec![]);
+    assert!(app.common.worker.is_busy());
+    assert_eq!(app.common.retry.as_ref().unwrap().1.animation_speed, 0.75);
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join("config.kdl")).unwrap(),
+        SOURCE
+    );
+}
+
+#[test]
+fn explicit_save_and_close_commit_the_latest_numeric_text_in_the_same_frame() {
+    for closing in [false, true] {
+        let (directory, mut app, context) = fixture(ActiveTab::Appearance);
+        focus_common_duration_editor(&mut app, &context);
+        frame(
+            &mut app,
+            &context,
+            vec![key(Key::A, Modifiers::CTRL), Event::Text("0.".into())],
+        );
+        assert_eq!(app.common.settings.as_ref().unwrap().animation_speed, 1.);
+        let mut final_input = input(700., 1., vec![Event::Text("75".into())]);
+        if closing {
+            final_input
+                .viewports
+                .get_mut(&egui::ViewportId::ROOT)
+                .unwrap()
+                .events
+                .push(egui::ViewportEvent::Close);
+        } else {
+            final_input.events.push(key(Key::S, Modifiers::CTRL));
+        }
+        let output = run(&mut app, &context, final_input);
+        assert!(
+            app.common.worker.is_busy(),
+            "explicit save/close should submit the final value"
+        );
+        assert_eq!(app.common.retry.as_ref().unwrap().1.animation_speed, 0.75);
+        assert_eq!(app.common.close_after_save, closing);
+        if closing {
+            assert!(output.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .contains(&egui::ViewportCommand::CancelClose));
+        }
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("config.kdl")).unwrap(),
+            SOURCE
+        );
+    }
+}
 
 fn fixture(tab: ActiveTab) -> (tempfile::TempDir, ClarionSettingsApp, egui::Context) {
     let directory = tempfile::tempdir().unwrap();
@@ -435,13 +554,15 @@ fn chrome_text_stays_inside_480_to_980_point_windows_at_fractional_dpi_without_s
                     "a sidebar consumed content width"
                 );
                 assert_eq!(context.available_rect().right(), width);
-                for label in [
-                    "命令中心",
-                    "搜索设置",
-                    "保存并应用",
-                    "检查修改",
-                    "当前没有未保存修改",
-                ] {
+                let automatic =
+                    ClarionSettingsApp::is_common_pane(tab) || tab == ActiveTab::Dashboard;
+                let mut labels = vec!["命令中心", "搜索设置"];
+                labels.extend(if automatic {
+                    vec!["更改会自动保存并应用"]
+                } else {
+                    vec!["保存并应用", "检查修改", "当前没有未保存修改"]
+                });
+                for label in labels {
                     let rects = text_rects(&output, label);
                     assert_eq!(rects.len(), 1, "{label} {tab:?} at {width}/{scale}");
                     assert!(
@@ -453,15 +574,20 @@ fn chrome_text_stays_inside_480_to_980_point_windows_at_fractional_dpi_without_s
                 for label in ["桌面体验", "管理与高级"] {
                     assert!(text_rects(&output, label).is_empty());
                 }
-                let save = text_rects(&output, "保存并应用")[0];
-                let check = text_rects(&output, "检查修改")[0];
-                let summary = text_rects(&output, "当前没有未保存修改")[0];
-                assert!(
-                    !save.intersects(check)
-                        && !summary.intersects(check)
-                        && !summary.intersects(save),
-                    "footer overlaps at {width}/{scale}"
-                );
+                if automatic {
+                    assert!(text_rects(&output, "保存并应用").is_empty());
+                    assert!(text_rects(&output, "检查修改").is_empty());
+                } else {
+                    let save = text_rects(&output, "保存并应用")[0];
+                    let check = text_rects(&output, "检查修改")[0];
+                    let summary = text_rects(&output, "当前没有未保存修改")[0];
+                    assert!(
+                        !save.intersects(check)
+                            && !summary.intersects(check)
+                            && !summary.intersects(save),
+                        "footer overlaps at {width}/{scale}"
+                    );
+                }
                 assert!(
                     context
                         .read_response(Id::new("preferences-search"))
@@ -536,23 +662,25 @@ fn keyboard_sliders_edit_real_repeat_fields_and_browsing_preserves_out_of_range_
             .iter()
             .filter_map(|shape| match &shape.shape {
                 Shape::Rect(rect)
-                    if rect.rect.width() >= 100.
+                    if rect.rect.width() >= 80.
                         && rect.rect.height() <= 10.
-                        && rect.rect.left() >= label.left() - 2.
-                        && rect.rect.left() <= label.left() + 12.
-                        && rect.rect.top() >= label.bottom()
-                        && rect.rect.bottom() <= label.bottom() + 40. =>
+                        && rect.rect.top() >= label.top() - 8.
+                        && rect.rect.bottom() <= label.bottom() + 70. =>
                 {
                     Some(rect.rect)
                 }
                 _ => None,
             })
-            .max_by(|left, right| left.width().total_cmp(&right.width()))
-            .expect("visible slider rail below its label")
+            .min_by(|left, right| {
+                (left.center().y - label.center().y)
+                    .abs()
+                    .total_cmp(&(right.center().y - label.center().y).abs())
+            })
+            .expect("visible slider rail beside or below its label")
     };
     let initial = app.config_mgr.effective_config().unwrap().input.keyboard;
     let output = frame(&mut app, &context, vec![]);
-    let rail = find_rail(&output, "按键重复");
+    let rail = find_rail(&output, "按键重复速度");
     let rate_target = egui::pos2(rail.left() + rail.width() * 0.85, rail.center().y);
     frame(
         &mut app,
@@ -571,17 +699,22 @@ fn keyboard_sliders_edit_real_repeat_fields_and_browsing_preserves_out_of_range_
         ],
     );
     frame(&mut app, &context, vec![pointer(delay_target, false)]);
-    let rate = app.config_mgr.visual_settings().keyboard_repeat_rate;
-    let delay = app.config_mgr.visual_settings().keyboard_repeat_delay;
+    let rate = app.common.settings.as_ref().unwrap().keyboard_repeat_rate;
+    let delay = app.common.settings.as_ref().unwrap().keyboard_repeat_delay;
     assert!(
-        rate > initial.repeat_rate && rate <= 60,
+        rate > initial.repeat_rate && rate <= 100,
         "rate slider did not change the model: {rate}"
     );
     assert!(
-        delay > initial.repeat_delay && delay <= 1200,
+        delay < initial.repeat_delay && delay >= 100,
         "delay slider did not change the model: {delay}"
     );
-    app.flush_config_form().unwrap();
+    CommonSettings::apply(
+        &mut app.config_mgr,
+        app.common.baseline.as_ref().unwrap(),
+        app.common.settings.as_ref().unwrap(),
+    )
+    .unwrap();
     let parsed = app.config_mgr.effective_config().unwrap();
     assert_eq!(parsed.input.keyboard.repeat_rate, rate);
     assert_eq!(parsed.input.keyboard.repeat_delay, delay);
@@ -862,4 +995,221 @@ fn initial_geometry_targets_only_its_own_window_once_and_respects_existing_float
             SOURCE
         );
     }
+}
+
+fn first_common_switch(output: &egui::FullOutput) -> Pos2 {
+    output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            Shape::Rect(rect)
+                if (rect.rect.width() - 42.).abs() < 0.1
+                    && (rect.rect.height() - 24.).abs() < 0.1
+                    && rect.rect.top() > 100. =>
+            {
+                Some(rect.rect)
+            }
+            _ => None,
+        })
+        .min_by(|a, b| a.top().total_cmp(&b.top()))
+        .expect("visible common switch")
+        .center()
+}
+
+#[test]
+fn common_switch_release_can_cancel_a_debounced_change_without_writing() {
+    let (directory, mut app, context) = fixture(ActiveTab::Appearance);
+    frame(&mut app, &context, vec![]);
+    let output = frame(&mut app, &context, vec![]);
+    let switch = first_common_switch(&output);
+    frame(
+        &mut app,
+        &context,
+        vec![Event::PointerMoved(switch), pointer(switch, true)],
+    );
+    frame(&mut app, &context, vec![pointer(switch, false)]);
+    assert!(app.common.pending());
+    assert!(app.common.due.is_some());
+    assert!(!app.common.worker.is_busy());
+    frame(&mut app, &context, vec![pointer(switch, true)]);
+    app.common.due = Some(std::time::Instant::now() - Duration::from_millis(1));
+    frame(&mut app, &context, vec![]);
+    assert!(
+        !app.common.worker.is_busy(),
+        "holding a control must not commit it"
+    );
+    frame(&mut app, &context, vec![pointer(switch, false)]);
+    assert!(
+        !app.common.pending(),
+        "the final release must be processed before autosave"
+    );
+    assert!(app.common.due.is_none());
+    assert!(!app.common.worker.is_busy());
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join("config.kdl")).unwrap(),
+        SOURCE
+    );
+    assert!(!directory.path().join("config.kdl.bak").exists());
+}
+
+#[test]
+fn browsing_common_pages_keeps_disk_and_inherited_values_unchanged() {
+    let (directory, mut app, context) = fixture(ActiveTab::Appearance);
+    for tab in [
+        ActiveTab::Appearance,
+        ActiveTab::Layout,
+        ActiveTab::InputHotCorners,
+        ActiveTab::Trackpad,
+    ] {
+        app.active_tab = tab;
+        for _ in 0..3 {
+            frame(&mut app, &context, vec![]);
+        }
+        assert!(!app.common.pending());
+        assert!(app.common.due.is_none());
+        assert!(!app.common.worker.is_busy());
+        assert!(!app.config_mgr.is_dirty());
+    }
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join("config.kdl")).unwrap(),
+        SOURCE
+    );
+    assert!(!directory.path().join("config.kdl.bak").exists());
+}
+
+#[test]
+fn common_pages_never_autosave_an_existing_advanced_draft() {
+    let (directory, mut app, context) = fixture(ActiveTab::Appearance);
+    let draft = SOURCE.replace("gaps 8", "gaps 23");
+    app.config_mgr.set_raw_content(draft.clone());
+    let output = frame(&mut app, &context, vec![]);
+    assert!(app.config_mgr.is_dirty());
+    assert_eq!(app.config_mgr.raw_content(), draft);
+    assert!(!app.common.worker.is_busy());
+    assert_eq!(text_rects(&output, "保存并应用").len(), 1);
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join("config.kdl")).unwrap(),
+        SOURCE
+    );
+}
+
+#[test]
+fn failed_autosave_with_unreadable_root_does_not_retry_each_frame() {
+    let (directory, mut app, context) = fixture(ActiveTab::Appearance);
+    frame(&mut app, &context, vec![]);
+    app.common.settings.as_mut().unwrap().gaps = 24.;
+    app.common.due = Some(std::time::Instant::now() - Duration::from_millis(1));
+    app.common.status = CommonSaveStatus::Pending;
+    std::fs::remove_file(directory.path().join("config.kdl")).unwrap();
+    app.active_tab = ActiveTab::FullConfig;
+    frame(&mut app, &context, vec![]);
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while app.common.worker.is_busy() {
+        std::thread::sleep(Duration::from_millis(5));
+        frame(&mut app, &context, vec![]);
+        assert!(std::time::Instant::now() < deadline);
+    }
+    assert!(matches!(app.common.status, CommonSaveStatus::Error(_)));
+    assert!(app.common.retry.is_some());
+    assert!(app.common.due.is_none());
+    for _ in 0..4 {
+        frame(&mut app, &context, vec![]);
+        assert!(!app.common.worker.is_busy());
+    }
+    assert!(!directory.path().join("config.kdl").exists());
+}
+
+#[test]
+fn close_waits_for_pending_save_and_preserves_failed_request() {
+    let (directory, mut app, context) = fixture(ActiveTab::Appearance);
+    frame(&mut app, &context, vec![]);
+    app.common.settings.as_mut().unwrap().gaps = 24.;
+    app.common.due = Some(std::time::Instant::now() + Duration::from_millis(350));
+    let mut native = input(700., 1., vec![]);
+    native
+        .viewports
+        .get_mut(&egui::ViewportId::ROOT)
+        .unwrap()
+        .events
+        .push(egui::ViewportEvent::Close);
+    let output = run(&mut app, &context, native);
+    assert!(output.viewport_output[&egui::ViewportId::ROOT]
+        .commands
+        .contains(&egui::ViewportCommand::CancelClose));
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while app.common.worker.is_busy() {
+        std::thread::sleep(Duration::from_millis(5));
+        frame(&mut app, &context, vec![]);
+        assert!(std::time::Instant::now() < deadline);
+    }
+    assert!(app.common.retry.is_some());
+    assert!(!app.common.close_after_save);
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join("config.kdl")).unwrap(),
+        SOURCE
+    );
+    app.config_mgr
+        .set_raw_content(SOURCE.replace("gaps 8", "gaps 36"));
+    let mut native = input(700., 1., vec![]);
+    native
+        .viewports
+        .get_mut(&egui::ViewportId::ROOT)
+        .unwrap()
+        .events
+        .push(egui::ViewportEvent::Close);
+    run(&mut app, &context, native);
+    assert!(
+        app.confirm_close,
+        "advanced drafts retain their own close guard"
+    );
+    assert!(!app.common.confirm_close);
+}
+#[path = "visual_preview_fixture.rs"]
+mod visual_preview_fixture;
+
+#[test]
+fn periodic_common_refresh_resolves_external_includes_and_root_without_overwriting_drafts() {
+    let (directory, mut app, _context) = fixture(ActiveTab::Trackpad);
+    let root = directory.path().join("config.kdl");
+    let included = directory.path().join("input.kdl");
+    let source = "include \"input.kdl\"\nlayout { gaps 8; }\n";
+    std::fs::write(&root, source).unwrap();
+    std::fs::write(&included, "input { touchpad { accel-speed 0.1; }; }\n").unwrap();
+    app.config_mgr.reload_from_disk().unwrap();
+    app.sync_common_preferences();
+    assert_eq!(app.common.settings.as_ref().unwrap().touchpad_speed, 0.1);
+
+    // The old root-only cache previously left this control stale indefinitely.
+    std::fs::write(&included, "input { touchpad { accel-speed 0.35; }; }\n").unwrap();
+    app.refresh_ipc_data();
+    assert_eq!(app.config_mgr.raw_content(), source);
+    assert_eq!(app.common.settings.as_ref().unwrap().touchpad_speed, 0.35);
+    assert!(!app.config_mgr.is_dirty());
+    assert!(!app.common.worker.is_busy());
+
+    std::fs::write(&root, source.replace("gaps 8", "gaps 14")).unwrap();
+    app.refresh_ipc_data();
+    assert_eq!(app.common.settings.as_ref().unwrap().gaps, 14.);
+    assert!(!app.common.worker.is_busy());
+
+    // A common control being edited keeps its baseline and uncommitted value.
+    app.common.settings.as_mut().unwrap().gaps = 99.;
+    std::fs::write(&root, source.replace("gaps 8", "gaps 18")).unwrap();
+    app.refresh_ipc_data();
+    assert_eq!(app.common.settings.as_ref().unwrap().gaps, 99.);
+    assert_eq!(app.common.baseline.as_ref().unwrap().gaps, 14.);
+    assert!(app.config_mgr.raw_content().contains("gaps 14"));
+
+    // Advanced drafts also retain ownership; polling never writes to disk.
+    app.common.settings = app.common.baseline.clone();
+    let draft = source.replace("gaps 8", "gaps 22");
+    app.config_mgr.set_raw_content(draft.clone());
+    app.refresh_ipc_data();
+    assert_eq!(app.config_mgr.raw_content(), draft);
+    assert!(app.config_mgr.is_dirty());
+    assert_eq!(
+        std::fs::read_to_string(&root).unwrap(),
+        source.replace("gaps 8", "gaps 18")
+    );
+    assert!(!root.with_extension("kdl.bak").exists());
 }

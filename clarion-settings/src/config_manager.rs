@@ -597,6 +597,36 @@ impl ConfigManager {
     }
 
     fn write_and_reload(&mut self, ipc: &crate::ipc::IpcClient) -> Result<()> {
+        self.write_with_reload(|action| ipc.perform_action(action))
+    }
+
+    /// Commit a validated common-settings transaction without entering the
+    /// display preview flow. The worker owns the synchronous reload callback.
+    pub(crate) fn save_automatic_with(
+        &mut self,
+        reload: impl FnOnce(clarion_ipc::Action) -> Result<()>,
+    ) -> Result<()> {
+        anyhow::ensure!(self.preview.is_none(), "请先确认或恢复显示设置");
+        anyhow::ensure!(
+            self.config_path == self.root_path,
+            "常用设置只能保存到主配置文件"
+        );
+        self.validate();
+        if let ValidationStatus::Error(error) = &self.validation_status {
+            anyhow::bail!("配置校验失败，未写入文件: {error}");
+        }
+        self.check_disk_unchanged()?;
+        anyhow::ensure!(
+            !self.outputs_changed()?,
+            "显示设置需要确认，不能自动应用；请使用显示器页面"
+        );
+        self.write_with_reload(reload)
+    }
+
+    fn write_with_reload(
+        &mut self,
+        reload: impl FnOnce(clarion_ipc::Action) -> Result<()>,
+    ) -> Result<()> {
         // Validate IPC path encoding before making irreversible disk changes.
         let reload_action = crate::ipc::config_reload_action(&self.root_path)?;
         self.check_disk_unchanged()?;
@@ -630,9 +660,7 @@ impl ConfigManager {
         // the matching runtime configuration and report the durability error.
         self.is_dirty = false;
         self.disk_content = Some(self.raw_content.clone());
-        let reload = ipc
-            .perform_action(reload_action)
-            .context("配置文件已保存，但无法通知 Clarion 重新载入");
+        let reload = reload(reload_action).context("配置文件已保存，但无法通知 Clarion 重新载入");
         write?;
         reload?;
 

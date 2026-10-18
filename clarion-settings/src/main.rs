@@ -1,6 +1,9 @@
 mod app;
 mod appearance_controls;
+mod autosave;
 mod command_palette;
+mod common_preferences;
+mod common_settings;
 mod config_manager;
 mod config_schema;
 mod editor;
@@ -11,6 +14,7 @@ mod ipc;
 mod kdl_edit;
 mod output_preview;
 mod preferences_home;
+mod settings_widgets;
 mod socket_io;
 mod storage;
 mod theme;
