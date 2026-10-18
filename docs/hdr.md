@@ -42,9 +42,38 @@ clarion msg outputs
 clarion msg --json outputs
 ```
 
+### HDR display brightness
+
+The bar's control center uses the compositor's per-output HDR brightness when
+HDR is active. Hardware backlight commands alone can change their reported value
+without changing a panel's PQ luminance. SDR mode retains hardware backlight
+control; an HDR adjustment does not overwrite that SDR hardware setting.
+
+```sh
+clarion msg output eDP-1 hdr-brightness 50
+```
+
+The percentage is finite and bounded to 1–100, with 100 as the default. Like
+other `msg output` actions it is transient; `hdr-brightness 50` inside the
+output's configuration block persists a preferred starting value. The
+`hdr_brightness` field in `msg --json outputs` reports the configured percentage.
+
+Vulkan multiplies absolute linear luminance after tone mapping/clipping and
+before the existing final PQ encoding. It dims SDR desktop white and HDR
+highlights together, retaining their relative range. It does not apply a gamma
+ramp, change EDID peak/reference-white metadata, add a rendering pass, or dim
+offscreen scene captures. Brightness changes invalidate framebuffer damage
+history without reallocating the swapchain or restaging KMS HDR metadata.
+
+The control center resolves its own output and rechecks HDR state before each
+write. It does not change an arbitrary monitor if output selection is ambiguous
+or disconnected. A running compositor without the new HDR brightness field
+cannot provide this control; update both compositor and shell and log into the
+new session. Physical panel luminance still needs on-device verification.
+
 The settings application's display page reports support, committed state,
 transition/rejection reason, peak and SDR white. The full output editor exposes
-the two luminance settings. Use its existing display preview and confirmation
+reference white, peak luminance and HDR brightness. Use its existing display preview and confirmation
 workflow when editing a physical display configuration.
 
 ## Client and renderer contract

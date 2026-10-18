@@ -1265,6 +1265,12 @@ pub enum OutputAction {
         #[cfg_attr(feature = "clap", arg())]
         max_bpc: MaxBpc,
     },
+    /// Set HDR output luminance to 1–100 percent without changing hardware backlight.
+    HdrBrightness {
+        /// Brightness percentage; must be finite and between 1 and 100.
+        #[cfg_attr(feature = "clap", arg())]
+        percent: f64,
+    },
     /// Enable or disable HDR10 output (PQ/BT.2020 signaling).
     ///
     /// Requires a 10-bit (or higher) output format; the compositor raises the
@@ -1439,6 +1445,9 @@ pub struct Output {
     /// Active HDR SDR reference white in cd/m².
     #[serde(default)]
     pub sdr_white_level: Option<f32>,
+    /// Configured HDR output brightness in percent; absent on unsupported backends.
+    #[serde(default)]
+    pub hdr_brightness: Option<f32>,
 }
 
 /// Output mode.
@@ -2372,6 +2381,13 @@ impl OutputAction {
     /// Validates required constraints on output modes and scale.
     pub fn validate(&self) -> Result<(), String> {
         match self {
+            OutputAction::HdrBrightness { percent } => {
+                ensure!(
+                    percent.is_finite() && (1.0..=100.0).contains(percent),
+                    "HDR brightness must be finite and between 1 and 100 percent"
+                );
+                Ok(())
+            }
             OutputAction::Modeline {
                 clock,
                 hdisplay,
@@ -2607,5 +2623,32 @@ mod canvas_cli_tests {
             command.action,
             Action::PanCanvas { x: -200, y: -100 }
         ));
+    }
+}
+
+#[cfg(test)]
+mod hdr_brightness_tests {
+    use super::*;
+    #[test]
+    fn hdr_brightness_rejects_nonfinite_and_out_of_range_requests() {
+        for percent in [
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            -1.,
+            0.,
+            0.99,
+            100.01,
+        ] {
+            assert!(OutputAction::HdrBrightness { percent }.validate().is_err());
+        }
+        for percent in [1., 50.5, 100.] {
+            let action = OutputAction::HdrBrightness { percent };
+            assert!(action.validate().is_ok());
+            let json = serde_json::to_string(&action).unwrap();
+            assert!(
+                matches!(serde_json::from_str::<OutputAction>(&json).unwrap(), OutputAction::HdrBrightness { percent: decoded } if decoded == percent)
+            );
+        }
     }
 }

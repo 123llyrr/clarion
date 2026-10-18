@@ -93,6 +93,7 @@ class ShellController extends ChangeNotifier {
            ? notificationService ?? NotificationService()
            : null,
        _trayService = tray ? trayService ?? TrayService() : trayService {
+    _system.bindOutputBrightness(_ipc.request, () => _outputName);
     _subscriptions.add(_launcherBridge.events.listen(_launcherEvent));
     appMenu.addListener(_appMenuChanged);
     audioOutputs.addListener(_audioOutputsChanged);

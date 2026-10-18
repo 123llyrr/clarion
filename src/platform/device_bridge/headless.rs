@@ -113,6 +113,7 @@ impl Headless {
                 ),
                 hdr_peak_luminance: None,
                 sdr_white_level: None,
+                hdr_brightness: None,
             },
         );
 

@@ -463,6 +463,15 @@ impl<'frame> VulkanFrame<'frame> {
         self.output.as_mut().unwrap().1.gamut[1][3] = 0.;
     }
 
+    pub(super) fn set_output_brightness(&mut self, gain: f32) {
+        if let Some((_, constants, _)) = &mut self.output {
+            constants.gamut[2][3] = gain;
+            if gain != 1.0 {
+                constants.gamut[1][3] = 0.0;
+            }
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn force_scene_color_transform_for_test(&mut self) {
         self.force_scene_color_transform_for_test = true;

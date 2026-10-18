@@ -2200,7 +2200,25 @@ impl State {
     }
 
     pub fn apply_transient_output_config(&mut self, name: &str, action: clarion_ipc::OutputAction) {
+        // A slider update must not reconfigure monitors, cancel touch gestures,
+        // or reprobe connectors. The next output frame applies the gain and
+        // invalidates buffer ages without restaging HDR metadata.
+        if let clarion_ipc::OutputAction::HdrBrightness { percent } = action {
+            if action.validate().is_err() {
+                return;
+            }
+            self.modify_output_config(name, |config| {
+                config.hdr_brightness = Some(FloatOrInt(percent))
+            });
+            self.backend
+                .update_config_snapshot(&self.clarion.config.borrow());
+            if let Some(output) = self.clarion.output_by_name_match(name).cloned() {
+                self.clarion.queue_redraw(&output);
+            }
+            return;
+        }
         self.modify_output_config(name, move |config| match action {
+            clarion_ipc::OutputAction::HdrBrightness { .. } => unreachable!(),
             clarion_ipc::OutputAction::Off => config.off = true,
             clarion_ipc::OutputAction::On => config.off = false,
             clarion_ipc::OutputAction::Mode { mode } => {

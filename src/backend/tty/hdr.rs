@@ -191,6 +191,7 @@ impl Drop for MetadataBlob {
 pub(crate) struct HdrOutputState {
     pub capabilities: HdrCapabilities,
     pub requested: bool,
+    pub brightness: f32,
     pub target: Option<HdrOutputSettings>,
     pub active: Option<HdrOutputSettings>,
     pub status: Option<String>,
@@ -212,6 +213,7 @@ impl HdrOutputState {
         Self {
             capabilities,
             requested: false,
+            brightness: 1.0,
             target: None,
             active: None,
             status: None,
@@ -237,10 +239,20 @@ impl HdrOutputState {
         format: Fourcc,
         atomic: bool,
     ) -> bool {
+        let brightness = config.hdr_brightness.map_or(1.0, |v| (v.0 / 100.0) as f32);
+        let brightness = if brightness.is_finite() {
+            brightness.clamp(0.01, 1.0)
+        } else {
+            1.0
+        };
+        let brightness_changed = self.brightness != brightness;
+        self.brightness = brightness;
+        self.ipc_dirty |= brightness_changed;
         let settings = self.capabilities.settings(config);
         let configuration = (config.hdr, config.max_bpc, settings, native, format, atomic);
         if self.configured.as_ref() == Some(&configuration) {
-            return false;
+            // Brightness changes repaint the framebuffer, not KMS metadata.
+            return brightness_changed;
         }
         self.configured = Some(configuration);
         self.signaling_confirmed = false;
@@ -886,5 +898,31 @@ mod tests {
             state.target.is_none(),
             "unchanged config must not loop failing HDR commits"
         );
+    }
+    #[test]
+    fn brightness_repaints_without_replacing_hdr_signaling_or_reference_white() {
+        let mut state = HdrOutputState::new(capable());
+        let mut config = OutputConfig {
+            hdr: true,
+            ..Default::default()
+        };
+        assert!(state.configure(&config, true, Fourcc::Abgr2101010, true));
+        state.active = state.target;
+        state.signaling_confirmed = true;
+        state.needs_stage = false;
+        let settings = state.target;
+        config.hdr_brightness = Some(clarion_config::FloatOrInt(50.0));
+        assert!(state.configure(&config, true, Fourcc::Abgr2101010, true));
+        assert_eq!(state.brightness, 0.5);
+        assert_eq!(state.target, settings);
+        assert_eq!(state.active, settings);
+        assert!(state.signaling_confirmed);
+        assert!(!state.needs_stage);
+        assert!(state.ipc_dirty);
+        assert!(!state.configure(&config, true, Fourcc::Abgr2101010, true));
+        config.hdr_brightness = Some(clarion_config::FloatOrInt(100.0));
+        assert!(state.configure(&config, true, Fourcc::Abgr2101010, true));
+        assert_eq!(state.brightness, 1.0);
+        assert!(!state.needs_stage);
     }
 }

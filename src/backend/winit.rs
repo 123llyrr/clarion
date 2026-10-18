@@ -275,6 +275,7 @@ impl Winit {
                 ),
                 hdr_peak_luminance: None,
                 sdr_white_level: None,
+                hdr_brightness: None,
             },
         )])));
 
@@ -888,6 +889,7 @@ mod tests {
             hdr_status: Some("HDR physical output requires the native Vulkan KMS backend".into()),
             hdr_peak_luminance: None,
             sdr_white_level: None,
+            hdr_brightness: None,
         };
         (output, snapshot)
     }

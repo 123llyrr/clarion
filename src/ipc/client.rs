@@ -670,6 +670,7 @@ fn print_output(output: Output) -> anyhow::Result<()> {
         hdr_status,
         hdr_peak_luminance,
         sdr_white_level,
+        hdr_brightness,
     } = output;
 
     let serial = serial.as_deref().unwrap_or("Unknown");
@@ -765,6 +766,9 @@ fn print_output(output: Output) -> anyhow::Result<()> {
     }
     if let Some(peak) = hdr_peak_luminance {
         println!("  HDR peak luminance: {peak:.1} cd/m²");
+    }
+    if let Some(brightness) = hdr_brightness {
+        println!("  HDR brightness: {brightness:.0}%");
     }
     if let Some(white) = sdr_white_level {
         println!("  SDR reference white: {white:.1} cd/m²");
