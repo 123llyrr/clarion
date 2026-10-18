@@ -8,8 +8,9 @@ The production images are maintained in:
 
 The original full-size design drafts and the duplicate settings-icon ZIP were
 removed from this documentation directory after checking their references and
-preserving the production assets. They remain recoverable from commit
-`6553b93631653c2ef13d6fdcfee47b65b31d48d2` at their original paths:
+preserving the production assets. They were also removed from the published Git
+history to keep clones small. The maintainer's offline backup retains the
+original files and the complete pre-cleanup history, including these paths:
 
 - `docs/branding/clarion-*.png`
 - `docs/branding/releases/clarion-huangshan-circle-v*.png`
