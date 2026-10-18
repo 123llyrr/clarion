@@ -3,6 +3,10 @@
 GPUI is a hybrid immediate and retained mode, GPU accelerated, UI framework
 for Rust, designed to support a wide variety of applications.
 
+This Clarion vendored copy omits upstream example executables and demo media.
+The runtime sources, tests, platform build resources and Apache-2.0 license are
+retained; see [the local patch record](CLARION_PATCHES.md) for the maintained scope.
+
 ## Getting Started
 
 GPUI is still in active development as we work on the Zed code editor, and is still pre-1.0. There will often be breaking changes between versions. You'll also need to use the latest version of stable Rust and be on macOS or Linux. Add the following to your `Cargo.toml`:

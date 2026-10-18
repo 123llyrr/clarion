@@ -2,7 +2,12 @@
 
 Base: the published `gpui` **0.2.2** crate from crates.io (Apache-2.0).
 The workspace pins `=0.2.2` and `[patch.crates-io]` selects this directory.
-Retain the upstream license, sources, examples and normalized manifest.
+Retain the upstream license, production sources, tests and normalized manifest.
+Clarion omits the upstream example executables and their demo media; neither the
+normalized manifest nor its original-form companion declares example targets.
+The Apache-2.0 attribution for the adapted Shell text input remains in
+`../../clarion-shell/src/input.rs`; the upstream license remains here.
+Production shaders and build resources are retained.
 
 Clarion additions:
 

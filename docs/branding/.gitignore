@@ -1,0 +1,6 @@
+# Keep local design drafts separate from production assets.
+*.png
+*.zip
+
+# User-owned local artwork; preserve it without adding it to the source tree.
+/dock/

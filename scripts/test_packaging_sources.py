@@ -99,6 +99,41 @@ class NixSourceClosureTests(unittest.TestCase):
                         self.assertTrue(resource.is_file(), str(resource))
                         self.assert_in_source(resource)
 
+    def test_vendored_targets_and_literal_embedded_resources_remain_in_the_source(self):
+        for package_directory in (ROOT / "third_party").iterdir():
+            if not package_directory.is_dir():
+                continue
+            for manifest_name in ("Cargo.toml", "Cargo.toml.orig"):
+                manifest_path = package_directory / manifest_name
+                if not manifest_path.is_file():
+                    continue
+                manifest = tomllib.loads(manifest_path.read_text())
+                target_paths = []
+                build = manifest.get("package", {}).get("build")
+                if isinstance(build, str):
+                    target_paths.append(build)
+                library = manifest.get("lib", {})
+                if "path" in library:
+                    target_paths.append(library["path"])
+                for kind in ("bin", "test", "bench", "example"):
+                    target_paths.extend(
+                        target["path"] for target in manifest.get(kind, []) if "path" in target
+                    )
+                for relative in target_paths:
+                    with self.subTest(manifest=manifest_path.relative_to(ROOT), target=relative):
+                        target_path = package_directory / relative
+                        self.assertTrue(target_path.is_file(), str(target_path))
+                        self.assert_in_source(target_path)
+            sources = list((package_directory / "src").rglob("*.rs"))
+            if (package_directory / "build.rs").is_file():
+                sources.append(package_directory / "build.rs")
+            for source in sources:
+                for relative in re.findall(r'include_(?:bytes|str)!\s*\(\s*"([^"\n]+)"', source.read_text()):
+                    with self.subTest(source=source.relative_to(ROOT), resource=relative):
+                        resource = source.parent / relative
+                        self.assertTrue(resource.is_file(), str(resource))
+                        self.assert_in_source(resource)
+
 
 class NativeShellPackagingClosureTests(unittest.TestCase):
     def test_nix_build_and_runtime_closure_includes_gpui_libraries(self):
