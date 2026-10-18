@@ -1633,8 +1633,17 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                                 .set_icon(wl_pointer, serial, style.to_icon_names(), scale);
                         }
                     }
+                    // Enter already carries a surface-local position. Wayland
+                    // need not send Motion until the pointer moves again, so
+                    // route this position through normal widget hit testing.
+                    let input = PlatformInput::MouseMove(MouseMoveEvent {
+                        position: state.mouse_location.unwrap(),
+                        pressed_button: state.button_pressed,
+                        modifiers: state.modifiers,
+                    });
                     drop(state);
                     window.set_hovered(true);
+                    window.handle_input(input);
                 }
             }
             wl_pointer::Event::Leave { .. } => {

@@ -20,8 +20,8 @@ use crate::{
     DispatchPhase, Display, Element, ElementId, Entity, FocusHandle, Global, GlobalElementId,
     Hitbox, HitboxBehavior, HitboxId, InspectorElementId, IntoElement, IsZero, KeyContext,
     KeyDownEvent, KeyUpEvent, KeyboardButton, KeyboardClickEvent, LayoutId, ModifiersChangedEvent,
-    MouseButton, MouseClickEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Overflow,
-    ParentElement, Pixels, Point, Render, ScrollWheelEvent, SharedString, Size, Style,
+    MouseButton, MouseClickEvent, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent,
+    Overflow, ParentElement, Pixels, Point, Render, ScrollWheelEvent, SharedString, Size, Style,
     StyleRefinement, Styled, Task, TooltipId, Visibility, Window, WindowControlArea, point, px,
     size,
 };
@@ -2248,6 +2248,8 @@ impl Interactivity {
             }
 
             if let Some(hover_listener) = self.hover_listener.take() {
+                let hover_listener: Rc<dyn Fn(&bool, &mut Window, &mut App)> =
+                    Rc::from(hover_listener);
                 let hitbox = hitbox.clone();
                 let was_hovered = element_state
                     .hover_state
@@ -2257,6 +2259,17 @@ impl Interactivity {
                     .pending_mouse_down
                     .get_or_insert_with(Default::default)
                     .clone();
+
+                // A platform exit may be the last pointer event for this
+                // surface. End hover without waiting for another MouseMove,
+                // whose position could still be inside the previous hitbox.
+                let exit_listener = hover_listener.clone();
+                let hovered_on_exit = was_hovered.clone();
+                window.on_mouse_event(move |_: &MouseExitEvent, phase, window, cx| {
+                    if phase == DispatchPhase::Bubble && hovered_on_exit.replace(false) {
+                        exit_listener(&false, window, cx);
+                    }
+                });
 
                 window.on_mouse_event(move |_: &MouseMoveEvent, phase, window, cx| {
                     if phase != DispatchPhase::Bubble {

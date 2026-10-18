@@ -159,6 +159,50 @@ fn actual_hover_enlarges_bounded_icons_and_the_raised_pixels_remain_clickable(
 }
 
 #[gpui::test]
+fn platform_exit_ends_hover_without_a_followup_motion_and_contracts_the_dock(
+    cx: &mut TestAppContext,
+) {
+    let mut fixture = Fixture::new(cx, false);
+    let idle = fixture.bounds();
+    fixture
+        .visual
+        .simulate_mouse_move(idle.center(), None, Modifiers::default());
+    fixture.advance_motion(Duration::from_millis(250));
+    assert!(fixture.bounds().size.width > idle.size.width + px(15.));
+
+    let exit = || {
+        MouseExitEvent {
+            // Wayland Leave retains the last known position, which remains inside
+            // the icon; leaving the surface does not require an offscreen Motion.
+            position: idle.center(),
+            pressed_button: None,
+            modifiers: Modifiers::default(),
+        }
+    };
+    fixture.visual.simulate_event(exit());
+    fixture.visual.run_until_parked();
+    fixture.view.read_with(&fixture.visual, |view, _| {
+        assert!(!view.dock_motion.hovered);
+        assert!(view.dock_motion.pointer_target.is_none());
+    });
+    let revision = fixture
+        .host
+        .read_with(&fixture.visual, |host, _| host.revision);
+    fixture.visual.simulate_event(exit());
+    fixture.visual.run_until_parked();
+    fixture.host.read_with(&fixture.visual, |host, _| {
+        assert_eq!(
+            host.revision, revision,
+            "A repeated exit does not dispatch hover=false twice"
+        );
+    });
+    fixture.advance_motion(Duration::from_secs(2));
+    assert_eq!(fixture.bounds().size, idle.size);
+    assert!(!fixture.animation_active());
+    assert!(!fixture.contains_input(point(px(1.), px(1.))));
+}
+
+#[gpui::test]
 fn launching_through_a_dock_click_bounces_once_and_then_stops(cx: &mut TestAppContext) {
     let mut fixture = Fixture::new(cx, true);
     let idle = fixture.bounds();
