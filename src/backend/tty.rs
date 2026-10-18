@@ -1430,6 +1430,7 @@ impl Tty {
                 native.arm_output_timing(tag, extent);
             }
             let render_result = {
+                let _brightness_scope = native.output_brightness_scope(surface.hdr.brightness);
                 let _latency = crate::utils::latency::Span::new(
                     crate::utils::latency::Operation::VulkanRender,
                 );

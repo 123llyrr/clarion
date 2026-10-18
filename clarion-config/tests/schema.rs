@@ -119,10 +119,15 @@ fn public_catalog_preserves_previous_editor_contract() {
             let existing: Vec<_> = actual
                 .fields
                 .iter()
-                .filter(|field| !matches!(field.name, "sdr-white-level" | "hdr-peak-luminance"))
+                .filter(|field| {
+                    !matches!(
+                        field.name,
+                        "sdr-white-level" | "hdr-peak-luminance" | "hdr-brightness"
+                    )
+                })
                 .collect();
             assert_eq!(existing, previous.fields.iter().collect::<Vec<_>>());
-            for name in ["sdr-white-level", "hdr-peak-luminance"] {
+            for name in ["sdr-white-level", "hdr-peak-luminance", "hdr-brightness"] {
                 let field = actual
                     .fields
                     .iter()

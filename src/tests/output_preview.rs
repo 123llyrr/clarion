@@ -277,3 +277,40 @@ fn included_output_draft_is_parsed_without_writing() {
             .is_err()
     );
 }
+
+#[test]
+fn hdr_brightness_updates_only_named_output_without_repositioning() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.add_output(2, (2560, 1440));
+    let first = f.clarion_output(1).clone();
+    let second = f.clarion_output(2).clone();
+    let first_mode = first.current_mode();
+    let second_mode = second.current_mode();
+    f.clarion_state().apply_transient_output_config(
+        "headless-1",
+        clarion_ipc::OutputAction::HdrBrightness { percent: 35.0 },
+    );
+    let before_invalid = f.clarion().config.borrow().outputs.clone();
+    assert_eq!(
+        before_invalid
+            .0
+            .iter()
+            .find(|c| c.name == "headless-1")
+            .unwrap()
+            .hdr_brightness,
+        Some(clarion_config::FloatOrInt(35.0))
+    );
+    assert!(before_invalid
+        .0
+        .iter()
+        .filter(|c| c.name != "headless-1")
+        .all(|c| c.hdr_brightness.is_none()));
+    assert_eq!(first.current_mode(), first_mode);
+    assert_eq!(second.current_mode(), second_mode);
+    f.clarion_state().apply_transient_output_config(
+        "headless-1",
+        clarion_ipc::OutputAction::HdrBrightness { percent: f64::NAN },
+    );
+    assert_eq!(f.clarion().config.borrow().outputs, before_invalid);
+}

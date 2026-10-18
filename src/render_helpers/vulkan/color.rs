@@ -70,6 +70,8 @@ pub(super) fn constants(
                     1.
                 } else if i == 1 && scene_identity {
                     2.
+                } else if i == 2 {
+                    1. // Panel luminance gain; changed only for the final HDR pass.
                 } else {
                     0.
                 },

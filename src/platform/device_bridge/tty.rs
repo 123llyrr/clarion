@@ -1682,6 +1682,7 @@ impl Tty {
                     hdr_status,
                     hdr_peak_luminance,
                     sdr_white_level,
+                    hdr_brightness: surface.map(|surface| surface.hdr.brightness * 100.0),
                 };
 
                 ipc_outputs.insert(id, ipc_output);

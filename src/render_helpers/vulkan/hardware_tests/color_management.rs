@@ -1545,3 +1545,93 @@ fn live_dmabuf_swapchain_imports_preserve_hdr_history_past_sixteen_buffers() {
         "dead swapchain slots release FP16 scenes"
     );
 }
+
+#[test]
+#[ignore = "requires real Vulkan renderer and HDR color pipeline"]
+fn hdr_brightness_scales_linear_nits_without_dimming_scene_captures_or_sdr() {
+    let mut renderer = renderer();
+    let output = HdrOutputSettings::default().description();
+    let samples = [
+        ([1., 1., 1.], SurfaceColor::default()),
+        ([0.4, 0.2, 0.1], SurfaceColor::default()),
+        (
+            [1000., 300., 100.].map(crate::color::pq_encode),
+            SurfaceColor {
+                description: ColorDescription::bt2020_pq(),
+                intent: RenderingIntent::Absolute,
+            },
+        ),
+        (
+            [12.5, 2.5, 0.1],
+            SurfaceColor {
+                description: ColorDescription::windows_scrgb(),
+                intent: RenderingIntent::Absolute,
+            },
+        ),
+    ];
+    let textures: Vec<_> = samples
+        .into_iter()
+        .map(|(rgb, color)| source(&mut renderer, rgb, 1., color).0)
+        .collect();
+    let mut target = renderer
+        .create_buffer(Fourcc::Abgr2101010, (4, 1).into())
+        .unwrap();
+    draw(&mut renderer, &mut target, &textures, output, [0.; 4]);
+    let full = read(&mut renderer, &target);
+    let mut scene = renderer
+        .create_buffer(Fourcc::Abgr16161616f, (4, 1).into())
+        .unwrap();
+    draw(&mut renderer, &mut scene, &textures, output, [0.; 4]);
+    let capture = read(&mut renderer, &scene);
+    let mut sdr = renderer
+        .create_buffer(Fourcc::Abgr2101010, (4, 1).into())
+        .unwrap();
+    draw(
+        &mut renderer,
+        &mut sdr,
+        &textures,
+        ColorDescription::srgb(),
+        [0.; 4],
+    );
+    let sdr_full = read(&mut renderer, &sdr);
+    for gain in [0.5, 0.1, 0.01, 1.0] {
+        let scope = renderer.output_brightness_scope(gain);
+        draw(&mut renderer, &mut target, &textures, output, [0.; 4]);
+        for (actual, reference) in read(&mut renderer, &target).iter().zip(&full) {
+            for channel in 0..3 {
+                let expected = crate::color::pq_decode(reference[channel]) * gain;
+                let nits = crate::color::pq_decode(actual[channel]);
+                assert!(
+                    (nits - expected).abs() < expected * 0.025 + 0.03,
+                    "gain={gain}, channel={channel}, got {nits} nits, expected {expected}"
+                );
+            }
+            assert_eq!(actual[3], reference[3]);
+        }
+        draw(&mut renderer, &mut scene, &textures, output, [0.; 4]);
+        assert_eq!(
+            read(&mut renderer, &scene),
+            capture,
+            "capture must retain undimmed scene"
+        );
+        draw(
+            &mut renderer,
+            &mut sdr,
+            &textures,
+            ColorDescription::srgb(),
+            [0.; 4],
+        );
+        assert_eq!(
+            read(&mut renderer, &sdr),
+            sdr_full,
+            "SDR uses hardware brightness"
+        );
+        drop(scope);
+        draw(&mut renderer, &mut target, &textures, output, [0.; 4]);
+        assert_eq!(
+            read(&mut renderer, &target),
+            full,
+            "gain must not leak to another output"
+        );
+    }
+}

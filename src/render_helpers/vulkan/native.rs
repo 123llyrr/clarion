@@ -565,6 +565,7 @@ pub struct NativeRenderer {
     shader_compiles: ShaderCompileOwner,
     prepared_output_formats: std::collections::HashSet<vk::Format>,
     output_color_state: Rc<std::cell::Cell<Option<crate::color::ColorDescription>>>,
+    output_brightness: Rc<std::cell::Cell<f32>>,
     output_scenes: std::collections::HashMap<u64, OutputScene>,
     color_management_supported: bool,
 }
@@ -591,6 +592,18 @@ pub struct OutputColorScope {
     previous: Option<crate::color::ColorDescription>,
 }
 impl Drop for OutputColorScope {
+    fn drop(&mut self) {
+        self.state.set(self.previous);
+    }
+}
+
+/// Panel-only gain: scoped around KMS rendering, never scene preparation/capture.
+#[must_use]
+pub struct OutputBrightnessScope {
+    state: Rc<std::cell::Cell<f32>>,
+    previous: f32,
+}
+impl Drop for OutputBrightnessScope {
     fn drop(&mut self) {
         self.state.set(self.previous);
     }
@@ -709,6 +722,7 @@ pub struct NativeFrame<'a> {
     completion_export_required: bool,
     hdr_output: bool,
     output_color: Option<(VulkanTexture, crate::color::ColorDescription)>,
+    output_brightness: f32,
     hdr_damage: Vec<Rectangle<i32, Physical>>,
     shader_compiles: &'a mut ShaderCompileOwner,
     scene_deferred: &'a mut bool,
@@ -835,6 +849,18 @@ impl NativeRenderer {
 
     pub fn supports_color_management(&self) -> bool {
         self.color_management_supported
+    }
+
+    pub fn output_brightness_scope(&self, gain: f32) -> OutputBrightnessScope {
+        let gain = if gain.is_finite() {
+            gain.clamp(0.01, 1.0)
+        } else {
+            1.0
+        };
+        OutputBrightnessScope {
+            state: self.output_brightness.clone(),
+            previous: self.output_brightness.replace(gain),
+        }
     }
 
     pub fn scene_color_description(&self) -> crate::color::ColorDescription {
@@ -2089,6 +2115,7 @@ impl NativeRenderer {
             shader_compiles: ShaderCompileOwner::new(),
             prepared_output_formats: Default::default(),
             output_color_state: Rc::new(std::cell::Cell::new(None)),
+            output_brightness: Rc::new(std::cell::Cell::new(1.0)),
             output_scenes: Default::default(),
             color_management_supported,
         }
@@ -2349,6 +2376,13 @@ impl Renderer for NativeRenderer {
             debug: self.debug,
             hdr_output: color_output.is_some(),
             output_color: color_output.map(|description| (actual_target, description)),
+            output_brightness: if color_output
+                .is_some_and(|color| color.transfer == crate::color::TransferFunction::Pq)
+            {
+                self.output_brightness.get()
+            } else {
+                1.0
+            },
             hdr_damage: Vec::new(),
             shader_compiles: &mut self.shader_compiles,
             scene_deferred: &mut self.scene_deferred,
@@ -3546,6 +3580,7 @@ impl Frame for NativeFrame<'_> {
         if let Some((output, description)) = &self.output_color {
             self.frame
                 .set_color_output(output, *description, &self.hdr_damage);
+            self.frame.set_output_brightness(self.output_brightness);
         }
         let mut cold_yuv = false;
         for (variant, format) in self.frame.sampled_yuv_targets() {

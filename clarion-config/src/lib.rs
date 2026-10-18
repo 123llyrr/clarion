@@ -1634,6 +1634,7 @@ mod tests {
                             ),
                         ),
                         hdr: false,
+                        hdr_brightness: None,
                         sdr_white_level: None,
                         hdr_peak_luminance: None,
                         mode: Some(
@@ -1683,6 +1684,7 @@ mod tests {
                         position: None,
                         max_bpc: None,
                         hdr: false,
+                        hdr_brightness: None,
                         sdr_white_level: None,
                         hdr_peak_luminance: None,
                         mode: Some(
@@ -1713,6 +1715,7 @@ mod tests {
                         position: None,
                         max_bpc: None,
                         hdr: false,
+                        hdr_brightness: None,
                         sdr_white_level: None,
                         hdr_peak_luminance: None,
                         mode: None,

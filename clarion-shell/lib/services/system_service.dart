@@ -152,6 +152,48 @@ class SystemService {
   final Map<String, String> environment;
   final String powerSupplyRoot;
   final ApplicationLauncher _applicationLauncher;
+  Future<dynamic> Function(Object)? _outputRequest;
+  String? Function()? _brightnessOutput;
+
+  /// Reuse the controller's connection and resolve the bar's own monitor.
+  /// This service does not own or dispose that connection.
+  void bindOutputBrightness(
+    Future<dynamic> Function(Object) request,
+    String? Function() outputName,
+  ) {
+    _outputRequest = request;
+    _brightnessOutput = outputName;
+  }
+
+  Future<({String name, bool hdr, double? percent})?>
+  _brightnessTarget() async {
+    final request = _outputRequest;
+    if (request == null) return null;
+    final name = _brightnessOutput?.call();
+    final reply = await request('Outputs');
+    final outputs = reply is Map ? reply['Outputs'] : null;
+    if (outputs is! Map) throw StateError('无法读取显示器亮度状态');
+    final connected = outputs.values
+        .whereType<Map>()
+        .where((output) => output['logical'] is Map && output['name'] is String)
+        .toList();
+    final matches = name == null
+        ? connected
+        : connected.where((output) => output['name'] == name).toList();
+    // Never dim an arbitrary HDR monitor when the bar's monitor is ambiguous
+    // or was disconnected. A single connected monitor is safe during startup.
+    if (matches.length != 1) throw StateError('无法确定控制中心所在的显示器');
+    final target = matches.single;
+    final raw = target['hdr_brightness'];
+    final percent = raw is num && raw.isFinite && raw >= 1 && raw <= 100
+        ? raw.toDouble()
+        : null;
+    return (
+      name: target['name'] as String,
+      hdr: target['hdr_active'] == true,
+      percent: percent,
+    );
+  }
 
   /// GIO resolves the user's GUI file manager. Locations stay literal argv,
   /// including homes with spaces or shell metacharacters.
@@ -223,6 +265,14 @@ class SystemService {
       }
     }
 
+    // Run IPC alongside the optional system probes. Attach an error handler
+    // immediately so a disconnected compositor cannot escape as an unhandled
+    // asynchronous error while the other probes are still pending.
+    var outputFailed = false;
+    final outputBrightness = _brightnessTarget().catchError((Object _) {
+      outputFailed = true;
+      return null;
+    });
     final values = await Future.wait([
       optional('wpctl', ['get-volume', '@DEFAULT_AUDIO_SINK@']),
       optional('brightnessctl', ['--class=backlight', '-m']),
@@ -255,6 +305,13 @@ class SystemService {
           break;
         }
       }
+    }
+    final target = await outputBrightness;
+    if (outputFailed) {
+      brightness = null;
+    } else if (target != null && target.hdr) {
+      // A compositor predating HDR brightness has no usable HDR slider.
+      brightness = target.percent == null ? null : target.percent! / 100;
     }
     final battery = await readBattery(powerSupplyRoot);
     final bluetooth = values[3];
@@ -310,6 +367,24 @@ class SystemService {
   Future<void> setBrightness(double value) async {
     if (!value.isFinite) {
       throw ArgumentError.value(value, 'value', 'Brightness must be finite');
+    }
+    final target = await _brightnessTarget();
+    if (target != null && target.hdr) {
+      if (target.percent == null) {
+        throw StateError('当前合成器尚不支持 HDR 亮度调节，请登录已更新的版本');
+      }
+      final reply = await _outputRequest!({
+        'Output': {
+          'output': target.name,
+          'action': {
+            'HdrBrightness': {'percent': value.clamp(0.01, 1.0) * 100},
+          },
+        },
+      });
+      if (reply is! Map || reply['OutputConfigChanged'] != 'Applied') {
+        throw StateError('显示器已断开或 HDR 亮度设置未被接受');
+      }
+      return;
     }
     // Keep a visible screen; changing DPMS is a distinct user action.
     await command('brightnessctl', [

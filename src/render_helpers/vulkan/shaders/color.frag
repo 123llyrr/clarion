@@ -2,7 +2,7 @@
 layout(push_constant) uniform ColorPushConstants {
     mat4 matrix;
     vec4 uv_bounds;
-    vec4 gamut[3]; // [0].w absolute normalization; [1].w output / bounded scene identity
+    vec4 gamut[3]; // [0].w absolute normalization; [1].w identity; [2].w luminance gain
     vec4 source; // transfer, minimum nits, code-one span nits, reference nits
     vec4 target;
     vec4 mapping; // source peak, target peak, intent (0 perceptual / 1 relative / 2 absolute), clamp
@@ -91,6 +91,9 @@ void main() {
         linear *= tone_map(maximum, pc.target.w, source_peak, pc.mapping.y) / maximum;
     }
     if (pc.mapping.w != 0.0) linear = clamp(linear, vec3(0.0), vec3(pc.mapping.y));
+    // Panel brightness acts on absolute linear luminance, after tone mapping
+    // and clipping, before PQ encoding. Never multiply encoded PQ code values.
+    linear *= pc.gamut[2].w;
     vec3 result = vec3(encode_channel(linear.r, pc.target), encode_channel(linear.g, pc.target), encode_channel(linear.b, pc.target));
     out_color = vec4(result * alpha, alpha);
 }
