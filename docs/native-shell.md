@@ -30,10 +30,19 @@ Shell 通过 Clarion IPC 接收桌面快照并发送动作，通过 layer-shell 
 最小化效果等已接入的偏好继续生效。`show_launcher=false` 隐藏 Dock 中的应用入口，
 顶部栏和快捷键仍可打开应用面板。
 
-尚未迁移的交互是 Dock 悬停放大（`magnification` / `magnification_scale`）、
-Downloads 堆栈（`show_downloads`）、顶部栏自动隐藏（`bar_auto_hide`）和
-应用启动时的 Dock 弹跳（`animate_opening_applications`）。原有值仍随偏好文件保留，
-当前版本不显示暗示这些交互已经实现的开关。这些限制不影响合成器自身的开窗和平铺动画。
+Dock 悬停放大（`magnification` / `magnification_scale`）、应用启动弹跳
+（`animate_opening_applications`）和自动隐藏已接入实际动画。桌面偏好提供放大开关、
+100%–200% 比例滑块与启动弹跳开关，自动保存并应用；旧配置相同字段继续生效。
+减少动态效果优先于这些装饰动画。启动弹跳只表示启动请求，并不推断客户端就绪状态。
+动画在稳定的 Dock 画布内绘制，预留放大与弹跳空间；工作区保留尺寸、截图避让与静止托盘一致，
+不随装饰位移反复改变。
+
+最小化／还原复用合成器既有 Genie 450ms、Scale 250ms 轨迹，Shell 登记图标目标和减少动态策略。
+Big Sur 静态分析中的 500ms 参考与当前 Genie 时长有区别。悬停、启动弹跳和自动隐藏的
+曲线、时长与位移是 Clarion 的工程调校值，不能称为已恢复的 Apple 动画常量。
+Downloads 堆栈（`show_downloads`）和顶部栏自动隐藏（`bar_auto_hide`）仍未迁移，
+原有值随偏好文件保留，当前版本不显示暗示这两项交互已经实现的开关。
+这些限制不影响合成器自身的开窗和平铺动画。
 
 ## 构建与部署
 
@@ -95,4 +104,4 @@ tile尺寸小于33时直径3，否则4；圆角半径为直径的一半。
 `~/.local/share/fonts/clarion-bigsur-text/`、`clarion-bigsur/` 注册，不随公开源码或安装包分发；缺失时回退到系统可用字体。
 固定tint、圆角和模糊等视觉值仍是工程选择，尚待同缩放、壁纸及色彩条件的实机像素基准核对，不能宣称全部像素已验证。
 桌面已接入 Super+A、Super+O/Down、Super+Backspace、Super+Shift+N、Super+I/Y；
-Quick Look支持有大小与解码预算限制的PNG/JPEG和UTF-8文本。上文列出的四项Dock相关交互仍未迁移，本轮未实现。
+Quick Look支持有大小与解码预算限制的PNG/JPEG和UTF-8文本。Dock 动画与尚未迁移的交互边界见上文。

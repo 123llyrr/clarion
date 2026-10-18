@@ -26,26 +26,21 @@ pub(super) fn backdrop_regions(host: &ViewState, width: f32, height: f32) -> Vec
         )];
     }
     let vertical = host.prefs.dock_position != DockPosition::Bottom;
-    let icon = host.prefs.dock_size as f32;
-    let count = host.dock_apps().len().min(18) + 1 + usize::from(host.prefs.show_launcher);
-    let length = (count as f32 * (icon + 12.) + 20.)
-        .min(if vertical { height - 90. } else { width - 32. })
-        .max(0.);
-    let thickness = icon + 44.;
-    let (x, y, w, h) = match host.prefs.dock_position {
-        DockPosition::Bottom => (
-            (width - length - 24.) / 2.,
-            height - 8. - thickness,
-            length + 24.,
-            thickness,
-        ),
-        DockPosition::Left => (8., (height - length - 24.) / 2., thickness, length + 24.),
-        DockPosition::Right => (
-            width - 8. - thickness,
-            (height - length - 24.) / 2.,
-            thickness,
-            length + 24.,
-        ),
+    let metrics = crate::dock_motion::DockMetrics::new(
+        host.dock_apps().len(),
+        host.prefs.dock_size as f32,
+        host.prefs.magnification_scale as f32,
+        host.prefs.magnification && !host.prefs.reduce_motion,
+        host.prefs.show_launcher,
+        vertical,
+        width,
+        height,
+    );
+    let (w, h) = (metrics.surface_width, metrics.surface_height);
+    let (x, y) = match host.prefs.dock_position {
+        DockPosition::Bottom => ((width - w) / 2., height - 8. - h),
+        DockPosition::Left => (8., (height - h) / 2.),
+        DockPosition::Right => (width - 8. - w, (height - h) / 2.),
     };
     let left = x.clamp(0., width);
     let right = (x + w).clamp(left, width);

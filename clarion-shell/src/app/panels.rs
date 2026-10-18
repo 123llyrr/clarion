@@ -49,12 +49,18 @@ pub(super) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
                 .min(available);
             let width = 250f32.min(w - 24.);
             let icon = state.prefs.dock_size as f32;
-            let step = icon + 12.;
-            let vertical = state.prefs.dock_position != DockPosition::Bottom;
-            let length = ((apps.len().min(18) + 1 + usize::from(state.prefs.show_launcher)) as f32
-                * step
-                + 20.)
-                .min(if vertical { h - 90. } else { w - 32. });
+            let metrics = crate::dock_motion::DockMetrics::new(
+                apps.len(),
+                icon,
+                state.prefs.magnification_scale as f32,
+                state.prefs.magnification && !state.prefs.reduce_motion,
+                state.prefs.show_launcher,
+                state.prefs.dock_position != DockPosition::Bottom,
+                w,
+                h,
+            );
+            let step = metrics.item;
+            let length = metrics.length;
             let position = 10.
                 + (app_index + usize::from(state.prefs.show_launcher)) as f32 * step
                 + step / 2.;

@@ -345,6 +345,40 @@ mod tests {
         );
     }
     #[test]
+    fn dock_motion_defaults_migrate_and_save_without_losing_unrelated_preferences() {
+        let defaults = Preferences::default();
+        assert!(defaults.magnification);
+        assert_eq!(defaults.magnification_scale, 1.45);
+        assert!(defaults.animate_opening_applications);
+        let dir = tempfile::tempdir().unwrap();
+        let env = environment(dir.path());
+        let path = preferences_path(&env).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, br##"{"unknown":{"keep":["value"]},"macos":{"magnification":false,"magnification_scale":1.8,"animate_opening_applications":false}}"##).unwrap();
+        let mut prefs = Preferences::load(&env, false).unwrap();
+        assert!(!prefs.magnification);
+        assert_eq!(prefs.magnification_scale, 1.8);
+        assert!(!prefs.animate_opening_applications);
+        prefs.magnification = true;
+        prefs.magnification_scale = 1.75;
+        prefs.animate_opening_applications = true;
+        prefs.save(&env, false).unwrap();
+        let saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["unknown"]["keep"], serde_json::json!(["value"]));
+        assert_eq!(saved["macos"]["magnification_scale"], 1.8);
+        assert_eq!(saved["magnification_scale"], 1.75);
+        assert_eq!(saved["magnification"], true);
+        assert_eq!(saved["animate_opening_applications"], true);
+        assert_eq!(Preferences::load(&env, false).unwrap(), prefs);
+        for invalid in [0.5, 2.1] {
+            let parsed =
+                Preferences::from_json(&serde_json::json!({"magnification_scale":invalid}));
+            assert_eq!(parsed.magnification_scale, defaults.magnification_scale);
+            prefs.magnification_scale = invalid;
+            assert!(prefs.save(&env, false).is_err());
+        }
+    }
+    #[test]
     fn preview_does_not_read_invalid_preferences_or_write_session_data() {
         let dir = tempfile::tempdir().unwrap();
         let env = environment(dir.path());

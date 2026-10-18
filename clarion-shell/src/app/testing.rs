@@ -52,7 +52,9 @@ pub(crate) fn test_host(
         ready: false,
         preferences_placed: None,
         last_target: HashMap::new(),
+        targets_pending: false,
         auto_hidden: false,
+        launches: HashMap::new(),
         dock_hover: false,
         dock_edge_hover: false,
         idle_since: Instant::now(),
@@ -66,4 +68,40 @@ pub(crate) fn open_panel(
 ) -> WindowHandle<ShellView> {
     host.update(cx, |host, cx| host.open(panel, cx));
     host.read(cx).popup.expect("test panel was not created")
+}
+
+pub(crate) fn open_dock(host: &Entity<Host>, cx: &mut App) -> WindowHandle<ShellView> {
+    host.update(cx, |host, cx| host.reconcile_outputs(cx));
+    host.read(cx)
+        .outputs
+        .values()
+        .find_map(|output| output.dock)
+        .expect("test Dock was not created")
+}
+
+pub(crate) fn capture_backend(
+    host: &Entity<Host>,
+    cx: &mut App,
+) -> std::sync::mpsc::Receiver<backend::Command> {
+    let (backend, received) = backend::Backend::test_channel(32);
+    host.update(cx, |host, _| host.backend = backend);
+    received
+}
+
+pub(crate) fn age_launch(host: &Entity<Host>, id: &str, elapsed: Duration, cx: &mut App) {
+    host.update(cx, |host, cx| {
+        *host
+            .launches
+            .get_mut(id)
+            .expect("test application was not launched") = Instant::now() - elapsed;
+        host.changed(cx);
+    });
+}
+
+pub(crate) fn set_dock_revealed(host: &Entity<Host>, revealed: bool, cx: &mut App) {
+    host.update(cx, |host, cx| {
+        host.auto_hidden = !revealed;
+        host.reconcile_docks(cx);
+        host.changed(cx);
+    });
 }

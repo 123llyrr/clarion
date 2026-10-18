@@ -37,6 +37,7 @@ pub struct ShellView {
     pub host: Entity<Host>,
     pub state: Arc<ViewState>,
     kind: Surface,
+    dock_motion: macos_dock::DockViewMotion,
     output: String,
     input: Entity<TextInput>,
     query: String,
@@ -151,9 +152,11 @@ impl ShellView {
             cx.notify();
         })
         .detach();
+        let dock_motion = macos_dock::DockViewMotion::new(state.dock_revealed);
         Self {
             host,
             state,
+            dock_motion,
             kind,
             output,
             input,
@@ -952,7 +955,7 @@ impl Render for ShellView {
         let height = f32::from(window.viewport_size().height);
         let content = match self.kind {
             Surface::Bar => self.bar(host, p, width, cx),
-            Surface::Dock => self.macos_dock(host, p, window),
+            Surface::Dock => self.macos_dock(host, p, window, cx),
             Surface::Panel => self.panel(host, p, window, cx),
             Surface::Toast(id) => {
                 if let Some(item) = host.notifications.iter().find(|n| n.id == id) {
@@ -1002,21 +1005,13 @@ impl Render for ShellView {
                     .into_any_element()
             }
         };
-        if matches!(
-            self.kind,
-            Surface::Dock | Surface::Panel | Surface::Toast(_)
-        ) {
-            let (x, y, w, h, radius) = if matches!(self.kind, Surface::Dock) {
-                match host.prefs.dock_position {
-                    DockPosition::Bottom => (12., 12., width - 24., height - 12., 20.),
-                    DockPosition::Left => (0., 12., width - 12., height - 24., 20.),
-                    DockPosition::Right => (12., 12., width - 12., height - 24., 20.),
-                }
-            } else if matches!(self.kind, Surface::Panel) && host.panel == Some(Panel::Apps) {
-                (0., 0., width, height, 0.)
-            } else {
-                (0., 0., width, height, 16.)
-            };
+        if matches!(self.kind, Surface::Panel | Surface::Toast(_)) {
+            let (x, y, w, h, radius) =
+                if matches!(self.kind, Surface::Panel) && host.panel == Some(Panel::Apps) {
+                    (0., 0., width, height, 0.)
+                } else {
+                    (0., 0., width, height, 16.)
+                };
             let mut regions =
                 if matches!(self.kind, Surface::Panel) && host.panel == Some(Panel::Apps) {
                     macos_launchpad::backdrop_regions(host, width, height)
@@ -1228,3 +1223,6 @@ mod tests {
 #[cfg(test)]
 #[path = "ui_tests.rs"]
 mod ui_tests;
+
+#[cfg(test)]
+mod dock_tests;

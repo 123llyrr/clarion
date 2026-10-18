@@ -245,6 +245,23 @@ class NativeShellSmokeIsolationTests(unittest.TestCase):
             self.assertEqual(preferences["pinned_app_ids"], identifiers[:6])
             self.assertTrue((private / "home/Desktop/测试文档.txt").is_file())
 
+    def test_screenshot_toolbar_avoids_the_resting_tray_not_the_motion_canvas(self):
+        logical = {"width": 1280, "height": 800}
+        bottom = self.smoke.FIXTURE_DOCK_SIZE + 56
+        toolbar = {"x": 445, "y": 800 - bottom - 64, "width": 390, "height": 64,
+                   "anchor": 2, "exclusive_zone": -1}
+        for canvas_height in (92, 176, 256):
+            with self.subTest(canvas_height=canvas_height):
+                result = self.smoke.assert_component_geometry(
+                    "screenshot", toolbar, logical, {"height": 24},
+                    {"height": canvas_height, "anchor": 2})
+                self.assertEqual(result["expected_bounds"], [445, 632, 390, 64])
+        misplaced = toolbar | {"y": 800 - 176 - 12 - 64}
+        with self.assertRaises(RuntimeError):
+            self.smoke.assert_component_geometry(
+                "screenshot", misplaced, logical, {"height": 24},
+                {"height": 176, "anchor": 2})
+
     def test_native_protocol_trace_requires_effect_and_metadata_only_identity(self):
         effect = ('-> ext_background_effect_manager_v1#7.get_background_effect(new id ext_background_effect_surface_v1#8, wl_surface#9)\n'
                   '-> ext_background_effect_surface_v1#8.set_blur_region(wl_region#10)\n')

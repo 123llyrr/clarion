@@ -28,6 +28,7 @@ from xml.sax.saxutils import escape
 ROOT = Path(__file__).resolve().parents[1]
 MARKER = ".native-shell-smoke-owner"
 FIXTURE_BAR_HEIGHT = 24
+FIXTURE_DOCK_SIZE = 48
 PREFERENCES_WINDOW_RULE = r'''window-rule {
     match app-id=r#"^io\.github\.clarion\.DesktopPreferences$"#
     open-floating true
@@ -271,7 +272,7 @@ def seed_catalog(private, env, theme="dark", visual=False):
     preferences = Path(env["XDG_CONFIG_HOME"]) / "clarion-shell"
     preferences.mkdir(parents=True)
     (preferences / "preferences.json").write_text(json.dumps(
-        {"theme": theme, "bar_height": FIXTURE_BAR_HEIGHT,
+        {"theme": theme, "bar_height": FIXTURE_BAR_HEIGHT, "dock_size": FIXTURE_DOCK_SIZE,
          "pinned_app_ids": identifiers[:6], "recent_app_ids": identifiers[6:9]},
         ensure_ascii=False) + "\n")
     if visual:
@@ -408,10 +409,11 @@ def assert_component_geometry(command, actual, logical, bar, dock):
         expected, anchor = [0, 0, width, height], 15
     elif command == "screenshot":
         tool_width = min(390, width - 24)
-        # This fixture uses the default visible bottom Dock. Its canvas includes
-        # 12 px of top shadow, leaving a further 4 px gap before the toolbar.
+        # Avoid the visible resting tray, rather than its larger motion canvas.
+        # The fixed canvas also contains hover/bounce headroom and must not push
+        # the screenshot toolbar upward when that animation padding changes.
         require(dock is not None and dock["anchor"] == 2, "Fixture bottom Dock missing")
-        bottom = dock["height"] + 12
+        bottom = FIXTURE_DOCK_SIZE + 56
         expected, anchor = [(width - tool_width) / 2, height - bottom - 64, tool_width, 64], 2
     else:
         preferred_width, panel_height = {

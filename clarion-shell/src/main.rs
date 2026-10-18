@@ -3,6 +3,7 @@
 mod app;
 mod backend;
 mod desktop;
+mod dock_motion;
 mod input;
 mod preferences;
 mod services;

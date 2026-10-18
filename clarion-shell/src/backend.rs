@@ -128,6 +128,20 @@ pub struct Backend {
 }
 
 impl Backend {
+    /// Capture the actual command queue without workers or desktop I/O.
+    #[cfg(test)]
+    pub(crate) fn test_channel(capacity: usize) -> (Self, mpsc::Receiver<Command>) {
+        let (commands, receiver) = mpsc::sync_channel(capacity);
+        (
+            Self {
+                commands,
+                alive: Arc::new(AtomicBool::new(true)),
+                _server: None,
+            },
+            receiver,
+        )
+    }
+
     pub fn start(options: Options) -> Result<(Self, Receiver<Event>)> {
         let alive = Arc::new(AtomicBool::new(true));
         let (events, receiver) = async_channel::bounded(128);

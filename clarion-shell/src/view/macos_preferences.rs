@@ -535,6 +535,28 @@ impl ShellView {
                     .text_color(p.muted)
                     .child(pref_text(format!("{:.0} pt", host.prefs.dock_size))),
             );
+        let magnification_slider = div()
+            .w(px(304.))
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .child(div().flex_1().child(self.preference_slider(
+                "magnification-scale",
+                host.prefs.magnification_scale - 1.,
+                |v| Action::MagnificationScale(1. + v),
+                p,
+            )))
+            .child(
+                div()
+                    .w(px(35.))
+                    .text_right()
+                    .text_size(px(11.))
+                    .text_color(p.muted)
+                    .child(pref_text(format!(
+                        "{:.0}%",
+                        host.prefs.magnification_scale * 100.
+                    ))),
+            );
         let bar_slider = div()
             .w(px(304.))
             .flex()
@@ -569,6 +591,20 @@ impl ShellView {
             .child(form_row("强调色：", accents).min_h(px(32.)))
             .child(form_separator(separator))
             .child(form_row("程序坞大小：", size_slider).min_h(px(32.)))
+            .child(
+                form_row(
+                    "放大效果：",
+                    self.preference_check(
+                        "prefs-magnification",
+                        "指针经过时放大图标",
+                        host.prefs.magnification,
+                        Action::Magnification(!host.prefs.magnification),
+                        p,
+                    ),
+                )
+                .min_h(px(30.)),
+            )
+            .child(form_row("放大比例：", magnification_slider).min_h(px(32.)))
             .child(form_row("屏幕上的位置：", positions).min_h(px(36.)))
             .child(
                 form_row(
@@ -578,6 +614,21 @@ impl ShellView {
                         "自动隐藏和显示程序坞",
                         host.prefs.dock_auto_hide,
                         Action::AutoHide(!host.prefs.dock_auto_hide),
+                        p,
+                    ),
+                )
+                .min_h(px(30.)),
+            )
+            .child(
+                form_row(
+                    "启动动画：",
+                    self.preference_check(
+                        "prefs-launch-animation",
+                        "启动应用时弹跳图标",
+                        host.prefs.animate_opening_applications,
+                        Action::AnimateOpeningApplications(
+                            !host.prefs.animate_opening_applications,
+                        ),
                         p,
                     ),
                 )
@@ -690,7 +741,10 @@ impl ShellView {
 #[cfg(test)]
 mod tests {
     use crate::app::{testing, Panel};
-    use gpui::{px, size, Modifiers, TestAppContext, VisualTestContext};
+    use gpui::{
+        point, px, size, Modifiers, ScrollDelta, ScrollWheelEvent, TestAppContext,
+        VisualTestContext,
+    };
     use std::collections::HashMap;
 
     #[gpui::test]
@@ -716,9 +770,25 @@ mod tests {
             window.refresh();
         });
         visual.run_until_parked();
+        let scale = visual
+            .debug_bounds("slider-magnification-scale")
+            .expect("actual magnification slider");
+        visual.simulate_click(
+            point(
+                scale.left() + px(8.) + (scale.size.width - px(16.)) * 0.75,
+                scale.center().y,
+            ),
+            Modifiers::default(),
+        );
+        visual.run_until_parked();
+        host.read_with(&visual, |host, _| {
+            assert!((host.prefs.magnification_scale - 1.75).abs() < 0.001)
+        });
         for id in [
             "prefs-appearance-light",
             "prefs-accent-bf5af2",
+            "prefs-magnification",
+            "prefs-launch-animation",
             "prefs-reduce-motion",
             "prefs-position-right",
             "prefs-auto-hide",
@@ -726,11 +796,23 @@ mod tests {
             let bounds = visual
                 .debug_bounds(id)
                 .unwrap_or_else(|| panic!("missing actual control: {id}"));
+            if bounds.center().y > px(460.) {
+                visual.simulate_event(ScrollWheelEvent {
+                    position: point(px(320.), px(240.)),
+                    delta: ScrollDelta::Pixels(point(px(0.), px(-500.))),
+                    ..Default::default()
+                });
+                visual.run_until_parked();
+            }
+            let bounds = visual.debug_bounds(id).expect("control after scrolling");
+            assert!(bounds.center().y > px(48.) && bounds.center().y < px(471.));
             visual.simulate_click(bounds.center(), Modifiers::default());
             visual.run_until_parked();
             host.read_with(&visual, |host, _| match id {
                 "prefs-appearance-light" => assert_eq!(host.prefs.theme, "light"),
                 "prefs-accent-bf5af2" => assert_eq!(host.prefs.accent, "#bf5af2"),
+                "prefs-magnification" => assert!(!host.prefs.magnification),
+                "prefs-launch-animation" => assert!(!host.prefs.animate_opening_applications),
                 "prefs-reduce-motion" => assert!(host.prefs.reduce_motion),
                 "prefs-position-right" => assert_eq!(
                     host.prefs.dock_position,
@@ -738,6 +820,15 @@ mod tests {
                 ),
                 "prefs-auto-hide" => assert!(host.prefs.dock_auto_hide),
                 _ => unreachable!(),
+            });
+        }
+        for (value, expected) in [(0., 1.), (3., 2.), (f64::NAN, 2.), (1.45, 1.45)] {
+            host.update(&mut visual, |host, cx| {
+                host.handle(crate::app::Action::MagnificationScale(value), cx);
+            });
+            visual.run_until_parked();
+            host.read_with(&visual, |host, _| {
+                assert_eq!(host.prefs.magnification_scale, expected)
             });
         }
         let close = visual

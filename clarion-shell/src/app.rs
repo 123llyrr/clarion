@@ -45,6 +45,9 @@ pub enum Action {
     BarHeight(f64),
     DockPosition(DockPosition),
     AutoHide(bool),
+    Magnification(bool),
+    MagnificationScale(f64),
+    AnimateOpeningApplications(bool),
     ReduceMotion(bool),
     Screenshot(u8),
     Settings,
@@ -76,6 +79,8 @@ pub struct ViewState {
     pub error: Option<String>,
     pub panel: Option<Panel>,
     pub dnd: bool,
+    pub dock_revealed: bool,
+    pub launches: HashMap<String, Instant>,
     dock_apps: Vec<DockApp>,
 }
 impl ViewState {
@@ -124,8 +129,11 @@ pub struct Host {
     options: Options,
     ready: bool,
     preferences_placed: Option<u64>,
-    last_target: HashMap<u64, DockTarget>,
+    // Suppression is part of the registration, even when geometry is unchanged.
+    last_target: HashMap<u64, (DockTarget, bool)>,
+    targets_pending: bool,
     auto_hidden: bool,
+    launches: HashMap<String, Instant>,
     dock_hover: bool,
     dock_edge_hover: bool,
     idle_since: Instant,
@@ -179,7 +187,9 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 ready: false,
                 preferences_placed: None,
                 last_target: HashMap::new(),
+                targets_pending: false,
                 auto_hidden,
+                launches: HashMap::new(),
                 dock_hover: false,
                 dock_edge_hover: false,
                 idle_since: Instant::now(),
@@ -255,6 +265,8 @@ impl Host {
             error: self.error.clone(),
             panel: self.panel.clone(),
             dnd: self.dnd,
+            dock_revealed: !self.auto_hidden,
+            launches: self.launches.clone(),
             dock_apps: self.dock_apps(),
         }
     }
@@ -309,6 +321,22 @@ impl Host {
                 if !snapshot.connected {
                     self.last_target.clear();
                 }
+                // Keep an automatically hidden Dock visible through a real
+                // minimize/restore transition. Its stable target must survive
+                // hiding; clearing it would truncate an in-flight core warp.
+                if self.prefs.dock_auto_hide
+                    && snapshot.connected
+                    && snapshot.generation == self.desktop.generation
+                    && snapshot.windows.iter().any(|next| {
+                        self.desktop
+                            .windows
+                            .iter()
+                            .any(|old| old.id == next.id && old.is_minimized != next.is_minimized)
+                    })
+                {
+                    self.auto_hidden = false;
+                    self.idle_since = Instant::now();
+                }
                 self.desktop = snapshot;
                 self.reconcile_outputs(cx);
                 self.place_preferences();
@@ -325,6 +353,9 @@ impl Host {
             }
             backend::Event::Preferences(prefs) => {
                 if !self.local_preferences && self.prefs != prefs {
+                    if !prefs.dock_auto_hide {
+                        self.auto_hidden = false;
+                    }
                     self.prefs = prefs;
                     self.rebuild(cx);
                     self.targets();
@@ -406,21 +437,9 @@ impl Host {
         cx.notify();
         let state = Arc::new(self.snapshot());
         for view in self.outputs.values() {
-            let count = self.dock_apps().len().min(18) as f32
-                + 1.
-                + u8::from(self.prefs.show_launcher) as f32;
-            let vertical = self.prefs.dock_position != DockPosition::Bottom;
-            let length = (count * (self.prefs.dock_size as f32 + 12.) + 20.).min(if vertical {
-                view.height - 90.
-            } else {
-                view.width - 32.
-            });
-            let thickness = self.prefs.dock_size as f32 + 32.;
-            let dimensions = if vertical {
-                size(px(thickness + 12.), px(length + 24.))
-            } else {
-                size(px(length + 24.), px(thickness + 12.))
-            };
+            let metrics = self.dock_metrics(view.width, view.height);
+            let thickness = metrics.thickness;
+            let dimensions = size(px(metrics.surface_width), px(metrics.surface_height));
             let _ = view.bar.update(cx, |v, window, cx| {
                 v.state = state.clone();
                 let desired = size(px(view.width), px(self.prefs.bar_height as f32));
@@ -548,9 +567,17 @@ impl Host {
             }
             Action::Launch(id) => {
                 if let Some(app) = self.catalog.get(&id) {
+                    self.auto_hidden = false;
                     let _ = self
                         .backend
                         .send(backend::Command::LaunchDesktop(app.desktop_file.clone()));
+                    if self.prefs.animate_opening_applications && !self.prefs.reduce_motion {
+                        let now = Instant::now();
+                        let started = self.launches.entry(id.clone()).or_insert(now);
+                        if now.duration_since(*started) >= Duration::from_secs(1) {
+                            *started = now;
+                        }
+                    }
                     self.prefs.recent_app_ids.retain(|other| other != &id);
                     self.prefs.recent_app_ids.insert(0, id);
                     self.prefs.recent_app_ids.truncate(24);
@@ -613,6 +640,20 @@ impl Host {
                 self.auto_hidden = false;
                 self.save(cx);
                 self.rebuild(cx);
+            }
+            Action::Magnification(value) => {
+                self.prefs.magnification = value;
+                self.save(cx);
+            }
+            Action::MagnificationScale(value) => {
+                if value.is_finite() {
+                    self.prefs.magnification_scale = value.clamp(1., 2.);
+                    self.save(cx);
+                }
+            }
+            Action::AnimateOpeningApplications(value) => {
+                self.prefs.animate_opening_applications = value;
+                self.save(cx);
             }
             Action::ReduceMotion(value) => {
                 self.prefs.reduce_motion = value;
@@ -959,12 +1000,13 @@ impl Host {
             .collect()
     }
     pub fn activate_app(&mut self, app: &DockApp, cx: &mut Context<Self>) {
-        if let Some(window) = app
-            .windows
-            .iter()
-            .find(|w| !w.is_focused)
-            .or_else(|| app.windows.first())
-        {
+        if let Some(window) = app.windows.iter().max_by_key(|window| {
+            (
+                window.is_focused,
+                window.focus_timestamp.map(|time| (time.secs, time.nanos)),
+                std::cmp::Reverse(window.id),
+            )
+        }) {
             self.handle(Action::Focus(window.id), cx)
         } else {
             self.handle(Action::Launch(app.id.clone()), cx)
@@ -1050,7 +1092,7 @@ impl Host {
                 move |_, cx| cx.new(|cx| ShellView::new(host, Surface::Bar, output, state, cx)),
             );
             let Ok(bar) = bar else { continue };
-            let dock = if self.prefs.dock_hidden || self.auto_hidden {
+            let dock = if self.prefs.dock_hidden {
                 None
             } else {
                 self.create_dock(&name, display.id(), width, height, cx)
@@ -1191,6 +1233,18 @@ impl Host {
             }
         }
     }
+    fn dock_metrics(&self, width: f32, height: f32) -> crate::dock_motion::DockMetrics {
+        crate::dock_motion::DockMetrics::new(
+            self.dock_apps().len(),
+            self.prefs.dock_size as f32,
+            self.prefs.magnification_scale as f32,
+            self.prefs.magnification && !self.prefs.reduce_motion,
+            self.prefs.show_launcher,
+            self.prefs.dock_position != DockPosition::Bottom,
+            width,
+            height,
+        )
+    }
     fn create_dock(
         &self,
         name: &str,
@@ -1199,23 +1253,15 @@ impl Host {
         height: f32,
         cx: &mut Context<Self>,
     ) -> Option<WindowHandle<ShellView>> {
-        let n =
-            self.dock_apps().len().min(18) as f32 + 1. + u8::from(self.prefs.show_launcher) as f32;
-        let item = self.prefs.dock_size as f32 + 12.;
-        let vertical = self.prefs.dock_position != DockPosition::Bottom;
-        let length = (n * item + 20.).min(if vertical { height - 90. } else { width - 32. });
-        let thickness = self.prefs.dock_size as f32 + 32.;
+        let metrics = self.dock_metrics(width, height);
+        let thickness = metrics.thickness;
         let mut anchor = LayerShellAnchor::default();
         match self.prefs.dock_position {
             DockPosition::Bottom => anchor.bottom = true,
             DockPosition::Left => anchor.left = true,
             DockPosition::Right => anchor.right = true,
         };
-        let size = if vertical {
-            size(px(thickness + 12.), px(length + 24.))
-        } else {
-            size(px(length + 24.), px(thickness + 12.))
-        };
+        let size = size(px(metrics.surface_width), px(metrics.surface_height));
         let bounds = Bounds::centered(Some(display), size, cx);
         let host = cx.entity();
         let output = name.to_owned();
@@ -1259,6 +1305,9 @@ impl Host {
     }
     fn tick(&mut self, cx: &mut Context<Self>) {
         self.reconcile_outputs(cx);
+        if self.targets_pending {
+            self.targets();
+        }
         if self.prefs.dock_auto_hide
             && !self.auto_hidden
             && !self.dock_hover
@@ -1267,9 +1316,10 @@ impl Host {
             && self.idle_since.elapsed() > Duration::from_millis(850)
         {
             self.auto_hidden = true;
-            self.reconcile_docks(cx);
-            self.targets();
+            self.changed(cx);
         }
+        self.launches
+            .retain(|_, started| started.elapsed() < Duration::from_secs(1));
         if !self.ready && !self.outputs.is_empty() {
             self.ready = true;
             let preview = self.preview;
@@ -1305,7 +1355,7 @@ impl Host {
                 let v = &self.outputs[&name];
                 (v.display, v.width, v.height, v.dock)
             };
-            if self.auto_hidden || self.prefs.dock_hidden {
+            if self.prefs.dock_hidden {
                 if let Some(window) = current {
                     let _ = window.update(cx, |_, w, _| w.remove_window());
                     self.outputs.get_mut(&name).unwrap().dock = None;
@@ -1317,27 +1367,16 @@ impl Host {
         }
     }
     fn targets(&mut self) {
+        self.targets_pending = false;
         let apps = self.dock_apps();
         let mut next = HashMap::new();
-        if self.prefs.minimize_into_app && !self.prefs.dock_hidden && !self.auto_hidden {
+        if self.prefs.minimize_into_app && !self.prefs.dock_hidden {
             for (name, output) in &self.outputs {
-                let vertical = self.prefs.dock_position != DockPosition::Bottom;
-                let item = self.prefs.dock_size + 12.;
-                let thickness = self.prefs.dock_size + 32.;
-                let length =
-                    ((apps.len().min(18) as f64 + 1. + u8::from(self.prefs.show_launcher) as f64)
-                        * item
-                        + 20.)
-                        .min(if vertical {
-                            output.height as f64 - 90.
-                        } else {
-                            output.width as f64 - 32.
-                        });
-                let visible = dock_visible_count(
-                    length as f32,
-                    self.prefs.dock_size as f32,
-                    self.prefs.show_launcher,
-                );
+                let metrics = self.dock_metrics(output.width, output.height);
+                let item = f64::from(metrics.item);
+                let thickness = f64::from(metrics.thickness);
+                let length = f64::from(metrics.length);
+                let visible = metrics.visible_apps;
                 for (index, app) in apps.iter().take(visible).enumerate() {
                     let offset = 10.
                         + (index as f64 + u8::from(self.prefs.show_launcher) as f64) * item
@@ -1355,7 +1394,7 @@ impl Host {
                             (output.height as f64 - length) / 2. + offset - 2.5,
                         ),
                     };
-                    if offset + self.prefs.dock_size > length {
+                    if offset + f64::from(metrics.icon_size) > length {
                         continue;
                     }
                     for window in &app.windows {
@@ -1373,8 +1412,8 @@ impl Host {
                                 output: name.clone(),
                                 x,
                                 y,
-                                width: self.prefs.dock_size,
-                                height: self.prefs.dock_size,
+                                width: f64::from(metrics.icon_size),
+                                height: f64::from(metrics.icon_size),
                                 edge: match self.prefs.dock_position {
                                     DockPosition::Bottom => DockEdge::Bottom,
                                     DockPosition::Left => DockEdge::Left,
@@ -1394,24 +1433,45 @@ impl Host {
             }
         }
         for (id, target) in &next {
-            if self.last_target.get(id) != Some(target) {
-                self.core(CoreAction::SetMinimizeTarget {
+            let registration = (target.clone(), self.prefs.reduce_motion);
+            if self.last_target.get(id) == Some(&registration) {
+                continue;
+            }
+            if self
+                .backend
+                .send(backend::Command::Action(CoreAction::SetMinimizeTarget {
                     id: *id,
                     target: Some(target.clone()),
                     reduce_motion: self.prefs.reduce_motion,
-                });
+                }))
+                .is_ok()
+            {
+                self.last_target.insert(*id, registration);
+            } else {
+                self.targets_pending = true;
             }
         }
-        for id in self.last_target.keys() {
-            if !next.contains_key(id) {
-                self.core(CoreAction::SetMinimizeTarget {
-                    id: *id,
+        let obsolete = self
+            .last_target
+            .keys()
+            .filter(|id| !next.contains_key(id))
+            .copied()
+            .collect::<Vec<_>>();
+        for id in obsolete {
+            if self
+                .backend
+                .send(backend::Command::Action(CoreAction::SetMinimizeTarget {
+                    id,
                     target: None,
                     reduce_motion: self.prefs.reduce_motion,
-                });
+                }))
+                .is_ok()
+            {
+                self.last_target.remove(&id);
+            } else {
+                self.targets_pending = true;
             }
         }
-        self.last_target = next;
     }
 }
 impl Drop for Host {
@@ -1540,12 +1600,6 @@ impl AssetSource for ShellAssets {
 
 #[cfg(test)]
 pub(crate) mod testing;
-
-/// Share the exact icon budget between rendering and minimize destinations.
-pub fn dock_visible_count(length: f32, icon_size: f32, show_launcher: bool) -> usize {
-    let fixed = 1 + usize::from(show_launcher);
-    (((length - 20.) / (icon_size + 12.)).floor().max(0.) as usize).saturating_sub(fixed)
-}
 
 fn append_recent_dock_apps(
     ids: &mut Vec<String>,
