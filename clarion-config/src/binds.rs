@@ -146,11 +146,18 @@ pub enum Action {
         write_to_disk: bool,
         show_pointer: bool,
         path: Option<String>,
+        is_preview: bool,
     },
     ToggleKeyboardShortcutsInhibit,
     MinimizeWindow,
     #[knuffel(skip)]
     MinimizeWindowById(u64),
+    #[knuffel(skip)]
+    SetReducedMotion {
+        enabled: bool,
+        platform: bool,
+        initialize_only: bool,
+    },
     #[knuffel(skip)]
     SetMinimizeTarget {
         id: u64,
@@ -467,17 +474,20 @@ impl From<clarion_ipc::Action> for Action {
                 write_to_disk,
                 show_pointer,
                 path,
+                is_preview: _,
             } => Self::ScreenshotWindow(write_to_disk, show_pointer, path),
             clarion_ipc::Action::ScreenshotWindow {
                 id: Some(id),
                 write_to_disk,
                 show_pointer,
                 path,
+                is_preview,
             } => Self::ScreenshotWindowById {
                 id,
                 write_to_disk,
                 show_pointer,
                 path,
+                is_preview,
             },
             clarion_ipc::Action::ToggleKeyboardShortcutsInhibit {} => {
                 Self::ToggleKeyboardShortcutsInhibit
@@ -497,6 +507,15 @@ impl From<clarion_ipc::Action> for Action {
             clarion_ipc::Action::MinimizeWindow { id } => match id {
                 Some(id) => Self::MinimizeWindowById(id),
                 None => Self::MinimizeWindow,
+            },
+            clarion_ipc::Action::SetReducedMotion {
+                enabled,
+                platform,
+                initialize_only,
+            } => Self::SetReducedMotion {
+                enabled,
+                platform,
+                initialize_only,
             },
             clarion_ipc::Action::SetMinimizeTarget {
                 id,

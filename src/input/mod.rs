@@ -73,6 +73,13 @@ use backend_ext::{ClarionInputBackend as InputBackend, ClarionInputDevice as _};
 
 pub use crate::gestures::{scroll_swipe_gesture, scroll_tracker, swipe_tracker};
 
+/// A compositor shortcut repeat belongs to one physical key and modifier chord.
+pub struct BindRepeat {
+    token: calloop::RegistrationToken,
+    key_code: Keycode,
+    modifiers: Modifiers,
+}
+
 pub const DOUBLE_CLICK_TIME: Duration = Duration::from_millis(400);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -290,6 +297,9 @@ impl State {
     }
 
     fn on_device_removed(&mut self, device: impl Device) {
+        if device.has_capability(DeviceCapability::Keyboard) {
+            self.stop_key_repeat();
+        }
         if device.has_capability(DeviceCapability::TabletTool) {
             let tablet_seat = self.clarion.seat.tablet_seat();
 
@@ -500,18 +510,8 @@ impl State {
         let time = Event::time_msec(&event);
         let pressed = event.state() == KeyState::Pressed;
 
-        // Stop bind key repeat on any release. This won't work 100% correctly in cases like:
-        // 1. Press Mod
-        // 2. Press Left (repeat starts)
-        // 3. Press PgDown (new repeat starts)
-        // 4. Release Left (PgDown repeat stops)
-        // But it's good enough for now.
-        // FIXME: handle this properly.
-        if !pressed {
-            if let Some(token) = self.clarion.bind_repeat_timer.take() {
-                self.clarion.event_loop.remove(token);
-            }
-        }
+        // Releasing an older held shortcut must not cancel the newer one.
+        self.update_key_repeat(event.key_code(), pressed, None);
 
         if pressed {
             self.hide_cursor_if_needed();
@@ -555,6 +555,9 @@ impl State {
                 let modified = keysym.modified_sym();
                 let raw = keysym.raw_latin_sym_or_raw_current_sym();
                 let modifiers = modifiers_from_state(*mods);
+                // XKB has now applied this event. Stop a chord when a modifier
+                // changes, including when its release is consumed by another UI.
+                this.update_key_repeat(key_code, pressed, Some(modifiers));
 
                 // After updating XKB state from accessibility-grabbed keys, return right away and
                 // don't handle them.
@@ -757,19 +760,50 @@ impl State {
 
         self.handle_bind(bind.clone());
 
-        self.start_key_repeat(bind);
+        // Session-changing actions clear intercepted keys because their
+        // releases may never arrive; do not start a fresh timer afterwards.
+        if self.clarion.suppressed_keys.contains(&event.key_code()) {
+            self.start_key_repeat(bind, event.key_code());
+        }
     }
 
-    fn start_key_repeat(&mut self, bind: Bind) {
+    fn update_key_repeat(
+        &mut self,
+        key_code: Keycode,
+        pressed: bool,
+        modifiers: Option<Modifiers>,
+    ) {
+        if self
+            .clarion
+            .bind_repeat_timer
+            .as_ref()
+            .is_some_and(|repeat| {
+                (!pressed && repeat.key_code == key_code)
+                    || modifiers.is_some_and(|modifiers| modifiers != repeat.modifiers)
+            })
+        {
+            self.stop_key_repeat();
+        }
+    }
+
+    fn stop_key_repeat(&mut self) {
+        if let Some(repeat) = self.clarion.bind_repeat_timer.take() {
+            self.clarion.event_loop.remove(repeat.token);
+        }
+    }
+
+    fn start_key_repeat(&mut self, bind: Bind, key_code: Keycode) {
         if !bind.repeat {
             return;
         }
 
         // Stop the previous key repeat if any.
-        if let Some(token) = self.clarion.bind_repeat_timer.take() {
-            self.clarion.event_loop.remove(token);
-        }
+        self.stop_key_repeat();
 
+        let keyboard = self.clarion.seat.get_keyboard().unwrap();
+        let modifiers = modifiers_from_state(keyboard.modifier_state());
+        let locked = self.clarion.is_locked();
+        let lock_epoch = self.clarion.capture_scene_epoch.stamp();
         let config = self.clarion.config.borrow();
         let config = &config.input.keyboard;
 
@@ -786,12 +820,36 @@ impl State {
             .clarion
             .event_loop
             .insert_source(repeat_timer, move |_, _, state| {
+                let keyboard = state.clarion.seat.get_keyboard().unwrap();
+                // Input focus loss or a session switch can clear the seat's
+                // pressed keys without delivering the usual key release here.
+                // A lock/unlock must never resume a pre-lock held shortcut.
+                let current = state
+                    .clarion
+                    .bind_repeat_timer
+                    .as_ref()
+                    .is_some_and(|repeat| {
+                        repeat.key_code == key_code && repeat.modifiers == modifiers
+                    })
+                    && keyboard.pressed_keys().contains(&key_code)
+                    && modifiers_from_state(keyboard.modifier_state()) == modifiers
+                    && lock_epoch.is_current()
+                    && state.clarion.is_locked() == locked
+                    && (!bind.allow_inhibiting || !state.is_inhibiting_shortcuts());
+                if !current {
+                    state.clarion.bind_repeat_timer = None;
+                    return TimeoutAction::Drop;
+                }
                 state.handle_bind(bind.clone());
                 TimeoutAction::ToDuration(repeat_duration)
             })
             .unwrap();
 
-        self.clarion.bind_repeat_timer = Some(token);
+        self.clarion.bind_repeat_timer = Some(BindRepeat {
+            token,
+            key_code,
+            modifiers,
+        });
     }
 
     fn hide_cursor_if_needed(&mut self) {
@@ -1024,11 +1082,13 @@ impl State {
                 self.clarion.stop_signal.stop()
             }
             Action::ChangeVt(vt) => {
+                self.stop_key_repeat();
                 self.backend.change_vt(vt);
                 // Changing VT may not deliver the key releases, so clear the state.
                 self.clarion.suppressed_keys.clear();
             }
             Action::Suspend => {
+                self.stop_key_repeat();
                 self.backend.suspend();
                 // Suspend may not deliver the key releases, so clear the state.
                 self.clarion.suppressed_keys.clear();
@@ -1038,6 +1098,24 @@ impl State {
             }
             Action::PowerOnMonitors => {
                 self.clarion.activate_monitors(&mut self.backend);
+            }
+            Action::SetReducedMotion {
+                enabled,
+                platform,
+                initialize_only,
+            } => {
+                let enabled = if initialize_only {
+                    self.clarion
+                        .ipc_server
+                        .as_ref()
+                        .and_then(|server| server.reduced_motion_choice())
+                        .unwrap_or(enabled)
+                } else {
+                    enabled
+                };
+                self.clarion.layout.set_reduced_motion(enabled || platform);
+                self.ipc_reduced_motion_changed(enabled);
+                self.clarion.queue_redraw_all();
             }
             Action::ToggleDebugTint => {
                 self.backend.toggle_debug_tint();
@@ -1153,6 +1231,7 @@ impl State {
                 write_to_disk,
                 show_pointer,
                 path,
+                is_preview,
             } => {
                 let mut windows = self.clarion.layout.windows();
                 let window = windows.find(|(_, m)| m.id().get() == id);
@@ -1162,23 +1241,25 @@ impl State {
                         .with_renderer_for_output(Some(output), |renderer| {
                             let res = match renderer {
                                 crate::render_helpers::renderer::AnyRenderer::Gles(gles) => {
-                                    self.clarion.screenshot_window(
+                                    self.clarion.screenshot_window_with_preview(
                                         gles,
                                         output,
                                         mapped,
                                         write_to_disk,
                                         show_pointer,
                                         path,
+                                        is_preview,
                                     )
                                 }
                                 crate::render_helpers::renderer::AnyRenderer::Native(native) => {
-                                    self.clarion.screenshot_window(
+                                    self.clarion.screenshot_window_with_preview(
                                         native,
                                         output,
                                         mapped,
                                         write_to_disk,
                                         show_pointer,
                                         path,
+                                        is_preview,
                                     )
                                 }
                             };
@@ -6438,6 +6519,114 @@ mod tests {
 
     use super::*;
     use crate::animation::Clock;
+
+    fn repeat_fixture() -> crate::tests::Fixture {
+        let mut config = Config::default();
+        config.input.keyboard.repeat_delay = 0;
+        config.hotkey_overlay.skip_at_startup = true;
+        crate::tests::Fixture::with_config(config)
+    }
+
+    fn repeat_bind() -> Bind {
+        Bind {
+            key: Key {
+                trigger: Trigger::Keysym(Keysym::F1),
+                modifiers: Modifiers::empty(),
+            },
+            action: Action::ShowHotkeyOverlay,
+            repeat: true,
+            cooldown: None,
+            allow_when_locked: false,
+            allow_inhibiting: false,
+            hotkey_overlay_title: None,
+        }
+    }
+
+    fn seat_key(state: &mut State, code: Keycode, pressed: bool) {
+        state.clarion.seat.get_keyboard().unwrap().input(
+            state,
+            code,
+            if pressed {
+                KeyState::Pressed
+            } else {
+                KeyState::Released
+            },
+            SERIAL_COUNTER.next_serial(),
+            0,
+            |_, _, _| FilterResult::Intercept(()),
+        );
+    }
+
+    #[test]
+    fn shortcut_repeat_keeps_newer_key_when_previous_key_released() {
+        let mut f = repeat_fixture();
+        let older = Keycode::from(38_u32);
+        let current = Keycode::from(56_u32);
+        let state = f.clarion_state();
+        seat_key(state, older, true);
+        state.start_key_repeat(repeat_bind(), older);
+        seat_key(state, current, true);
+        state.start_key_repeat(repeat_bind(), current);
+        seat_key(state, older, false);
+        // The pre-XKB release path and post-XKB modifier path both preserve
+        // the new owner, and its actual timer still executes the action.
+        state.update_key_repeat(older, false, None);
+        state.update_key_repeat(older, false, Some(Modifiers::empty()));
+        assert_eq!(
+            state.clarion.bind_repeat_timer.as_ref().unwrap().key_code,
+            current
+        );
+        f.state.server.dispatch();
+        assert!(f.clarion().hotkey_overlay.is_open());
+        let state = f.clarion_state();
+        seat_key(state, current, false);
+        state.update_key_repeat(current, false, None);
+        assert!(state.clarion.bind_repeat_timer.is_none());
+    }
+
+    #[test]
+    fn shortcut_repeat_stops_on_modifier_changes() {
+        let mut f = repeat_fixture();
+        let state = f.clarion_state();
+        let key = Keycode::from(38_u32);
+        let other = Keycode::from(56_u32);
+        seat_key(state, key, true);
+        state.start_key_repeat(repeat_bind(), key);
+        // An unrelated press with the same chord is harmless.
+        state.update_key_repeat(other, true, Some(Modifiers::empty()));
+        assert!(state.clarion.bind_repeat_timer.is_some());
+        state.update_key_repeat(Keycode::from(50_u32), true, Some(Modifiers::SHIFT));
+        assert!(state.clarion.bind_repeat_timer.is_none());
+        f.state.server.dispatch();
+        assert!(!f.clarion().hotkey_overlay.is_open());
+    }
+
+    #[test]
+    fn shortcut_repeat_drops_when_seat_loses_pressed_key_without_routed_release() {
+        let mut f = repeat_fixture();
+        let state = f.clarion_state();
+        let key = Keycode::from(38_u32);
+        seat_key(state, key, true);
+        state.start_key_repeat(repeat_bind(), key);
+        // Input backend focus loss may update XKB without the shortcut filter.
+        seat_key(state, key, false);
+        f.state.server.dispatch();
+        assert!(f.clarion().bind_repeat_timer.is_none());
+        assert!(!f.clarion().hotkey_overlay.is_open());
+    }
+
+    #[test]
+    fn shortcut_repeat_does_not_survive_lock_epoch_change() {
+        let mut f = repeat_fixture();
+        let state = f.clarion_state();
+        let key = Keycode::from(38_u32);
+        seat_key(state, key, true);
+        state.start_key_repeat(repeat_bind(), key);
+        state.clarion.capture_scene_epoch.invalidate();
+        f.state.server.dispatch();
+        assert!(f.clarion().bind_repeat_timer.is_none());
+        assert!(!f.clarion().hotkey_overlay.is_open());
+    }
 
     #[test]
     fn macos_desktop_shortcuts_match_only_implemented_command_chords() {

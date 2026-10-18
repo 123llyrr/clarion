@@ -67,6 +67,7 @@ class WindowPreviewService {
         'write_to_disk': true,
         'show_pointer': false,
         'path': path,
+        'is_preview': true,
       });
       if (!await completed.future || _disposed || generation != _generation) {
         return null;

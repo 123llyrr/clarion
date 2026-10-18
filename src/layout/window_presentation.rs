@@ -326,11 +326,11 @@ impl WindowPresentationState {
             return None;
         }
 
-        // FIXME: would be cool to, like, gradually resize the border from full width to 0 during
-        // fullscreening, but the rest of the code isn't quite ready for that yet. It needs to
-        // handle things like computing intermediate tile size when an animated resize starts during
-        // an animated unfullscreen resize.
-        Some(self.border_config.width)
+        // The tile and client geometries already retain independent size and
+        // velocity across interrupted resizes. Use the same continuous expanded
+        // trajectory for the visible border instead of removing its full width
+        // on the final frame.
+        Some(self.border_config.width * (1. - expanded_progress))
     }
 
     pub(crate) fn window_loc(&self, window: &impl LayoutElement) -> Point<f64, Logical> {

@@ -17,6 +17,8 @@ pub use clock::Clock;
 pub struct Animation {
     clock: Clock,
     trajectory: Trajectory,
+    reduced_motion_epoch: u64,
+    born_with_reduced_motion: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -31,8 +33,30 @@ pub enum Curve {
 impl Animation {
     /// Transfer numerical ownership to a pure controller. The platform clock
     /// and configuration adapter are consumed, never retained as a second target.
-    pub(crate) fn into_trajectory(self) -> Trajectory {
+    pub(crate) fn into_trajectory(mut self) -> Trajectory {
+        if self.should_complete_instantly() {
+            self.trajectory.disable();
+        }
         self.trajectory
+    }
+
+    fn from_trajectory(clock: Clock, trajectory: Trajectory) -> Self {
+        Self {
+            reduced_motion_epoch: clock.reduced_motion_epoch(),
+            born_with_reduced_motion: clock.reduced_motion(),
+            clock,
+            trajectory,
+        }
+    }
+
+    fn reduced_motion_completed(&self) -> bool {
+        self.clock.reduced_motion()
+            || self.born_with_reduced_motion
+            || self.reduced_motion_epoch != self.clock.reduced_motion_epoch()
+    }
+
+    fn should_complete_instantly(&self) -> bool {
+        self.clock.should_complete_instantly() || self.reduced_motion_completed()
     }
 
     pub fn new(
@@ -77,7 +101,7 @@ impl Animation {
         if config.off {
             trajectory.disable();
         }
-        Self { clock, trajectory }
+        Self::from_trajectory(clock, trajectory)
     }
 
     pub fn replace_config(&mut self, config: clarion_config::Animation) {
@@ -89,7 +113,7 @@ impl Animation {
         let active = now > self.trajectory.start_time()
             && !self
                 .trajectory
-                .is_done_at(now, self.clock.should_complete_instantly());
+                .is_done_at(now, self.should_complete_instantly());
         let start_time = if active {
             now
         } else {
@@ -170,21 +194,24 @@ impl Animation {
     /// Restart the retained configuration, preserving real-time momentum.
     pub fn restarted(&self, from: f64, to: f64, initial_velocity: f64) -> Self {
         let initial_velocity = initial_velocity / self.clock.rate().max(0.001);
-        Self {
-            trajectory: self
-                .trajectory
+        Self::from_trajectory(
+            self.clock.clone(),
+            self.trajectory
                 .restarted_at(self.clock.now(), from, to, initial_velocity),
-            clock: self.clock.clone(),
-        }
+        )
     }
 
-    /// Begin a fresh retained preset after a deferred capture becomes ready.
+    /// Begin a retained preset after a deferred capture becomes ready. Keep its
+    /// accessibility epoch: clearing reduced motion must not revive a close
+    /// which was waiting for a client transaction when the preference changed.
     pub fn restarted_fresh(&self, from: f64, to: f64) -> Self {
         Self {
             trajectory: self
                 .trajectory
                 .restarted_fresh_at(self.clock.now(), from, to),
             clock: self.clock.clone(),
+            reduced_motion_epoch: self.reduced_motion_epoch,
+            born_with_reduced_motion: self.born_with_reduced_motion,
         }
     }
 
@@ -196,17 +223,15 @@ impl Animation {
         duration_ms: u64,
         curve: Curve,
     ) -> Self {
-        Self {
-            trajectory: Trajectory::ease_at(
-                clock.now(),
-                from,
-                to,
-                initial_velocity,
-                Duration::from_millis(duration_ms),
-                curve.into_core(),
-            ),
-            clock,
-        }
+        let trajectory = Trajectory::ease_at(
+            clock.now(),
+            from,
+            to,
+            initial_velocity,
+            Duration::from_millis(duration_ms),
+            curve.into_core(),
+        );
+        Self::from_trajectory(clock, trajectory)
     }
 
     pub fn continuous_ease(
@@ -217,24 +242,20 @@ impl Animation {
         duration_ms: u64,
     ) -> Self {
         let initial_velocity = initial_velocity / clock.rate().max(0.001);
-        Self {
-            trajectory: Trajectory::continuous_ease_at(
-                clock.now(),
-                from,
-                to,
-                initial_velocity,
-                Duration::from_millis(duration_ms),
-            ),
-            clock,
-        }
+        let trajectory = Trajectory::continuous_ease_at(
+            clock.now(),
+            from,
+            to,
+            initial_velocity,
+            Duration::from_millis(duration_ms),
+        );
+        Self::from_trajectory(clock, trajectory)
     }
 
     pub fn spring(clock: Clock, spring: Spring) -> Self {
         let _span = clarion_tracy_span!("Animation::spring");
-        Self {
-            trajectory: Trajectory::spring_at(clock.now(), spring),
-            clock,
-        }
+        let trajectory = Trajectory::spring_at(clock.now(), spring);
+        Self::from_trajectory(clock, trajectory)
     }
 
     pub fn decelerate(
@@ -244,31 +265,35 @@ impl Animation {
         deceleration_rate: f64,
         threshold: f64,
     ) -> Self {
-        Self {
-            trajectory: Trajectory::decelerate_at(
-                clock.now(),
-                from,
-                initial_velocity,
-                deceleration_rate,
-                threshold,
-            ),
-            clock,
-        }
+        let trajectory = Trajectory::decelerate_at(
+            clock.now(),
+            from,
+            initial_velocity,
+            deceleration_rate,
+            threshold,
+        );
+        Self::from_trajectory(clock, trajectory)
     }
 
     pub fn is_done(&self) -> bool {
         self.trajectory
-            .is_done_at(self.clock.now(), self.clock.should_complete_instantly())
+            .is_done_at(self.clock.now(), self.should_complete_instantly())
     }
 
     pub fn is_clamped_done(&self) -> bool {
         self.trajectory
-            .is_clamped_done_at(self.clock.now(), self.clock.should_complete_instantly())
+            .is_clamped_done_at(self.clock.now(), self.should_complete_instantly())
     }
 
     pub fn value_at(&self, at: Duration) -> f64 {
+        // Configuration-off historically preserves the starting value inside
+        // one event cycle. Accessibility must already show the final pose in
+        // that cycle, including deferred animations released at this timestamp.
+        if self.reduced_motion_completed() {
+            return self.trajectory.to();
+        }
         self.trajectory
-            .value_at(at, self.clock.should_complete_instantly())
+            .value_at(at, self.should_complete_instantly())
     }
 
     pub fn value(&self) -> f64 {
@@ -278,13 +303,13 @@ impl Animation {
     /// Current velocity in units per real second, suitable for `new`/`restarted`.
     pub fn velocity(&self) -> f64 {
         self.trajectory
-            .velocity_at(self.clock.now(), self.clock.should_complete_instantly())
+            .velocity_at(self.clock.now(), self.should_complete_instantly())
             * self.clock.rate()
     }
 
     pub fn clamped_value(&self) -> f64 {
         self.trajectory
-            .clamped_value_at(self.clock.now(), self.clock.should_complete_instantly())
+            .clamped_value_at(self.clock.now(), self.should_complete_instantly())
     }
 
     pub fn to(&self) -> f64 {
@@ -619,6 +644,46 @@ mod tests {
         clock.set_unadjusted(Duration::from_secs(1));
         assert!(anim.is_done());
         assert_eq!(anim.value(), 0.);
+    }
+
+    #[test]
+    fn runtime_reduced_motion_cannot_revive_old_or_deferred_trajectories() {
+        let mut clock = Clock::with_time(Duration::ZERO);
+        let old = Animation::ease(clock.clone(), 0., 1., 0., 400, Curve::Linear);
+        clock.set_unadjusted(Duration::from_millis(60));
+        assert!(old.value() > 0. && old.value() < 1.);
+        clock.set_reduced_motion(true);
+        let during = Animation::ease(clock.clone(), 0., 1., 0., 400, Curve::Linear);
+        assert_eq!(old.value(), 1.);
+        assert_eq!(during.value(), 1.);
+        clock.set_complete_instantly(false); // configuration reload
+        assert!(clock.should_complete_instantly());
+        clock.set_reduced_motion(false);
+        for animation in [&old, &during] {
+            assert!(animation.is_done());
+            assert_eq!(animation.value(), 1.);
+            assert_eq!(animation.velocity(), 0.);
+            let deferred = animation.restarted_fresh(0., 1.);
+            assert!(deferred.is_done());
+            assert_eq!(deferred.value(), 1.);
+        }
+        // A new interaction after the preference is disabled animates normally.
+        let next = Animation::ease(clock.clone(), 0., 1., 0., 400, Curve::Linear);
+        assert!(!next.is_done());
+        assert_eq!(next.value(), 0.);
+        clock.set_unadjusted(Duration::from_millis(160));
+        assert_eq!(next.value(), 0.25);
+    }
+
+    #[test]
+    fn runtime_reduced_motion_does_not_clear_the_configuration_override() {
+        let mut clock = Clock::with_time(Duration::ZERO);
+        clock.set_complete_instantly(true);
+        clock.set_reduced_motion(true);
+        clock.set_reduced_motion(false);
+        assert!(clock.should_complete_instantly());
+        clock.set_complete_instantly(false);
+        assert!(!clock.should_complete_instantly());
     }
 
     #[test]

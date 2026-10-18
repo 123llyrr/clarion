@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use clarion_config::{Action, Config};
@@ -260,6 +261,57 @@ fn privacy_epoch_cancels_transfer(native: bool) {
     assert!(!path.exists(), "invalidated desktop snapshot was published");
 }
 
+fn window_preview_preserves_clipboard(native: bool) {
+    use smithay::wayland::selection::data_device::{
+        current_data_device_selection_userdata, set_data_device_selection,
+    };
+
+    let files = Files::new();
+    let mut f = fixture(native);
+    let client = f.add_client();
+    let window = f.client(client).create_window();
+    let surface = window.surface.clone();
+    window.commit();
+    f.double_roundtrip(client);
+    let window = f.client(client).window(&surface);
+    let buffer = window
+        .spbm
+        .create_u32_rgba_buffer(0, u32::MAX, 0, u32::MAX, &window.qh, ());
+    window.surface.attach(Some(&buffer), 0, 0);
+    window.set_size(70, 50);
+    window.ack_last_and_commit();
+    f.double_roundtrip(client);
+
+    let sentinel: Arc<[u8]> = Arc::from(&b"clipboard owned by the user"[..]);
+    let clarion = f.clarion();
+    set_data_device_selection::<State>(
+        &clarion.display_handle,
+        &clarion.seat,
+        vec!["text/plain".into()],
+        sentinel.clone(),
+    );
+    let id = clarion.layout.focus().unwrap().id().get();
+    let path = files.path("preview.png");
+    f.clarion_state().do_action(
+        Action::ScreenshotWindowById {
+            id,
+            write_to_disk: true,
+            show_pointer: false,
+            path: Some(path.to_string_lossy().into_owned()),
+            is_preview: true,
+        },
+        false,
+    );
+    let (w, h, bytes) = wait_png(&mut f, &path);
+    assert!(w > 0 && h > 0 && bytes.len() == w as usize * h as usize * 4);
+    f.dispatch();
+    let clipboard = current_data_device_selection_userdata::<State>(&f.clarion().seat).unwrap();
+    assert!(
+        Arc::ptr_eq(&clipboard, &sentinel),
+        "an internal preview replaced the user's clipboard"
+    );
+}
+
 fn color_pipeline(native: bool) {
     let mut f = fixture(native);
     let (tx, rx) = async_channel::bounded(1);
@@ -356,6 +408,17 @@ fn native_portal_creates_default_directory_and_cancels_old_scene() {
 #[test]
 fn gles_output_selection_window_png_pipeline() {
     output_selection_window_pipeline(false);
+}
+
+#[test]
+fn gles_window_preview_preserves_user_clipboard() {
+    window_preview_preserves_clipboard(false);
+}
+
+#[test]
+#[ignore = "requires a real DRM render node and Vulkan; never acquires display master"]
+fn native_window_preview_preserves_user_clipboard() {
+    window_preview_preserves_clipboard(true);
 }
 #[test]
 fn gles_old_scene_transfer_is_cancelled_and_releases_capacity() {

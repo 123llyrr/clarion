@@ -559,6 +559,14 @@ pub fn baba_is_float_offset(now: Duration, view_height: f64) -> f64 {
     amplitude * ((f64::consts::TAU * now / 3.6).sin() - 1.)
 }
 
+pub(crate) fn messages_in_chinese() -> bool {
+    ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .into_iter()
+        .filter_map(|key| std::env::var(key).ok())
+        .find(|locale| !locale.is_empty())
+        .is_some_and(|locale| locale.starts_with("zh"))
+}
+
 #[cfg(feature = "dbus")]
 pub fn show_screenshot_notification(image_path: Option<&Path>) -> anyhow::Result<()> {
     use std::collections::HashMap;
@@ -567,6 +575,25 @@ pub fn show_screenshot_notification(image_path: Option<&Path>) -> anyhow::Result
     use zbus::zvariant;
 
     let conn = zbus::blocking::Connection::session()?;
+
+    // A matching shell consumes the trusted compositor completion event and
+    // supplies local file actions. Other notification daemons keep the
+    // standard, independent fallback below.
+    if let Ok(reply) = conn.call_method(
+        Some("org.freedesktop.Notifications"),
+        "/org/freedesktop/Notifications",
+        Some("org.freedesktop.Notifications"),
+        "GetCapabilities",
+        &(),
+    ) {
+        if reply
+            .body()
+            .deserialize::<Vec<String>>()
+            .is_ok_and(|caps| caps.iter().any(|cap| cap == "x-clarion-screenshot-events"))
+        {
+            return Ok(());
+        }
+    }
 
     // Try to add the screenshot as an image if possible.
     let mut image_url = None;
@@ -597,8 +624,16 @@ pub fn show_screenshot_notification(image_path: Option<&Path>) -> anyhow::Result
             "clarion",
             0u32,
             image_url.as_ref().map(|url| url.as_str()).unwrap_or(""),
-            "Screenshot captured",
-            "You can paste the image from the clipboard.",
+            if messages_in_chinese() {
+                "截图完成"
+            } else {
+                "Screenshot captured"
+            },
+            if messages_in_chinese() {
+                "图片已复制到剪贴板，可以直接粘贴。"
+            } else {
+                "You can paste the image from the clipboard."
+            },
             actions,
             HashMap::from([
                 ("transient", zvariant::Value::Bool(true)),

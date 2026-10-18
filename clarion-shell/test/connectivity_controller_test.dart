@@ -82,6 +82,8 @@ class _System extends SystemService {
 }
 
 class _Ipc extends ClarionIpc {
+  @override
+  Future<dynamic> request(Object request) async => null;
   final connectionEvents = StreamController<bool>.broadcast(sync: true);
   final desktopEvents = StreamController<Map<String, dynamic>>.broadcast(
     sync: true,

@@ -61,6 +61,8 @@ impl Drop for CapturePermit {
 pub(crate) struct ScreenshotSaveOptions {
     pub(crate) destination: Option<(PathBuf, bool)>,
     pub(crate) publish_clipboard: bool,
+    /// Internal previews complete without changing the clipboard or alerting the user.
+    pub(crate) is_preview: bool,
     pub(crate) completion: ScreenshotCompletion,
 }
 

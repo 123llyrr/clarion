@@ -71,6 +71,8 @@ pub enum Request {
     Version,
     /// Request optional features supported by the running compositor.
     Capabilities,
+    /// Request the initialized session-wide reduced-motion preference, if any.
+    ReducedMotionState,
     /// Request information about connected outputs.
     Outputs,
     /// Request a snapshot of per-output frame timings. Does not schedule any redraws.
@@ -175,6 +177,8 @@ pub enum Response {
     Version(String),
     /// Stable feature names; clients must tolerate unknown names.
     Capabilities(Vec<String>),
+    /// Session-wide reduced-motion preference; `None` means not initialized yet.
+    ReducedMotionState(Option<bool>),
     /// Information about connected outputs.
     ///
     /// Map from output name to output info.
@@ -327,6 +331,10 @@ pub enum Action {
         /// If `None`, the screenshot is saved according to the `screenshot-path` config setting.
         #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set))]
         path: Option<String>,
+        /// Capture for a desktop preview without clipboard or user notifications.
+        #[serde(default)]
+        #[cfg_attr(feature = "clap", arg(long))]
+        is_preview: bool,
     },
     /// Enable or disable the keyboard shortcuts inhibitor (if any) for the focused surface.
     ToggleKeyboardShortcutsInhibit {},
@@ -368,6 +376,20 @@ pub enum Action {
         /// If absent, minimizes the currently focused window.
         #[cfg_attr(feature = "clap", arg(long))]
         id: Option<u64>,
+    },
+    /// Set reduced motion for all compositor animations in the current session.
+    SetReducedMotion {
+        /// Complete current motion and suppress new motion while enabled.
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set))]
+        enabled: bool,
+        /// Platform accessibility preference, independent of the saved user choice.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[cfg_attr(feature = "clap", arg(long))]
+        platform: bool,
+        /// Only seed an unset user choice; otherwise preserve it while updating the platform flag.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[cfg_attr(feature = "clap", arg(skip))]
+        initialize_only: bool,
     },
     /// Register an application icon as the destination of a window's minimize animation.
     /// Coordinates are logical pixels local to the named output.
@@ -2037,6 +2059,14 @@ pub enum Event {
         /// If `None`, the screenshot was either only copied to the clipboard, or the path couldn't
         /// be converted to a `String` (e.g. contained invalid UTF-8 bytes).
         path: Option<String>,
+        /// Whether this is an internal desktop preview rather than a user screenshot.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        is_preview: bool,
+    },
+    /// The session-wide reduced-motion preference was initialized or changed.
+    ReducedMotionChanged {
+        /// Whether existing and future compositor motion should complete immediately.
+        enabled: bool,
     },
     /// The screencasts have changed.
     CastsChanged {

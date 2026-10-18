@@ -494,6 +494,12 @@ impl<W: LayoutElement> Tile<W> {
     }
 
     pub fn advance_animations(&mut self) {
+        if self.presentation.clock.should_complete_instantly()
+            && self.presentation.wobble.borrow().is_active()
+        {
+            self.presentation.wobble.borrow_mut().cancel();
+            self.clear_wobble_render_cache();
+        }
         // Only active effects can emit scene retirement. Ordinary tiles never
         // need a resource-registry lookup to advance their numeric state.
         if self.has_effect_pose() {

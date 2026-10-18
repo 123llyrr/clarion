@@ -78,6 +78,9 @@ struct EventStreamSender {
 }
 
 impl IpcServer {
+    pub(crate) fn reduced_motion_choice(&self) -> Option<bool> {
+        self.event_stream_state.borrow().reduced_motion.enabled
+    }
     pub fn start(
         event_loop: &LoopHandle<'static, State>,
         wayland_socket_name: Option<&OsStr>,
@@ -373,9 +376,10 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
     let response = match request {
         Request::ReturnError => return Err(String::from("example compositor error")),
         Request::Version => Response::Version(version()),
-        Request::Capabilities => {
-            Response::Capabilities(vec!["desktop-menu-focus-restore".to_owned()])
-        }
+        Request::Capabilities => Response::Capabilities(vec![
+            "desktop-menu-focus-restore".to_owned(),
+            "runtime-reduced-motion".to_owned(),
+        ]),
         Request::FrameTimings => {
             // Admission precedes the owner-thread copy, so concurrent clients
             // cannot accumulate unbounded frozen rings before worker admission.
@@ -674,6 +678,9 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             let is_open = state.overview.is_open;
             Response::OverviewState(Overview { is_open })
         }
+        Request::ReducedMotionState => {
+            Response::ReducedMotionState(ctx.event_stream_state.borrow().reduced_motion.enabled)
+        }
         Request::Casts => {
             let state = ctx.event_stream_state.borrow();
             let casts = state.casts.casts.values().cloned().collect();
@@ -697,6 +704,18 @@ pub(crate) fn parse_session_layout(
 }
 
 fn validate_action(action: &Action) -> Result<(), String> {
+    if let Action::ScreenshotWindow {
+        id,
+        path,
+        write_to_disk,
+        is_preview: true,
+        ..
+    } = action
+    {
+        if id.is_none() || path.is_none() || !write_to_disk {
+            return Err("window previews require an explicit window ID and destination".into());
+        }
+    }
     match action {
         Action::RestoreSessionLayout { json } => {
             if json.len() > 4 * 1024 * 1024 {
@@ -1202,13 +1221,23 @@ impl State {
         server.send_event(event);
     }
 
-    pub fn ipc_screenshot_taken(&mut self, path: Option<String>) {
+    pub fn ipc_reduced_motion_changed(&mut self, enabled: bool) {
+        let Some(server) = &self.clarion.ipc_server else {
+            return;
+        };
+        let mut state = server.event_stream_state.borrow_mut();
+        let event = Event::ReducedMotionChanged { enabled };
+        state.apply(event.clone());
+        server.send_event(event);
+    }
+
+    pub fn ipc_screenshot_taken(&mut self, path: Option<String>, is_preview: bool) {
         let Some(server) = &self.clarion.ipc_server else {
             return;
         };
         let mut state = server.event_stream_state.borrow_mut();
 
-        let event = Event::ScreenshotCaptured { path };
+        let event = Event::ScreenshotCaptured { path, is_preview };
         state.apply(event.clone());
         server.send_event(event);
     }
@@ -1225,6 +1254,56 @@ mod lifecycle_tests {
     use smithay::reexports::wayland_server::Display;
 
     use super::*;
+
+    #[test]
+    fn reduced_motion_initialization_preserves_the_choice_and_updates_accessibility() {
+        let mut f = crate::tests::Fixture::new();
+        let handle = f.clarion().event_loop.clone();
+        f.clarion().ipc_server = Some(IpcServer::start(&handle, None).unwrap());
+        for (enabled, platform, initialize_only, choice, effective) in [
+            (true, false, true, true, true),
+            (false, false, true, true, true),
+            (false, true, false, false, true),
+            (true, false, true, false, false),
+        ] {
+            f.clarion_state().do_action(
+                clarion_config::Action::SetReducedMotion {
+                    enabled,
+                    platform,
+                    initialize_only,
+                },
+                false,
+            );
+            assert_eq!(
+                f.clarion()
+                    .ipc_server
+                    .as_ref()
+                    .unwrap()
+                    .reduced_motion_choice(),
+                Some(choice)
+            );
+            assert_eq!(f.clarion().layout.reduced_motion(), effective);
+        }
+    }
+
+    #[test]
+    fn internal_window_previews_require_an_explicit_target_and_saved_result() {
+        for (id, path, write_to_disk, accepted) in [
+            (Some(1), Some("/tmp/preview.png"), true, true),
+            (None, Some("/tmp/preview.png"), true, false),
+            (Some(1), None, true, false),
+            (Some(1), Some("/tmp/preview.png"), false, false),
+        ] {
+            let action = Action::ScreenshotWindow {
+                id,
+                path: path.map(str::to_owned),
+                write_to_disk,
+                show_pointer: false,
+                is_preview: true,
+            };
+            assert_eq!(validate_action(&action).is_ok(), accepted);
+        }
+    }
 
     fn assert_pending_clients_released(teardown: impl FnOnce(EventLoop<'static, State>, State)) {
         let mut event_loop = EventLoop::try_new().unwrap();

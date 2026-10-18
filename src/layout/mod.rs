@@ -3693,6 +3693,30 @@ impl<W: LayoutElement> Layout<W> {
         self.options = options;
     }
 
+    /// Apply the session's accessibility preference to the shared animation
+    /// clock. Configuration `animations.off` remains an independent override.
+    pub fn set_reduced_motion(&mut self, enabled: bool) {
+        if self.clock.reduced_motion() == enabled {
+            return;
+        }
+        // Drain pure viewport controllers while instant completion still
+        // applies, including when disabling the preference between frames.
+        if !enabled {
+            self.advance_animations();
+        }
+        self.clock.set_reduced_motion(enabled);
+        if enabled {
+            for workspace in self.workspaces_mut() {
+                workspace.stop_canvas_pan();
+            }
+            self.advance_animations();
+        }
+    }
+
+    pub fn reduced_motion(&self) -> bool {
+        self.clock.reduced_motion()
+    }
+
     /// Toggle interactive window wobble for the current compositor session.
     ///
     /// Reloading the configuration replaces this transient value with the configured one.

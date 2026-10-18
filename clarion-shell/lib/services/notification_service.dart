@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import 'dart:async';
+import 'dart:io';
 import 'package:dbus/dbus.dart';
 import '../models.dart';
 
@@ -19,10 +20,13 @@ class NotificationService extends DBusObject {
   final int historyLimit;
   final _changes = StreamController<void>.broadcast();
   final _history = <int, ShellNotification>{};
+  final _unread = <int>{};
+  bool _historyVisible = false;
   final _active = <int>{};
   final _senders = <int, String?>{};
   final _expiry = <int, Timer>{};
   final _invoking = <ShellNotification>{};
+  final _localActions = <int, Map<String, Future<void> Function()>>{};
   List<ShellNotification>? _snapshot;
   Timer? _changeTimer;
   Future<bool>? _startWork;
@@ -33,6 +37,57 @@ class NotificationService extends DBusObject {
   List<ShellNotification> get notifications =>
       _snapshot ??= List.unmodifiable(_history.values.toList().reversed);
   Stream<void> get changes => _changes.stream;
+  int get unreadCount => _unread.length;
+
+  /// Reading history does not dismiss live notifications or their actions.
+  void markRead() {
+    if (_disposed || _unread.isEmpty) return;
+    _unread.clear();
+    _changed();
+  }
+
+  void setHistoryVisible(bool visible) {
+    if (_disposed) return;
+    _historyVisible = visible;
+    if (visible) markRead();
+  }
+
+  /// Only the compositor's trusted completion event creates these callbacks.
+  /// D-Bus senders cannot supply a command, file action, or local callback.
+  void showScreenshot(
+    String? path, {
+    required Future<void> Function(String) openLocation,
+  }) {
+    if (_disposed) return;
+    final file = path != null && File(path).isAbsolute ? File(path) : null;
+    final id = _allocateId();
+    final actions = <String, Future<void> Function()>{};
+    if (file != null) {
+      actions['default'] = () => openLocation(file.path);
+      actions['show-folder'] = () => openLocation(file.parent.path);
+    }
+    final item = ShellNotification(
+      id: id,
+      appName: '截图',
+      summary: file == null ? '截图已复制' : '截图已保存',
+      body: file == null ? '已复制到剪贴板' : '已保存到 ${file.path}',
+      timestamp: DateTime.now(),
+      actions: file == null
+          ? const []
+          : const [
+              NotificationAction('default', '打开图片'),
+              NotificationAction('show-folder', '打开所在文件夹'),
+            ],
+    );
+    _history[id] = item;
+    _localActions[id] = actions;
+    _active.add(id);
+    if (!_historyVisible) _unread.add(id);
+    while (_history.length > historyLimit) {
+      _background(_close(_history.values.first, 4, removeHistory: true));
+    }
+    _changed();
+  }
 
   Future<bool> start() {
     if (_disposed) return Future.value(false);
@@ -124,7 +179,12 @@ class NotificationService extends DBusObject {
           return DBusMethodErrorResponse.invalidArgs();
         }
         return DBusMethodSuccessResponse([
-          DBusArray.string(['body', 'actions', 'persistence']),
+          DBusArray.string([
+            'body',
+            'actions',
+            'persistence',
+            'x-clarion-screenshot-events',
+          ]),
         ]);
       case 'GetServerInformation':
         if (call.signature != DBusSignature('')) {
@@ -144,7 +204,10 @@ class NotificationService extends DBusObject {
         }
         final v = call.values;
         final replacement = v[1].asUint32();
-        final id = replacement != 0 && _active.contains(replacement)
+        final id =
+            replacement != 0 &&
+                _active.contains(replacement) &&
+                !_localActions.containsKey(replacement)
             ? replacement
             : _allocateId();
         final actionValues = v[5].asStringArray().take(32).toList();
@@ -193,6 +256,11 @@ class NotificationService extends DBusObject {
               hints['transient']!.asBoolean(),
         );
         _history[id] = item;
+        if (_historyVisible) {
+          _unread.remove(id);
+        } else {
+          _unread.add(id);
+        }
         _active.add(id);
         _senders[id] = call.sender;
         while (_history.length > historyLimit) {
@@ -219,7 +287,9 @@ class NotificationService extends DBusObject {
         }
         final id = call.values.first.asUint32();
         final item = _history[id];
-        if (item == null || !_active.contains(id)) {
+        if (item == null ||
+            !_active.contains(id) ||
+            _localActions.containsKey(id)) {
           return DBusMethodErrorResponse.invalidArgs();
         }
         await _close(item, 3, removeHistory: true);
@@ -259,10 +329,12 @@ class NotificationService extends DBusObject {
     _expiry.remove(id)?.cancel();
     final wasActive = _active.remove(id);
     final sender = _senders.remove(id);
+    final local = _localActions.remove(id) != null;
     // Invalidate before awaiting I/O: a replacement during signal delivery must
     // never have its timer, actions or history changed by the previous item.
     if (removeHistory || item.transient) {
       _history.remove(id);
+      _unread.remove(id);
     } else {
       _history[id] = ShellNotification(
         id: item.id,
@@ -277,7 +349,7 @@ class NotificationService extends DBusObject {
       );
     }
     _changed();
-    if (wasActive) {
+    if (wasActive && !local) {
       await _signal(sender, 'NotificationClosed', [
         DBusUint32(id),
         DBusUint32(reason),
@@ -310,10 +382,17 @@ class NotificationService extends DBusObject {
     }
     _invoking.add(item);
     try {
-      await _signal(_senders[id], 'ActionInvoked', [
-        DBusUint32(id),
-        DBusString(key),
-      ]);
+      final local = _localActions[id];
+      if (local != null) {
+        final action = local[key];
+        if (action == null) return false;
+        await action();
+      } else {
+        await _signal(_senders[id], 'ActionInvoked', [
+          DBusUint32(id),
+          DBusString(key),
+        ]);
+      }
       if (_disposed) return false;
       if (!item.resident) {
         await _close(item, 2, removeHistory: true);
@@ -375,6 +454,8 @@ class NotificationService extends DBusObject {
       timer.cancel();
     }
     _expiry.clear();
+    _unread.clear();
+    _localActions.clear();
     unawaited(_changes.close());
     final bus = _bus;
     if (bus != null) unawaited(bus.close());

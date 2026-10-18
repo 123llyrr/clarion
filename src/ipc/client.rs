@@ -578,14 +578,26 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
                         };
                         println!("Config loaded {status}");
                     }
-                    Event::ScreenshotCaptured { path } => {
+                    Event::ScreenshotCaptured { path, is_preview } => {
                         let mut parts = vec![];
-                        parts.push("copied to clipboard".to_string());
+                        if !is_preview {
+                            parts.push("copied to clipboard".to_string());
+                        }
                         if let Some(path) = &path {
                             parts.push(format!("saved to {path}"));
                         }
                         let description = parts.join(" and ");
-                        println!("Screenshot captured: {description}");
+                        if is_preview {
+                            println!("Window preview captured: {description}");
+                        } else {
+                            println!("Screenshot captured: {description}");
+                        }
+                    }
+                    Event::ReducedMotionChanged { enabled } => {
+                        println!(
+                            "Reduced motion: {}",
+                            if enabled { "enabled" } else { "disabled" }
+                        );
                     }
                     Event::CastsChanged { casts } => {
                         println!("Casts changed: {casts:?}");

@@ -327,7 +327,7 @@ class _SystemBar extends StatelessWidget {
       muted: controller.muted,
       battery: controller.batteryFraction,
       charging: controller.charging,
-      notifications: controller.notifications.length,
+      notifications: controller.unreadNotificationCount,
       doNotDisturb: controller.doNotDisturb,
       trayItems: controller.trayItems,
       appMenuAvailable: controller.materialAppMenuAvailable,
@@ -506,8 +506,8 @@ class _SystemBar extends StatelessWidget {
                 icon: Badge(
                   isLabelVisible:
                       !controller.doNotDisturb &&
-                      controller.notifications.isNotEmpty,
-                  label: Text('${controller.notifications.length}'),
+                      controller.unreadNotificationCount > 0,
+                  label: Text('${controller.unreadNotificationCount}'),
                   child: Icon(
                     controller.doNotDisturb
                         ? Icons.notifications_off_outlined

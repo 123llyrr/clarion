@@ -6,6 +6,7 @@ use clarion_config::{PresetSize, RelativeTo};
 use clarion_core::floating::{Direction, FloatingPolicy, Placement, PlacementChange};
 use clarion_core::layout::LiveLayoutPolicy;
 use clarion_ipc::{PositionChange, SizeChange, WindowLayout};
+use smithay::backend::renderer::element::Id;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size};
 
 use super::scrolling::ColumnWidth;
@@ -35,6 +36,8 @@ pub struct FloatingSpace<W: LayoutElement> {
     scene_resources: SceneResourceAllocator,
     /// Tiles in top-to-bottom order.
     tiles: Vec<Tile<W>>,
+    /// Includes fading snapshots, so destroying a background window cannot raise it.
+    stacking: FloatingStack,
     /// Sole numeric camera owner; the adapter only converts coordinates/time.
     canvas: Option<clarion_core::canvas::CanvasPan>,
 
@@ -65,6 +68,64 @@ clarion_render_elements! {
         Tile = TileRenderElement<R>,
         ClosingWindow = ClosingWindowRenderElement,
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum FloatingStackEntry {
+    Live(u64),
+    Closing(Id),
+}
+
+#[derive(Debug, Default)]
+struct FloatingStack {
+    entries: Vec<FloatingStackEntry>,
+}
+
+impl FloatingStack {
+    fn place_live(&mut self, id: u64, next_live: Option<u64>, top: bool) {
+        self.remove_live(id);
+        let index = if top {
+            0
+        } else {
+            next_live
+                .and_then(|next| {
+                    self.entries
+                        .iter()
+                        .position(|entry| *entry == FloatingStackEntry::Live(next))
+                })
+                .unwrap_or(self.entries.len())
+        };
+        self.entries.insert(index, FloatingStackEntry::Live(id));
+    }
+
+    fn remove_live(&mut self, id: u64) {
+        self.entries
+            .retain(|entry| *entry != FloatingStackEntry::Live(id));
+    }
+
+    fn close(&mut self, source: u64, snapshot: Id) {
+        let index = self
+            .entries
+            .iter()
+            .position(|entry| *entry == FloatingStackEntry::Live(source))
+            .unwrap_or(0);
+        self.entries
+            .insert(index, FloatingStackEntry::Closing(snapshot));
+    }
+
+    fn retain_closing(&mut self, closing: &[ClosingWindow]) {
+        self.entries.retain(|entry| match entry {
+            FloatingStackEntry::Live(_) => true,
+            FloatingStackEntry::Closing(id) => {
+                closing.iter().any(|window| window.stable_id() == id)
+            }
+        });
+    }
+}
+
+enum FloatingRenderItem<'a, W: LayoutElement> {
+    Tile(&'a Tile<W>, Point<f64, Logical>),
+    Closing(&'a ClosingWindow),
 }
 
 /// This bridge projects numeric placement into the platform's logical types.
@@ -124,6 +185,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
         Self {
             scene_resources,
             tiles: Vec::new(),
+            stacking: FloatingStack::default(),
             canvas: None,
             policy: FloatingPolicy::new(),
             closing_windows: Vec::new(),
@@ -161,7 +223,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
             let applied = pan.pan(
                 [delta.x, delta.y],
                 self.clock.now(),
-                kinetic && !self.options.animations.off,
+                kinetic && !self.options.animations.off && !self.clock.should_complete_instantly(),
             );
             self.translate_canvas((applied[0], applied[1]).into());
         }
@@ -229,6 +291,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
             closing.advance_animations();
             closing.are_animations_ongoing()
         });
+        self.stacking.retain_closing(&self.closing_windows);
         delta != [0.; 2]
     }
 
@@ -490,6 +553,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
         ];
         self.policy.restore_presets(core_id, presets);
         self.tiles.insert(idx, tile);
+        self.place_stack_tile(idx);
 
         self.bring_up_descendants_of(idx);
     }
@@ -525,6 +589,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
         for change in self.policy.raise_descendants(id) {
             let tile = self.tiles.remove(change.from);
             self.tiles.insert(change.to, tile);
+            self.place_stack_tile(change.to);
         }
     }
 
@@ -537,6 +602,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
         let id = self.tiles[idx].window().core_id();
         let (index, member) = self.policy.remove(id).unwrap();
         let mut tile = self.tiles.remove(index);
+        self.stacking.remove_live(id);
         tile.floating_preset_width_idx = member.presets[0];
         tile.floating_preset_height_idx = member.presets[1];
         if let Some(size) = tile.window().expected_size() {
@@ -584,6 +650,8 @@ impl<W: LayoutElement> FloatingSpace<W> {
             self.scene_resources.closing.clone(),
         ) {
             Ok(closing) => {
+                self.stacking
+                    .close(tile.window().core_id(), closing.stable_id().clone());
                 self.closing_windows.push(closing);
             }
             Err(err) => {
@@ -631,6 +699,13 @@ impl<W: LayoutElement> FloatingSpace<W> {
 
         match closing_res {
             Ok(closing) => {
+                let source = self
+                    .tiles()
+                    .find(|tile| tile.window().id() == id)
+                    .unwrap()
+                    .window()
+                    .core_id();
+                self.stacking.close(source, closing.stable_id().clone());
                 self.closing_windows.push(closing);
             }
             Err(err) => {
@@ -676,6 +751,13 @@ impl<W: LayoutElement> FloatingSpace<W> {
 
         match closing_res {
             Ok(closing) => {
+                let source = self
+                    .tiles()
+                    .find(|tile| tile.window().id() == id)
+                    .unwrap()
+                    .window()
+                    .core_id();
+                self.stacking.close(source, closing.stable_id().clone());
                 self.closing_windows.push(closing);
             }
             Err(err) => {
@@ -716,6 +798,35 @@ impl<W: LayoutElement> FloatingSpace<W> {
         let change = self.policy.raise(id, to_idx).unwrap();
         let tile = self.tiles.remove(change.from);
         self.tiles.insert(change.to, tile);
+        self.place_stack_tile(change.to);
+    }
+
+    fn place_stack_tile(&mut self, index: usize) {
+        let id = self.tiles[index].window().core_id();
+        let next = self
+            .tiles
+            .get(index + 1)
+            .map(|tile| tile.window().core_id());
+        self.stacking.place_live(id, next, index == 0);
+    }
+
+    fn stacked_items(&self) -> impl Iterator<Item = FloatingRenderItem<'_, W>> {
+        let mut tiles = self.tiles_with_render_positions();
+        self.stacking
+            .entries
+            .iter()
+            .filter_map(move |entry| match entry {
+                FloatingStackEntry::Live(id) => {
+                    let (tile, position) = tiles.next()?;
+                    debug_assert_eq!(tile.window().core_id(), *id);
+                    Some(FloatingRenderItem::Tile(tile, position))
+                }
+                FloatingStackEntry::Closing(id) => self
+                    .closing_windows
+                    .iter()
+                    .find(|closing| closing.stable_id() == id)
+                    .map(FloatingRenderItem::Closing),
+            })
     }
 
     fn sizing_input(&self, index: usize) -> clarion_core::floating::SizingInput {
@@ -1004,38 +1115,41 @@ impl<W: LayoutElement> FloatingSpace<W> {
     ) {
         use crate::layout::scene_source::{ClosingRenderSource, TileRenderSource};
         use crate::scene::workspace_composition::{Channel, Item, OrderedItem, TileSpace};
-        if normal_visible {
-            for closing in self.closing_windows.iter().rev() {
-                items.push(OrderedItem {
-                    channel: Channel::FloatingNormal,
-                    item: Item::Closing {
-                        source: ClosingRenderSource::new(closing),
-                        view: Rectangle::from_size(self.view_size),
-                        scale: Scale::from(self.scale),
-                        space: TileSpace::Floating,
-                    },
-                });
-            }
-        }
         let active = self.active_window_id();
-        for (tile, position) in self.tiles_with_render_positions() {
-            let moving = tile.is_moving_between_workspaces();
-            if !moving && !normal_visible {
-                continue;
+        for item in self.stacked_items() {
+            match item {
+                FloatingRenderItem::Closing(closing) if normal_visible => {
+                    items.push(OrderedItem {
+                        channel: Channel::FloatingNormal,
+                        item: Item::Closing {
+                            source: ClosingRenderSource::new(closing),
+                            view: Rectangle::from_size(self.view_size),
+                            scale: Scale::from(self.scale),
+                            space: TileSpace::Floating,
+                        },
+                    });
+                }
+                FloatingRenderItem::Closing(_) => (),
+                FloatingRenderItem::Tile(tile, position) => {
+                    let moving = tile.is_moving_between_workspaces();
+                    if !moving && !normal_visible {
+                        continue;
+                    }
+                    items.push(OrderedItem {
+                        channel: if moving {
+                            Channel::FloatingMoving
+                        } else {
+                            Channel::FloatingNormal
+                        },
+                        item: Item::Tile {
+                            source: TileRenderSource::new(tile),
+                            position,
+                            focused: focus && Some(tile.window().id()) == active,
+                            space: TileSpace::Floating,
+                        },
+                    });
+                }
             }
-            items.push(OrderedItem {
-                channel: if moving {
-                    Channel::FloatingMoving
-                } else {
-                    Channel::FloatingNormal
-                },
-                item: Item::Tile {
-                    source: TileRenderSource::new(tile),
-                    position,
-                    focused: focus && Some(tile.window().id()) == active,
-                    space: TileSpace::Floating,
-                },
-            });
         }
     }
 
@@ -1050,32 +1164,27 @@ impl<W: LayoutElement> FloatingSpace<W> {
     ) {
         let scale = Scale::from(self.scale);
 
-        // Draw the closing windows on top of the other windows.
-        //
-        // FIXME: I guess this should rather preserve the stacking order when the window is closed.
-        if layer.is_normal() {
-            for closing in self.closing_windows.iter().rev() {
-                for elem in closing.render(ctx.r(), view_rect, scale) {
-                    push(elem.into());
+        let active = self.active_window_id().cloned();
+        for item in self.stacked_items() {
+            match item {
+                FloatingRenderItem::Closing(closing) if layer.is_normal() => {
+                    for elem in closing.render(ctx.r(), view_rect, scale) {
+                        push(elem.into());
+                    }
+                }
+                FloatingRenderItem::Closing(_) => (),
+                FloatingRenderItem::Tile(tile, tile_pos) => {
+                    if layer.is_normal() == tile.is_moving_between_workspaces() {
+                        continue;
+                    }
+                    let focus_ring = focus_ring && Some(tile.window().id()) == active.as_ref();
+                    let xray_pos = xray_pos.offset(tile_pos);
+                    tile.scene()
+                        .render(ctx.r(), tile_pos, xray_pos, focus_ring, &mut |elem| {
+                            push(elem.into())
+                        });
                 }
             }
-        }
-
-        let active = self.active_window_id().cloned();
-        for (tile, tile_pos) in self.tiles_with_render_positions() {
-            // Skip tiles belonging to a different render layer.
-            if layer.is_normal() == tile.is_moving_between_workspaces() {
-                continue;
-            }
-
-            // For the active tile, draw the focus ring.
-            let focus_ring = focus_ring && Some(tile.window().id()) == active.as_ref();
-
-            let xray_pos = xray_pos.offset(tile_pos);
-            tile.scene()
-                .render(ctx.r(), tile_pos, xray_pos, focus_ring, &mut |elem| {
-                    push(elem.into())
-                });
         }
     }
 
@@ -1354,6 +1463,20 @@ impl<W: LayoutElement> FloatingSpace<W> {
             assert!(self.tiles.is_empty());
         }
 
+        assert_eq!(
+            self.stacking
+                .entries
+                .iter()
+                .filter_map(|entry| match entry {
+                    FloatingStackEntry::Live(id) => Some(*id),
+                    FloatingStackEntry::Closing(_) => None,
+                })
+                .collect::<Vec<_>>(),
+            self.tiles
+                .iter()
+                .map(|tile| tile.window().core_id())
+                .collect::<Vec<_>>()
+        );
         assert!(self.policy.verify_invariants());
         assert_eq!(
             self.policy
@@ -1388,5 +1511,92 @@ fn core_preset(preset: PresetSize) -> clarion_core::floating::Preset {
     match preset {
         PresetSize::Fixed(value) => clarion_core::floating::Preset::Fixed(value),
         PresetSize::Proportion(value) => clarion_core::floating::Preset::Proportion(value),
+    }
+}
+
+#[cfg(test)]
+mod stacking_tests {
+    use super::*;
+
+    fn stack() -> FloatingStack {
+        let mut stack = FloatingStack::default();
+        stack.place_live(1, None, true);
+        stack.place_live(2, Some(1), true);
+        stack.place_live(3, Some(2), true);
+        stack
+    }
+
+    #[test]
+    fn background_close_retains_its_slot_between_surviving_windows() {
+        let mut stack = stack();
+        let closing = Id::new();
+        stack.close(2, closing.clone());
+        stack.remove_live(2);
+        assert_eq!(
+            stack.entries,
+            vec![
+                FloatingStackEntry::Live(3),
+                FloatingStackEntry::Closing(closing),
+                FloatingStackEntry::Live(1),
+            ]
+        );
+    }
+
+    #[test]
+    fn consecutive_closes_keep_original_order_and_new_windows_open_above_them() {
+        let mut stack = stack();
+        let bottom = Id::new();
+        let top = Id::new();
+        stack.close(1, bottom.clone());
+        stack.remove_live(1);
+        stack.close(3, top.clone());
+        stack.remove_live(3);
+        stack.place_live(4, Some(2), true);
+        assert_eq!(
+            stack.entries,
+            vec![
+                FloatingStackEntry::Live(4),
+                FloatingStackEntry::Closing(top),
+                FloatingStackEntry::Live(2),
+                FloatingStackEntry::Closing(bottom),
+            ]
+        );
+    }
+
+    #[test]
+    fn activating_a_survivor_raises_it_above_a_closing_snapshot() {
+        let mut stack = stack();
+        let closing = Id::new();
+        stack.close(2, closing.clone());
+        stack.remove_live(2);
+        stack.place_live(1, Some(3), true);
+        assert_eq!(
+            stack.entries,
+            vec![
+                FloatingStackEntry::Live(1),
+                FloatingStackEntry::Live(3),
+                FloatingStackEntry::Closing(closing),
+            ]
+        );
+    }
+
+    #[test]
+    fn closing_a_detached_drag_remains_above_the_workspace() {
+        let mut stack = stack();
+        let closing = Id::new();
+        stack.close(9, closing.clone());
+        assert_eq!(
+            stack.entries.first(),
+            Some(&FloatingStackEntry::Closing(closing))
+        );
+        stack.retain_closing(&[]);
+        assert_eq!(
+            stack.entries,
+            vec![
+                FloatingStackEntry::Live(3),
+                FloatingStackEntry::Live(2),
+                FloatingStackEntry::Live(1),
+            ]
+        );
     }
 }
