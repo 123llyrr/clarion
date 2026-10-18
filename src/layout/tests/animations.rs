@@ -631,6 +631,221 @@ fn dwindle_tile_transitions_remain_active_while_idle() {
 }
 
 #[test]
+fn dwindle_column_insertion_preserves_existing_window_positions() {
+    for insertion_index in 0..=2 {
+        for minimum_width in [0, 1600] {
+            let mut options = make_options();
+            options.layout.auto_stack_new_windows = true;
+            options.layout.max_windows_per_column = 8;
+            options.layout.default_column_display = clarion_ipc::ColumnDisplay::Dwindle;
+            let mut layout = check_ops_with_options(
+                options,
+                [
+                    Op::AddOutput(1),
+                    Op::AddWindow {
+                        params: TestWindowParams::new(1),
+                    },
+                    Op::AddWindow {
+                        params: TestWindowParams::new(2),
+                    },
+                    Op::Communicate(1),
+                    Op::Communicate(2),
+                    Op::CompleteAnimations,
+                ],
+            );
+            let positions = |layout: &mut Layout<TestWindow>| {
+                let mut positions = layout
+                    .active_workspace_mut()
+                    .unwrap()
+                    .tiles_with_render_positions_mut(false)
+                    .map(|(tile, position)| (*tile.window().id(), position))
+                    .collect::<Vec<_>>();
+                positions.sort_by_key(|(id, _)| *id);
+                positions
+            };
+            let before = positions(&mut layout);
+            let window = TestWindow::new(TestWindowParams {
+                min_max_size: ((minimum_width, 0).into(), (0, 0).into()),
+                ..TestWindowParams::new(3)
+            });
+            let tile = Tile::new(
+                window,
+                (1280., 720.).into(),
+                1.,
+                layout.clock.clone(),
+                layout.options.clone(),
+                layout.scene_resources.windows.allocate(),
+            );
+            layout.active_workspace_mut().unwrap().add_tile_to_column(
+                0,
+                Some(insertion_index),
+                tile,
+                false,
+            );
+            let after = positions(&mut layout);
+            for (id, position) in before {
+                assert_eq!(
+                    after.iter().find(|(next_id, _)| *next_id == id).unwrap().1,
+                    position,
+                    "insertion={insertion_index}, minimum_width={minimum_width}, window={id}"
+                );
+            }
+            let (new_tile, _) = layout
+                .active_workspace_mut()
+                .unwrap()
+                .tiles_with_render_positions_mut(false)
+                .find(|(tile, _)| *tile.window().id() == 3)
+                .unwrap();
+            assert_eq!(new_tile.render_offset(), (0., 0.).into());
+            layout.verify_invariants();
+        }
+    }
+}
+
+#[test]
+fn new_column_camera_uses_layout_motion_but_focus_uses_navigation_motion() {
+    let mut samples = Vec::new();
+    for navigation_duration in [50, 10_000] {
+        let mut options = make_options();
+        options.layout.default_column_width = Some(clarion_config::PresetSize::Proportion(0.75));
+        options.animations.horizontal_view_movement.0.kind = Kind::Easing(EasingParams {
+            duration_ms: navigation_duration,
+            curve: Curve::Linear,
+        });
+        let params = |id| TestWindowParams {
+            bbox: Rectangle::from_size((960, 720).into()),
+            ..TestWindowParams::new(id)
+        };
+        let mut layout = check_ops_with_options(
+            options,
+            [
+                Op::AddOutput(1),
+                Op::AddWindow { params: params(1) },
+                Op::Communicate(1),
+                Op::CompleteAnimations,
+            ],
+        );
+        let before = layout.active_workspace().unwrap().scrolling().view_pos();
+        Op::AddWindow { params: params(2) }.apply(&mut layout);
+        let scrolling = layout.active_workspace().unwrap().scrolling();
+        assert_eq!(scrolling.view_pos(), before);
+        let target = scrolling.target_view_pos();
+        assert!((target - before).abs() > 100.);
+        Op::AdvanceAnimations { msec_delta: 100 }.apply(&mut layout);
+        let inserted = layout.active_workspace().unwrap().scrolling().view_pos();
+        assert!((inserted - (before + (target - before) * 0.1)).abs() < 1e-6);
+
+        Op::CompleteAnimations.apply(&mut layout);
+        Op::FocusColumnLeft.apply(&mut layout);
+        Op::AdvanceAnimations { msec_delta: 100 }.apply(&mut layout);
+        let focused = layout.active_workspace().unwrap().scrolling().view_pos();
+        samples.push((inserted, focused));
+    }
+    assert!((samples[0].0 - samples[1].0).abs() < 1e-6);
+    assert!((samples[0].1 - samples[1].1).abs() > 100.);
+}
+
+#[test]
+fn newly_expanded_windows_keep_their_initial_size_in_a_separate_column() {
+    for mode in [SizingMode::Fullscreen, SizingMode::Maximized] {
+        let mut layout = check_ops([
+            Op::AddOutput(1),
+            Op::AddWindow {
+                params: TestWindowParams::new(1),
+            },
+            Op::Communicate(1),
+            Op::CompleteAnimations,
+        ]);
+        let previous_request = layout.focus().unwrap().requested_size();
+        let initial_size = match mode {
+            SizingMode::Fullscreen => layout.active_workspace().unwrap().view_size(),
+            SizingMode::Maximized => layout.active_workspace().unwrap().working_area().size,
+            SizingMode::Normal => unreachable!(),
+        }
+        .to_i32_round();
+        let mut window = TestWindow::new(TestWindowParams {
+            bbox: Rectangle::from_size(initial_size),
+            ..TestWindowParams::new(2)
+        });
+        window.request_size(initial_size, mode, false, None);
+        window.communicate();
+        layout.add_window(
+            window.clone(),
+            AddWindowTarget::Auto,
+            None,
+            None,
+            false,
+            false,
+            ActivateWindow::Yes,
+        );
+        assert_eq!(window.pending_sizing_mode(), mode);
+        assert_eq!(window.requested_size(), Some(initial_size));
+        assert_eq!(
+            layout
+                .active_workspace()
+                .unwrap()
+                .scrolling()
+                .columns()
+                .count(),
+            2
+        );
+        assert_eq!(
+            layout
+                .windows()
+                .find(|(_, w)| *w.id() == 1)
+                .unwrap()
+                .1
+                .requested_size(),
+            previous_request
+        );
+        Op::Communicate(2).apply(&mut layout);
+        assert_eq!(window.sizing_mode(), mode);
+        assert_eq!(window.size(), initial_size);
+        layout.verify_invariants();
+    }
+}
+
+#[test]
+fn dwindle_late_buffer_height_change_does_not_move_other_panes_again() {
+    let mut options = Options::default();
+    options.layout.gaps = 0.;
+    options.layout.border.off = true;
+    options.layout.default_column_width = Some(clarion_config::PresetSize::Proportion(0.75));
+    options.layout.default_column_display = clarion_ipc::ColumnDisplay::Dwindle;
+    let mut layout = check_ops_with_options(
+        options,
+        [
+            Op::AddOutput(1),
+            Op::AddWindow {
+                params: TestWindowParams {
+                    bbox: Rectangle::from_size((960, 720).into()),
+                    ..TestWindowParams::new(1)
+                },
+            },
+            Op::Communicate(1),
+            Op::CompleteAnimations,
+            Op::AddWindow {
+                params: TestWindowParams::new(2),
+            },
+            Op::Communicate(1),
+            Op::Communicate(2),
+            Op::CompleteAnimations,
+            Op::AddWindow {
+                params: TestWindowParams::new(3),
+            },
+            Op::AdvanceAnimations { msec_delta: 60 },
+        ],
+    );
+    let (_, second) = layout.windows().find(|(_, w)| *w.id() == 2).unwrap();
+    assert_eq!(second.size().h, 720);
+    assert_eq!(second.requested_size().unwrap().h, 360);
+    let before = window_y(&mut layout, 3);
+    Op::Communicate(2).apply(&mut layout);
+    assert_eq!(window_y(&mut layout, 3), before);
+    layout.verify_invariants();
+}
+
+#[test]
 fn height_resize_animates_next_y() {
     let mut layout = set_up_two_in_column();
 

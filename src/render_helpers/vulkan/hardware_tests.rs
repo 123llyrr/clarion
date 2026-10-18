@@ -3829,12 +3829,206 @@ mod shm_protocol {
                 }
             }
         }
+        // A compact additional matrix exercises the goal/current live-surface
+        // scale path without multiplying the complete 192-case identity matrix.
+        // The XRGB child supplies genuine opaque regions; alpha 0.7 above would
+        // make every opaque-region assertion vacuous.
+        let mut scaled_cases = 0;
+        let mut visible_damage_pixels_checked = 0;
+        let mut opaque_pixels_checked = 0;
+        for buffer_transform in [
+            ClientTransform::Normal,
+            ClientTransform::_90,
+            ClientTransform::Flipped,
+            ClientTransform::Flipped90,
+        ] {
+            client_surface.set_buffer_transform(buffer_transform);
+            client_surface.commit();
+            connection.flush().unwrap();
+            display.dispatch_clients(&mut state).unwrap();
+            for scale in [1.5, 2.] {
+                for (sx, sy) in [(1., 1.), (0.75, 1.25), (1.25, 0.9)] {
+                    let origin =
+                        smithay::utils::Point::<i32, smithay::utils::Physical>::from((5, 3));
+                    let surface_scale = smithay::utils::Scale::from((sx, sy));
+                    let location = origin.to_f64().to_logical(scale);
+                    let geometry = Rectangle::new(
+                        location + smithay::utils::Point::from((sx, 0.5 * sy)),
+                        (6. * sx, 3. * sy).into(),
+                    );
+                    let clip: Rectangle<i32, smithay::utils::Physical> =
+                        geometry.to_physical_precise_round(scale);
+                    let radius = clarion_config::CornerRadius {
+                        top_left: 1.,
+                        top_right: 1.5,
+                        bottom_right: 0.5,
+                        bottom_left: 1.,
+                    };
+                    for transform in [Transform::Normal, Transform::Flipped90] {
+                        let native_elements: Vec<WaylandSurfaceRenderElement<NativeRenderer>> =
+                            render_elements_from_surface_tree(
+                                &mut renderer,
+                                &surface,
+                                origin,
+                                scale,
+                                1.,
+                                Kind::Unspecified,
+                            );
+                        let expected_geometries: Vec<Rectangle<i32, smithay::utils::Physical>> =
+                            native_elements
+                                .iter()
+                                .map(|element| {
+                                    let original = element.geometry(scale.into());
+                                    // The pivot is a physical scene position, not
+                                    // a source-buffer coordinate or logical pixel.
+                                    Rectangle::new(
+                                        (
+                                            f64::from(origin.x)
+                                                + f64::from(original.loc.x - origin.x) * sx,
+                                            f64::from(origin.y)
+                                                + f64::from(original.loc.y - origin.y) * sy,
+                                        )
+                                            .into(),
+                                        (
+                                            f64::from(original.size.w) * sx,
+                                            f64::from(original.size.h) * sy,
+                                        )
+                                            .into(),
+                                    )
+                                    .to_i32_round()
+                                })
+                                .collect();
+                        let clipped: Vec<_> = native_elements
+                            .into_iter()
+                            .map(|element| {
+                                ClippedSurfaceRenderElement::new(
+                                    element,
+                                    scale.into(),
+                                    geometry,
+                                    (),
+                                    radius,
+                                )
+                                .with_surface_scale(origin, surface_scale)
+                            })
+                            .collect();
+                        let reference_elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                            render_elements_from_surface_tree(
+                                &mut oracle,
+                                &surface,
+                                origin,
+                                scale,
+                                1.,
+                                Kind::Unspecified,
+                            );
+                        let program = ClippedSurfaceRenderElement::shader(&mut oracle)
+                            .unwrap()
+                            .clone();
+                        let reference_clipped: Vec<_> = reference_elements
+                            .into_iter()
+                            .map(|element| {
+                                ClippedSurfaceRenderElement::new(
+                                    element,
+                                    scale.into(),
+                                    geometry,
+                                    program.clone(),
+                                    radius,
+                                )
+                                .with_surface_scale(origin, surface_scale)
+                            })
+                            .collect();
+                        assert_eq!(clipped.len(), 2);
+                        assert_eq!(reference_clipped.len(), 2);
+                        let mut damage_absolute = Vec::new();
+                        let mut opaque_absolute = Vec::new();
+                        for (index, (native, reference)) in
+                            clipped.iter().zip(&reference_clipped).enumerate()
+                        {
+                            let bounds = native.geometry(scale.into());
+                            assert_eq!(bounds, expected_geometries[index]);
+                            assert_eq!(bounds, reference.geometry(scale.into()));
+                            assert!(!bounds.is_empty());
+                            let damage = native.damage_since(scale.into(), None);
+                            let reference_damage = reference.damage_since(scale.into(), None);
+                            assert_eq!(&damage[..], &reference_damage[..]);
+                            assert!(native
+                                .damage_since(scale.into(), Some(native.current_commit()))
+                                .is_empty());
+                            for region in damage {
+                                let absolute = Rectangle::new(region.loc + bounds.loc, region.size);
+                                // Overdamage is safe; missing a drawable pixel
+                                // below is not. The destination clip still bounds it.
+                                assert!(clip.contains_rect(absolute));
+                                damage_absolute.push(absolute);
+                            }
+                            let opaque = native.opaque_regions(scale.into());
+                            let reference_opaque = reference.opaque_regions(scale.into());
+                            assert_eq!(&opaque[..], &reference_opaque[..]);
+                            for region in opaque {
+                                let absolute = Rectangle::new(region.loc + bounds.loc, region.size);
+                                assert!(bounds.contains_rect(absolute));
+                                assert!(clip.contains_rect(absolute));
+                                opaque_absolute.push(absolute);
+                            }
+                        }
+                        assert!(!damage_absolute.is_empty(), "empty scaled damage");
+                        assert!(
+                            !opaque_absolute.is_empty(),
+                            "XRGB child must exercise opaque geometry"
+                        );
+                        let size = (48, 40).into();
+                        let a = render_to_vec(
+                            &mut renderer,
+                            size,
+                            scale.into(),
+                            transform,
+                            Fourcc::Abgr8888,
+                            clipped.iter().rev(),
+                        )
+                        .unwrap();
+                        let b = render_to_vec(
+                            &mut oracle,
+                            size,
+                            scale.into(),
+                            transform,
+                            Fourcc::Abgr8888,
+                            reference_clipped.iter().rev(),
+                        )
+                        .unwrap();
+                        assert_eq!(a.len(), b.len());
+                        let worst = a.iter().zip(&b).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+                        assert!(worst <= 3,
+                            "scaled rounded mismatch input={buffer_transform:?} scale={scale} stretch=({sx},{sy}) origin={origin:?} output={transform:?}: {worst}");
+                        assert!(a.as_chunks::<4>().0.iter().any(|pixel| pixel[3] > 0),
+                            "empty scaled result input={buffer_transform:?} scale={scale} stretch=({sx},{sy}) output={transform:?}");
+                        if transform == Transform::Normal {
+                            for (index, pixel) in a.as_chunks::<4>().0.iter().enumerate() {
+                                let point: smithay::utils::Point<i32, smithay::utils::Physical> =
+                                    ((index % 48) as i32, (index / 48) as i32).into();
+                                if pixel[3] > 0 {
+                                    assert!(damage_absolute.iter().any(|region| region.contains(point)),
+                                        "scaled damage missed visible pixel {point:?}, stretch=({sx},{sy}), scale={scale}");
+                                    visible_damage_pixels_checked += 1;
+                                }
+                                if opaque_absolute.iter().any(|region| region.contains(point)) {
+                                    assert!(pixel[3] >= 254,
+                                        "scaled opaque region covers transparent pixel {point:?}: {pixel:?}, stretch=({sx},{sy}), scale={scale}");
+                                    opaque_pixels_checked += 1;
+                                }
+                            }
+                        }
+                        scaled_cases += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(scaled_cases, 48);
+        assert!(visible_damage_pixels_checked > 0 && opaque_pixels_checked > 0);
         client_surface.set_buffer_transform(ClientTransform::Normal);
         client_surface.commit();
         connection.flush().unwrap();
         display.dispatch_clients(&mut state).unwrap();
         eprintln!(
-            "PASS: actual native rounded root/subsurface clipping, asymmetric radii, fractional scale and output transforms"
+            "PASS: actual native rounded root/subsurface clipping, asymmetric radii, fractional scale and output transforms; additional scaled/offset cases={scaled_cases}, visible damage pixels={visible_damage_pixels_checked}, opaque pixels={opaque_pixels_checked}"
         );
         let mut snapshots = Vec::new();
         crate::render_helpers::surface::render_snapshot_from_surface_tree(

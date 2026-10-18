@@ -36,6 +36,10 @@ pub(crate) struct ResizeAnimation {
     pub(crate) momentum: Option<ResizeMomentum>,
     pub(crate) size_from: Size<f64, Logical>,
     pub(crate) tile_size_from: Size<f64, Logical>,
+    /// Ordinary tiling owns a geometric goal before its client supplies pixels.
+    /// The legacy snapshot blend instead derives its target from the committed
+    /// buffer. A completed request may hold its goal without scheduling redraws.
+    pub(crate) request: Option<ResizeRequest>,
     // If the resize involved the fullscreen state at some point, this is the progress toward the
     // fullscreen state. Used for things like fullscreen backdrop alpha.
     //
@@ -44,6 +48,16 @@ pub(crate) struct ResizeAnimation {
     pub(crate) fullscreen_progress: Option<Animation>,
     // Similar to above but for fullscreen-or-maximized.
     pub(crate) expanded_progress: Option<Animation>,
+}
+
+#[derive(Debug)]
+pub(crate) struct ResizeRequest {
+    /// Protocol hint can differ from visible geometry when client constraints
+    /// cannot fit a cell. Matching commits still belong to this request.
+    pub(crate) protocol_size: Size<i32, Logical>,
+    pub(crate) window_size: Size<f64, Logical>,
+    pub(crate) tile_size: Size<f64, Logical>,
+    pub(crate) pending_buffer: bool,
 }
 
 /// One homogeneous spring response carries all four size velocities. The main
@@ -87,6 +101,16 @@ impl ResizeMomentum {
 }
 
 impl ResizeAnimation {
+    fn target_size(&self, committed: Size<f64, Logical>, tile: bool) -> Size<f64, Logical> {
+        self.request.as_ref().map_or(committed, |request| {
+            if tile {
+                request.tile_size
+            } else {
+                request.window_size
+            }
+        })
+    }
+
     pub(crate) fn size_value(&self, to: Size<f64, Logical>, tile: bool) -> Size<f64, Logical> {
         let size = self.size_components(to, tile);
         Size::from((size.x.max(1.), size.y.max(1.)))
@@ -97,6 +121,7 @@ impl ResizeAnimation {
         to: Size<f64, Logical>,
         tile: bool,
     ) -> Point<f64, Logical> {
+        let to = self.target_size(to, tile);
         let from = if tile {
             self.tile_size_from
         } else {
@@ -127,6 +152,7 @@ impl ResizeAnimation {
         to: Size<f64, Logical>,
         tile: bool,
     ) -> (Size<f64, Logical>, Point<f64, Logical>) {
+        let to = self.target_size(to, tile);
         let from = if tile {
             self.tile_size_from
         } else {

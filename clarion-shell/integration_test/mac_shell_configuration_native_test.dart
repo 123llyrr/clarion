@@ -1792,7 +1792,6 @@ void main() {
       controller.setMacPreferences(
         controller.macPreferences.copyWith(
           showLaunchpad: false,
-          showMissionControl: false,
           showDownloads: false,
           magnificationScale: 2,
           dockSize: 32,

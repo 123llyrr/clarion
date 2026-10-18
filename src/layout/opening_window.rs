@@ -133,10 +133,11 @@ impl OpenAnimation {
             clamped_progress,
             scale,
             opacity: if self.lightweight {
-                // Begin visibly on the first mapped buffer, then finish opacity
-                // before the small geometry settle. This is group opacity.
-                let fade = (clamped_progress / 0.65).clamp(0., 1.);
-                0.18 + 0.82 * fade * fade * (3. - 2. * fade)
+                // Opacity and geometry share the configured trajectory. Applying
+                // another easing and a shorter fade here made the first few
+                // refreshes flash opaque while the window was still settling.
+                // Keep immediate first-buffer feedback and group opacity.
+                0.18 + 0.82 * clamped_progress
             } else {
                 clamped_progress
             },
@@ -376,17 +377,44 @@ mod tests {
         assert_eq!(open.pose().offset_y, 0.);
         assert_eq!(open.pose().opacity, 1.);
         assert!(open.anim.velocity().abs() < 0.01);
-        // Opacity reaches full strength before the geometry finishes settling.
+        // A timed fade must not turn fully opaque while its geometry still has
+        // a long, independent tail.
         let arrival = (0..=settled_at)
             .find(|millis| {
                 clock.set_unadjusted(Duration::from_millis(*millis));
                 open.pose().opacity >= 1.
             })
             .expect("opacity arrives");
-        assert!(
-            arrival < settled_at,
-            "opacity still rising after the geometry settled"
-        );
+        assert_eq!(arrival, settled_at);
+    }
+
+    #[test]
+    fn default_open_does_not_flash_opaque_in_the_first_refreshes() {
+        for hz in [60., 90., 120., 144., 240., 360.] {
+            let mut clock = Clock::with_time(Duration::ZERO);
+            let config = clarion_config::animations::WindowOpenAnim::default();
+            let open = OpenAnimation::new(
+                Animation::new(clock.clone(), 0., 1., 0., config.anim),
+                config.popin_ratio,
+                config.glide,
+                true,
+                config.effect,
+            );
+            let mut previous = open.pose().opacity;
+            for frame in 1..=(hz * 0.23_f64).ceil() as usize {
+                clock.set_unadjusted(Duration::from_secs_f64(frame as f64 / hz));
+                let opacity = open.pose().opacity;
+                assert!(opacity >= previous);
+                assert!(
+                    opacity - previous < 0.16,
+                    "hz={hz}, frame={frame}: abrupt opacity step {}",
+                    opacity - previous
+                );
+                previous = opacity;
+            }
+            assert!(open.is_done());
+            assert_eq!(previous, 1.);
+        }
     }
 
     #[test]

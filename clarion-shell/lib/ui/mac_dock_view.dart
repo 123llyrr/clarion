@@ -94,13 +94,15 @@ class _MacDockViewState extends State<MacDockView> {
   int? _lastTargetDesktopRevision;
   Map<int, Rect> _lastWindowTargets = const {};
   static const _launcher = '__clarion-launcher__';
-  static const _overview = '__clarion-overview__';
+  // Ignore this retired utility even if an older preferences file pinned it.
+  // Match the reserved ID only; applications named Mission Control stay usable.
+  static const _retiredUtilityIds = {'__clarion-overview__'};
   static const _finder = '__clarion-finder__';
   static const _trash = '__clarion-trash__';
   static const _downloads = '__clarion-downloads__';
   static const _utilityIds = {
     _launcher,
-    _overview,
+    ..._retiredUtilityIds,
     _finder,
     _trash,
     _downloads,
@@ -737,25 +739,22 @@ class _MacDockViewState extends State<MacDockView> {
   }
 
   Widget _asset(String name, int pixelSize) => OptionalAssetIcon(
-    // The three dock utilities prefer a locally imported original kept out
+    // Dock utilities prefer a locally imported original kept out
     // of the tree; the committed WhiteSur icon is the shared fallback.
     preferredAsset: switch (name) {
       'finder' => 'assets/shell/finder.png',
       'launchpad' => 'assets/shell/launchpad.png',
-      'mission-control' => 'assets/shell/mission-control.png',
       _ => null,
     },
     asset: switch (name) {
       'finder' => 'assets/icons/home.svg',
       'launchpad' => 'assets/icons/launchpad.png',
-      'mission-control' => 'assets/icons/mission-control.svg',
       'trash-full' => 'assets/icons/trash-full.png',
       _ => 'assets/icons/trash-empty.png',
     },
     fallback: switch (name) {
       'finder' => Icons.folder_rounded,
       'launchpad' => Icons.apps_rounded,
-      'mission-control' => Icons.dashboard_rounded,
       'trash-full' => Icons.delete_rounded,
       _ => Icons.delete_outline_rounded,
     },
@@ -794,7 +793,9 @@ class _MacDockViewState extends State<MacDockView> {
             .ceil()
             .clamp(16, 512);
         final axes = _DockAxes(preferences.dockPosition);
-        final apps = controller.dockApps;
+        final apps = controller.dockApps
+            .where((app) => !_retiredUtilityIds.contains(app.id))
+            .toList(growable: false);
         final fileManagers = apps.where(_fileManager).toList();
         final finderApp = fileManagers.isEmpty ? null : fileManagers.first;
         final finderId = finderApp?.id ?? _finder;
@@ -808,7 +809,9 @@ class _MacDockViewState extends State<MacDockView> {
               (app) => !app.isPinned && app.id != finderId && app.id != _finder,
             )
             .toList();
-        final recent = controller.recentDockApps;
+        final recent = controller.recentDockApps
+            .where((app) => !_retiredUtilityIds.contains(app.id))
+            .toList(growable: false);
         final reduced =
             controller.reduceMotion || MediaQuery.disableAnimationsOf(context);
         final blocked =
@@ -887,23 +890,6 @@ class _MacDockViewState extends State<MacDockView> {
         }
         for (final app in running) {
           appSlot(app);
-        }
-        if (preferences.showMissionControl) {
-          slots.add(
-            _DockSlot(
-              id: _overview,
-              label: '调度中心',
-              icon: _asset('mission-control', pixelSize),
-              selected: controller.panel == ShellPanel.spaces,
-              onTap: () {
-                if (controller.shellStyle == ShellStyle.macos) {
-                  controller.toggleSpaces();
-                } else {
-                  controller.toggleOverview();
-                }
-              },
-            ),
-          );
         }
         if (recent.isNotEmpty) {
           slots.add(const _DockSlot.divider('recent-divider'));
@@ -1073,8 +1059,7 @@ class _MacDockViewState extends State<MacDockView> {
                                 !slot.id.startsWith('window-') &&
                                 slot.id != _downloads &&
                                 slot.id != _trash &&
-                                slot.id != _launcher &&
-                                slot.id != _overview
+                                slot.id != _launcher
                             ? (draggedId, isAfter) => _handleDockReorder(
                                 draggedId,
                                 slot.id,
@@ -1717,7 +1702,6 @@ class _DockItemState extends State<_DockItem>
         key: ValueKey(switch (widget.id) {
           _MacDockViewState._finder => 'dock-finder',
           _MacDockViewState._launcher => 'dock-launcher',
-          _MacDockViewState._overview => 'dock-overview',
           _MacDockViewState._downloads => 'dock-downloads',
           _MacDockViewState._trash => 'dock-trash',
           _ =>

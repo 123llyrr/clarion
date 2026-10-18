@@ -86,7 +86,6 @@ Future<_Controller> _mount(
         dockPosition: position,
         magnificationScale: 1.8,
         showLaunchpad: false,
-        showMissionControl: false,
         showDownloads: false,
         showRecentApplications: false,
       ),

@@ -905,8 +905,12 @@ void main() {
           tester,
           find.byKey(const ValueKey('dock-divider-utilities-divider')),
         );
+        expect(find.byKey(const ValueKey('dock-overview')), findsNothing);
         expect(
-          _painted(tester, find.byKey(const ValueKey('dock-overview'))).right,
+          _painted(
+            tester,
+            find.byKey(const ValueKey('dock-app-$_application')),
+          ).right,
           lessThan(recentDivider.left),
         );
         expect(

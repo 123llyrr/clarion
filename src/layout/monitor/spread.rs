@@ -189,7 +189,10 @@ impl<W: LayoutElement> Monitor<W> {
             .into_iter()
             .enumerate()
             .map(|(i, tile)| {
-                let size = tile.tile_size();
+                // A late client buffer can retain an already displayed tiling
+                // goal. The grid and its captured closing pose must use the
+                // same visible geometry, rather than switch to buffer bounds.
+                let size = tile.animated_tile_size();
                 let zoom = ((cw - 24.).max(1.) / size.w.max(1.))
                     .min((ch - 24.).max(1.) / size.h.max(1.))
                     .min(1.);
@@ -197,7 +200,9 @@ impl<W: LayoutElement> Monitor<W> {
                 let loc = Point::from((
                     12. + (i % cols) as f64 * cw + (cw - size.w) / 2.,
                     68. + (i / cols) as f64 * ch + (ch - size.h) / 2.,
-                ));
+                ))
+                .to_physical_precise_round(self.scale.fractional_scale())
+                .to_logical(self.scale.fractional_scale());
                 (tile, Rectangle::new(loc, size), zoom)
             })
             .collect()
@@ -603,7 +608,7 @@ impl<W: LayoutElement> Monitor<W> {
             // in workspace coordinates would change its highlight and damage it again every frame.
             tile.update_render_elements(
                 selected.as_ref() == Some(tile.window().id()),
-                Rectangle::from_size(tile.tile_size()),
+                Rectangle::from_size(tile.animated_tile_size()),
             );
         }
     }

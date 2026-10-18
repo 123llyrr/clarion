@@ -118,6 +118,41 @@ fn dwindle_core_nested_slots_preserve_internal_resize_geometry() {
 }
 
 #[test]
+fn dwindle_core_interactive_resize_tracks_positions_without_move_animation() {
+    let (scene_resources, mut space, view, mut clock, options) = fixture();
+    for id in 0..3 {
+        space.add_tile(
+            tile(id, view, &clock, &options, &scene_resources),
+            ActivateWindow::Yes,
+        );
+    }
+    space.restore_session_tree(&nested_tree(), &[Some(0), Some(1), Some(2)]);
+    clock.set_unadjusted(Duration::from_secs(2));
+    space.advance_animations();
+
+    // Direct manipulation must also retire movement inherited from an earlier
+    // layout change, rather than leaving the split boundary behind the cursor.
+    space
+        .tiles_mut()
+        .find(|tile| *tile.window().id() == 2)
+        .unwrap()
+        .animate_move_from((80., 40.).into());
+    assert!(space.interactive_resize_begin(0, ResizeEdge::RIGHT | ResizeEdge::BOTTOM));
+    assert!(space.interactive_resize_update(&0, (50., 30.).into()));
+    let expected = space.tiled_positions();
+    for (tile, position, _) in space.tiles_with_render_positions_mut(false) {
+        let geometry = expected
+            .iter()
+            .find(|(id, _)| id == tile.window().id())
+            .unwrap()
+            .1;
+        assert_eq!(position, geometry);
+        assert_eq!(tile.render_offset(), (0., 0.).into());
+    }
+    space.interactive_resize_end(Some(&0));
+}
+
+#[test]
 fn dwindle_core_client_hints_do_not_change_reserved_slots_or_double_subtract_borders() {
     let (scene_resources, mut space, view, clock, options) = fixture();
     let params = TestWindowParams {

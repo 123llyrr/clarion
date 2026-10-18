@@ -1107,12 +1107,6 @@ class _MacMenuBar extends StatelessWidget {
               enabled: false,
             ),
             GlobalMenuItem(
-              id: 'finder-spaces',
-              label: '调度中心',
-              shortcut: 'F3',
-              onAction: () => controller.toggleSpaces(),
-            ),
-            GlobalMenuItem(
               id: 'finder-show-all',
               label: '全部显示',
               onAction: () => controller.showAll(),
@@ -1201,12 +1195,6 @@ class _MacMenuBar extends StatelessWidget {
               label: '最小化',
               shortcut: '⌘M',
               onAction: () => controller.minimizeWindow(focused.id),
-            ),
-            GlobalMenuItem(
-              id: 'app-spaces',
-              label: '调度中心',
-              shortcut: 'F3',
-              onAction: () => controller.toggleSpaces(),
             ),
             GlobalMenuItem(
               id: 'app-show-all',
@@ -1366,24 +1354,6 @@ class _MacMenuBar extends StatelessWidget {
                           },
                         ),
                       ),
-                      if (width > 680)
-                        _MacBarButton(
-                          buttonKey: 'mac-overview',
-                          panel: ShellPanel.spaces,
-                          controller: controller,
-                          selected: controller.panel == ShellPanel.spaces,
-                          label: '调度中心',
-                          onPressed: () {
-                            if (controller.shellStyle == ShellStyle.macos) {
-                              controller.toggleSpaces();
-                            } else {
-                              controller.toggleOverview();
-                            }
-                          },
-                          // Overlapping panels, matching the Mission Control
-                          // silhouette instead of a bare window outline.
-                          child: const Icon(Icons.space_dashboard_outlined),
-                        ),
                       if (width > 420)
                         _MacBarButton(
                           buttonKey: 'mac-screenshot',

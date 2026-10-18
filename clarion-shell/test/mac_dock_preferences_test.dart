@@ -348,7 +348,7 @@ void main() {
       // A utility slot uses the imported artwork when it exists, and the
       // shipped icon otherwise: its form differs, the reserved texture size
       // does not.
-      for (final key in ['dock-launcher', 'dock-overview']) {
+      for (final key in ['dock-launcher']) {
         final raster = find.descendant(
           of: find.byKey(ValueKey(key)),
           matching: find.byType(RawImage),
@@ -393,7 +393,6 @@ void main() {
           magnification: false,
           showRunningIndicators: false,
           showLaunchpad: false,
-          showMissionControl: false,
           showDownloads: false,
         ),
       );
@@ -429,7 +428,7 @@ void main() {
       );
       expect(find.byKey(const ValueKey('dock-running-Editor')), findsOneWidget);
       expect(find.byKey(const ValueKey('dock-launcher')), findsOneWidget);
-      expect(find.byKey(const ValueKey('dock-overview')), findsOneWidget);
+      expect(find.byKey(const ValueKey('dock-overview')), findsNothing);
       await mouse.moveTo(const Offset(500, 500));
       await mouse.moveTo(tester.getCenter(_icon(_editor.id)));
       await tester.pumpAndSettle();
@@ -456,7 +455,6 @@ void main() {
             dockSize: 64,
             magnificationScale: 2,
             showLaunchpad: false,
-            showMissionControl: false,
             showDownloads: false,
           ),
         );

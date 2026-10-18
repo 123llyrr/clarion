@@ -78,6 +78,23 @@ class _Apps extends DesktopApps {
   Future<void> launch(DesktopApp app) async {}
 }
 
+class _RetiredUtilityApps extends _Apps {
+  @override
+  Future<List<DesktopApp>> load() async => [
+    ..._apps,
+    const DesktopApp(
+      id: '__clarion-overview__',
+      name: 'Retired utility',
+      desktopFile: '/fixture/retired-utility.desktop',
+    ),
+    const DesktopApp(
+      id: 'mission-control.desktop',
+      name: 'Mission Control application',
+      desktopFile: '/fixture/mission-control.desktop',
+    ),
+  ];
+}
+
 class _DeferredApps extends _Apps {
   final ready = Completer<List<DesktopApp>>.sync();
   final started = Completer<void>.sync();
@@ -428,8 +445,9 @@ void main() {
             find.byKey(const ValueKey('dock-divider-utilities-divider')),
           )
           .dx;
+      expect(find.byKey(const ValueKey('dock-overview')), findsNothing);
       expect(
-        tester.getCenter(find.byKey(const ValueKey('dock-overview'))).dx,
+        tester.getCenter(find.byKey(const ValueKey('dock-launcher'))).dx,
         lessThan(utility),
       );
       expect(
@@ -446,6 +464,61 @@ void main() {
         find.byKey(const ValueKey('dock-divider-recent-divider')),
         findsOneWidget,
       );
+    },
+  );
+
+  testWidgets(
+    'legacy utility pins and recents stay hidden without hiding ordinary applications',
+    (tester) async {
+      final (c, _, _) = await _fixture(
+        tester,
+        applications: _RetiredUtilityApps(),
+      );
+      c.setPinnedAppIds([
+        'browser.desktop',
+        '__clarion-overview__',
+        'mission-control.desktop',
+      ]);
+      // Keep legacy preferences intact: only the removed utility is excluded
+      // from rendering, not a real application whose name resembles it.
+      expect(c.dockApps.any((app) => app.id == '__clarion-overview__'), isTrue);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildMacShellTheme(Brightness.light),
+          home: Align(
+            alignment: Alignment.bottomCenter,
+            child: SizedBox(height: 160, child: MacDockView(controller: c)),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('dock-overview')), findsNothing);
+      expect(
+        find.byKey(const ValueKey('dock-app-__clarion-overview__')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('dock-app-mission-control.desktop')),
+        findsOneWidget,
+      );
+      expect(c.pinnedAppIds, contains('__clarion-overview__'));
+
+      c.setPinnedAppIds(['browser.desktop']);
+      c.setRecentAppIds(['__clarion-overview__', 'mission-control.desktop']);
+      await tester.pumpAndSettle();
+      expect(
+        c.recentDockApps.any((app) => app.id == '__clarion-overview__'),
+        isTrue,
+      );
+      expect(
+        find.byKey(const ValueKey('dock-app-__clarion-overview__')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('dock-app-mission-control.desktop')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
     },
   );
 

@@ -4,6 +4,7 @@ use core::f64;
 use std::ops::Deref;
 
 use clarion_config::{Color, CornerRadius, GradientInterpolation};
+use smithay::backend::renderer::element::utils::RescaleRenderElement;
 use smithay::backend::renderer::element::{Element, Kind};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Size};
@@ -33,6 +34,7 @@ use crate::scene::window_resources::{EffectRetirements, WindowResourceLease};
 clarion_render_elements! {
     TileRenderElement<R> => {
         LayoutElement = LayoutElementRenderElement<R>,
+        ScaledLayoutElement = RescaleRenderElement<LayoutElementRenderElement<R>>,
         FocusRing = FocusRingRenderElement,
         SolidColor = SolidColorRenderElement,
         Opening = OpeningWindowRenderElement,
@@ -177,9 +179,23 @@ impl<W: LayoutElement> TileScene<'_, W> {
         );
 
         let mut pushed_resize = false;
+        let request_resize = self
+            .resize_animation
+            .as_ref()
+            .is_some_and(|resize| resize.request.is_some());
+        let surface_anim_scale = if request_resize {
+            animated_window_size / window_size
+        } else {
+            Scale::from(1.)
+        };
+        let surface_origin = window_render_loc.to_physical_precise_round(scale);
         let resources = &self.resources;
         let resize_images = resources.resize.borrow();
-        if let (Some(resize), Some(images)) = (&self.resize_animation, resize_images.as_ref()) {
+        if let (Some(resize), Some(images), false) = (
+            &self.resize_animation,
+            resize_images.as_ref(),
+            request_resize,
+        ) {
             if ResizeRenderElement::has_shader(ctx.renderer) {
                 if let Some(mut ctx) = ctx.as_gles() {
                     if let Some((texture_from, snapshot_size)) =
@@ -325,8 +341,12 @@ impl<W: LayoutElement> TileScene<'_, W> {
         // If we're not resizing, render the window itself.
         let has_border_shader = BorderRenderElement::has_shader(ctx.renderer);
         if !pushed_resize {
-            let geo = Rectangle::new(window_render_loc, window_size);
-            let radius = radius.fit_to(window_size.w as f32, window_size.h as f32);
+            let geo = if request_resize {
+                area
+            } else {
+                Rectangle::new(window_render_loc, window_size)
+            };
+            let radius = radius.fit_to(geo.size.w as f32, geo.size.h as f32);
 
             let clip_shader = ClippedSurfaceRenderElement::clip_program(ctx.renderer);
             let rounding_power = self.rounding_power();
@@ -335,7 +355,9 @@ impl<W: LayoutElement> TileScene<'_, W> {
                     // If we should clip to geometry, render a clipped window.
                     if clip_to_geometry {
                         if let Some(shader) = clip_shader.clone() {
-                            if ClippedSurfaceRenderElement::will_clip(&elem, scale, geo, radius) {
+                            if surface_anim_scale != Scale::from(1.)
+                                || ClippedSurfaceRenderElement::will_clip(&elem, scale, geo, radius)
+                            {
                                 return ClippedSurfaceRenderElement::new(
                                     elem,
                                     scale,
@@ -343,6 +365,7 @@ impl<W: LayoutElement> TileScene<'_, W> {
                                     shader.clone(),
                                     radius,
                                 )
+                                .with_surface_scale(surface_origin, surface_anim_scale)
                                 .with_rounding_power(rounding_power)
                                 .into();
                             }
@@ -350,7 +373,17 @@ impl<W: LayoutElement> TileScene<'_, W> {
                     }
 
                     // Otherwise, render it normally.
-                    LayoutElementRenderElement::Wayland(elem).into()
+                    let element = LayoutElementRenderElement::Wayland(elem);
+                    if surface_anim_scale != Scale::from(1.) {
+                        RescaleRenderElement::from_element(
+                            element,
+                            surface_origin,
+                            surface_anim_scale,
+                        )
+                        .into()
+                    } else {
+                        element.into()
+                    }
                 }
                 LayoutElementRenderElement::SolidColor(elem) => {
                     // In this branch we're rendering a blocked-out window with a solid
@@ -379,7 +412,17 @@ impl<W: LayoutElement> TileScene<'_, W> {
                     }
 
                     // Otherwise, render the solid color as is.
-                    LayoutElementRenderElement::SolidColor(elem).into()
+                    let element = LayoutElementRenderElement::SolidColor(elem);
+                    if surface_anim_scale != Scale::from(1.) {
+                        RescaleRenderElement::from_element(
+                            element,
+                            surface_origin,
+                            surface_anim_scale,
+                        )
+                        .into()
+                    } else {
+                        element.into()
+                    }
                 }
                 elem @ LayoutElementRenderElement::BackgroundEffect(_) => {
                     // This is only used on popups for now. If subsurface blur is implemented, this

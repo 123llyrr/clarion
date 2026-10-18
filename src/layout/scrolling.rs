@@ -651,6 +651,75 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             .is_none_or(|col| col.pending_sizing_mode().is_normal())
     }
 
+    pub fn can_auto_stack_new_window(&self) -> bool {
+        self.options.layout.auto_stack_new_windows
+            && !self.is_empty()
+            && self.active_column_tile_count() < self.options.layout.max_windows_per_column as usize
+            && self.active_column_is_normal()
+    }
+
+    /// Predict the cell used by automatic insertion before the client draws its
+    /// first buffer. Use the same column constraints and spiral as the eventual
+    /// arrangement, without changing membership, focus or animation state.
+    pub fn auto_stack_new_window_size(
+        &self,
+        rules: &ResolvedWindowRules,
+        (min_size, max_size): (Size<i32, Logical>, Size<i32, Logical>),
+    ) -> Option<Size<i32, Logical>> {
+        if !self.can_auto_stack_new_window() {
+            return None;
+        }
+        let column = &self.columns[self.order.active_index()];
+        // Tabbed insertion keeps its display mode and has a separate indicator
+        // extent; only normal columns turn into the spiral arrangement.
+        if column.policy.display_mode == ColumnDisplay::Tabbed {
+            return None;
+        }
+
+        let border = self.options.layout.border.merged_with(&rules.border);
+        let decoration = if border.off {
+            0.
+        } else {
+            crate::utils::round_logical_in_physical_max1(self.scale, border.width) * 2.
+        };
+        let minimum = f64::from(min_size.w.max(1)) + decoration;
+        let maximum = if max_size.w > 0 {
+            f64::from(max_size.w) + decoration
+        } else {
+            0.
+        };
+        let constraints = column.tiles.iter().map(|tile| {
+            (
+                tile.min_size_nonfullscreen().w.max(1.),
+                tile.max_size_nonfullscreen().w,
+            )
+        });
+        let width = column.policy.arranged_width(
+            self.working_area.size.w,
+            self.options.layout.gaps,
+            0.,
+            constraints.chain(iter::once((minimum, maximum))),
+        );
+        let height = (self.working_area.size.h - self.options.layout.gaps * 2.).max(1.);
+        let mut cells = Vec::new();
+        clarion_core::geometry::spiral_rects_into(
+            clarion_core::Rect::new(0., 0., width, height),
+            column.tiles.len() + 1,
+            self.options.layout.gaps,
+            &mut cells,
+        );
+        let cell = cells.last().unwrap();
+        // Match Tile::request_tile_size, including fractional border rounding
+        // and the protocol's one-pixel floor for exhausted work areas.
+        Some(
+            Size::from((
+                (cell.width.max(1.) - decoration).max(1.),
+                (cell.height.max(1.) - decoration).max(1.),
+            ))
+            .to_i32_floor(),
+        )
+    }
+
     pub fn new_window_toplevel_bounds(&self, rules: &ResolvedWindowRules) -> Size<i32, Logical> {
         let border_config = self.options.layout.border.merged_with(&rules.border);
 
@@ -1189,9 +1258,10 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             let prev_offset = (!was_empty && idx == self.order.active_index() + 1)
                 .then(|| self.view_offset.stationary());
 
-            let anim_config =
-                anim_config.unwrap_or(self.options.animations.horizontal_view_movement.0);
-            self.activate_column_with_anim_config(idx, anim_config);
+            // This camera movement belongs to the same layout change as the
+            // columns above. A faster focus-navigation spring pulls the view
+            // ahead of the windows when an opening window creates a new column.
+            self.activate_column_with_anim_config(idx, config);
             self.order.activate_previous_on_removal = prev_offset;
         }
     }
@@ -1290,7 +1360,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             column.tiles[removal.new_active].ensure_alpha_animates_to_1();
         }
 
-        column.update_tile_sizes_with_transaction(true, transaction);
+        column.update_tile_sizes_with_transaction(true, true, transaction);
         self.data[column_idx].update(column);
         let offset = prev_width - column.width();
 
@@ -4442,7 +4512,10 @@ impl<W: LayoutElement> Column<W> {
         self.data.insert(idx, TileData::new(&tile));
         assert!(self.policy.insert(idx, tile.window().core_id()));
         self.tiles.insert(idx, tile);
-        self.update_tile_sizes(true);
+        // This insertion owns movement compensation below, where old positions
+        // still correspond to window identities. Letting the Dwindle arrangement
+        // compensate too would add the same geometry change twice.
+        self.update_tile_sizes_with_transaction(true, false, Transaction::new());
 
         // Animate tiles according to the offset changes.
         prev_offsets.insert(idx, Point::default());
@@ -4470,15 +4543,16 @@ impl<W: LayoutElement> Column<W> {
 
         let offset = prev_height - self.data[tile_idx].size.h;
 
-        let is_tabbed = self.policy.display_mode == ColumnDisplay::Tabbed;
-
         // Move windows below in tandem with resizing.
+        // Dwindle positions already follow the arranged cells. A late client
+        // height change does not change those offsets, so compensating it like
+        // a vertical stack would move the following panes a second time.
         //
         // FIXME: in always-centering mode, window resizing will affect the offsets of all other
         // windows in the column, so they should all be animated. How should this interact with
         // animated vs. non-animated resizes? For example, an animated +20 resize followed by two
         // non-animated -10 resizes.
-        if !is_tabbed && offset != 0. {
+        if self.policy.display_mode == ColumnDisplay::Normal && offset != 0. {
             if tile.resize_animation().is_some() {
                 // If there's a resize animation (that may have just started in
                 // tile.update_window()), then the apparent size change is smooth with no sudden
@@ -4531,10 +4605,15 @@ impl<W: LayoutElement> Column<W> {
     }
 
     fn update_tile_sizes(&mut self, animate: bool) {
-        self.update_tile_sizes_with_transaction(animate, Transaction::new());
+        self.update_tile_sizes_with_transaction(animate, animate, Transaction::new());
     }
 
-    fn update_tile_sizes_with_transaction(&mut self, animate: bool, transaction: Transaction) {
+    fn update_tile_sizes_with_transaction(
+        &mut self,
+        animate: bool,
+        animate_movement: bool,
+        transaction: Transaction,
+    ) {
         let sizing_mode = self.pending_sizing_mode();
         if matches!(sizing_mode, SizingMode::Fullscreen | SizingMode::Maximized) {
             let bounds = if sizing_mode == SizingMode::Fullscreen {
@@ -4621,7 +4700,7 @@ impl<W: LayoutElement> Column<W> {
                 let (tile_idx, tile) = tiles.next().unwrap();
                 debug_assert_eq!(*id, tile.window().core_id());
                 let position = Point::from((rect.x, rect.y));
-                if animate && tile_idx < old_len {
+                if animate_movement && tile_idx < old_len {
                     let delta = offsets[tile_idx] - position;
                     if delta != Point::from((0., 0.)) {
                         tile.animate_move_from(delta);
@@ -4632,7 +4711,7 @@ impl<W: LayoutElement> Column<W> {
                 let transaction = Some(transaction.clone());
                 // Empty cells are valid clipping geometry on exhausted outputs,
                 // but Wayland size zero means "client chooses", not one pixel.
-                tile.request_tile_size(
+                tile.request_tile_size_with_geometry_animation(
                     (rect.width.max(1.), rect.height.max(1.)).into(),
                     animate,
                     transaction,

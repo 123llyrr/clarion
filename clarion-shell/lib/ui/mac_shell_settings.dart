@@ -263,12 +263,6 @@ class MacShellSettings extends StatelessWidget {
               (v) => update(p.copyWith(showLaunchpad: v)),
             ),
             toggle(
-              'mac-dock-mission-control',
-              '显示 Mission Control',
-              p.showMissionControl,
-              (v) => update(p.copyWith(showMissionControl: v)),
-            ),
-            toggle(
               'mac-dock-downloads',
               '显示下载文件夹',
               p.showDownloads,

@@ -141,13 +141,15 @@ impl<W: LayoutElement> TileStore<W> {
         let slot = &mut self.slots[idx];
         Some((slot.tile.as_mut(), slot.geometry))
     }
-    fn apply_placement(&mut self, id: &u64, bounds: clarion_core::Rect) {
+    fn apply_placement(&mut self, id: &u64, bounds: clarion_core::Rect, animate: bool) {
         let Some(index) = self.core_index.get(id).copied() else {
             return;
         };
         let slot = &mut self.slots[index];
         let next = platform_rect(bounds);
-        if slot.geometry.loc != next.loc && slot.geometry.size.w > 0. {
+        if !animate {
+            slot.tile.stop_move_animations();
+        } else if slot.geometry.loc != next.loc && slot.geometry.size.w > 0. {
             slot.tile.animate_move_from(slot.geometry.loc - next.loc);
         }
         slot.geometry = next;
@@ -165,10 +167,11 @@ impl<W: LayoutElement> TileStore<W> {
                 SizingMode::Maximized => {
                     slot.tile.request_maximized(area.size, animate, transaction)
                 }
-                SizingMode::Normal => {
-                    slot.tile
-                        .request_tile_size(slot.geometry.size, animate, transaction)
-                }
+                SizingMode::Normal => slot.tile.request_tile_size_with_geometry_animation(
+                    slot.geometry.size,
+                    animate,
+                    transaction,
+                ),
             }
         }
     }
@@ -856,13 +859,13 @@ impl<W: LayoutElement> DwindleSpace<W> {
     }
 
     fn relayout_with_animation(&mut self, animate: bool) {
-        self.arrange_geometry();
+        self.arrange_geometry(animate);
         if let Some(payloads) = &mut self.payloads {
             payloads.request_sizes(self.working_area, animate, &Transaction::new());
         }
     }
 
-    fn arrange_geometry(&mut self) {
+    fn arrange_geometry(&mut self, animate: bool) {
         let payloads = &mut self.payloads;
         self.tree.arrange(
             BspArrangement {
@@ -871,7 +874,7 @@ impl<W: LayoutElement> DwindleSpace<W> {
             },
             |id, rect| {
                 if let Some(payloads) = payloads {
-                    payloads.apply_placement(id, rect);
+                    payloads.apply_placement(id, rect, animate);
                 }
             },
         );
@@ -902,7 +905,7 @@ impl<W: LayoutElement> DwindleSpace<W> {
     ) {
         // Restored session trees start with empty geometries. Smart splitting needs the actual
         // target rectangle even though client size requests remain deferred until the end.
-        self.arrange_geometry();
+        self.arrange_geometry(false);
         for tile in tiles {
             self.insert_tile(tile, activate, self.tree.active().copied());
         }
@@ -1436,7 +1439,7 @@ impl<W: LayoutElement> DwindleSpace<W> {
             }
         }
         self.interactive_resize = None;
-        self.arrange_geometry();
+        self.arrange_geometry(false);
         if let Some(payloads) = &mut self.payloads {
             for slot in &mut payloads.slots {
                 let tile = &mut slot.tile;

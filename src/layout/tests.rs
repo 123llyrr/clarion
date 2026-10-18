@@ -28,6 +28,7 @@ mod management;
 mod normal_move;
 mod output_affinity;
 mod renderer_recovery;
+mod requested_resize;
 mod scene_source;
 mod spread;
 mod spread_composition;
@@ -36,6 +37,7 @@ mod stage_drag;
 mod stage_scene_source;
 mod struts;
 mod viewport;
+mod window_opening;
 mod workspace_names;
 
 #[test]
@@ -466,6 +468,9 @@ struct TestWindowInner {
     bbox: Cell<Rectangle<i32, Logical>>,
     initial_bbox: Rectangle<i32, Logical>,
     requested_size: Cell<Option<Size<i32, Logical>>>,
+    /// Opt-in protocol fixture: a latest acknowledged client can choose a size
+    /// different from the requested goal. Other tests retain the old default.
+    expected_size_override: Cell<Option<Size<i32, Logical>>>,
     // Emulates the window ignoring the compositor-provided size.
     forced_size: Cell<Option<Size<i32, Logical>>>,
     min_size: Size<i32, Logical>,
@@ -524,6 +529,7 @@ impl TestWindow {
             bbox: Cell::new(params.bbox),
             initial_bbox: params.bbox,
             requested_size: Cell::new(None),
+            expected_size_override: Cell::new(None),
             forced_size: Cell::new(None),
             min_size: params.min_max_size.0,
             max_size: params.min_max_size.1,
@@ -699,6 +705,24 @@ impl LayoutElement for TestWindow {
 
     fn requested_size(&self) -> Option<Size<i32, Logical>> {
         self.0.requested_size.get()
+    }
+
+    fn expected_size(&self) -> Option<Size<i32, Logical>> {
+        if let Some(size) = self.0.expected_size_override.get() {
+            return Some(size);
+        }
+        if self.sizing_mode().is_fullscreen() {
+            return None;
+        }
+        let mut requested = self.requested_size().unwrap_or_default();
+        let current = self.size();
+        if requested.w == 0 {
+            requested.w = current.w;
+        }
+        if requested.h == 0 {
+            requested.h = current.h;
+        }
+        Some(requested)
     }
 
     fn is_windowed_fullscreen(&self) -> bool {

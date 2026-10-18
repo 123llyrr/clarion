@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:clarion_shell/mac_shell_preferences.dart';
 import 'package:clarion_shell/models.dart';
 import 'package:clarion_shell/state/shell_controller.dart';
 import 'package:clarion_shell/theme/mac_shell_theme.dart';
@@ -224,11 +225,14 @@ void main() {
   );
 
   testWidgets(
-    'mac-overview bar button and dock-overview button toggle Mission Control in macOS mode',
+    'bar and Dock omit Mission Control even with the legacy preference enabled',
     (tester) async {
       final controller = ShellController(demo: true)
         ..setShellStyle(ShellStyle.macos)
-        ..setReduceMotion(true);
+        ..setReduceMotion(true)
+        ..setMacPreferences(
+          MacShellPreferences.fromJson({'show_mission_control': true}),
+        );
 
       await tester.pumpWidget(
         MaterialApp(
@@ -258,23 +262,14 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // 1. Tapping mac-overview in menu bar
-      final barButton = find.byKey(const ValueKey('mac-overview'));
-      expect(barButton, findsOneWidget);
-      await tester.tap(barButton);
+      expect(find.byKey(const ValueKey('mac-overview')), findsNothing);
+      expect(find.byKey(const ValueKey('dock-overview')), findsNothing);
+      expect(find.byTooltip('调度中心'), findsNothing);
+      expect(find.byKey(const ValueKey('dock-launcher')), findsOneWidget);
+      // Control Center is a separate function and remains usable.
+      await tester.tap(find.byKey(const ValueKey('mac-quick-settings')));
       await tester.pumpAndSettle();
-      expect(controller.panel, ShellPanel.spaces);
-
-      await tester.tap(barButton);
-      await tester.pumpAndSettle();
-      expect(controller.panel, ShellPanel.none);
-
-      // 2. Tapping dock-overview on Dock
-      final dockButton = find.byKey(const ValueKey('dock-overview'));
-      expect(dockButton, findsOneWidget);
-      await tester.tap(dockButton);
-      await tester.pumpAndSettle();
-      expect(controller.panel, ShellPanel.spaces);
+      expect(controller.panel, ShellPanel.quickSettings);
 
       controller.closePanel();
       await tester.pumpAndSettle();
