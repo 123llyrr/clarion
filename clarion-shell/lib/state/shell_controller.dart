@@ -163,6 +163,11 @@ class ShellController extends ChangeNotifier {
   bool get externalLauncherVisible => _externalLauncherVisible;
   int get externalLauncherRequest => _externalLauncherRequest;
 
+  Future<void> warmupExternalLauncher() async {
+    if (_disposed || demo || !externalLauncherEnabled) return;
+    await _launcherBridge.warmup(output: _outputName);
+  }
+
   void _invalidateExternalLauncher() {
     _externalVisibleDeadline?.cancel();
     _externalLauncherRequest = _launcherBridge.beginRequest();
@@ -756,7 +761,13 @@ class ShellController extends ChangeNotifier {
   List<BluetoothDevice> get bluetoothDevices => _bluetoothDevices;
   bool get bluetoothScanning => _bluetoothScanning;
   String? get error => _error;
-  Set<String> get busy => Set.unmodifiable(_busy);
+  Set<String> get busy => Set.unmodifiable({
+    ..._busy,
+    // Launcher panels still expose one busy indicator. Dock requests are
+    // guarded per application, so a slow GIO/D-Bus helper cannot discard a
+    // click on a different application.
+    if (_busy.any((key) => key.startsWith('launch:'))) 'launch',
+  });
   ThemeMode get themeMode => _themeMode;
   bool get reduceMotion => _reduceMotion;
   BarPosition get barPosition => _barPosition;
@@ -2052,7 +2063,7 @@ class ShellController extends ChangeNotifier {
       return;
     }
     final panelRevision = _panelRevision;
-    await _perform('launch', () async {
+    await _perform('launch:${app.id}', () async {
       await prepareAppMenus();
       if (_disposed) return;
       await _desktopApps.launch(app);

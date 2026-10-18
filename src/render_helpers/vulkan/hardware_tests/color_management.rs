@@ -168,6 +168,500 @@ fn render_sdr_output_frame(
     frame.finish_and_wait().unwrap();
 }
 
+fn render_hdr_sdr_source_frame(
+    renderer: &NativeRenderer,
+    scene: &VulkanTexture,
+    target: &VulkanTexture,
+    sources: &[&VulkanTexture],
+    force_full_transform: bool,
+    timing: Option<super::super::timing::QueryLease>,
+    retain: Option<&mut Vec<Arc<super::super::frame::GpuCompletion>>>,
+) -> Vec<vk::Image> {
+    let vk = renderer.vulkan();
+    let output = HdrOutputSettings::default().description();
+    let mut frame = super::super::frame::VulkanFrame::begin(
+        vk.ctx.as_ref().unwrap().clone(),
+        vk.pipeline_mgr.as_ref().unwrap().clone(),
+        vk.scratch_textures.clone(),
+        vk.importer.as_ref().unwrap().clone(),
+        scene.image(),
+        scene.image_view(),
+        vk::Format::R16G16B16A16_SFLOAT,
+        true,
+        scene.width,
+        scene.height,
+        Some([0.; 4]),
+        scene.current_layout().get(),
+        false,
+    )
+    .unwrap();
+    frame.retain_target(scene);
+    frame.set_color_scene(
+        super::super::color::scene_description(Some(output)),
+        output.primaries,
+        output.reference_luminance,
+    );
+    if force_full_transform {
+        frame.force_scene_color_transform_for_test();
+    } else {
+        frame
+            .set_color_scratch_pool(renderer.color_scratch_pool_for_test())
+            .unwrap();
+    }
+    let mut converted_images = Vec::new();
+    for source in sources {
+        let converted = frame.color_texture(source).unwrap();
+        if converted.image() != source.image() {
+            converted_images.push(converted.image());
+        }
+        assert_eq!(
+            converted.image() == source.image(),
+            !force_full_transform
+                && !source.has_alpha
+                && source.format != vk::Format::R16G16B16A16_SFLOAT.as_raw() as u32,
+            "only opaque normalized SDR may skip the scene color pass",
+        );
+        frame
+            .draw_texture(
+                source,
+                0.,
+                0.,
+                scene.width as f32,
+                scene.height as f32,
+                None,
+                1.,
+                None,
+                0.,
+            )
+            .unwrap();
+    }
+    frame.set_color_output(
+        target,
+        output,
+        &[Rectangle::from_size(
+            (scene.width as i32, scene.height as i32).into(),
+        )],
+    );
+    frame.measure_gpu_work(timing);
+    if let Some(retain) = retain {
+        retain.push(frame.finish_async_unexported(scene.clone()).unwrap());
+    } else {
+        frame.finish_and_wait().unwrap();
+    }
+    converted_images
+}
+
+#[test]
+#[ignore = "requires real DRM render node and Vulkan validation"]
+fn hdr_sdr_scene_identity_matches_full_transform_with_alpha_and_extended_samples() {
+    let mut renderer = renderer();
+    let samples: Vec<[u8; 4]> = [0, 1, 32, 128, 192, 255]
+        .into_iter()
+        .flat_map(|alpha| {
+            (0..=255u8).map(move |value| [value, value.wrapping_mul(73), 255 - value, alpha])
+        })
+        .collect();
+    for format in [
+        Fourcc::Abgr8888,
+        Fourcc::Argb8888,
+        Fourcc::Xbgr8888,
+        Fourcc::Xrgb8888,
+        Fourcc::Abgr16161616f,
+    ] {
+        let data: Vec<u8> = if format == Fourcc::Abgr16161616f {
+            samples
+                .iter()
+                .flat_map(|rgba| {
+                    // Signed extended SDR and RGB > alpha must preserve their
+                    // original shoulder behavior, rather than taking the identity.
+                    [
+                        rgba[0] as f32 / 64. - 1.,
+                        rgba[1] as f32 / 255.,
+                        rgba[2] as f32 / 128.,
+                        rgba[3] as f32 / 255.,
+                    ]
+                    .map(half)
+                    .into_iter()
+                    .flat_map(u16::to_le_bytes)
+                })
+                .collect()
+        } else {
+            samples.iter().flatten().copied().collect()
+        };
+        let size = (samples.len() as i32, 1).into();
+        let source = renderer.import_memory(&data, format, size, false).unwrap();
+        // A fractional scale exercises linear interpolation across valid and
+        // malformed premultiplication boundaries, not just texel centers.
+        let output_size = (samples.len() as i32 * 2 + 1, 3).into();
+        let scene = renderer
+            .create_buffer(Fourcc::Abgr16161616f, output_size)
+            .unwrap();
+        let target = renderer
+            .create_buffer(Fourcc::Abgr2101010, output_size)
+            .unwrap();
+        let mut results = Vec::new();
+        for force in [false, true] {
+            render_hdr_sdr_source_frame(&renderer, &scene, &target, &[&source], force, None, None);
+            results.push(read(&mut renderer, &target));
+        }
+        let mut worst = 0.0_f32;
+        for (fast, full) in results[0].iter().zip(&results[1]) {
+            for channel in 0..4 {
+                worst = worst.max((fast[channel] - full[channel]).abs());
+            }
+        }
+        assert!(
+            worst <= 2. / 1023.,
+            "{format:?}: HDR output differs by {} codes",
+            worst * 1023.
+        );
+        eprintln!(
+            "HDR_SDR_SCENE_IDENTITY format={format:?} samples={} worst_10bit_codes={}",
+            samples.len(),
+            worst * 1023.
+        );
+    }
+    for format in [
+        vk::Format::A2B10G10R10_UNORM_PACK32,
+        vk::Format::A2R10G10B10_UNORM_PACK32,
+    ] {
+        let ctx = renderer.vulkan().ctx.as_ref().unwrap().clone();
+        let source = allocate_texture(
+            &ctx,
+            3,
+            2,
+            format,
+            vk::ImageTiling::OPTIMAL,
+            vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            vk::ImageLayout::UNDEFINED,
+            false,
+        )
+        .unwrap();
+        let mut clear = renderer
+            .vulkan()
+            .render_frame(
+                source.image(),
+                source.image_view(),
+                format,
+                false,
+                3,
+                2,
+                Some([0.00098, 0.52, 1., 0.]),
+            )
+            .unwrap();
+        clear.retain_target(&source);
+        clear.finish_and_wait().unwrap();
+        let scene = renderer
+            .create_buffer(Fourcc::Abgr16161616f, (11, 7).into())
+            .unwrap();
+        let target = renderer
+            .create_buffer(Fourcc::Abgr2101010, (11, 7).into())
+            .unwrap();
+        let mut results = Vec::new();
+        for force in [false, true] {
+            render_hdr_sdr_source_frame(&renderer, &scene, &target, &[&source], force, None, None);
+            results.push(read(&mut renderer, &target));
+        }
+        assert!(
+            results[0]
+                .iter()
+                .zip(&results[1])
+                .all(|(a, b)| a.iter().zip(b).all(|(a, b)| (a - b).abs() <= 2. / 1023.)),
+            "opaque10 format {format:?}"
+        );
+    }
+}
+
+fn hdr_4k_sdr_sources(renderer: &NativeRenderer, opaque_first: bool) -> [VulkanTexture; 2] {
+    let ctx = renderer.vulkan().ctx.as_ref().unwrap().clone();
+    [!opaque_first, true].map(|has_alpha| {
+        let mut source = allocate_texture(
+            &ctx,
+            3840,
+            2400,
+            vk::Format::R8G8B8A8_UNORM,
+            vk::ImageTiling::OPTIMAL,
+            vk::ImageUsageFlags::COLOR_ATTACHMENT
+                | vk::ImageUsageFlags::SAMPLED
+                | vk::ImageUsageFlags::TRANSFER_DST,
+            vk::ImageLayout::UNDEFINED,
+            has_alpha,
+        )
+        .unwrap();
+        source.color = SurfaceColor::default();
+        let rgba = if has_alpha {
+            [0.05, 0.2, 0.4, 0.5]
+        } else {
+            [0.1, 0.4, 0.8, 1.]
+        };
+        let mut clear = renderer
+            .vulkan()
+            .render_frame(
+                source.image(),
+                source.image_view(),
+                vk::Format::R8G8B8A8_UNORM,
+                has_alpha,
+                3840,
+                2400,
+                Some(rgba),
+            )
+            .unwrap();
+        clear.retain_target(&source);
+        clear.finish_and_wait().unwrap();
+        source
+    })
+}
+
+#[test]
+#[ignore = "optional 4K SDR-in-HDR GPU timing; run serially outside desktop diagnosis"]
+fn hdr_sdr_scene_identity_4k_gpu_timing() {
+    let mut renderer = renderer();
+    let size = (3840, 2400).into();
+    let scene = renderer.create_buffer(Fourcc::Abgr16161616f, size).unwrap();
+    let target = renderer.create_buffer(Fourcc::Abgr2101010, size).unwrap();
+    let ctx = renderer.vulkan().ctx.as_ref().unwrap().clone();
+    let timings = super::super::timing::GpuTimings::new(ctx.clone())
+        .unwrap()
+        .unwrap();
+    let sources = hdr_4k_sdr_sources(&renderer, true);
+    let thread_cpu_ms = || {
+        let mut time = std::mem::MaybeUninit::<libc::timespec>::uninit();
+        assert_eq!(
+            unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, time.as_mut_ptr()) },
+            0
+        );
+        let time = unsafe { time.assume_init() };
+        time.tv_sec as f64 * 1000. + time.tv_nsec as f64 / 1e6
+    };
+    for (name, sources) in [
+        ("opaque_window", vec![&sources[0]]),
+        ("alpha_shell", vec![&sources[1]]),
+        (
+            "opaque_window_plus_alpha_shell",
+            vec![&sources[0], &sources[1]],
+        ),
+    ] {
+        let mut retained_images: [std::collections::HashSet<vk::Image>; 2] = Default::default();
+        let mut cold_allocations = [0; 2];
+        let mut samples: [Vec<f64>; 2] = std::array::from_fn(|_| Vec::new());
+        let mut cpu_samples: [Vec<f64>; 2] = std::array::from_fn(|_| Vec::new());
+        for iteration in 0..32 {
+            for (variant, force) in [false, true].into_iter().enumerate() {
+                let tag = super::super::timing::GpuTimingTag {
+                    output_generation: 1,
+                    redraw_sequence: (iteration * 2 + variant) as u64,
+                };
+                let before = thread_cpu_ms();
+                let allocations_before = super::super::frame::scratch_allocation_count_for_test();
+                let converted_images = render_hdr_sdr_source_frame(
+                    &renderer,
+                    &scene,
+                    &target,
+                    &sources,
+                    force,
+                    Some(timings.acquire(tag).unwrap()),
+                    None,
+                );
+                let cpu_ms = thread_cpu_ms() - before;
+                let mut measured = None;
+                timings.drain(|sample| {
+                    assert_eq!(sample.tag, tag);
+                    measured = Some(sample.gpu_time.as_secs_f64() * 1000.);
+                });
+                if iteration >= 8 {
+                    cold_allocations[variant] +=
+                        super::super::frame::scratch_allocation_count_for_test()
+                            - allocations_before;
+                    retained_images[variant].extend(converted_images);
+                    samples[variant].push(measured.unwrap());
+                    cpu_samples[variant].push(cpu_ms);
+                }
+            }
+        }
+        for (variant, mode) in ["identity", "full_color_transform"].into_iter().enumerate() {
+            assert_eq!(
+                cold_allocations[variant], 0,
+                "warm {name} {mode} unexpectedly allocated scratch on the owner thread"
+            );
+            samples[variant].sort_by(f64::total_cmp);
+            cpu_samples[variant].sort_by(f64::total_cmp);
+            eprintln!(
+                "HDR_SDR_SCENE_GPU_TIMING {}",
+                serde_json::json!({
+                    "mode": mode, "source": name, "warm_scratch_allocations": cold_allocations[variant], "reused_scratch_images": retained_images[variant].len(), "size": [3840, 2400], "samples": 24,
+                    "gpu_p50_ms": samples[variant][12], "gpu_p95_ms": samples[variant][22],
+                    "thread_cpu_p50_ms": cpu_samples[variant][12], "thread_cpu_p95_ms": cpu_samples[variant][22],
+                    "scope": "GPU timestamp: SDR texture conversion, FP16 composition and unchanged HDR10 final pass; CPU/fence wait excluded",
+                    "cpu_scope": "thread CPU time of fixture recording/submission/wait, excluding blocked wall time; not physical desktop latency",
+                    "variants_interleaved": true, "setup_and_warmup_excluded": true,
+                })
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires real DRM render node; 4K three-frame retained-completion scratch reuse"]
+fn hdr_sdr_scene_identity_three_frames_reuse_scratch_without_hot_allocations() {
+    let mut renderer = renderer();
+    let size = (3840, 2400).into();
+    let scenes: [_; 3] =
+        std::array::from_fn(|_| renderer.create_buffer(Fourcc::Abgr16161616f, size).unwrap());
+    let targets: [_; 3] =
+        std::array::from_fn(|_| renderer.create_buffer(Fourcc::Abgr2101010, size).unwrap());
+    let sources = hdr_4k_sdr_sources(&renderer, false);
+    for force in [true, false] {
+        let mut warm_allocations = 0;
+        let mut warm_cpu_ms = Vec::new();
+        let mut retained_images = std::collections::HashSet::new();
+        for batch in 0..8 {
+            let before = super::super::frame::scratch_allocation_count_for_test();
+            let thread_cpu = || {
+                let mut time = std::mem::MaybeUninit::<libc::timespec>::uninit();
+                assert_eq!(
+                    unsafe {
+                        libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, time.as_mut_ptr())
+                    },
+                    0
+                );
+                let time = unsafe { time.assume_init() };
+                time.tv_sec as f64 * 1000. + time.tv_nsec as f64 / 1e6
+            };
+            let cpu_before = thread_cpu();
+            let mut completions = Vec::new();
+            for slot in 0..3 {
+                let mut first = sources[0].clone();
+                first.y_inverted = (batch + slot) % 2 != 0;
+                let images = render_hdr_sdr_source_frame(
+                    &renderer,
+                    &scenes[slot],
+                    &targets[slot],
+                    &[&first, &sources[1]],
+                    force,
+                    None,
+                    Some(&mut completions),
+                );
+                if batch >= 2 {
+                    retained_images.extend(images);
+                }
+            }
+            // All three completion owners still keep their GPU objects alive.
+            // The old pool waits for their retirement before reusing storage;
+            // the ordered color class can reuse it in later queued frames.
+            assert_eq!(completions.len(), 3);
+            if batch >= 2 {
+                warm_cpu_ms.push(thread_cpu() - cpu_before);
+                warm_allocations +=
+                    super::super::frame::scratch_allocation_count_for_test() - before;
+            }
+            for completion in completions {
+                completion.prepare_retirement().unwrap();
+                drop(completion);
+            }
+        }
+        if force {
+            assert!(warm_allocations > 0, "six retained FP16 images exceed the existing 256 MiB idle cache; reference must expose its repeated allocation");
+        } else {
+            assert_eq!(
+                warm_allocations, 0,
+                "ordered color reuse must avoid warm allocations for both ARGB sources"
+            );
+            assert_eq!(
+                retained_images.len(),
+                2,
+                "two color intermediates must be reused across all queued frames"
+            );
+        }
+        warm_cpu_ms.sort_by(f64::total_cmp);
+        eprintln!(
+            "HDR_SDR_RETAINED_SCRATCH {}",
+            serde_json::json!({
+                "mode": if force { "old_retired_pool" } else { "ordered_color_pool" }, "source": "two_fullscreen_argb", "source_y_inversion_alternates": true, "thread_cpu_per_3frame_batch_p50_ms": warm_cpu_ms[3], "size": [3840,2400],
+                "simultaneously_retained_completions": 3, "warm_batches": 6, "warm_frames": 18,
+                "warm_scratch_allocations": warm_allocations, "warm_distinct_scratch_images": retained_images.len(),
+                "scope": "three asynchronously submitted frames retain their actual GpuCompletion owners before retirement; no per-frame CPU wait",
+            })
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires real DRM render node, Vulkan validation and timeline semaphores"]
+fn ordered_color_pool_preserves_each_gated_frame_pixels_before_retirement() {
+    let mut renderer = renderer();
+    let size = (7, 5).into();
+    let scenes: [_; 3] =
+        std::array::from_fn(|_| renderer.create_buffer(Fourcc::Abgr16161616f, size).unwrap());
+    let targets: [_; 3] =
+        std::array::from_fn(|_| renderer.create_buffer(Fourcc::Abgr2101010, size).unwrap());
+    let sources: [_; 3] = [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]].map(|rgba| {
+        renderer
+            .import_memory(&rgba, Fourcc::Abgr8888, (1, 1).into(), false)
+            .unwrap()
+    });
+    let transparent = renderer
+        .import_memory(&[0; 4], Fourcc::Abgr8888, (1, 1).into(), false)
+        .unwrap();
+    // Prepare the two private color images and their pipelines before gating
+    // the queue. The gated portion isolates ordered reuse, rather than cold
+    // memory/pipeline initialization in a driver.
+    render_hdr_sdr_source_frame(
+        &renderer,
+        &scenes[0],
+        &targets[0],
+        &[&sources[0], &transparent],
+        false,
+        None,
+        None,
+    );
+    let mut completions = Vec::new();
+    // Gate is declared after the completion owners, so unwinding releases the
+    // queue before an owner can wait for its own still-gated work in Drop.
+    let gate = super::super::native::readback_tests::TimelineGate::new(
+        renderer.vulkan().ctx.as_ref().unwrap().clone(),
+    );
+    let mut converted_images = std::collections::HashSet::new();
+    for slot in 0..3 {
+        converted_images.extend(render_hdr_sdr_source_frame(
+            &renderer,
+            &scenes[slot],
+            &targets[slot],
+            &[&sources[slot], &transparent],
+            false,
+            None,
+            Some(&mut completions),
+        ));
+        assert_eq!(renderer.color_scratch_pool_for_test().stats_for_test().1, 2);
+    }
+    assert_eq!(converted_images.len(), 2, "later queued frames must reuse exactly the two intermediates even before the first fence signals");
+    assert!(completions
+        .iter()
+        .all(|completion| !completion.status().unwrap()));
+    drop(gate);
+    let output = HdrOutputSettings::default().description();
+    for (slot, rgb) in [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]]
+        .into_iter()
+        .enumerate()
+    {
+        completions[slot].prepare_retirement().unwrap();
+        let expected = crate::color::convert_color(rgb, SurfaceColor::default(), output);
+        for actual in read(&mut renderer, &targets[slot]) {
+            for channel in 0..3 {
+                assert!(
+                    (actual[channel] - expected[channel]).abs() <= 2. / 1023.,
+                    "frame {slot} channel {channel}: a later color pass overwrote an earlier frame"
+                );
+            }
+        }
+    }
+    drop(completions);
+    assert_eq!(
+        renderer.color_scratch_pool_for_test().stats_for_test().1,
+        2,
+        "retirement must not return the same color images a second time"
+    );
+}
+
 #[test]
 #[ignore = "requires real DRM render node and Vulkan validation"]
 fn sdr_identity_output_matches_full_transform_with_extended_premultiplied_alpha() {

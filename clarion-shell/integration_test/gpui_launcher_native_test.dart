@@ -258,6 +258,30 @@ void main() {
       'scope': 'Real production LauncherBridge with a private fake-GIO catalog',
       'pointer': 'Isolated compositor virtual pointer; no physical input claim',
     };
+    final timeline = <Map<String, Object?>>[];
+    final elapsed = Stopwatch()..start();
+    String? lastState;
+    void recordState() {
+      final state =
+          '${controller.panel.name} '
+          '${controller.externalLauncherRequest} '
+          '${controller.externalLauncherVisible} ${controller.error}';
+      if (state == lastState) return;
+      lastState = state;
+      timeline.add({'ms': elapsed.elapsedMilliseconds, 'state': state});
+    }
+
+    controller.addListener(recordState);
+    final eventSubscription = bridge.events.listen((event) {
+      timeline.add({
+        'ms': elapsed.elapsedMilliseconds,
+        'event': event.type,
+        'request': event.requestId,
+        'panel': controller.panel.name,
+        'currentRequest': controller.externalLauncherRequest,
+        'visible': controller.externalLauncherVisible,
+      });
+    });
     Future<Map<String, dynamic>> opened() async {
       await _wait(
         tester,
@@ -346,6 +370,18 @@ void main() {
       evidence['opened'] = await opened();
       await _capture(env, 'gpui-launcher-native-apps');
 
+      await _key(env, ['-P', 'a', '-s', '900', '-p', 'a']);
+      await _key(env, ['-M', 'ctrl', '-k', 'a', '-k', 'c', '-m', 'ctrl']);
+      final repeated = await Process.run(
+        env['CLARION_SHELL_WL_PASTE'] ?? 'wl-paste',
+        ['--no-newline'],
+        environment: env,
+      ).timeout(const Duration(seconds: 3));
+      expect(repeated.exitCode, 0);
+      final heldText = repeated.stdout as String;
+      expect(heldText, matches(RegExp(r'^a{2,}$')));
+      evidence['heldKeyRepeatedCharacters'] = heldText.length;
+      // The selection from copying replaces the held-key diagnostic query.
       await _key(env, ['uniquealpha']);
       await _key(env, ['-M', 'ctrl', '-k', 'a', '-k', 'c', '-m', 'ctrl']);
       final copied = await Process.run(
@@ -402,6 +438,19 @@ void main() {
       evidence['afterEscape'] = await closed();
       await _capture(env, 'gpui-launcher-native-closed');
 
+      final repeat =
+          (int.tryParse(env['CLARION_SHELL_LAUNCHER_REPEAT'] ?? '') ?? 0).clamp(
+            0,
+            50,
+          );
+      for (var cycle = 0; cycle < repeat; cycle++) {
+        await _clickApps(tester, binding, controller, env);
+        await opened();
+        await _key(env, ['-k', 'Escape']);
+        await closed();
+        evidence['completedReopenCycles'] = cycle + 1;
+      }
+
       await _clickApps(tester, binding, controller, env);
       await opened();
       controller.setUseExternalLauncher(false);
@@ -446,10 +495,13 @@ void main() {
         wrapWithView: false,
       );
       await bridge.dispose();
+      await eventSubscription.cancel();
+      controller.removeListener(recordState);
       controller.dispose();
       await _window.invokeMethod<void>('setExpanded', false);
       await _window.invokeMethod<void>('setShellStyle', 'material');
       evidence['ignoredUnattachedDeviceEvents'] = devices.ignored;
+      evidence['launcherEvents'] = timeline;
       await File(
         '${captures.path}/gpui-launcher-native-evidence.json',
       ).writeAsString(const JsonEncoder.withIndent('  ').convert(evidence));

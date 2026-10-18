@@ -2,7 +2,7 @@
 layout(push_constant) uniform ColorPushConstants {
     mat4 matrix;
     vec4 uv_bounds;
-    vec4 gamut[3]; // [0].w absolute normalization; [1].w exact default-SDR identity
+    vec4 gamut[3]; // [0].w absolute normalization; [1].w output / bounded scene identity
     vec4 source; // transfer, minimum nits, code-one span nits, reference nits
     vec4 target;
     vec4 mapping; // source peak, target peak, intent (0 perceptual / 1 relative / 2 absolute), clamp
@@ -64,6 +64,14 @@ void main() {
         // Exact for min=0, code-one=reference=peak=80 and identical sRGB.
         // Clamp after premultiplication equivalently to the full color pass.
         out_color = vec4(clamp(sample_color.rgb, vec3(0.0), vec3(alpha)), alpha);
+        return;
+    }
+    if (pc.gamut[1].w == 2.0 && all(greaterThanEqual(sample_color.rgb, vec3(0.0)))
+        && all(lessThanEqual(sample_color.rgb, vec3(alpha)))) {
+        // Default SDR in an HDR scene: perceptual black/white adaptation and
+        // target normalization cancel exactly. Keep the general transform for
+        // extended values and RGB greater than alpha, even from UNORM clients.
+        out_color = vec4(sample_color.rgb, alpha);
         return;
     }
     vec3 encoded = sample_color.rgb / alpha;

@@ -28,9 +28,11 @@ pub enum Operation {
     NativeBlur,
     NativeAllocation,
     TransitionCapture,
+    VulkanRecordSubmit,
+    VulkanFenceExport,
 }
 impl Operation {
-    const COUNT: usize = Self::TransitionCapture as usize + 1;
+    const COUNT: usize = Self::VulkanFenceExport as usize + 1;
 
     fn threshold(self) -> Duration {
         match self {
@@ -43,7 +45,9 @@ impl Operation {
             | Self::NativeBackground
             | Self::NativeBlur
             | Self::NativeAllocation
-            | Self::TransitionCapture => SLOW_SUBPHASE,
+            | Self::TransitionCapture
+            | Self::VulkanRecordSubmit
+            | Self::VulkanFenceExport => SLOW_SUBPHASE,
             _ => SLOW,
         }
     }
@@ -70,6 +74,8 @@ impl Operation {
             Self::NativeBlur => "background-blur",
             Self::NativeAllocation => "offscreen-allocation",
             Self::TransitionCapture => "transition-capture",
+            Self::VulkanRecordSubmit => "vulkan-record-submit",
+            Self::VulkanFenceExport => "vulkan-fence-export",
         }
     }
 }
@@ -239,6 +245,8 @@ mod tests {
             Operation::NativeBlur,
             Operation::NativeAllocation,
             Operation::TransitionCapture,
+            Operation::VulkanRecordSubmit,
+            Operation::VulkanFenceExport,
         ];
         assert_eq!(phases.len(), Operation::COUNT);
         let mut labels = std::collections::HashSet::new();

@@ -143,6 +143,27 @@ its parent, the parent's `bin`, then absolute PATH entries. The installer puts
 `clarion-launcher` beside `clarion-shell` in one versioned release. A running old
 Shell therefore continues using its own release after a new one is installed.
 
+After the Shell's first rasterized frame, an enabled external launcher starts
+its hidden `--serve` daemon in the background. This prepares the catalog, fonts
+and GPUI device before the first Apps click. Warmup sends no presentation or
+reload command, changes no request ID and maps no surface. Show shares an
+in-progress connection; warmup failure is optional and the next Show retries.
+
+Closing Apps still destroys its layer-shell role and releases keyboard focus.
+GPUI retains device-owned render pipelines across these window lifetimes,
+keyed by attachment format, alpha mode and path sample count. Vulkan handles
+are released after the cache and all renderers using them have dropped their
+references. Keyboard repeat is cancelled when its surface loses focus or is
+destroyed, and repeat timers only address their original surface. Escape from a
+closed panel therefore cannot dismiss a newly opened panel.
+
+Set `GPUI_STARTUP_TRACE=1` to record catalog/application initialization, the
+actual GPUI device and driver, and surface/pipeline creation time. A `Visible`
+reply confirms window creation, so latency acceptance must also observe the
+first attached client buffer or the compositor's actual presentation. Hidden
+warmup does not prove that initialization finishes before an immediate click
+during login, and it does not measure physical HDR presentation latency.
+
 ## IPC and lifecycle
 
 `$XDG_RUNTIME_DIR/clarion-launcher.sock` is a mode-0600 Unix socket guarded by a

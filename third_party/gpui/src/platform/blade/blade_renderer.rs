@@ -11,7 +11,10 @@ use blade_util::{BufferBelt, BufferBeltDescriptor};
 use bytemuck::{Pod, Zeroable};
 #[cfg(target_os = "macos")]
 use media::core_video::CVMetalTextureCache;
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 const MAX_FRAME_TIME_MS: u32 = 10000;
 
@@ -123,6 +126,7 @@ struct PathRasterizationVertex {
 }
 
 struct BladePipelines {
+    gpu: Arc<gpu::Context>,
     quads: gpu::RenderPipeline,
     shadows: gpu::RenderPipeline,
     path_rasterization: gpu::RenderPipeline,
@@ -134,7 +138,7 @@ struct BladePipelines {
 }
 
 impl BladePipelines {
-    fn new(gpu: &gpu::Context, surface_info: gpu::SurfaceInfo, path_sample_count: u32) -> Self {
+    fn new(gpu: Arc<gpu::Context>, surface_info: gpu::SurfaceInfo, path_sample_count: u32) -> Self {
         use gpu::ShaderData as _;
 
         log::info!(
@@ -167,6 +171,7 @@ impl BladePipelines {
         }];
 
         Self {
+            gpu: Arc::clone(&gpu),
             quads: gpu.create_render_pipeline(gpu::RenderPipelineDesc {
                 name: "quads",
                 data_layouts: &[&ShaderQuadsData::layout()],
@@ -315,22 +320,55 @@ impl BladePipelines {
     }
 }
 
+impl Drop for BladePipelines {
+    fn drop(&mut self) {
+        let gpu = Arc::clone(&self.gpu);
+        self.destroy(&gpu);
+    }
+}
+
+type PipelineKey = (gpu::TextureFormat, gpu::AlphaMode, u32);
+
+/// Pipelines depend on the device, attachment format, blend mode and path MSAA,
+/// but not the window or its size. The cache belongs to one BladeContext and
+/// survives layer-shell unmapping, which otherwise recompiles all eight
+/// pipelines every time the launcher opens. Each pipeline retains its device
+/// until the cache and every renderer using it have released their references.
+#[derive(Clone, Default)]
+pub(super) struct BladePipelineCache(Arc<Mutex<HashMap<PipelineKey, Arc<BladePipelines>>>>);
+
+impl BladePipelineCache {
+    fn get(
+        &self,
+        gpu: &Arc<gpu::Context>,
+        surface_info: gpu::SurfaceInfo,
+        path_sample_count: u32,
+    ) -> Arc<BladePipelines> {
+        let key = (surface_info.format, surface_info.alpha, path_sample_count);
+        let mut cache = self.0.lock().expect("Blade pipeline cache poisoned");
+        Arc::clone(cache.entry(key).or_insert_with(|| {
+            Arc::new(BladePipelines::new(
+                Arc::clone(gpu),
+                surface_info,
+                path_sample_count,
+            ))
+        }))
+    }
+}
+
 pub struct BladeSurfaceConfig {
     pub size: gpu::Extent,
     pub transparent: bool,
 }
 
-//Note: we could see some of these fields moved into `BladeContext`
-// so that they are shared between windows. E.g. `pipelines`.
-// But that is complicated by the fact that pipelines depend on
-// the format and alpha mode.
 pub struct BladeRenderer {
     gpu: Arc<gpu::Context>,
     surface: gpu::Surface,
     surface_config: gpu::SurfaceConfig,
     command_encoder: gpu::CommandEncoder,
     last_sync_point: Option<gpu::SyncPoint>,
-    pipelines: BladePipelines,
+    pipeline_cache: BladePipelineCache,
+    pipelines: Arc<BladePipelines>,
     instance_belt: BufferBelt,
     atlas: Arc<BladeAtlas>,
     atlas_sampler: gpu::Sampler,
@@ -349,6 +387,8 @@ impl BladeRenderer {
         window: &I,
         config: BladeSurfaceConfig,
     ) -> anyhow::Result<Self> {
+        let started = (std::env::var("GPUI_STARTUP_TRACE").as_deref() == Ok("1"))
+            .then(std::time::Instant::now);
         let surface_config = gpu::SurfaceConfig {
             size: config.size,
             usage: gpu::TextureUsage::TARGET,
@@ -361,17 +401,19 @@ impl BladeRenderer {
             .gpu
             .create_surface_configured(window, surface_config)
             .map_err(|err| anyhow::anyhow!("Failed to create surface: {err:?}"))?;
+        let surface_ms = started.map(|started| started.elapsed().as_secs_f64() * 1000.0);
 
         let command_encoder = context.gpu.create_command_encoder(gpu::CommandEncoderDesc {
             name: "main",
             buffer_count: 2,
         });
         let rendering_parameters = RenderingParameters::from_env(context);
-        let pipelines = BladePipelines::new(
+        let pipelines = context.pipeline_cache.get(
             &context.gpu,
             surface.info(),
             rendering_parameters.path_sample_count,
         );
+        let pipelines_ms = started.map(|started| started.elapsed().as_secs_f64() * 1000.0);
         let instance_belt = BufferBelt::new(BufferBeltDescriptor {
             memory: gpu::Memory::Shared,
             min_chunk_size: 0x1000,
@@ -401,6 +443,14 @@ impl BladeRenderer {
                 rendering_parameters.path_sample_count,
             )
             .unzip();
+        if let Some(started) = started {
+            eprintln!(
+                "GPUI startup: surface_ms={:.3} pipelines_ms={:.3} renderer_ms={:.3}",
+                surface_ms.unwrap_or_default(),
+                pipelines_ms.unwrap_or_default() - surface_ms.unwrap_or_default(),
+                started.elapsed().as_secs_f64() * 1000.0,
+            );
+        }
 
         #[cfg(target_os = "macos")]
         let core_video_texture_cache = unsafe {
@@ -416,6 +466,7 @@ impl BladeRenderer {
             surface_config,
             command_encoder,
             last_sync_point: None,
+            pipeline_cache: context.pipeline_cache.clone(),
             pipelines,
             instance_belt,
             atlas,
@@ -517,8 +568,7 @@ impl BladeRenderer {
             self.surface_config.transparent = transparent;
             self.gpu
                 .reconfigure_surface(&mut self.surface, self.surface_config);
-            self.pipelines.destroy(&self.gpu);
-            self.pipelines = BladePipelines::new(
+            self.pipelines = self.pipeline_cache.get(
                 &self.gpu,
                 self.surface.info(),
                 self.rendering_parameters.path_sample_count,
@@ -627,7 +677,6 @@ impl BladeRenderer {
         self.gpu.destroy_sampler(self.atlas_sampler);
         self.instance_belt.destroy(&self.gpu);
         self.gpu.destroy_command_encoder(&mut self.command_encoder);
-        self.pipelines.destroy(&self.gpu);
         self.gpu.destroy_surface(&mut self.surface);
         self.gpu.destroy_texture(self.path_intermediate_texture);
         self.gpu

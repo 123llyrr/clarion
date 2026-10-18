@@ -302,7 +302,7 @@ pub struct VulkanRenderer {
     texture_cache: Rc<RefCell<HashMap<WeakDmabuf, dmabuf::CachedDmabufTexture>>>,
     target_cache: HashMap<TargetKey, CachedTarget>,
     // Textures retain their context; the context must never own this pool.
-    scratch_textures: Arc<std::sync::Mutex<Vec<VulkanTexture>>>,
+    scratch_textures: Arc<std::sync::Mutex<frame::ScratchPool>>,
 }
 
 impl VulkanRenderer {
