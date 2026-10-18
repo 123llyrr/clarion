@@ -18,7 +18,15 @@ use super::VulkanTexture;
 use crate::render_helpers::particles::ParticleVertex;
 
 const MAX_IDLE_SCRATCH_IMAGES: usize = 64;
-const MAX_IDLE_SCRATCH_BYTES: u64 = 256 * 1024 * 1024;
+const BASE_IDLE_SCRATCH_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_IDLE_SCRATCH_BYTES: u64 = 512 * 1024 * 1024;
+
+fn color_scratch_budget(local_heap_bytes: u64) -> u64 {
+    // Six 4K FP16 window conversions exceed 256 MiB even without decorations.
+    // Retain their working set on larger devices instead of allocating and
+    // backing new images on every submission. Do not reserve memory up front.
+    (local_heap_bytes / 8).clamp(BASE_IDLE_SCRATCH_BYTES, MAX_IDLE_SCRATCH_BYTES)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScratchClass {
@@ -32,13 +40,23 @@ struct ScratchEntry {
     class: ScratchClass,
 }
 
-/// Separate reuse classes share a 64-image / 256-MiB idle budget.
+/// Separate reuse classes share one bounded idle budget and at most 64 images.
 /// A single decorated client can need more than eight color intermediates.
 /// Keep small subsurfaces from exhausting the object limit and evicting large
 /// window conversions every frame; actual allocation bytes remain bounded.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ScratchPool {
     entries: Vec<ScratchEntry>,
+    byte_limit: u64,
+}
+
+impl Default for ScratchPool {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            byte_limit: BASE_IDLE_SCRATCH_BYTES,
+        }
+    }
 }
 
 impl ScratchPool {
@@ -71,6 +89,18 @@ impl ColorScratchPool {
         context: &Arc<VulkanContext>,
         textures: Arc<std::sync::Mutex<ScratchPool>>,
     ) -> Arc<Self> {
+        let properties = unsafe {
+            context
+                .instance
+                .get_physical_device_memory_properties(context.physical_device)
+        };
+        let local_heap_bytes = properties.memory_heaps[..properties.memory_heap_count as usize]
+            .iter()
+            .filter(|heap| heap.flags.contains(vk::MemoryHeapFlags::DEVICE_LOCAL))
+            .map(|heap| heap.size)
+            .max()
+            .unwrap_or(0);
+        textures.lock().unwrap().byte_limit = color_scratch_budget(local_heap_bytes);
         Arc::new(Self {
             context: Arc::downgrade(context),
             queue: context.graphics_queue,
@@ -133,11 +163,11 @@ fn recycle_scratch_as(
     let mut bytes: u64 = idle.iter().map(scratch_bytes).sum();
     for texture in textures {
         let incoming = scratch_bytes(&texture);
-        if incoming > MAX_IDLE_SCRATCH_BYTES {
+        if incoming > idle.byte_limit {
             discarded.push(texture);
             continue;
         }
-        while idle.len() >= MAX_IDLE_SCRATCH_IMAGES || bytes + incoming > MAX_IDLE_SCRATCH_BYTES {
+        while idle.len() >= MAX_IDLE_SCRATCH_IMAGES || bytes + incoming > idle.byte_limit {
             let oldest = idle.entries.remove(0).texture;
             bytes -= scratch_bytes(&oldest);
             discarded.push(oldest);
@@ -3095,8 +3125,42 @@ mod tests {
     use crate::render_helpers::vulkan::hardware_tests::setup;
 
     #[test]
+    fn color_cache_budget_is_device_bounded_without_upfront_reservation() {
+        let mib = 1024 * 1024;
+        for (heap, expected) in [
+            (0, 256 * mib),
+            (1024 * mib, 256 * mib),
+            (2048 * mib, 256 * mib),
+            (3072 * mib, 384 * mib),
+            (4096 * mib, 512 * mib),
+            (u64::MAX, 512 * mib),
+        ] {
+            assert_eq!(color_scratch_budget(heap), expected);
+        }
+        let pool = ScratchPool::default();
+        assert!(pool.is_empty());
+        assert_eq!(pool.byte_limit, BASE_IDLE_SCRATCH_BYTES);
+    }
+
+    #[test]
     #[ignore = "4K HDR DMA-BUF scene; run serially on a real DRM render node"]
     fn hdr_decorated_client_reuses_large_and_small_conversions_across_inflight_frames() {
+        measure_decorated_scene(1, false);
+    }
+
+    #[test]
+    #[ignore = "multiwindow HDR cache working set; run serially on a real DRM render node"]
+    fn hdr_multiwindow_working_set_avoids_byte_budget_thrashing() {
+        let misses = measure_decorated_scene(6, true);
+        let reused = measure_decorated_scene(6, false);
+        assert!(
+            misses > 0,
+            "the constrained control must reproduce allocation churn"
+        );
+        assert_eq!(reused, 0, "the device budget must retain this working set");
+    }
+
+    fn measure_decorated_scene(large_windows: usize, constrained: bool) -> u64 {
         use smithay::backend::allocator::dmabuf::AsDmabuf;
         use smithay::backend::allocator::{Allocator, Fourcc};
         use smithay::backend::renderer::{Bind, Color32F, Frame, Renderer};
@@ -3104,6 +3168,22 @@ mod tests {
 
         let (renderer, mut gles, mut allocator) = setup();
         let ctx = renderer.ctx.as_ref().unwrap();
+        let pool = ColorScratchPool::new(ctx, renderer.scratch_textures.clone());
+        let device_budget = renderer.scratch_textures.lock().unwrap().byte_limit;
+        if constrained {
+            renderer.scratch_textures.lock().unwrap().byte_limit =
+                if device_budget < MAX_IDLE_SCRATCH_BYTES {
+                    BASE_IDLE_SCRATCH_BYTES / 2
+                } else {
+                    BASE_IDLE_SCRATCH_BYTES
+                };
+        }
+        let (window_width, window_height) =
+            if large_windows > 1 && device_budget < MAX_IDLE_SCRATCH_BYTES {
+                (2560, 1440)
+            } else {
+                (3840, 2160)
+            };
         let modifiers = crate::render_helpers::vulkan::hardware_tests::modifiers(
             &renderer,
             &gles,
@@ -3112,7 +3192,7 @@ mod tests {
         // One application plus its title, corners, edges and labels exceeded
         // the old eight-object cache despite using far less than 256 MiB.
         let sizes = [
-            (3840, 2160),
+            (window_width, window_height),
             (3840, 128),
             (26, 26),
             (26, 26),
@@ -3122,6 +3202,10 @@ mod tests {
             (3840, 5),
         ]
         .into_iter()
+        .chain(std::iter::repeat_n(
+            (window_width, window_height),
+            large_windows - 1,
+        ))
         .chain((0..16).map(|n| (64 + n * 3, 24)))
         .collect::<Vec<_>>();
         let mut buffers = Vec::new();
@@ -3176,10 +3260,10 @@ mod tests {
             .map(|buffer| renderer.import_dmabuf_as_target(buffer).unwrap())
             .collect::<Vec<_>>();
         let output_color = crate::color::HdrOutputSettings::default().description();
-        let pool = ColorScratchPool::new(ctx, renderer.scratch_textures.clone());
         let mut pending = std::collections::VecDeque::<Arc<GpuCompletion>>::new();
         let mut images = Vec::new();
         let mut samples = Vec::new();
+        let mut warm_allocations = 0;
         for index in 0..64 {
             // Exercise ordered reuse while the previous two completion owners
             // still retain every image. These test-owned DMA-BUFs are immutable
@@ -3236,7 +3320,7 @@ mod tests {
             if index == 0 {
                 assert_eq!(converted.len(), sources.len());
                 images = converted;
-            } else {
+            } else if !constrained {
                 assert_eq!(
                     converted, images,
                     "decorations evicted a live scene's conversion working set"
@@ -3251,10 +3335,14 @@ mod tests {
             let elapsed = started.elapsed().as_secs_f64() * 1000.;
             pending.push_back(completion);
             if index >= 16 {
+                warm_allocations += scratch_allocation_count_for_test() - before_allocations;
                 samples.push(elapsed);
             }
             let (count, _, bytes) = pool.stats_for_test();
-            assert!(count <= MAX_IDLE_SCRATCH_IMAGES && bytes <= MAX_IDLE_SCRATCH_BYTES);
+            assert!(
+                count <= MAX_IDLE_SCRATCH_IMAGES
+                    && bytes <= renderer.scratch_textures.lock().unwrap().byte_limit
+            );
         }
         for completion in pending {
             completion.prepare_retirement().unwrap();
@@ -3263,12 +3351,16 @@ mod tests {
         eprintln!(
             "HDR_DECORATED_SUBMISSION {}",
             serde_json::json!({
+                "large_windows": large_windows, "window_size": [window_width, window_height],
+                "constrained_control": constrained, "device_budget_bytes": device_budget,
+                "warm_allocations": warm_allocations,
                 "sources": sources.len(), "samples": samples.len(), "p50_ms": samples[24],
                 "p95_ms": samples[45], "max_ms": samples[47],
                 "scope": "4K EGL DMA-BUF sources, FP16 scene, 10-bit HDR outputs; CPU record/submit only; explicit completion waits excluded"
             })
         );
         drop(buffers);
+        warm_allocations
     }
 
     #[test]
@@ -3501,6 +3593,7 @@ mod tests {
         let (renderer, _, _) = setup();
         let ctx = renderer.ctx.as_ref().unwrap();
         let pool = std::sync::Mutex::new(ScratchPool::default());
+        let byte_limit = pool.lock().unwrap().byte_limit;
         let make_texture = |width, height| {
             allocate_texture(
                 ctx,
@@ -3518,12 +3611,12 @@ mod tests {
         };
         // Five quarter-budget RGBA images exceed the byte budget, independent
         // of its configured value; driver padding can only increase their cost.
-        let side = (MAX_IDLE_SCRATCH_BYTES / (4 * 4)).isqrt() as u32;
+        let side = (byte_limit / (4 * 4)).isqrt() as u32;
         recycle_scratch(&pool, (0..5).map(|_| make_texture(side, side)));
         {
             let cached = pool.lock().unwrap();
             assert!(cached.len() < 5);
-            assert!(cached.iter().map(scratch_bytes).sum::<u64>() <= MAX_IDLE_SCRATCH_BYTES);
+            assert!(cached.iter().map(scratch_bytes).sum::<u64>() <= byte_limit);
             for texture in cached.iter() {
                 let requirements =
                     unsafe { ctx.device.get_image_memory_requirements(texture.image()) };
@@ -3535,7 +3628,7 @@ mod tests {
             }
         }
         let oversized = make_texture(side * 2 + 1, side * 2);
-        assert!(scratch_bytes(&oversized) > MAX_IDLE_SCRATCH_BYTES);
+        assert!(scratch_bytes(&oversized) > byte_limit);
         let weak = Arc::downgrade(&oversized.inner);
         recycle_scratch(&pool, std::iter::once(oversized));
         assert!(
@@ -3548,7 +3641,7 @@ mod tests {
         );
         let cached = pool.lock().unwrap();
         assert_eq!(cached.len(), MAX_IDLE_SCRATCH_IMAGES);
-        assert!(cached.iter().map(scratch_bytes).sum::<u64>() <= MAX_IDLE_SCRATCH_BYTES);
+        assert!(cached.iter().map(scratch_bytes).sum::<u64>() <= byte_limit);
         drop(cached);
         recycle_scratch_as(
             &pool,
@@ -3562,7 +3655,7 @@ mod tests {
             MAX_IDLE_SCRATCH_IMAGES,
             "reuse categories share the image budget"
         );
-        assert!(mixed.iter().map(scratch_bytes).sum::<u64>() <= MAX_IDLE_SCRATCH_BYTES);
+        assert!(mixed.iter().map(scratch_bytes).sum::<u64>() <= byte_limit);
         assert!(mixed
             .entries
             .iter()
