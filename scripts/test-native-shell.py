@@ -283,8 +283,33 @@ def seed_catalog(private, env, theme="dark", visual=False):
     desktop = Path(env["HOME"]) / "Desktop"
     desktop.mkdir()
     (desktop / "测试文档.txt").write_text("Owned native Shell fixture.\n")
+    if visual:
+        for index in range(8):
+            (desktop / f"项目归档 {index + 1:02}").mkdir()
+        for index in range(18):
+            (desktop / f"春日漫剧-源代码与发布记录-2026-10-19-版本-{index + 1:02}.txt").write_text(
+                "Owned desktop label and grid fixture.\n")
+        shutil.copyfile(wallpaper, desktop / "桌面图片.png")
     (Path(env["XDG_CONFIG_HOME"]) / "user-dirs.dirs").write_text(f'XDG_DESKTOP_DIR="{desktop}"\n')
     return identifiers
+
+
+def seed_notification(env):
+    """Only the owned private bus receives this long, actionable fixture."""
+    title = "下载完成：这是需要自动换行显示的中文通知标题，不能只显示开头"
+    body = ("文件已保存到下载目录，请核对下面的完整信息。\n"
+            "这是第二行内容。长通知需要能够滚动阅读，操作按钮也应始终可以到达。\n" * 5
+            + "验收结尾：完整正文与第三个操作都必须保留。")
+    output = run([
+        "gdbus", "call", "--session", "--dest", "org.freedesktop.Notifications",
+        "--object-path", "/org/freedesktop/Notifications",
+        "--method", "org.freedesktop.Notifications.Notify",
+        "Clarion 通知排版验收", "0", "", title, body,
+        "['default', '查看详情', 'open', '打开文件夹', 'later', '稍后处理']", "{}", "0",
+    ], env)
+    require(re.fullmatch(r"\(uint32 \d+,\)\s*", output),
+            f"Unexpected private notification reply: {output}")
+    return {"title_characters": len(title), "body_characters": len(body), "actions": 3}
 
 
 def require_no_legacy_launcher(roots):
@@ -674,6 +699,48 @@ def exercise(args):
         report["panel_geometry"] = {}
         if args.capture:
             run(["grim", "-o", "winit", str(artifacts / "desktop.png")], env)
+        if args.visual_fixture:
+            report["notification_fixture"] = seed_notification(env)
+            logical = ipc("outputs")["winit"]["logical"]
+            def notification_geometry():
+                trace = (artifacts / "shell.log").read_text()
+                geometry = negotiated_layer_geometry(
+                    trace, "clarion-notification", logical)
+                if (geometry and geometry["height"] > 124
+                        and geometry["requested_size"] == [geometry["width"], geometry["height"]]
+                        and geometry["x"] >= 0 and geometry["y"] >= 0
+                        and geometry["x"] + geometry["width"] <= logical["width"]
+                        and geometry["y"] + geometry["height"] <= logical["height"]):
+                    role = geometry["surface_role_id"]
+                    surface = re.search(
+                        rf'get_layer_surface\(new id zwlr_layer_surface_v1[@#]{role}, '
+                        r'wl_surface[@#](\d+),', trace)
+                    acks = list(re.finditer(
+                        rf'zwlr_layer_surface_v1[@#]{role}\.ack_configure\(\d+\)', trace))
+                    if surface and acks:
+                        # Negotiation alone precedes painting the resized card.
+                        # Require a real buffer commit after its latest ack.
+                        tail = trace[acks[-1].end():]
+                        rendered = re.search(
+                            rf'wl_surface[@#]{surface.group(1)}\.attach\(wl_buffer[@#]\d+,', tail)
+                        if rendered and re.search(
+                            rf'wl_surface[@#]{surface.group(1)}\.commit\(\)', tail[rendered.end():]):
+                            return geometry
+                return None
+            geometry = wait_for("wrapped notification negotiated geometry", notification_geometry,
+                                (core, shell), args.timeout)
+            report["notification_geometry"] = geometry
+            if args.capture:
+                barrier = subprocess.run(["grim", "-t", "ppm", "-o", "winit", "-"],
+                                         env=env, capture_output=True, timeout=10)
+                require(barrier.returncode == 0, "Owned notification presentation barrier failed")
+                ppm_center_sample(barrier.stdout)
+                run(["grim", "-o", "winit", str(artifacts / "notification-toast.png")], env)
+            # Opening the center dismisses the banner while retaining its text.
+            send("notifications")
+            wait_for("notification center opened", panel, (core, shell), args.timeout)
+            send("close")
+            wait_for("notification center closed", lambda: not panel(), (core, shell), args.timeout)
         for command in ("launcher", "control-center", "notifications", "screenshot", "preferences", "recent-content"):
             align_shell_surfaces(f"before-{command}")
             started = time.monotonic()
@@ -819,6 +886,8 @@ def main():
         exercise(args)
         return 0
     require(shutil.which("dbus-run-session"), "dbus-run-session is required")
+    if args.visual_fixture:
+        require(shutil.which("gdbus"), "--visual-fixture requires gdbus for owned notification checks")
     if args.capture:
         require(shutil.which("grim"), "--capture requires grim")
     runtime = Path(os.environ.get("XDG_RUNTIME_DIR", ""))

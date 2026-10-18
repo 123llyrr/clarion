@@ -44,6 +44,8 @@ pub struct ShellView {
     filter: u8,
     selection: usize,
     scroll: ScrollHandle,
+    #[cfg(test)]
+    notification_regions: std::rc::Rc<std::cell::RefCell<Vec<Bounds<Pixels>>>>,
     focus: FocusHandle,
     activated: bool,
     image_cache: std::collections::HashMap<String, Arc<Image>>,
@@ -164,6 +166,8 @@ impl ShellView {
             filter: 0,
             selection: 0,
             scroll: ScrollHandle::new(),
+            #[cfg(test)]
+            notification_regions: Default::default(),
             focus: cx.focus_handle(),
             activated: false,
             image_cache: Default::default(),
@@ -326,7 +330,7 @@ impl ShellView {
                     .map(|app| app.name.clone())
                     .unwrap_or_else(|| id.to_owned())
             })
-            .unwrap_or_else(|| "访达".into());
+            .unwrap_or_else(|| "Home".into());
         let mark = image_path(if host.dark() {
             "clarion-mark-white.png"
         } else {
@@ -839,7 +843,7 @@ impl ShellView {
         match &panel {
             Panel::Apps => return self.macos_launchpad(host, p, window, cx),
             Panel::Preferences => return self.macos_preferences(host, p),
-            Panel::Notifications => return self.macos_notifications(host, p, cx),
+            Panel::Notifications => return self.macos_notifications(host, p, window, cx),
             _ => {}
         }
         let mut body = div()
@@ -959,30 +963,7 @@ impl Render for ShellView {
             Surface::Panel => self.panel(host, p, window, cx),
             Surface::Toast(id) => {
                 if let Some(item) = host.notifications.iter().find(|n| n.id == id) {
-                    div()
-                        .size_full()
-                        .p_4()
-                        .rounded(px(14.))
-                        .bg(p.panel)
-                        .border_1()
-                        .border_color(p.line)
-                        .flex()
-                        .flex_col()
-                        .gap_2()
-                        .child(div().text_xs().text_color(p.muted).child(item.app.clone()))
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(item.title.clone()),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .overflow_hidden()
-                                .child(item.body.chars().take(180).collect::<String>()),
-                        )
-                        .into_any_element()
+                    self.macos_toast(item, host, p, window, cx)
                 } else {
                     div().into_any_element()
                 }
@@ -1005,7 +986,9 @@ impl Render for ShellView {
                     .into_any_element()
             }
         };
-        if matches!(self.kind, Surface::Panel | Surface::Toast(_)) {
+        // Notifications set their regions after layout, when wrapped card
+        // heights and the clamped scroll offset are available.
+        if matches!(self.kind, Surface::Panel) && host.panel != Some(Panel::Notifications) {
             let (x, y, w, h, radius) =
                 if matches!(self.kind, Surface::Panel) && host.panel == Some(Panel::Apps) {
                     (0., 0., width, height, 0.)
@@ -1015,15 +998,6 @@ impl Render for ShellView {
             let mut regions =
                 if matches!(self.kind, Surface::Panel) && host.panel == Some(Panel::Apps) {
                     macos_launchpad::backdrop_regions(host, width, height)
-                } else if matches!(self.kind, Surface::Panel)
-                    && host.panel == Some(Panel::Notifications)
-                {
-                    macos_notifications::card_regions(
-                        width,
-                        height,
-                        host.notifications.len(),
-                        f32::from(self.scroll.offset().y),
-                    )
                 } else {
                     rounded_region(w, h, radius)
                 };

@@ -18,6 +18,7 @@ use anyhow::{Context as _, Result};
 use async_channel::Sender;
 use gpui::{prelude::*, *};
 use image::ImageReader;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::input::{QueryChanged, TextInput};
 
@@ -27,6 +28,11 @@ const MAX_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
 const CONFIG_LIMIT: u64 = 65536;
 const MAX_PREVIEW_TEXT: u64 = 256 * 1024;
 const MAX_OPEN_SELECTION: usize = 16;
+const DESKTOP_MARGIN: f32 = 16.;
+const DESKTOP_CELL_WIDTH: f32 = 112.;
+const DESKTOP_CELL_HEIGHT: f32 = 112.;
+const DESKTOP_ICON_SIZE: f32 = 64.;
+const DESKTOP_LABEL_WIDTH: f32 = 104.;
 
 actions!(
     clarion_desktop,
@@ -39,8 +45,14 @@ actions!(
         QuickLook,
         NewFolder,
         Cancel,
-        NextSelection,
-        PreviousSelection
+        SelectUp,
+        SelectDown,
+        SelectLeft,
+        SelectRight,
+        ExtendUp,
+        ExtendDown,
+        ExtendLeft,
+        ExtendRight
     ]
 );
 
@@ -107,6 +119,174 @@ enum Update {
     },
 }
 
+#[derive(Clone, Copy, Debug)]
+enum SelectionDirection {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+/// All desktop geometry is in output-local logical pixels. Painting, marquee
+/// hit testing and arrow navigation share this column-major layout.
+#[derive(Clone, Copy, Debug)]
+struct DesktopGrid {
+    origin: Point<Pixels>,
+    width: f32,
+    height: f32,
+    rows: usize,
+    cell_width: f32,
+}
+
+impl DesktopGrid {
+    fn new(viewport: Size<Pixels>, edges: [f32; 4], count: usize) -> Self {
+        let [top, bottom, left, right] = edges;
+        let width = (f32::from(viewport.width) - left - right - 2. * DESKTOP_MARGIN).max(1.);
+        let height = (f32::from(viewport.height) - top - bottom - 2. * DESKTOP_MARGIN).max(1.);
+        let visible_rows = (height / DESKTOP_CELL_HEIGHT).floor().max(1.) as usize;
+        let columns = (width / DESKTOP_CELL_WIDTH).floor().max(1.) as usize;
+        // Keep every entry reachable if a small output has more files than can
+        // fit. Ordinary desktops do not scroll or spread across the top row.
+        let rows = visible_rows.max(count.div_ceil(columns));
+        Self {
+            origin: point(px(left + DESKTOP_MARGIN), px(top + DESKTOP_MARGIN)),
+            width,
+            height,
+            rows,
+            cell_width: DESKTOP_CELL_WIDTH.min(width),
+        }
+    }
+
+    fn cell(&self, index: usize) -> Bounds<Pixels> {
+        let column = index / self.rows;
+        let row = index % self.rows;
+        Bounds::new(
+            point(
+                px((self.width - (column + 1) as f32 * self.cell_width).max(0.)),
+                px(row as f32 * DESKTOP_CELL_HEIGHT),
+            ),
+            size(px(self.cell_width), px(DESKTOP_CELL_HEIGHT)),
+        )
+    }
+
+    fn content_height(&self) -> f32 {
+        self.height.max(self.rows as f32 * DESKTOP_CELL_HEIGHT)
+    }
+
+    fn tile(&self, index: usize) -> Bounds<Pixels> {
+        let cell = self.cell(index);
+        Bounds::new(
+            cell.origin + point(px(4.), px(2.)),
+            size((cell.size.width - px(8.)).max(px(1.)), px(106.)),
+        )
+    }
+
+    fn local_position(&self, position: Point<Pixels>, offset: Point<Pixels>) -> Point<Pixels> {
+        position - self.origin - offset
+    }
+
+    fn contains(&self, position: Point<Pixels>) -> bool {
+        Bounds::new(self.origin, size(px(self.width), px(self.height))).contains(&position)
+    }
+
+    fn neighbor(&self, current: usize, count: usize, direction: SelectionDirection) -> usize {
+        let row = current % self.rows;
+        let column = current / self.rows;
+        match direction {
+            SelectionDirection::Up if row > 0 => current - 1,
+            SelectionDirection::Down if row + 1 < self.rows && current + 1 < count => current + 1,
+            SelectionDirection::Right if column > 0 => current - self.rows,
+            SelectionDirection::Left if (column + 1) * self.rows < count => {
+                (current + self.rows).min(count - 1)
+            }
+            _ => current,
+        }
+    }
+}
+
+struct MarqueeSelection {
+    start: Point<Pixels>,
+    end: Point<Pixels>,
+    base: BTreeSet<PathBuf>,
+}
+
+impl MarqueeSelection {
+    fn bounds(&self) -> Bounds<Pixels> {
+        Bounds::from_corners(
+            point(self.start.x.min(self.end.x), self.start.y.min(self.end.y)),
+            point(self.start.x.max(self.end.x), self.start.y.max(self.end.y)),
+        )
+    }
+
+    fn visible(&self) -> bool {
+        (self.start.x - self.end.x).abs() + (self.start.y - self.end.y).abs() >= px(3.)
+    }
+}
+
+/// Two explicitly measured lines, preserving a long filename's identifying
+/// suffix. Clip-only labels made similarly prefixed downloads indistinguishable.
+fn desktop_label(name: &str, width: f32, measure: impl Fn(&str) -> f32) -> Vec<String> {
+    let name: String = name
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect();
+    if measure(&name) <= width {
+        return vec![name];
+    }
+    let graphemes: Vec<&str> = name.graphemes(true).collect();
+    let fit_prefix = |parts: &[&str], available: f32| {
+        let mut low = 0;
+        let mut high = parts.len();
+        while low < high {
+            let middle = (low + high).div_ceil(2);
+            if measure(&parts[..middle].concat()) <= available {
+                low = middle;
+            } else {
+                high = middle - 1;
+            }
+        }
+        low
+    };
+    let first_count = fit_prefix(&graphemes, width).max(1);
+    let first = graphemes[..first_count].concat();
+    let remaining = &graphemes[first_count..];
+    if measure(&remaining.concat()) <= width {
+        return vec![first, remaining.concat()];
+    }
+    let mut suffix_start = remaining.len();
+    while suffix_start > 0 && measure(&remaining[suffix_start - 1..].concat()) <= width * 0.72 {
+        suffix_start -= 1;
+    }
+    let suffix = remaining[suffix_start..].concat();
+    let prefix_count = fit_prefix(
+        &remaining[..suffix_start],
+        (width - measure(&format!("…{suffix}"))).max(0.),
+    );
+    vec![
+        first,
+        format!("{}…{suffix}", remaining[..prefix_count].concat()),
+    ]
+}
+
+fn label_width_fn(text: &str, window: &Window) -> f32 {
+    let mut label_font = font("Noto Sans");
+    label_font.weight = FontWeight::MEDIUM;
+    let run = TextRun {
+        len: text.len(),
+        font: label_font,
+        color: rgb(0xffffff).into(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    f32::from(
+        window
+            .text_system()
+            .shape_line(text.to_owned().into(), px(12.), &[run], None)
+            .width,
+    )
+}
+
 pub struct DesktopView {
     output: String,
     actions: Sender<DesktopAction>,
@@ -116,6 +296,9 @@ pub struct DesktopView {
     wallpaper: Option<Arc<Image>>,
     selected: Option<PathBuf>,
     selected_many: BTreeSet<PathBuf>,
+    selection_anchor: Option<PathBuf>,
+    marquee: Option<MarqueeSelection>,
+    labels: HashMap<(String, u32), Vec<String>>,
     new_folder: bool,
     inspector: Option<Inspector>,
     inspection_generation: u64,
@@ -146,10 +329,14 @@ impl DesktopView {
             KeyBinding::new("f2", RenameSelection, Some("ClarionDesktop")),
             KeyBinding::new("delete", TrashSelection, Some("ClarionDesktop")),
             KeyBinding::new("escape", Cancel, Some("ClarionDesktop")),
-            KeyBinding::new("right", NextSelection, Some("ClarionDesktop")),
-            KeyBinding::new("down", NextSelection, Some("ClarionDesktop")),
-            KeyBinding::new("left", PreviousSelection, Some("ClarionDesktop")),
-            KeyBinding::new("up", PreviousSelection, Some("ClarionDesktop")),
+            KeyBinding::new("right", SelectRight, Some("ClarionDesktop")),
+            KeyBinding::new("down", SelectDown, Some("ClarionDesktop")),
+            KeyBinding::new("left", SelectLeft, Some("ClarionDesktop")),
+            KeyBinding::new("up", SelectUp, Some("ClarionDesktop")),
+            KeyBinding::new("shift-right", ExtendRight, Some("ClarionDesktop")),
+            KeyBinding::new("shift-down", ExtendDown, Some("ClarionDesktop")),
+            KeyBinding::new("shift-left", ExtendLeft, Some("ClarionDesktop")),
+            KeyBinding::new("shift-up", ExtendUp, Some("ClarionDesktop")),
         ]);
     }
 
@@ -183,6 +370,10 @@ impl DesktopView {
                         match update {
                             Update::Snapshot(snapshot) => {
                                 this.entries = snapshot.entries;
+                                this.labels.retain(|(name, _), _| {
+                                    this.entries.iter().any(|entry| &entry.name == name)
+                                });
+                                this.marquee = None;
                                 this.directory = snapshot.directory;
                                 this.wallpaper = snapshot.wallpaper;
                                 this.error = snapshot.error;
@@ -194,10 +385,16 @@ impl DesktopView {
                                 }) {
                                     this.selected = None;
                                 }
+                                if this.selection_anchor.as_ref().is_some_and(|path| {
+                                    !this.entries.iter().any(|entry| &entry.path == path)
+                                }) {
+                                    this.selection_anchor = None;
+                                }
                             }
                             Update::Error(error) => this.error = Some(error),
                             Update::Created(path) => {
                                 this.selected = Some(path.clone());
+                                this.selection_anchor = Some(path.clone());
                                 this.selected_many = [path].into();
                             }
                             Update::Inspector { generation, result } => {
@@ -227,6 +424,9 @@ impl DesktopView {
             wallpaper: None,
             selected: None,
             selected_many: BTreeSet::new(),
+            selection_anchor: None,
+            marquee: None,
+            labels: HashMap::new(),
             new_folder: false,
             inspector: None,
             inspection_generation: 0,
@@ -405,6 +605,7 @@ impl DesktopView {
             .map(|entry| entry.path.clone())
             .collect();
         self.selected = self.entries.first().map(|entry| entry.path.clone());
+        self.selection_anchor = self.selected.clone();
         self.menu = None;
         cx.notify();
     }
@@ -450,6 +651,7 @@ impl DesktopView {
         self.new_folder = true;
         self.menu = None;
         self.selected = None;
+        self.selection_anchor = None;
         self.selected_many.clear();
         self.input
             .update(cx, |input, cx| input.set_text(&self.rename_name, true, cx));
@@ -469,6 +671,7 @@ impl DesktopView {
 
     fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.menu = None;
+        self.marquee = None;
         self.rename = None;
         self.new_folder = false;
         self.inspector = None;
@@ -478,7 +681,37 @@ impl DesktopView {
         cx.notify();
     }
 
-    fn step(&mut self, forward: bool, cx: &mut Context<Self>) {
+    fn grid(&self, window: &Window) -> DesktopGrid {
+        DesktopGrid::new(
+            window.viewport_size(),
+            self.reserved_edges,
+            self.entries.len() + usize::from(self.new_folder),
+        )
+    }
+
+    fn select_range(&mut self, index: usize) {
+        let anchor = self
+            .entries
+            .iter()
+            .position(|entry| Some(&entry.path) == self.selection_anchor.as_ref())
+            .unwrap_or(index);
+        self.selected_many = self.entries[anchor.min(index)..=anchor.max(index)]
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect();
+        self.selected = Some(self.entries[index].path.clone());
+        if self.selection_anchor.is_none() {
+            self.selection_anchor = self.selected.clone();
+        }
+    }
+
+    fn step(
+        &mut self,
+        direction: SelectionDirection,
+        extend: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.rename.is_some()
             || self.new_folder
             || self.inspector.is_some()
@@ -490,14 +723,54 @@ impl DesktopView {
             .entries
             .iter()
             .position(|entry| Some(&entry.path) == self.selected.as_ref());
-        let index = match current {
-            Some(index) if forward => (index + 1).min(self.entries.len() - 1),
-            Some(index) => index.saturating_sub(1),
-            None => 0,
-        };
-        self.selected = Some(self.entries[index].path.clone());
-        self.selected_many = [self.entries[index].path.clone()].into();
+        let grid = self.grid(window);
+        let index = current
+            .map(|current| grid.neighbor(current, self.entries.len(), direction))
+            .unwrap_or(0);
+        if extend {
+            self.select_range(index);
+        } else {
+            self.selected = Some(self.entries[index].path.clone());
+            self.selection_anchor = self.selected.clone();
+            self.selected_many = [self.entries[index].path.clone()].into();
+        }
+        let bounds = grid.cell(index);
+        let mut offset = self.scroll.offset();
+        if bounds.top() + offset.y < px(0.) {
+            offset.y = -bounds.top();
+        } else if bounds.bottom() + offset.y > px(grid.height) {
+            offset.y = px(grid.height) - bounds.bottom();
+        }
+        self.scroll.set_offset(offset);
         self.menu = None;
+        cx.notify();
+    }
+
+    fn update_marquee(&mut self, position: Point<Pixels>, window: &Window, cx: &mut Context<Self>) {
+        let grid = self.grid(window);
+        let offset = self.scroll.offset();
+        let Some(marquee) = self.marquee.as_mut() else {
+            return;
+        };
+        marquee.end = grid.local_position(position, offset);
+        marquee.end.x = marquee.end.x.clamp(px(0.), px(grid.width));
+        marquee.end.y = marquee.end.y.clamp(px(0.), px(grid.content_height()));
+        let bounds = marquee.bounds();
+        self.selected_many = marquee.base.clone();
+        if marquee.visible() {
+            for (index, entry) in self.entries.iter().enumerate() {
+                if bounds.intersects(&grid.tile(index)) {
+                    self.selected_many.insert(entry.path.clone());
+                }
+            }
+        }
+        self.selected = self
+            .entries
+            .iter()
+            .rev()
+            .find(|entry| self.selected_many.contains(&entry.path))
+            .map(|entry| entry.path.clone());
+        self.selection_anchor = self.selected.clone();
         cx.notify();
     }
 
@@ -522,53 +795,16 @@ impl DesktopView {
     }
 
     fn file_icon(kind: EntryKind) -> AnyElement {
-        match kind {
-            EntryKind::Directory => div()
-                .w(px(46.))
-                .h(px(38.))
-                .relative()
-                .child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .w(px(21.))
-                        .h(px(11.))
-                        .rounded_t(px(4.))
-                        .bg(rgb(0x3b93d8)),
-                )
-                .child(
-                    div()
-                        .absolute()
-                        .top(px(7.))
-                        .left_0()
-                        .right_0()
-                        .bottom_0()
-                        .rounded(px(5.))
-                        .bg(rgb(0x64b9ed))
-                        .border_1()
-                        .border_color(rgba(0xd6efff66)),
-                )
-                .into_any_element(),
-            kind => div()
-                .w(px(34.))
-                .h(px(43.))
-                .rounded(px(5.))
-                .bg(rgb(0xe6edf5))
-                .border_1()
-                .border_color(rgba(0xffffff66))
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_xl()
-                .text_color(rgb(0x4d6c89))
-                .child(match kind {
-                    EntryKind::Image => "▧",
-                    EntryKind::Application => "◇",
-                    _ => "≡",
-                })
-                .into_any_element(),
-        }
+        use crate::desktop_icons::{self, DesktopIconKind};
+        desktop_icons::icon(
+            match kind {
+                EntryKind::Directory => DesktopIconKind::Folder,
+                EntryKind::File => DesktopIconKind::Document,
+                EntryKind::Image => DesktopIconKind::Image,
+                EntryKind::Application => DesktopIconKind::Application,
+            },
+            DESKTOP_ICON_SIZE,
+        )
     }
 }
 
@@ -621,25 +857,89 @@ impl Render for DesktopView {
                 cx.listener(|this, _: &NewFolder, window, cx| this.begin_new_folder(window, cx)),
             )
             .on_action(cx.listener(|this, _: &Cancel, window, cx| this.cancel(window, cx)))
-            .on_action(cx.listener(|this, _: &NextSelection, _, cx| this.step(true, cx)))
-            .on_action(cx.listener(|this, _: &PreviousSelection, _, cx| this.step(false, cx)))
+            .on_action(cx.listener(|this, _: &SelectUp, window, cx| {
+                this.step(SelectionDirection::Up, false, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SelectDown, window, cx| {
+                this.step(SelectionDirection::Down, false, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SelectLeft, window, cx| {
+                this.step(SelectionDirection::Left, false, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SelectRight, window, cx| {
+                this.step(SelectionDirection::Right, false, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ExtendUp, window, cx| {
+                this.step(SelectionDirection::Up, true, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ExtendDown, window, cx| {
+                this.step(SelectionDirection::Down, true, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ExtendLeft, window, cx| {
+                this.step(SelectionDirection::Left, true, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ExtendRight, window, cx| {
+                this.step(SelectionDirection::Right, true, window, cx)
+            }))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _, window, cx| {
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    let grid = this.grid(window);
+                    let additive = event.modifiers.platform
+                        || event.modifiers.control
+                        || event.modifiers.shift;
+                    let base = if additive {
+                        this.selected_many.clone()
+                    } else {
+                        BTreeSet::new()
+                    };
+                    let start = grid.local_position(event.position, this.scroll.offset());
                     this.selected = None;
-                    this.selected_many.clear();
+                    this.selection_anchor = None;
+                    this.selected_many = base.clone();
                     this.menu = None;
                     this.rename = None;
                     this.new_folder = false;
+                    this.marquee = grid.contains(event.position).then_some(MarqueeSelection {
+                        start,
+                        end: start,
+                        base,
+                    });
                     window.focus(&this.focus);
                     cx.notify();
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                if event.pressed_button == Some(MouseButton::Left) {
+                    this.update_marquee(event.position, window, cx);
+                } else if this.marquee.take().is_some() {
+                    cx.notify();
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                    this.update_marquee(event.position, window, cx);
+                    if this.marquee.take().is_some() {
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, _, cx| {
+                    if this.marquee.take().is_some() {
+                        cx.notify();
+                    }
                 }),
             )
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|this, event: &MouseDownEvent, window, cx| {
                     this.selected = None;
+                    this.selection_anchor = None;
                     this.selected_many.clear();
+                    this.marquee = None;
                     this.rename = None;
                     this.new_folder = false;
                     this.menu = Some(event.position);
@@ -665,32 +965,39 @@ impl Render for DesktopView {
                     .bg(rgba(0x5d668328)),
             );
         }
-        let mut grid = div()
-            .id("desktop-grid")
-            .absolute()
-            .inset_0()
-            .pt(px(top + 16.))
-            .pb(px(bottom + 16.))
-            .pl(px(left + 16.))
-            .pr(px(right + 16.))
-            .overflow_y_scroll()
-            .track_scroll(&self.scroll)
-            .flex()
-            .flex_wrap()
-            .content_start()
-            .gap_2();
-        if self.new_folder {
-            grid = grid.child(
+        let layout = self.grid(window);
+        if self.labels.len() > MAX_ENTRIES * 2 {
+            self.labels.clear();
+        }
+        let slot_offset = usize::from(self.new_folder);
+        let mut content = div().relative().w_full().h(px(layout.content_height()));
+        if let Some(marquee) = self.marquee.as_ref().filter(|marquee| marquee.visible()) {
+            let bounds = marquee.bounds();
+            content = content.child(
                 div()
-                    .w(px(140.))
-                    .min_h(px(90.))
-                    .p_2()
-                    .rounded(px(8.))
+                    .absolute()
+                    .left(bounds.left())
+                    .top(bounds.top())
+                    .w(bounds.size.width)
+                    .h(bounds.size.height)
+                    .border_1()
+                    .border_color(rgba(0x92bfffcc))
+                    .bg(rgba(0x3689e933)),
+            );
+        }
+        if self.new_folder {
+            let bounds = layout.tile(0);
+            content = content.child(
+                div()
+                    .absolute()
+                    .left(bounds.left())
+                    .top(bounds.top())
+                    .w(bounds.size.width)
+                    .h(bounds.size.height)
                     .flex()
                     .flex_col()
                     .items_center()
-                    .gap_2()
-                    .bg(rgba(0x0a84ff66))
+                    .gap(px(3.))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .child(Self::file_icon(EntryKind::Directory))
                     .child(
@@ -709,37 +1016,46 @@ impl Render for DesktopView {
             let context_path = path.clone();
             let selected = self.selected_many.contains(&path);
             let editing = self.rename.as_ref() == Some(&path);
+            let bounds = layout.tile(index + slot_offset);
+            let label_width = (f32::from(bounds.size.width).min(DESKTOP_LABEL_WIDTH) - 6.).max(1.);
+            let label = self
+                .labels
+                .entry((entry.name.clone(), label_width.to_bits()))
+                .or_insert_with(|| {
+                    desktop_label(&entry.name, label_width, |text| {
+                        label_width_fn(text, window)
+                    })
+                })
+                .clone();
             let mut icon = div()
                 .id(("desktop-file", index))
-                .w(px(94.))
-                .min_h(px(90.))
-                .flex_none()
-                .p_2()
-                .rounded(px(8.))
+                .absolute()
+                .left(bounds.left())
+                .top(bounds.top())
+                .w(bounds.size.width)
+                .h(bounds.size.height)
                 .flex()
                 .flex_col()
                 .items_center()
-                .gap_2()
-                .border_1()
-                .border_color(if selected {
-                    rgba(0xb8dcff99)
-                } else {
-                    rgba(0xffffff00)
-                })
-                .bg(if selected {
-                    rgba(0x0a84ff66)
-                } else {
-                    rgba(0xffffff00)
-                })
-                .cursor_pointer()
-                .hover(|style| style.bg(rgba(0xffffff18)))
-                .child(Self::file_icon(entry.kind))
+                .gap(px(3.))
+                .child(
+                    div()
+                        .size(px(DESKTOP_ICON_SIZE))
+                        .rounded(px(7.))
+                        .bg(if selected {
+                            rgba(0x6387ad66)
+                        } else {
+                            rgba(0xffffff00)
+                        })
+                        .child(Self::file_icon(entry.kind)),
+                )
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                         cx.stop_propagation();
                         window.focus(&this.focus);
                         this.menu = None;
+                        this.marquee = None;
                         if this.rename.as_ref() != Some(&path) {
                             this.rename = None;
                         }
@@ -747,13 +1063,29 @@ impl Render for DesktopView {
                         if event.modifiers.platform || event.modifiers.control {
                             if !this.selected_many.remove(&path) {
                                 this.selected_many.insert(path.clone());
+                                this.selected = Some(path.clone());
+                            } else if this.selected.as_ref() == Some(&path) {
+                                this.selected = this
+                                    .entries
+                                    .iter()
+                                    .rev()
+                                    .find(|entry| this.selected_many.contains(&entry.path))
+                                    .map(|entry| entry.path.clone());
                             }
-                            this.selected = this.selected_many.last().cloned();
+                            this.selection_anchor = this.selected.clone();
+                        } else if event.modifiers.shift {
+                            this.select_range(index);
                         } else {
                             this.selected = Some(path.clone());
+                            this.selection_anchor = Some(path.clone());
                             this.selected_many = [path.clone()].into();
                         }
-                        if event.click_count >= 2 && this.rename.is_none() {
+                        if event.click_count >= 2
+                            && this.rename.is_none()
+                            && !event.modifiers.shift
+                            && !event.modifiers.platform
+                            && !event.modifiers.control
+                        {
                             this.send(DesktopAction::Open(path.clone()), cx);
                         }
                         cx.notify();
@@ -766,7 +1098,9 @@ impl Render for DesktopView {
                         window.focus(&this.focus);
                         this.rename = None;
                         this.new_folder = false;
+                        this.marquee = None;
                         this.selected = Some(context_path.clone());
+                        this.selection_anchor = Some(context_path.clone());
                         if !this.selected_many.contains(&context_path) {
                             this.selected_many = [context_path.clone()].into();
                         }
@@ -786,19 +1120,49 @@ impl Render for DesktopView {
                         .child(self.input.clone()),
                 );
             } else {
-                icon = icon.child(
-                    div()
-                        .w_full()
-                        .max_h(px(34.))
-                        .overflow_hidden()
-                        .text_xs()
-                        .text_center()
-                        .child(entry.name.clone()),
-                );
+                let mut caption = div()
+                    .max_w_full()
+                    .px(px(3.))
+                    .rounded(px(3.))
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_center()
+                    .line_height(px(16.))
+                    .when(selected, |label| label.bg(rgb(0x176fd2)));
+                for line in label {
+                    caption = caption.child(
+                        div()
+                            .relative()
+                            .h(px(16.))
+                            .whitespace_nowrap()
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top(px(1.))
+                                    .left(px(0.))
+                                    .right(px(0.))
+                                    .text_color(rgba(0x000000bb))
+                                    .child(line.clone()),
+                            )
+                            .child(div().relative().text_color(rgb(0xffffff)).child(line)),
+                    );
+                }
+                icon = icon.child(caption);
             }
-            grid = grid.child(icon);
+            content = content.child(icon);
         }
-        root = root.child(grid);
+        root = root.child(
+            div()
+                .id("desktop-grid")
+                .absolute()
+                .left(layout.origin.x)
+                .top(layout.origin.y)
+                .w(px(layout.width))
+                .h(px(layout.height))
+                .overflow_y_scroll()
+                .track_scroll(&self.scroll)
+                .child(content),
+        );
         if self.preview {
             root = root.child(
                 div()
@@ -1659,6 +2023,100 @@ mod tests {
         ]
         .into()
     }
+
+    #[test]
+    fn desktop_grid_fills_down_from_right_and_respects_each_outputs_logical_edges() {
+        // A 3840x2400 output at scale 2 is presented to GPUI as 1920x1200.
+        // No second multiplication by scale belongs in desktop geometry.
+        for (viewport, edges) in [
+            (size(px(1920.), px(1200.)), [28., 78., 0., 0.]),
+            (size(px(1280.), px(720.)), [28., 0., 84., 0.]),
+            (size(px(900.), px(600.)), [28., 0., 0., 84.]),
+        ] {
+            let grid = DesktopGrid::new(viewport, edges, 40);
+            let first = grid.cell(0);
+            assert_eq!(first.top(), px(0.));
+            assert_eq!(first.right(), px(grid.width));
+            assert_eq!(grid.cell(1).left(), first.left());
+            assert_eq!(grid.cell(1).top(), px(DESKTOP_CELL_HEIGHT));
+            assert!(grid.cell(grid.rows).left() < first.left());
+            assert_eq!(grid.cell(grid.rows).top(), px(0.));
+            assert_eq!(grid.origin, point(px(edges[2] + 16.), px(edges[0] + 16.)));
+            assert_eq!(
+                grid.origin.x + px(grid.width),
+                viewport.width - px(edges[3] + 16.)
+            );
+            assert_eq!(
+                grid.origin.y + px(grid.height),
+                viewport.height - px(edges[1] + 16.)
+            );
+        }
+    }
+
+    #[test]
+    fn arrows_follow_geometric_neighbors_without_wrapping_between_columns() {
+        let grid = DesktopGrid::new(size(px(700.), px(480.)), [0.; 4], 14);
+        assert_eq!(grid.rows, 4);
+        assert_eq!(grid.neighbor(0, 14, SelectionDirection::Down), 1);
+        assert_eq!(grid.neighbor(3, 14, SelectionDirection::Down), 3);
+        assert_eq!(grid.neighbor(0, 14, SelectionDirection::Up), 0);
+        assert_eq!(grid.neighbor(1, 14, SelectionDirection::Left), 5);
+        assert_eq!(grid.neighbor(5, 14, SelectionDirection::Right), 1);
+        assert_eq!(grid.neighbor(11, 14, SelectionDirection::Left), 13);
+        assert_eq!(grid.neighbor(13, 14, SelectionDirection::Left), 13);
+        assert_eq!(grid.neighbor(13, 14, SelectionDirection::Right), 9);
+    }
+
+    #[test]
+    fn full_desktop_keeps_all_entries_reachable_and_marquee_tracks_scroll_and_output_origin() {
+        let grid = DesktopGrid::new(size(px(480.), px(360.)), [28., 78., 0., 0.], MAX_ENTRIES);
+        for index in 0..MAX_ENTRIES {
+            let bounds = grid.tile(index);
+            assert!(bounds.left() >= px(0.));
+            assert!(bounds.right() <= px(grid.width));
+            assert!(bounds.bottom() <= px(grid.content_height()));
+        }
+        let bounds = grid.tile(130);
+        let offset = point(px(0.), -bounds.top());
+        let screen_point = grid.origin + bounds.origin + offset + point(px(4.), px(4.));
+        assert!(grid.contains(screen_point));
+        let local = grid.local_position(screen_point, offset);
+        assert!(bounds.contains(&local));
+        let marquee = MarqueeSelection {
+            start: bounds.origin,
+            end: bounds.bottom_right(),
+            base: BTreeSet::new(),
+        };
+        assert!(marquee.visible());
+        assert!(marquee.bounds().intersects(&bounds));
+        assert!(!marquee.bounds().intersects(&grid.tile(129)));
+    }
+
+    #[test]
+    fn two_line_names_keep_unicode_graphemes_and_distinguishing_filename_suffixes() {
+        let measure = |text: &str| text.graphemes(true).count() as f32;
+        assert_eq!(desktop_label("Home", 12., measure), ["Home"]);
+        assert_eq!(
+            desktop_label("small-file.txt", 8., measure),
+            ["small-fi", "le.txt"]
+        );
+        let name = "春日漫剧-源代码-2026-10-18-作品18.mp4";
+        let first = desktop_label(name, 12., measure);
+        let second = desktop_label(&name.replace("作品18", "作品19"), 12., measure);
+        assert_eq!(first.len(), 2);
+        assert!(first.iter().all(|line| measure(line) <= 12.));
+        assert!(first[1].contains('…'));
+        assert!(first[1].ends_with("作品18.mp4"));
+        assert_ne!(first, second);
+        let complex = "👩🏽‍💻".repeat(40) + ".txt";
+        let lines = desktop_label(&complex, 12., measure);
+        assert!(lines.iter().all(|line| measure(line) <= 12.));
+        assert!(lines[1].ends_with(".txt"));
+        assert_eq!(
+            desktop_label("file\nname\t.txt", 40., measure),
+            ["file name .txt"]
+        );
+    }
     #[::core::prelude::v1::test]
     fn new_folder_is_literal_and_never_replaces_an_existing_entry() {
         let root = tempfile::tempdir().unwrap();
@@ -1784,6 +2242,9 @@ mod tests {
                 wallpaper: None,
                 selected: None,
                 selected_many: BTreeSet::new(),
+                selection_anchor: None,
+                marquee: None,
+                labels: HashMap::new(),
                 new_folder: false,
                 inspector: None,
                 inspection_generation: 0,
@@ -1800,6 +2261,54 @@ mod tests {
                 reserved_edges: [0.; 4],
             }
         });
+        let (first_bounds, second_bounds) = visual.update(|window, cx| {
+            let grid = view.read(cx).grid(window);
+            (
+                Bounds::new(grid.origin + grid.tile(0).origin, grid.tile(0).size),
+                Bounds::new(grid.origin + grid.tile(1).origin, grid.tile(1).size),
+            )
+        });
+        visual.simulate_click(first_bounds.center(), Modifiers::default());
+        assert_eq!(
+            view.read_with(visual, |view, _| view.selected.clone()),
+            Some(directory.join("first.txt"))
+        );
+        visual.simulate_keystrokes("down");
+        assert_eq!(
+            view.read_with(visual, |view, _| view.selected.clone()),
+            Some(directory.join("second.txt"))
+        );
+        visual.simulate_keystrokes("up shift-down");
+        assert_eq!(
+            view.read_with(visual, |view, _| view.selected_many.len()),
+            2
+        );
+        visual.simulate_keystrokes("shift-up");
+        assert_eq!(
+            view.read_with(visual, |view, _| view.selected_many.len()),
+            1
+        );
+        visual.simulate_mouse_down(
+            second_bounds.center(),
+            MouseButton::Right,
+            Modifiers::default(),
+        );
+        assert_eq!(
+            view.read_with(visual, |view, _| view.selected.clone()),
+            Some(directory.join("second.txt"))
+        );
+        assert!(view.read_with(visual, |view, _| view.menu.is_some()));
+        visual.simulate_keystrokes("escape");
+        let start = first_bounds.origin - point(px(2.), px(2.));
+        let end = second_bounds.bottom_right() + point(px(1.), px(1.));
+        visual.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+        visual.simulate_mouse_move(end, MouseButton::Left, Modifiers::default());
+        assert_eq!(
+            view.read_with(visual, |view, _| view.selected_many.len()),
+            2
+        );
+        visual.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+        assert!(view.read_with(visual, |view, _| view.marquee.is_none()));
         visual.simulate_keystrokes("super-a");
         assert_eq!(
             view.read_with(visual, |view, _| view.selected_many.len()),

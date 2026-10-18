@@ -42,3 +42,18 @@ are not shipped as alternative styles.
 used by the native Control Center. They contain no Apple artwork.
 
 `capture-screen.svg`, `capture-window.svg`, and `capture-region.svg` are original capture-toolbar glyphs under GPL-3.0-or-later.
+
+## Desktop file icons
+
+`desktop-folder.png` is a 192 × 192 rasterization of the existing WhiteSur
+`generic-folder.svg`. `desktop-application.png` uses the existing WhiteSur
+`generic-application.svg`, with transparent canvas padding so the visible app
+tile fits a 56-point square within its 64-point canvas. Both retain the
+upstream GPL-3.0-or-later license and attribution above.
+
+`desktop-document.svg` and `desktop-image.svg` are original Clarion artwork,
+distributed under GPL-3.0-or-later. Their matching 192 × 192 PNGs are rendered
+with librsvg at three pixels per logical point. They share a folded paper
+silhouette, subtle shading and restrained content marks. The Shell embeds all
+four desktop PNGs and shares one cached image per role; desktop icons do not
+depend on the user's icon theme or on reading artwork from disk while drawing.

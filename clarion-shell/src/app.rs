@@ -407,6 +407,15 @@ impl Host {
                     })
                     .cloned();
                 self.notifications = items;
+                if self
+                    .toast_id
+                    .is_some_and(|id| !self.notifications.iter().any(|item| item.id == id))
+                {
+                    self.toast_id = None;
+                    if let Some(toast) = self.toast.take() {
+                        let _ = toast.update(cx, |_, window, _| window.remove_window());
+                    }
+                }
                 if !self.dnd {
                     if let Some(item) = new {
                         self.show_toast(item.id, cx);
@@ -771,6 +780,12 @@ impl Host {
         }
         if panel == Panel::Notifications {
             self.service.send(services::Command::MarkRead);
+            // The persistent column replaces its transient banner; otherwise
+            // the banner covers the first notification for its remaining timeout.
+            self.toast_id = None;
+            if let Some(toast) = self.toast.take() {
+                let _ = toast.update(cx, |_, window, _| window.remove_window());
+            }
         }
         self.panel = Some(panel);
         let output = self.active_output();
@@ -841,7 +856,7 @@ impl Host {
         }
     }
     fn show_toast(&mut self, id: u32, cx: &mut Context<Self>) {
-        if self.toast_id == Some(id) {
+        if self.panel == Some(Panel::Notifications) || self.toast_id == Some(id) {
             return;
         }
         self.toast_id = Some(id);
@@ -1739,3 +1754,60 @@ fn themed_dock_icons() -> &'static HashMap<&'static str, std::path::PathBuf> {
 
 #[cfg(test)]
 mod dock_preferences_tests;
+
+#[cfg(test)]
+mod notification_lifecycle_tests {
+    use super::*;
+    use ::core::prelude::v1::test;
+
+    fn notification(id: u32) -> services::Notification {
+        services::Notification {
+            id,
+            app: "Notification fixture".into(),
+            title: "通知标题".into(),
+            body: "通知正文".into(),
+            actions: Vec::new(),
+            created_at: u64::from(id),
+            unread: true,
+        }
+    }
+
+    #[gpui::test]
+    fn dismissing_a_notification_removes_its_banner_and_input_surface(cx: &mut TestAppContext) {
+        let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
+        host.update(cx, |host, cx| {
+            host.service_event(services::Event::Notifications(vec![notification(1)]), cx)
+        });
+        let toast = host.read_with(cx, |host, _| host.toast.expect("banner created"));
+        host.update(cx, |host, cx| {
+            host.service_event(services::Event::Notifications(Vec::new()), cx)
+        });
+        host.read_with(cx, |host, _| {
+            assert!(host.toast.is_none());
+            assert!(host.toast_id.is_none());
+        });
+        cx.update(|cx| assert!(toast.update(cx, |_, _, _| ()).is_err()));
+    }
+
+    #[gpui::test]
+    fn the_notification_center_replaces_banners_and_stays_unobscured(cx: &mut TestAppContext) {
+        let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
+        host.update(cx, |host, cx| {
+            host.service_event(services::Event::Notifications(vec![notification(1)]), cx);
+            assert!(host.toast.is_some());
+            host.open(Panel::Notifications, cx);
+            assert!(host.toast.is_none());
+            assert!(host.toast_id.is_none());
+            host.service_event(
+                services::Event::Notifications(vec![notification(1), notification(2)]),
+                cx,
+            );
+            assert!(
+                host.toast.is_none(),
+                "new notifications belong in the open center"
+            );
+            assert_eq!(host.notifications.len(), 2);
+            assert_eq!(host.panel, Some(Panel::Notifications));
+        });
+    }
+}
