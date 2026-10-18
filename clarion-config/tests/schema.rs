@@ -1,5 +1,20 @@
 use clarion_config::schema::{self, FieldSpec, TypeSpec};
 
+#[test]
+fn internal_workspace_feedback_is_not_an_editor_choice() {
+    assert!(schema::spec("animations", "Kind::WorkspaceFeedback").is_none());
+    let kind = schema::spec("animations", "Kind").unwrap();
+    assert!(!kind
+        .fields
+        .iter()
+        .any(|field| field.name == "workspace-feedback"));
+    assert!(!kind.variants.contains(&"workspace-feedback"));
+    let workspace = schema::fields("animations", "WorkspaceSwitchAnim");
+    assert!(!workspace
+        .iter()
+        .any(|field| matches!(field.name, "model" | "profile")));
+}
+
 // Captured from the settings-owned generator before this API was moved. Keeping
 // this as data tests every field/variant and its order without retaining a second
 // implementation of the generator in the settings crate.

@@ -317,8 +317,11 @@ fn append_item(output: &mut String, module: &str, item: Item) {
             let mut children = Vec::new();
             for v in &e.variants {
                 if v.attrs.iter().any(|a| {
-                    a.path().is_ident("knuffel")
-                        && a.meta.to_token_stream().to_string().contains("skip")
+                    (a.path().is_ident("knuffel")
+                        && a.meta.to_token_stream().to_string().contains("skip"))
+                        || (a.path().is_ident("doc")
+                            && a.parse_args::<syn::Path>()
+                                .is_ok_and(|path| path.is_ident("hidden")))
                 }) {
                     continue;
                 }

@@ -17,7 +17,7 @@ animations {
     // Individual animations.
 
     workspace-switch {
-        spring damping-ratio=1.0 stiffness=1000 epsilon=0.0001
+        // Omit spring/duration-ms/curve to retain the default feedback trajectory.
 
         cube {
             on
@@ -93,8 +93,9 @@ animations {
 
 ### Animation Types
 
-There are two animation types: easing and spring.
-Each animation can be either an easing or a spring.
+The configurable timing types are easing and spring. Workspace switching also
+has an internal feedback trajectory by default; setting spring or easing fields
+replaces it with the explicit timing.
 
 #### Easing
 
@@ -204,7 +205,16 @@ Now let's go into more detail on the animations that you can configure.
 
 #### `workspace-switch`
 
-Animation when switching workspaces up and down, including after the vertical touchpad gesture (a spring is recommended).
+Animation when switching workspaces up and down, including after the vertical
+touchpad gesture. The default uses a velocity-aware feedback trajectory whose
+settling time depends on the remaining distance and velocity. It samples the
+output's predicted presentation time and retains momentum when interrupted.
+The reference recurrence comes from Big Sur's Dock; normalization, interpolation
+between reference steps, and bounded computation are Clarion adaptations.
+
+Existing explicit `spring`, `duration-ms`, and `curve` settings continue to select
+their configured timing. No new model or profile setting is needed. For example,
+the previous default spring remains available through the existing syntax:
 
 ```kdl
 animations {

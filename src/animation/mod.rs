@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use clarion_motion::trajectory::Trajectory;
+use clarion_motion::workspace_feedback::FeedbackParams;
 
 mod bezier;
 use bezier::CubicBezier;
@@ -48,6 +49,37 @@ impl Animation {
         animation
     }
 
+    /// Workspace indices use one unit per displayed desktop. Supply the actual
+    /// physical-pixel distance instead of scaling completion by the remaining
+    /// gesture distance. Core gesture policy already handles range rubber bands.
+    pub fn workspace(
+        clock: Clock,
+        from: f64,
+        to: f64,
+        initial_velocity: f64,
+        config: clarion_config::Animation,
+        single_pixel: f64,
+    ) -> Self {
+        if config.kind != clarion_config::animations::Kind::WorkspaceFeedback {
+            return Self::new(clock, from, to, initial_velocity, config);
+        }
+        let initial_velocity = initial_velocity / clock.rate().max(0.001);
+        let mut trajectory = Trajectory::workspace_feedback_with_params_at(
+            clock.now(),
+            from,
+            to,
+            initial_velocity,
+            FeedbackParams {
+                single_pixel,
+                ..FeedbackParams::default()
+            },
+        );
+        if config.off {
+            trajectory.disable();
+        }
+        Self { clock, trajectory }
+    }
+
     pub fn replace_config(&mut self, config: clarion_config::Animation) {
         if config.off {
             self.trajectory.disable();
@@ -77,6 +109,30 @@ impl Animation {
             self.trajectory.initial_velocity()
         };
         self.trajectory = match config.kind {
+            clarion_config::animations::Kind::WorkspaceFeedback => {
+                // This configuration also follows windows moving with their
+                // workspace, where coordinates may be logical pixels. Retain
+                // explicit display parameters when present; otherwise use a
+                // relative tolerance for these coordinate-agnostic followers.
+                let params = self
+                    .trajectory
+                    .workspace_feedback_params()
+                    .unwrap_or_else(|| {
+                        let extent = (to - from).abs().max(1.);
+                        FeedbackParams {
+                            single_pixel: extent / 1080.,
+                            velocity_epsilon: extent * 0.01,
+                            ..FeedbackParams::default()
+                        }
+                    });
+                Trajectory::workspace_feedback_with_params_at(
+                    start_time,
+                    from,
+                    to,
+                    initial_velocity,
+                    params,
+                )
+            }
             clarion_config::animations::Kind::Spring(p) => {
                 let _span = clarion_tracy_span!("Animation::spring");
                 Trajectory::spring_at(
@@ -310,6 +366,61 @@ impl From<clarion_config::animations::Curve> for Curve {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_feedback_uses_output_forecasts_without_consuming_owner_time() {
+        for rate in [0.5, 1., 2.] {
+            let mut clock = Clock::with_time(Duration::ZERO);
+            clock.set_rate(rate);
+            let config = clarion_config::Animation {
+                off: false,
+                kind: clarion_config::animations::Kind::WorkspaceFeedback,
+            };
+            let single_pixel = 1. / 2112.;
+            let mut anim = Animation::workspace(clock.clone(), 2., 3., 0.4, config, single_pixel);
+            clock.set_unadjusted(Duration::from_millis(50));
+            let owner = (anim.value(), anim.velocity());
+            for ms in [100, 150, 90, 220] {
+                let _projection = clock.project_to(Duration::from_millis(ms));
+                assert!(anim.value().is_finite());
+                assert!(anim.velocity().is_finite());
+            }
+            assert_eq!((anim.value(), anim.velocity()), owner);
+            anim.replace_config(config);
+            assert_eq!(
+                anim.trajectory
+                    .workspace_feedback_params()
+                    .unwrap()
+                    .single_pixel,
+                single_pixel
+            );
+            assert!((anim.value() - owner.0).abs() < 1e-12);
+            assert!((anim.velocity() - owner.1).abs() < 1e-9);
+            let reversed = anim.restarted(anim.value(), 2., anim.velocity());
+            assert_eq!(reversed.value(), anim.value());
+            assert!((reversed.velocity() - anim.velocity()).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn workspace_adapter_honors_existing_overrides_and_off() {
+        let mut clock = Clock::with_time(Duration::ZERO);
+        let config = clarion_config::Animation {
+            off: true,
+            kind: clarion_config::animations::Kind::WorkspaceFeedback,
+        };
+        let disabled = Animation::workspace(clock.clone(), 2., 3., 0.4, config, 1. / 1440.);
+        assert!(disabled.is_done());
+        // Existing Animation semantics retain the origin in the same event
+        // cycle even when disabled, then expose the destination on the next tick.
+        assert_eq!(disabled.value(), 2.);
+        clock.set_unadjusted(Duration::from_nanos(1));
+        assert_eq!(disabled.value(), 3.);
+        let custom = easing_config(clarion_config::animations::Curve::Linear);
+        let animation = Animation::workspace(clock, 2., 3., 0., custom, 1. / 1440.);
+        assert!(animation.trajectory.workspace_feedback_params().is_none());
+        assert!(animation.trajectory.has_fixed_duration());
+    }
 
     fn easing_config(curve: clarion_config::animations::Curve) -> clarion_config::Animation {
         clarion_config::Animation {

@@ -939,6 +939,7 @@ fn native_capacity_backpressure_keeps_tile_effects_until_retry_but_fatal_errors_
         pose.source.size,
         smithay::backend::renderer::utils::CommitCounter::default(),
         7,
+        1.,
     );
     let genie_vertices = Rc::downgrade(&mesh.vertices);
     drop(mesh);

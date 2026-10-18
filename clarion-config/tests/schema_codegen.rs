@@ -31,6 +31,8 @@ pub enum Choice {
     Second,
     #[knuffel(skip)]
     Hidden,
+    #[doc(hidden)]
+    Internal,
 }
 "#;
 
@@ -98,6 +100,8 @@ fn source_layout_changes_preserve_public_logical_groups() {
     .unwrap();
     let generated = generator::generate(&directory.path().join("lib.rs")).unwrap();
     assert_eq!(generated.code, expected.unwrap());
+    assert!(!generated.code.contains("Choice::Hidden"));
+    assert!(!generated.code.contains("Choice::Internal"));
 }
 
 #[test]
