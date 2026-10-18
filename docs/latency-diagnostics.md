@@ -14,6 +14,11 @@
 | scene-build | TTY 输出的场景元素构建及其中的缓存准备，4 ms 阈值 |
 | vulkan-render | 原生 Vulkan 的损伤/平面选择、渲染记录和提交，4 ms 阈值 |
 | vulkan-record-submit | Vulkan 命令记录和队列提交，包含准备描述符和驱动调用，4 ms 阈值；不含随后导出呈现 fence |
+| vulkan-command-lock | 等待 Vulkan 命令资源锁，4 ms 阈值 |
+| vulkan-descriptors | 准备本次提交的描述符与资源集合，4 ms 阈值 |
+| vulkan-record | 记录 Vulkan 命令，4 ms 阈值 |
+| vulkan-queue-submit | 驱动的 vkQueueSubmit 调用，4 ms 阈值；不含随后等待 GPU 完成 |
+| vulkan-recycle | 提交成功后发布可按队列顺序复用的 HDR 中间图像，4 ms 阈值 |
 | vulkan-fence-export | 导出 Vulkan 呈现同步文件的驱动调用，4 ms 阈值；部分驱动可能在此等待生产者 |
 | gles-render | GLES 的损伤/平面选择与渲染，4 ms 阈值 |
 | kms-submit | 向 DRM/KMS 排队提交帧的调用，4 ms 阈值，不含随后等待显示器呈现 |
@@ -75,7 +80,12 @@ PQ、scRGB、其他渲染意图和扩展范围像素继续使用完整转换。�
 对于仍需转色的透明窗口，私有转色图像可以在同一 graphics queue 成功提交后按队列
 顺序复用，屏障保证前帧读取早于后帧写入；GPU 完成对象继续保有图像所有权。
 这避免多帧并行时按帧持有多组整窗 FP16 临时图像。截图、模糊和历史图像仍等待完成后
-回收，两类复用共享原有八张／256 MiB 缓存上限；未提交的图像不会提前发布给后帧。
+回收，两类复用共享 64 张／256 MiB 缓存上限；未提交的图像不会提前发布给后帧。
+图像数量上限需要容纳窗口内容、标题栏、边角和标签等多个小图像。原来的八张上限
+会在字节预算尚有余量时持续驱逐大窗口的 FP16 转换图像，使每帧首次使用新分配内存
+的成本出现在驱动提交阶段。增加数量上限保留了按实际分配字节计算的内存上限，
+不改变 GPU 同步、颜色转换或客户端缓冲区释放时机。真实 EGL 图像的 4K HDR 回归
+覆盖 24 个源图像、三帧完成资源同时保留以及预热后不再分配转换图像。
 
 物理输出可用 `clarion msg frame-timings` 查看最近渲染耗时、预测呈现偏差和当前 latch 预算；`clarion msg --json frame-timings` 适合保存两次快照作比较。`late_presentations` 与 `fixed_refresh_presentations` 是累计计数，应比较同一输出在相同负载下两次快照的增量。没有历史呈现时间的首帧和缺少目标时间的帧不计入预测偏差。嵌套或无头输出不会使用 KMS latch 调度。
 

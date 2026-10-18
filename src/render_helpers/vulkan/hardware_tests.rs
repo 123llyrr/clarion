@@ -440,7 +440,7 @@ pub(crate) fn setup() -> (
     (vk, gles, GbmAllocator::new(gbm, GbmBufferFlags::RENDERING))
 }
 
-fn modifiers(vk: &VulkanRenderer, gles: &GlesRenderer, code: Fourcc) -> Vec<Modifier> {
+pub(super) fn modifiers(vk: &VulkanRenderer, gles: &GlesRenderer, code: Fourcc) -> Vec<Modifier> {
     let formats = gles
         .egl_context()
         .dmabuf_render_formats()
