@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! XDG desktop application catalog, compatible with the Flutter Shell scanner.
 
-use std::{
-    collections::{HashMap, HashSet},
-    fs::{self, File},
-    io::Read,
-    os::unix::fs::PermissionsExt,
-    path::{Path, PathBuf},
-};
+use std::collections::{HashMap, HashSet};
+use std::fs::{self, File};
+use std::io::Read;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 
 use walkdir::WalkDir;
 
@@ -626,9 +624,11 @@ fn exec_words(value: &str) -> Option<Vec<String>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::os::unix::fs::symlink;
+
     use tempfile::TempDir;
+
+    use super::*;
 
     struct Fixture {
         root: TempDir,

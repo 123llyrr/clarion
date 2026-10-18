@@ -1,22 +1,14 @@
 //! Private, single-instance JSON-line transport between Shell and the launcher.
-use std::{
-    fs::{self, File, OpenOptions},
-    io::{Read, Write},
-    os::{
-        fd::AsRawFd,
-        unix::{
-            fs::{FileTypeExt, OpenOptionsExt, PermissionsExt},
-            net::{UnixListener, UnixStream},
-        },
-    },
-    path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, Mutex,
-    },
-    thread::{self, JoinHandle},
-    time::Duration,
-};
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::{FileTypeExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -269,8 +261,9 @@ impl Drop for Server {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::BufRead;
+
+    use super::*;
 
     #[test]
     fn split_json_lines_and_events_round_trip() {

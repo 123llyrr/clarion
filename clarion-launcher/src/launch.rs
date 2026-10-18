@@ -1,17 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! GIO owns Desktop Entry expansion; only one application invocation is attempted.
 
-use std::{
-    collections::HashMap,
-    ffi::OsString,
-    fs,
-    io::Read,
-    os::fd::AsRawFd,
-    path::Path,
-    process::{Command, Stdio},
-    thread,
-    time::{Duration, Instant},
-};
+use std::collections::HashMap;
+use std::ffi::OsString;
+use std::io::Read;
+use std::os::fd::AsRawFd;
+use std::path::Path;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+use std::{fs, thread};
 
 use anyhow::{bail, Context, Result};
 

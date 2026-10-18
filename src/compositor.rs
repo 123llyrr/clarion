@@ -2543,8 +2543,9 @@ impl State {
 
                             self.clarion.fill_xray_elements(ctx.r(), output);
 
-                            // If any background layer has block_out_from, also fill the Screencast xray
-                            // buffer so the unmap snapshot can render a buffer with blocked-out
+                            // If any background layer has block_out_from, also fill the Screencast
+                            // xray buffer so the unmap snapshot can
+                            // render a buffer with blocked-out
                             // background.
                             //
                             // This will be used in Tile::render_snapshot().
@@ -3102,8 +3103,7 @@ impl Clarion {
 
         drop(config_);
         // Constructed before the literal because the literal moves `config`.
-        let idle_policy =
-            crate::idle::IdlePolicy::new(&config.borrow().idle, Instant::now());
+        let idle_policy = crate::idle::IdlePolicy::new(&config.borrow().idle, Instant::now());
         let mut clarion = Self {
             config,
             config_file_output_config,
@@ -7715,12 +7715,11 @@ impl Clarion {
     /// timeout is honored within a second of expiring.
     pub fn poll_idle(&mut self) {
         let inhibited = !self.idle_inhibiting_surfaces.is_empty()
-            || self.is_fdo_idle_inhibited.load(std::sync::atomic::Ordering::Relaxed);
+            || self
+                .is_fdo_idle_inhibited
+                .load(std::sync::atomic::Ordering::Relaxed);
         let locked = !matches!(self.lock_state, LockState::Unlocked);
-        let Some(action) = self
-            .idle_policy
-            .poll(Instant::now(), inhibited, locked)
-        else {
+        let Some(action) = self.idle_policy.poll(Instant::now(), inhibited, locked) else {
             return;
         };
         match action {

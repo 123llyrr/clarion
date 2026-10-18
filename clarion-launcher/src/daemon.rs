@@ -1,12 +1,8 @@
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    time::{Duration, Instant},
-};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
 use gpui::{
@@ -14,13 +10,11 @@ use gpui::{
     WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
 };
 
-use crate::{
-    catalog::AppCatalog,
-    ipc::{Command, Event, Events, Input, Presentation, Server},
-    launch::launch_desktop_file,
-    preferences::{AppsViewState, ShellSnapshot},
-    ui::{self, AppsPanel, Request},
-};
+use crate::catalog::AppCatalog;
+use crate::ipc::{Command, Event, Events, Input, Presentation, Server};
+use crate::launch::launch_desktop_file;
+use crate::preferences::{AppsViewState, ShellSnapshot};
+use crate::ui::{self, AppsPanel, Request};
 
 static TERMINATE: AtomicBool = AtomicBool::new(false);
 

@@ -1,6 +1,9 @@
 use std::iter::zip;
 use std::mem;
 
+use clarion_config::{CornerRadius, Gradient, GradientRelativeTo, TabIndicatorPosition};
+use smithay::utils::{Logical, Point, Rectangle, Size};
+
 use crate::animation::{Animation, Clock};
 use crate::clarion_render_elements;
 use crate::render_helpers::border::BorderRenderElement;
@@ -8,8 +11,6 @@ use crate::render_helpers::renderer::DecorationRenderer;
 use crate::utils::{
     floor_logical_in_physical_max1, round_logical_in_physical, round_logical_in_physical_max1,
 };
-use clarion_config::{CornerRadius, Gradient, GradientRelativeTo, TabIndicatorPosition};
-use smithay::utils::{Logical, Point, Rectangle, Size};
 
 #[derive(Debug)]
 pub struct TabIndicator {

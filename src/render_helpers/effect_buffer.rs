@@ -647,13 +647,14 @@ mod tests {
     #[test]
     #[ignore = "requires a real DRM render node"]
     fn native_effect_color_cache_rebuilds_for_output_color_and_precision_changes() {
+        use smithay::backend::allocator::Fourcc;
+        use smithay::backend::renderer::Texture;
+        use smithay::utils::Scale;
+
         use crate::color::{ColorDescription, HdrOutputSettings};
         use crate::render_helpers::solid_color::SolidColorBuffer;
         use crate::render_helpers::vulkan::hardware_tests::setup;
         use crate::render_helpers::vulkan::native::NativeRenderer;
-        use smithay::backend::allocator::Fourcc;
-        use smithay::backend::renderer::Texture;
-        use smithay::utils::Scale;
         let (vk, reference, allocator) = setup();
         drop(reference);
         drop(allocator);

@@ -46,7 +46,9 @@ pub(super) fn on_completion(state: &mut State) {
             match state.clarion.event_loop.insert_source(
                 Timer::from_duration(Duration::from_secs(15)),
                 move |_, _, state| {
-                    let crate::backend::Backend::Tty(tty) = &mut state.backend else { return TimeoutAction::Drop; };
+                    let crate::backend::Backend::Tty(tty) = &mut state.backend else {
+                        return TimeoutAction::Drop;
+                    };
                     if tty.vulkan_recovery_generation == Some(generation) {
                         // Do not join a hung driver or free its in-flight objects.
                         // Late success is stale and is destroyed by the same worker.

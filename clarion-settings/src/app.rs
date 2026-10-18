@@ -2336,10 +2336,8 @@ impl ClarionSettingsApp {
                         },
                     );
                 }
-                for (right, hint) in [
-                    (false, "左下角暂未绑定操作"),
-                    (true, "右下角暂未绑定操作"),
-                ] {
+                for (right, hint) in [(false, "左下角暂未绑定操作"), (true, "右下角暂未绑定操作")]
+                {
                     ui.allocate_new_ui(
                         egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
                             egui::pos2(

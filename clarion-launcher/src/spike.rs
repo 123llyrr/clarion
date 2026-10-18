@@ -1,20 +1,18 @@
 //! Phase 0 probe. This binary does not replace the Flutter launcher until the
 //! layer-shell, input and shell-composition acceptance checks have passed.
 
-use std::{
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    time::{Duration, Instant},
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use gpui::prelude::*;
+use gpui::{
+    actions, div, px, rgb, rgba, size, App, Application, Bounds, Context, Entity, Focusable,
+    KeyBinding, LayerShellOptions, Render, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowKind, WindowOptions,
 };
 
 use crate::spike_input::SpikeInput;
-use gpui::{
-    actions, div, prelude::*, px, rgb, rgba, size, App, Application, Bounds, Context, Entity,
-    Focusable, KeyBinding, LayerShellOptions, Render, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowKind, WindowOptions,
-};
 
 pub struct Options {
     pub output: Option<String>,

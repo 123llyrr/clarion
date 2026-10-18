@@ -5,8 +5,9 @@ use eframe::egui::{self, FontId, Rounding, Stroke, TextStyle, Visuals};
 
 /// Shared colors for panels, controls and custom-painted navigation.
 pub mod colors {
-    use eframe::egui::Color32;
     use std::cell::Cell;
+
+    use eframe::egui::Color32;
 
     thread_local! {
         /// The pane draws itself with one palette at a time; the appearance is
@@ -221,9 +222,7 @@ const OPEN_FONT_FAMILIES: &[&str] = &[
 
 fn is_open_font_family(family: &str) -> bool {
     let family = family.to_lowercase();
-    OPEN_FONT_FAMILIES
-        .iter()
-        .any(|open| family.contains(open))
+    OPEN_FONT_FAMILIES.iter().any(|open| family.contains(open))
 }
 
 /// Load the first requested pattern that fontconfig resolves to an
@@ -244,8 +243,7 @@ fn open_source_font(patterns: &[&str]) -> Option<egui::FontData> {
 pub fn font_definitions() -> egui::FontDefinitions {
     let mut fonts = egui::FontDefinitions::default();
     let mut proportional_prefix: Vec<String> = Vec::new();
-    if let Some(font) =
-        open_source_font(&["Noto Sans", "Inter", "DejaVu Sans", "Liberation Sans"])
+    if let Some(font) = open_source_font(&["Noto Sans", "Inter", "DejaVu Sans", "Liberation Sans"])
     {
         fonts.font_data.insert("clarion-ui-latin".into(), font);
         proportional_prefix.push("clarion-ui-latin".into());

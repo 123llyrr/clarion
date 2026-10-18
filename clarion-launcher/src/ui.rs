@@ -1,18 +1,15 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
+use gpui::prelude::*;
 use gpui::{
-    actions, div, img, point, prelude::*, px, rgba, App, Context, Entity, Focusable, KeyBinding,
-    Render, ScrollAnchor, ScrollHandle, Window, WindowAppearance,
+    actions, div, img, point, px, rgba, App, Context, Entity, Focusable, KeyBinding, Render,
+    ScrollAnchor, ScrollHandle, Window, WindowAppearance,
 };
 
-use crate::{
-    catalog::{AppCatalog, AppCategory, DesktopApp},
-    preferences::{AppsViewState, DisplayMode, ViewMode},
-    spike_input::{QueryChanged, SpikeInput},
-};
+use crate::catalog::{AppCatalog, AppCategory, DesktopApp};
+use crate::preferences::{AppsViewState, DisplayMode, ViewMode};
+use crate::spike_input::{QueryChanged, SpikeInput};
 
 actions!(apps, [PreviousApp, NextApp, LaunchSelected, Dismiss]);
 
