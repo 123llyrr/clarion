@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:clarion_shell/models.dart';
 import 'package:clarion_shell/services/system_service.dart';
 import 'package:clarion_shell/state/shell_controller.dart';
 import 'package:clarion_shell/theme/mac_shell_theme.dart';
@@ -14,6 +15,7 @@ class _TestShellController extends ShellController {
   int networkPrefCalls = 0;
   int btPrefCalls = 0;
   String? connectedSsidTarget;
+  String? connectedPassword;
 
   @override
   Future<void> openNetworkPreferences() async {
@@ -26,9 +28,10 @@ class _TestShellController extends ShellController {
   }
 
   @override
-  Future<void> connectWifi(String ssid, {String? password}) async {
+  Future<bool> connectWifi(String ssid, {String? password}) async {
     connectedSsidTarget = ssid;
-    await super.connectWifi(ssid, password: password);
+    connectedPassword = password;
+    return super.connectWifi(ssid, password: password);
   }
 }
 
@@ -66,7 +69,8 @@ void main() {
     testWidgets(
       'Wi-Fi drawer opens, lists networks, connects, and navigates back',
       (tester) async {
-        final controller = _TestShellController();
+        final controller = _TestShellController()
+          ..selectPanel(ShellPanel.quickSettings);
         addTearDown(controller.dispose);
 
         await tester.pumpWidget(
@@ -89,14 +93,21 @@ void main() {
         expect(_key('mac-wifi-switch'), findsOneWidget);
         expect(_key('mac-wifi-back'), findsOneWidget);
         expect(find.text('Wi-Fi'), findsWidgets);
-        expect(find.text('已知网络'), findsOneWidget);
+        expect(find.text('当前网络'), findsOneWidget);
         expect(find.text('其他网络'), findsOneWidget);
         expect(find.text('打开“网络”偏好设置…'), findsOneWidget);
 
         // Tap other network to connect
         await tester.tap(find.text('Office-5G'));
         await tester.pumpAndSettle();
+        expect(controller.connectedSsidTarget, isNull);
+        await tester.enterText(_key('mac-wifi-password'), 'test-password');
+        await tester.pump();
+        await tester.ensureVisible(_key('mac-wifi-password-connect'));
+        await tester.tap(_key('mac-wifi-password-connect'));
+        await tester.pumpAndSettle();
         expect(controller.connectedSsidTarget, 'Office-5G');
+        expect(controller.connectedPassword, 'test-password');
 
         // Tap network preferences
         await tester.tap(_key('mac-wifi-preferences'));

@@ -23,6 +23,8 @@ struct LazyClock {
 struct AdjustableClock {
     inner: LazyClock,
     rate_clock: clarion_motion::rate_clock::RateClock,
+    reduced_motion: bool,
+    reduced_motion_epoch: u64,
 }
 
 impl Clock {
@@ -84,7 +86,26 @@ impl Clock {
         self.inner.borrow().should_complete_instantly()
     }
 
-    /// Sets whether animations should complete instantly.
+    /// The runtime accessibility preference is independent of configuration reloads.
+    pub fn reduced_motion(&self) -> bool {
+        self.inner.borrow().reduced_motion
+    }
+
+    pub(crate) fn reduced_motion_epoch(&self) -> u64 {
+        self.inner.borrow().reduced_motion_epoch
+    }
+
+    /// Enabling reduced motion also retires existing trajectories permanently.
+    pub fn set_reduced_motion(&mut self, value: bool) {
+        let mut clock = self.inner.borrow_mut();
+        if value && !clock.reduced_motion {
+            clock.reduced_motion_epoch = clock.reduced_motion_epoch.wrapping_add(1);
+        }
+        clock.reduced_motion = value;
+    }
+
+    /// Sets the configuration's instant-completion flag. Runtime reduced motion
+    /// continues to apply even when a configuration reload clears this flag.
     pub fn set_complete_instantly(&mut self, value: bool) {
         self.inner.borrow_mut().set_complete_instantly(value);
     }
@@ -133,7 +154,12 @@ impl LazyClock {
 impl AdjustableClock {
     pub fn new(mut inner: LazyClock) -> Self {
         let rate_clock = clarion_motion::rate_clock::RateClock::new(inner.now());
-        Self { inner, rate_clock }
+        Self {
+            inner,
+            rate_clock,
+            reduced_motion: false,
+            reduced_motion_epoch: 0,
+        }
     }
 
     pub fn rate(&self) -> f64 {
@@ -145,7 +171,7 @@ impl AdjustableClock {
     }
 
     pub fn should_complete_instantly(&self) -> bool {
-        self.rate_clock.should_complete_instantly()
+        self.reduced_motion || self.rate_clock.should_complete_instantly()
     }
 
     pub fn set_complete_instantly(&mut self, value: bool) {

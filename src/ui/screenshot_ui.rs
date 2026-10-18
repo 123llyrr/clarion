@@ -43,6 +43,22 @@ const TEXT_SHOW_P: &str =
     "Drag to select an area, then press <span face='mono' bgcolor='#2C2C2C'> Space </span> to save.\n\
      Press <span face='mono' bgcolor='#2C2C2C'> P </span> to show the pointer.";
 
+fn screenshot_help(show_pointer: bool) -> &'static str {
+    if crate::utils::messages_in_chinese() {
+        if show_pointer {
+            "拖动选择区域，按 <span face='mono' bgcolor='#2C2C2C'> Space </span> 保存。\n\
+             按 <span face='mono' bgcolor='#2C2C2C'> P </span> 隐藏指针，Esc 取消。"
+        } else {
+            "拖动选择区域，按 <span face='mono' bgcolor='#2C2C2C'> Space </span> 保存。\n\
+             按 <span face='mono' bgcolor='#2C2C2C'> P </span> 显示指针，Esc 取消。"
+        }
+    } else if show_pointer {
+        TEXT_HIDE_P
+    } else {
+        TEXT_SHOW_P
+    }
+}
+
 // Ideally the screenshot UI should support cross-output selections. However, that poses some
 // technical challenges when the outputs have different scales and such. So, this implementation
 // allows only single-output selections for now.
@@ -249,8 +265,8 @@ impl ScreenshotUi {
                         .map_err(|err| warn!("error rendering help panel: {err:?}"))
                         .ok()
                 };
-                let panel_show = render_panel_(TEXT_SHOW_P);
-                let panel_hide = render_panel_(TEXT_HIDE_P);
+                let panel_show = render_panel_(screenshot_help(false));
+                let panel_hide = render_panel_(screenshot_help(true));
                 let panel = Option::zip(panel_show, panel_hide);
 
                 let data = OutputData {
@@ -345,8 +361,8 @@ impl ScreenshotUi {
                         .map_err(|err| warn!("error rendering help panel: {err:?}"))
                         .ok()
                 };
-                let panel_show = render_panel_(TEXT_SHOW_P);
-                let panel_hide = render_panel_(TEXT_HIDE_P);
+                let panel_show = render_panel_(screenshot_help(false));
+                let panel_hide = render_panel_(screenshot_help(true));
                 let panel = Option::zip(panel_show, panel_hide);
 
                 let data = OutputData {
@@ -481,11 +497,11 @@ impl ScreenshotUi {
         renderer: &mut GlesRenderer,
         scale: f64,
     ) -> Option<(ScreenshotPanel, ScreenshotPanel)> {
-        let show = render_panel(renderer, scale, TEXT_SHOW_P)
+        let show = render_panel(renderer, scale, screenshot_help(false))
             .map(ScreenshotPanel::Gles)
             .map_err(|err| warn!("error rendering help panel: {err:?}"))
             .ok();
-        let hide = render_panel(renderer, scale, TEXT_HIDE_P)
+        let hide = render_panel(renderer, scale, screenshot_help(true))
             .map(ScreenshotPanel::Gles)
             .map_err(|err| warn!("error rendering help panel: {err:?}"))
             .ok();
@@ -497,11 +513,11 @@ impl ScreenshotUi {
         renderer: &mut crate::render_helpers::vulkan::native::NativeRenderer,
         scale: f64,
     ) -> Option<(ScreenshotPanel, ScreenshotPanel)> {
-        let show = render_panel(renderer, scale, TEXT_SHOW_P)
+        let show = render_panel(renderer, scale, screenshot_help(false))
             .map(ScreenshotPanel::Vulkan)
             .map_err(|err| warn!("error rendering help panel: {err:?}"))
             .ok();
-        let hide = render_panel(renderer, scale, TEXT_HIDE_P)
+        let hide = render_panel(renderer, scale, screenshot_help(true))
             .map(ScreenshotPanel::Vulkan)
             .map_err(|err| warn!("error rendering help panel: {err:?}"))
             .ok();

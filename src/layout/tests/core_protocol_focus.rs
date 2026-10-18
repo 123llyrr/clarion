@@ -54,3 +54,81 @@ fn detached_cross_output_move_supplies_only_its_live_focus_payload() {
     assert!(layout.core_focus_id().is_none());
     layout.verify_invariants();
 }
+
+#[test]
+fn closing_background_floating_windows_keeps_keyboard_focus_on_the_foreground() {
+    for mode in [
+        clarion_ipc::TilingMode::Scrolling,
+        clarion_ipc::TilingMode::Dwindle,
+    ] {
+        let mut layout = check_ops([
+            Op::AddOutput(1),
+            Op::SwitchTilingMode(Some(mode)),
+            Op::AddWindow {
+                params: TestWindowParams {
+                    is_floating: true,
+                    ..TestWindowParams::new(1)
+                },
+            },
+            Op::AddWindow {
+                params: TestWindowParams {
+                    is_floating: true,
+                    ..TestWindowParams::new(2)
+                },
+            },
+            Op::AddWindow {
+                params: TestWindowParams {
+                    is_floating: true,
+                    ..TestWindowParams::new(3)
+                },
+            },
+            Op::CompleteAnimations,
+        ]);
+        assert_eq!(layout.core_focus_id(), Some(3));
+        assert!(layout.remove_window(&2, Transaction::new()).is_some());
+        assert_eq!(layout.core_focus_id(), Some(3));
+        assert_eq!(layout.core_focus_window(3).map(LayoutElement::id), Some(&3));
+        assert!(layout.core_focus_window(2).is_none());
+        assert!(layout.remove_window(&3, Transaction::new()).is_some());
+        assert_eq!(layout.core_focus_id(), Some(1));
+        assert_eq!(layout.core_focus_window(1).map(LayoutElement::id), Some(&1));
+        layout.verify_invariants();
+    }
+}
+
+#[test]
+fn closing_floating_dialog_restores_parent_and_closing_parked_window_keeps_focus() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams {
+                is_floating: true,
+                ..TestWindowParams::new(1)
+            },
+        },
+        Op::AddWindow {
+            params: TestWindowParams {
+                is_floating: true,
+                parent_id: Some(1),
+                ..TestWindowParams::new(2)
+            },
+        },
+        Op::CompleteAnimations,
+    ]);
+    assert_eq!(layout.core_focus_id(), Some(2));
+    assert!(layout.remove_window(&2, Transaction::new()).is_some());
+    assert_eq!(layout.core_focus_id(), Some(1));
+    Op::AddWindow {
+        params: TestWindowParams {
+            is_floating: true,
+            ..TestWindowParams::new(3)
+        },
+    }
+    .apply(&mut layout);
+    assert!(layout.minimize_window(&3));
+    assert_eq!(layout.core_focus_id(), Some(1));
+    assert!(layout.remove_window(&3, Transaction::new()).is_some());
+    assert_eq!(layout.core_focus_id(), Some(1));
+    assert!(layout.core_focus_window(3).is_none());
+    layout.verify_invariants();
+}

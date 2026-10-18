@@ -182,6 +182,144 @@ Future<void> _eventually(bool Function() condition) async {
 }
 
 void main() {
+  test(
+    'read state is independent of live actions and expiry history',
+    () async {
+      final f = await _Fixture.create();
+      final caller = f.client();
+      final id = await f.notify(caller, timeout: 30);
+      final item = f.service.notifications.single;
+      expect(f.service.unreadCount, 1);
+      f.service.markRead();
+      expect(f.service.unreadCount, 0);
+      expect(identical(f.service.notifications.single, item), isTrue);
+      await _eventually(() => !f.service.notifications.single.active);
+      expect(f.service.notifications.single.id, id);
+      expect(f.service.unreadCount, 0);
+      await f.notify(caller, timeout: 20);
+      await _eventually(() => !f.service.notifications.first.active);
+      expect(
+        f.service.unreadCount,
+        1,
+        reason: 'Unseen expired history is still unread',
+      );
+      await f.service.clear();
+      expect(f.service.unreadCount, 0);
+    },
+  );
+
+  test(
+    'visible history consumes new arrivals and replacements count once',
+    () async {
+      final f = await _Fixture.create();
+      final caller = f.client();
+      f.service.setHistoryVisible(true);
+      final id = await f.notify(caller);
+      expect(f.service.unreadCount, 0);
+      f.service.setHistoryVisible(false);
+      expect(await f.notify(caller, replace: id, summary: 'Updated'), id);
+      expect(f.service.unreadCount, 1);
+      await f.notify(caller, replace: id, summary: 'Updated again');
+      expect(f.service.unreadCount, 1);
+      expect(f.service.notifications, hasLength(1));
+      f.service.setHistoryVisible(true);
+      expect(f.service.unreadCount, 0);
+      expect(f.service.notifications.single.summary, 'Updated again');
+    },
+  );
+
+  test('unread count follows capacity and transient deletion', () async {
+    final f = await _Fixture.create(historyLimit: 2);
+    final caller = f.client();
+    await f.notify(caller);
+    await f.notify(caller);
+    await f.notify(
+      caller,
+      timeout: 20,
+      hints: {'transient': const DBusBoolean(true)},
+    );
+    expect(f.service.unreadCount, 2);
+    await _eventually(() => f.service.notifications.length == 1);
+    expect(f.service.unreadCount, 1);
+  });
+
+  test(
+    'trusted screenshot actions are local and external replacement cannot take them over',
+    () async {
+      final f = await _Fixture.create();
+      final caller = f.client();
+      final opened = <String>[];
+      f.service.showScreenshot(
+        '/tmp/Shot with spaces.png',
+        openLocation: (location) async => opened.add(location),
+      );
+      final image = f.service.notifications.single;
+      expect(image.summary, '截图已保存');
+      expect(image.actions.map((action) => action.label), ['打开图片', '打开所在文件夹']);
+      final replacement = await f.notify(caller, replace: image.id);
+      expect(replacement, isNot(image.id));
+      await expectLater(
+        f.closeNotification(caller, image.id),
+        throwsA(isA<DBusMethodResponseException>()),
+      );
+      expect(
+        await f.service.invokeAction(image.id, 'default', expected: image),
+        isTrue,
+      );
+      expect(opened, ['/tmp/Shot with spaces.png']);
+      expect(
+        f.bus.sent,
+        isEmpty,
+        reason: 'Local actions do not broadcast D-Bus action signals',
+      );
+      f.service.showScreenshot(
+        '/tmp/Second.png',
+        openLocation: (location) async => opened.add(location),
+      );
+      final folder = f.service.notifications.first;
+      expect(
+        await f.service.invokeAction(
+          folder.id,
+          'show-folder',
+          expected: folder,
+        ),
+        isTrue,
+      );
+      expect(opened.last, '/tmp');
+      f.service.showScreenshot(
+        null,
+        openLocation: (_) async => fail('Clipboard has no file action'),
+      );
+      expect(f.service.notifications.first.summary, '截图已复制');
+      expect(f.service.notifications.first.actions, isEmpty);
+    },
+  );
+
+  test(
+    'failed local screenshot opening retains the notification for retry',
+    () async {
+      final f = await _Fixture.create(historyLimit: 1);
+      var failOpen = true;
+      f.service.showScreenshot(
+        '/tmp/Shot.png',
+        openLocation: (_) async {
+          if (failOpen) throw StateError('Handler failed');
+        },
+      );
+      final image = f.service.notifications.single;
+      await expectLater(
+        f.service.invokeAction(image.id, 'default'),
+        throwsStateError,
+      );
+      expect(f.service.notifications.single, same(image));
+      failOpen = false;
+      expect(await f.service.invokeAction(image.id, 'default'), isTrue);
+      expect(f.service.notifications, isEmpty);
+      expect(f.service.unreadCount, 0);
+      expect(f.bus.sent, isEmpty);
+    },
+  );
+
   test('history capacity must be positive', () {
     expect(() => NotificationService(historyLimit: 0), throwsRangeError);
     expect(() => NotificationService(historyLimit: -1), throwsRangeError);

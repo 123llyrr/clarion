@@ -366,7 +366,7 @@ class _DoNotDisturbCard extends StatelessWidget {
     select: () => controller.doNotDisturb,
     builder: (context, enabled) => _ControlCard(
       child: Tooltip(
-        message: '暂停通知计数提醒，保留通知历史',
+        message: '暂停新通知提醒，保留通知历史',
         child: _ControlAction(
           actionKey: const ValueKey('mac-control-dnd'),
           title: '勿扰模式',
@@ -982,10 +982,111 @@ class _WifiDetailPanel extends StatefulWidget {
 }
 
 class _WifiDetailPanelState extends State<_WifiDetailPanel> {
+  final _password = TextEditingController();
+  final _passwordFocus = FocusNode();
+  WifiNetwork? _credentialNetwork;
+  String? _checkingSsid;
+  String? _connectionError;
+  bool _showPassword = false;
+  int _request = 0;
+
   @override
   void initState() {
     super.initState();
     widget.controller.scanWifiNetworks();
+    widget.controller.addListener(_controllerChanged);
+  }
+
+  void _controllerChanged() {
+    if (_credentialNetwork == null && _checkingSsid == null) return;
+    if (widget.controller.panel == ShellPanel.quickSettings &&
+        widget.controller.wifiEnabled == true) {
+      return;
+    }
+    _request++;
+    _password.clear();
+    if (mounted) {
+      setState(() {
+        _credentialNetwork = null;
+        _checkingSsid = null;
+        _connectionError = null;
+        _showPassword = false;
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _request++;
+    widget.controller.removeListener(_controllerChanged);
+    _password.dispose();
+    _passwordFocus.dispose();
+    super.dispose();
+  }
+
+  bool _needsPassword(WifiNetwork network) =>
+      network.isSecured && !network.security.toUpperCase().contains('OWE');
+
+  bool _isEnterprise(WifiNetwork network) =>
+      network.security.toUpperCase().contains('802.1X') ||
+      network.security.toUpperCase().contains('EAP');
+
+  Future<void> _chooseNetwork(WifiNetwork network) async {
+    final controller = widget.controller;
+    if (_checkingSsid != null || controller.busy.contains('wifi-connect')) {
+      return;
+    }
+    final request = ++_request;
+    _password.clear();
+    setState(() {
+      _credentialNetwork = null;
+      _connectionError = null;
+      _showPassword = false;
+      _checkingSsid = network.ssid;
+    });
+    if (_needsPassword(network)) {
+      final saved = await controller.hasSavedWifiConnection(network.ssid);
+      if (!mounted || request != _request) return;
+      if (!saved) {
+        setState(() {
+          _credentialNetwork = network;
+          _checkingSsid = null;
+        });
+        if (!_isEnterprise(network)) _passwordFocus.requestFocus();
+        return;
+      }
+    }
+    await _connect(network, request: request);
+  }
+
+  Future<void> _connect(WifiNetwork network, {int? request}) async {
+    final token = request ?? ++_request;
+    final password = _credentialNetwork == null ? null : _password.text;
+    if (password != null && password.isEmpty) return;
+    setState(() {
+      _checkingSsid = network.ssid;
+      _connectionError = null;
+    });
+    final success = await widget.controller.connectWifi(
+      network.ssid,
+      password: password,
+    );
+    if (!mounted || token != _request) return;
+    setState(() {
+      _checkingSsid = null;
+      if (success) {
+        _password.clear();
+        _credentialNetwork = null;
+        _showPassword = false;
+      } else {
+        _connectionError =
+            widget.controller.wifiConnectionError ?? '连接未完成，请确认网络与密码后重试';
+        if (_needsPassword(network)) _credentialNetwork = network;
+      }
+    });
+    if (!success && _credentialNetwork != null && !_isEnterprise(network)) {
+      _passwordFocus.requestFocus();
+    }
   }
 
   @override
@@ -1003,6 +1104,8 @@ class _WifiDetailPanelState extends State<_WifiDetailPanel> {
         controller.wifiScanning,
         controller.busy.contains('wifi'),
         controller.busy.contains('wifi-connect'),
+        controller.wifiConnectingSsid,
+        controller.wifiScanError,
       ),
       builder: (context, state) {
         final enabled = state.$1 ?? false;
@@ -1011,6 +1114,15 @@ class _WifiDetailPanelState extends State<_WifiDetailPanel> {
         final scanning = state.$4;
         final busyWifi = state.$5;
         final busyConnect = state.$6;
+        final connectingSsid = state.$7 ?? _checkingSsid;
+        final interactionBusy = busyConnect || _checkingSsid != null;
+        final scanError = state.$8;
+        final otherNetworks = networks
+            .where((network) => network.ssid != currentSsid)
+            .toList();
+        final current = networks
+            .where((network) => network.inUse && network.ssid == currentSsid)
+            .firstOrNull;
 
         return SingleChildScrollView(
           padding: const EdgeInsets.all(12),
@@ -1068,7 +1180,7 @@ class _WifiDetailPanelState extends State<_WifiDetailPanel> {
                   Padding(
                     padding: const EdgeInsets.fromLTRB(6, 6, 6, 4),
                     child: Text(
-                      '已知网络',
+                      '当前网络',
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
@@ -1078,9 +1190,10 @@ class _WifiDetailPanelState extends State<_WifiDetailPanel> {
                   ),
                   _ControlCard(
                     child: _NetworkRow(
+                      key: const ValueKey('mac-wifi-current-network'),
                       ssid: currentSsid,
-                      signalBars: 3,
-                      isSecured: true,
+                      signalBars: current?.signalBars,
+                      isSecured: current?.isSecured,
                       isConnected: true,
                       onTap: null,
                     ),
@@ -1105,21 +1218,40 @@ class _WifiDetailPanelState extends State<_WifiDetailPanel> {
                           dimension: 12,
                           child: CircularProgressIndicator(strokeWidth: 1.5),
                         ),
+                      if (!scanning)
+                        IconButton(
+                          key: const ValueKey('mac-wifi-rescan'),
+                          tooltip: '重新扫描',
+                          icon: const Icon(Icons.refresh_rounded, size: 16),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints.tightFor(
+                            width: 24,
+                            height: 24,
+                          ),
+                          onPressed: interactionBusy
+                              ? null
+                              : controller.scanWifiNetworks,
+                        ),
                     ],
                   ),
                 ),
                 _ControlCard(
-                  child: networks.where((n) => n.ssid != currentSsid).isEmpty
+                  child: otherNetworks.isEmpty
                       ? Padding(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 14,
                             vertical: 12,
                           ),
                           child: Text(
-                            scanning ? '正在查找网络…' : '未发现其他网络',
+                            scanning ? '正在查找网络…' : scanError ?? '未发现其他网络',
+                            key: scanError == null
+                                ? null
+                                : const ValueKey('mac-wifi-scan-error'),
                             style: TextStyle(
                               fontSize: 12,
-                              color: colors.onSurfaceVariant,
+                              color: scanError == null
+                                  ? colors.onSurfaceVariant
+                                  : colors.error,
                             ),
                           ),
                         )
@@ -1127,9 +1259,7 @@ class _WifiDetailPanelState extends State<_WifiDetailPanel> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             for (final (index, net)
-                                in networks
-                                    .where((n) => n.ssid != currentSsid)
-                                    .indexed) ...[
+                                in otherNetworks.indexed) ...[
                               if (index > 0)
                                 const Divider(
                                   height: 1,
@@ -1138,17 +1268,162 @@ class _WifiDetailPanelState extends State<_WifiDetailPanel> {
                                   endIndent: 12,
                                 ),
                               _NetworkRow(
+                                key: ValueKey('mac-wifi-network-${net.ssid}'),
                                 ssid: net.ssid,
                                 signalBars: net.signalBars,
                                 isSecured: net.isSecured,
                                 isConnected: false,
-                                busy: busyConnect,
-                                onTap: () => controller.connectWifi(net.ssid),
+                                busy: connectingSsid == net.ssid,
+                                progressLabel: state.$7 == net.ssid
+                                    ? '正在连接…'
+                                    : '正在检查…',
+                                onTap: interactionBusy
+                                    ? null
+                                    : () => _chooseNetwork(net),
                               ),
                             ],
                           ],
                         ),
                 ),
+                if (scanError != null && otherNetworks.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Semantics(
+                    liveRegion: true,
+                    child: Text(
+                      scanError,
+                      key: const ValueKey('mac-wifi-scan-error'),
+                      style: TextStyle(fontSize: 12, color: colors.error),
+                    ),
+                  ),
+                ],
+                if (_credentialNetwork case final network?) ...[
+                  const SizedBox(height: 8),
+                  _ControlCard(
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Text(
+                            network.ssid,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                          const SizedBox(height: 8),
+                          if (_isEnterprise(network))
+                            const Text(
+                              '此网络需要身份验证配置，请在网络设置中选择证书或账户。',
+                              style: TextStyle(fontSize: 12),
+                            )
+                          else
+                            TextField(
+                              key: const ValueKey('mac-wifi-password'),
+                              controller: _password,
+                              focusNode: _passwordFocus,
+                              enabled: !interactionBusy,
+                              obscureText: !_showPassword,
+                              autocorrect: false,
+                              enableSuggestions: false,
+                              textInputAction: TextInputAction.done,
+                              decoration: InputDecoration(
+                                isDense: true,
+                                labelText: '网络密码',
+                                suffixIcon: IconButton(
+                                  key: const ValueKey(
+                                    'mac-wifi-password-visibility',
+                                  ),
+                                  tooltip: _showPassword ? '隐藏密码' : '显示密码',
+                                  icon: Icon(
+                                    _showPassword
+                                        ? Icons.visibility_off_outlined
+                                        : Icons.visibility_outlined,
+                                    size: 18,
+                                  ),
+                                  onPressed: interactionBusy
+                                      ? null
+                                      : () {
+                                          setState(
+                                            () =>
+                                                _showPassword = !_showPassword,
+                                          );
+                                          _passwordFocus.requestFocus();
+                                        },
+                                ),
+                              ),
+                              onChanged: (_) => setState(() {}),
+                              onSubmitted: (_) {
+                                if (!interactionBusy &&
+                                    _password.text.isNotEmpty) {
+                                  _connect(network);
+                                }
+                              },
+                            ),
+                          if (_connectionError != null) ...[
+                            const SizedBox(height: 8),
+                            Text(
+                              _connectionError!,
+                              key: const ValueKey('mac-wifi-connection-error'),
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: colors.error,
+                              ),
+                            ),
+                          ],
+                          const SizedBox(height: 8),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              TextButton(
+                                key: const ValueKey('mac-wifi-password-cancel'),
+                                onPressed: interactionBusy
+                                    ? null
+                                    : () {
+                                        _password.clear();
+                                        setState(() {
+                                          _credentialNetwork = null;
+                                          _connectionError = null;
+                                          _showPassword = false;
+                                        });
+                                      },
+                                child: const Text('取消'),
+                              ),
+                              const SizedBox(width: 4),
+                              FilledButton(
+                                key: const ValueKey(
+                                  'mac-wifi-password-connect',
+                                ),
+                                onPressed: interactionBusy
+                                    ? null
+                                    : _isEnterprise(network)
+                                    ? controller.openNetworkPreferences
+                                    : _password.text.isEmpty
+                                    ? null
+                                    : () => _connect(network),
+                                child: Text(
+                                  interactionBusy
+                                      ? '正在连接…'
+                                      : _isEnterprise(network)
+                                      ? '网络设置'
+                                      : _connectionError == null
+                                      ? '连接'
+                                      : '重试',
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ] else if (_connectionError != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    _connectionError!,
+                    key: const ValueKey('mac-wifi-connection-error'),
+                    style: TextStyle(fontSize: 12, color: colors.error),
+                  ),
+                ],
               ],
               const SizedBox(height: 8),
               const Divider(height: 1, thickness: 0.5),
@@ -1168,18 +1443,21 @@ class _WifiDetailPanelState extends State<_WifiDetailPanel> {
 
 class _NetworkRow extends StatelessWidget {
   const _NetworkRow({
+    super.key,
     required this.ssid,
     required this.signalBars,
     required this.isSecured,
     required this.isConnected,
     this.busy = false,
+    this.progressLabel = '正在连接…',
     this.onTap,
   });
   final String ssid;
-  final int signalBars;
-  final bool isSecured;
+  final int? signalBars;
+  final bool? isSecured;
   final bool isConnected;
   final bool busy;
+  final String progressLabel;
   final VoidCallback? onTap;
 
   @override
@@ -1188,7 +1466,9 @@ class _NetworkRow extends StatelessWidget {
     final icon = switch (signalBars) {
       3 => Icons.wifi_rounded,
       2 => Icons.wifi_2_bar_rounded,
-      _ => Icons.wifi_1_bar_rounded,
+      1 => Icons.wifi_1_bar_rounded,
+      0 => Icons.signal_wifi_0_bar_rounded,
+      _ => Icons.wifi_outlined,
     };
     return InkWell(
       onTap: busy ? null : onTap,
@@ -1211,7 +1491,19 @@ class _NetworkRow extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
               ),
             ),
-            if (isSecured) ...[
+            if (busy) ...[
+              const SizedBox(width: 6),
+              const SizedBox.square(
+                dimension: 12,
+                child: CircularProgressIndicator(strokeWidth: 1.5),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                progressLabel,
+                style: TextStyle(fontSize: 11, color: colors.onSurfaceVariant),
+              ),
+            ],
+            if (isSecured == true) ...[
               const SizedBox(width: 6),
               Icon(
                 Icons.lock_outline_rounded,
@@ -1220,12 +1512,15 @@ class _NetworkRow extends StatelessWidget {
               ),
             ],
             const SizedBox(width: 6),
-            Icon(
-              icon,
-              size: 16,
-              color: isConnected
-                  ? const Color(0xff007aff)
-                  : colors.onSurfaceVariant,
+            Tooltip(
+              message: signalBars == null ? '信号强度未知' : '信号强度 $signalBars / 3',
+              child: Icon(
+                icon,
+                size: 16,
+                color: isConnected
+                    ? const Color(0xff007aff)
+                    : colors.onSurfaceVariant,
+              ),
             ),
           ],
         ),

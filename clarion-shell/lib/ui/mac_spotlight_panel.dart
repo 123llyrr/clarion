@@ -28,6 +28,17 @@ class _MacSpotlightPanelState extends State<MacSpotlightPanel> {
   int _selectedIndex = -1;
   List<_SpotlightResult> _results = const [];
   Timer? _debounce;
+  String _queryText = '';
+  String? _searchedText;
+  bool _enterHeld = false;
+  final _imeKeys = <PhysicalKeyboardKey>{};
+  bool _copyInProgress = false;
+  String? _copyFeedback;
+  bool _copyFailed = false;
+  Timer? _feedbackTimer;
+
+  bool get _composing =>
+      _query.value.composing.isValid && !_query.value.composing.isCollapsed;
 
   @override
   void initState() {
@@ -42,6 +53,7 @@ class _MacSpotlightPanelState extends State<MacSpotlightPanel> {
   @override
   void dispose() {
     _debounce?.cancel();
+    _feedbackTimer?.cancel();
     _query.removeListener(_onQueryChanged);
     _query.dispose();
     _focus.dispose();
@@ -49,12 +61,32 @@ class _MacSpotlightPanelState extends State<MacSpotlightPanel> {
   }
 
   void _onQueryChanged() {
+    // Selection and IME range updates must not restart a text search.
+    if (_queryText == _query.text) return;
+    _queryText = _query.text;
+    _searchedText = null;
     _debounce?.cancel();
+    _feedbackTimer?.cancel();
+    // A visible row must always belong to the current text, including the
+    // brief debounce interval in which a pointer or Return can arrive.
+    setState(() {
+      _results = const [];
+      _selectedIndex = -1;
+      _copyFeedback = null;
+    });
     _debounce = Timer(const Duration(milliseconds: 80), _search);
   }
 
+  void _refreshResults() {
+    if (_searchedText == _query.text.trim()) return;
+    _debounce?.cancel();
+    _search();
+  }
+
   void _search() {
+    _debounce = null;
     final text = _query.text.trim();
+    _searchedText = text;
     if (text.isEmpty) {
       setState(() {
         _results = const [];
@@ -131,10 +163,7 @@ class _MacSpotlightPanelState extends State<MacSpotlightPanel> {
     final sanitised = expr.replaceAll(RegExp(r'[^0-9+\-*/().%^ ×÷]'), '');
     if (sanitised.isEmpty) return null;
     // Normalise Unicode operators
-    var clean = expr
-        .replaceAll('×', '*')
-        .replaceAll('÷', '/')
-        .replaceAll('^', '');
+    var clean = expr.replaceAll('×', '*').replaceAll('÷', '/');
     // Very simple: try evaluating as Dart double expression
     try {
       // Only allow basic arithmetic
@@ -204,7 +233,8 @@ class _MacSpotlightPanelState extends State<MacSpotlightPanel> {
         if (tokens[pos] == '(') {
           pos++;
           final val = parseExpr();
-          if (pos < tokens.length && tokens[pos] == ')') pos++;
+          if (pos >= tokens.length || tokens[pos] != ')') return null;
+          pos++;
           return val;
         }
         final num = double.tryParse(tokens[pos]);
@@ -250,6 +280,11 @@ class _MacSpotlightPanelState extends State<MacSpotlightPanel> {
   }
 
   void _activate(_SpotlightResult result) {
+    if (_composing ||
+        _searchedText != _query.text.trim() ||
+        !_results.contains(result)) {
+      return;
+    }
     switch (result.kind) {
       case _ResultKind.launcher:
         widget.controller.selectPanel(ShellPanel.launcher);
@@ -259,40 +294,91 @@ class _MacSpotlightPanelState extends State<MacSpotlightPanel> {
         }
         widget.onClose();
       case _ResultKind.calculator:
-        // Copy to clipboard
-        final value = result.title.replaceFirst('= ', '');
-        Clipboard.setData(ClipboardData(text: value));
+        unawaited(_copyCalculation(result));
       case _ResultKind.systemSetting:
         widget.controller.openSettings();
         widget.onClose();
     }
   }
 
+  Future<void> _copyCalculation(_SpotlightResult result) async {
+    if (_copyInProgress) return;
+    _copyInProgress = true;
+    final text = _query.text;
+    var failed = false;
+    try {
+      await Clipboard.setData(
+        ClipboardData(text: result.title.replaceFirst('= ', '')),
+      );
+    } on Object {
+      failed = true;
+    } finally {
+      _copyInProgress = false;
+    }
+    // A slow clipboard reply must not annotate a later search.
+    if (!mounted || _query.text != text || !_results.contains(result)) return;
+    _feedbackTimer?.cancel();
+    setState(() {
+      _copyFailed = failed;
+      _copyFeedback = failed ? '复制失败，请重试' : '已复制计算结果';
+    });
+    _feedbackTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _copyFeedback = null);
+    });
+  }
+
+  void _activateSelected() {
+    if (_composing) return;
+    _refreshResults();
+    if (_selectedIndex >= 0 && _selectedIndex < _results.length) {
+      _activate(_results[_selectedIndex]);
+    }
+  }
+
   KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
+    final key = event.logicalKey;
+    final isEnter =
+        key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter;
+    final isNavigation =
+        isEnter ||
+        key == LogicalKeyboardKey.arrowDown ||
+        key == LogicalKeyboardKey.arrowUp ||
+        key == LogicalKeyboardKey.escape;
+    if (event is KeyUpEvent) {
+      _imeKeys.remove(event.physicalKey);
+      if (isEnter) _enterHeld = false;
+      return KeyEventResult.ignored;
+    }
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
     }
-    if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+    if (isEnter) _enterHeld = true;
+    // Let the input method confirm, navigate or cancel its own candidates.
+    // Keep the whole physical press with the IME even if it commits mid-hold.
+    if (isNavigation && (_composing || _imeKeys.contains(event.physicalKey))) {
+      _imeKeys.add(event.physicalKey);
+      return KeyEventResult.skipRemainingHandlers;
+    }
+    if (isEnter) {
+      if (event is KeyDownEvent) _activateSelected();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.arrowDown ||
+        key == LogicalKeyboardKey.arrowUp) {
+      _refreshResults();
       if (_results.isNotEmpty) {
         setState(() {
-          _selectedIndex = (_selectedIndex + 1).clamp(0, _results.length - 1);
+          final delta = key == LogicalKeyboardKey.arrowDown ? 1 : -1;
+          _selectedIndex = (_selectedIndex + delta).clamp(
+            0,
+            _results.length - 1,
+          );
         });
         return KeyEventResult.handled;
       }
-    } else if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
-      if (_results.isNotEmpty) {
-        setState(() {
-          _selectedIndex = (_selectedIndex - 1).clamp(0, _results.length - 1);
-        });
-        return KeyEventResult.handled;
-      }
-    } else if (event.logicalKey == LogicalKeyboardKey.enter) {
-      if (_selectedIndex >= 0 && _selectedIndex < _results.length) {
-        _activate(_results[_selectedIndex]);
-        return KeyEventResult.handled;
-      }
-    } else if (event.logicalKey == LogicalKeyboardKey.escape) {
-      widget.onClose();
+    } else if (key == LogicalKeyboardKey.escape) {
+      if (event is KeyDownEvent) widget.onClose();
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
@@ -415,11 +501,14 @@ class _MacSpotlightPanelState extends State<MacSpotlightPanel> {
                                 isDense: true,
                               ),
                               textInputAction: TextInputAction.search,
+                              // Keep focus for IME confirmation and calculator
+                              // copies; an activated app closes the panel itself.
+                              onEditingComplete: () {},
+                              // Physical Return is handled by the focus node;
+                              // retain virtual-keyboard Search without a second
+                              // activation for the same hardware press.
                               onSubmitted: (_) {
-                                if (_selectedIndex >= 0 &&
-                                    _selectedIndex < _results.length) {
-                                  _activate(_results[_selectedIndex]);
-                                }
+                                if (!_enterHeld) _activateSelected();
                               },
                             ),
                           ),
@@ -439,6 +528,40 @@ class _MacSpotlightPanelState extends State<MacSpotlightPanel> {
                         ],
                       ),
                     ),
+                    if (_copyFeedback != null)
+                      Semantics(
+                        liveRegion: true,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(18, 0, 18, 8),
+                          child: Row(
+                            children: [
+                              Icon(
+                                _copyFailed
+                                    ? Icons.error_outline_rounded
+                                    : Icons.check_rounded,
+                                size: 15,
+                                color: _copyFailed
+                                    ? Theme.of(context).colorScheme.error
+                                    : dark
+                                    ? Colors.white70
+                                    : Colors.black54,
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                _copyFeedback!,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: _copyFailed
+                                      ? Theme.of(context).colorScheme.error
+                                      : dark
+                                      ? Colors.white70
+                                      : Colors.black54,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     // Results
                     if (hasResults) ...[
                       Container(

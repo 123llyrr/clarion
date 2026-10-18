@@ -49,6 +49,9 @@ pub struct EventStreamState {
 
     /// State of screencasts.
     pub casts: CastsState,
+
+    /// Session-wide reduced-motion preference, shared by all Shell instances.
+    pub reduced_motion: ReducedMotionState,
 }
 
 /// The workspaces state communicated over the event stream.
@@ -93,6 +96,30 @@ pub struct CastsState {
     pub casts: HashMap<u64, Cast>,
 }
 
+/// Reduced-motion state communicated over the event stream.
+#[derive(Debug, Default)]
+pub struct ReducedMotionState {
+    /// `None` until a Shell or accessibility client initializes the preference.
+    pub enabled: Option<bool>,
+}
+
+impl EventStreamStatePart for ReducedMotionState {
+    fn replicate(&self) -> Vec<Event> {
+        self.enabled
+            .map(|enabled| Event::ReducedMotionChanged { enabled })
+            .into_iter()
+            .collect()
+    }
+
+    fn apply(&mut self, event: Event) -> Option<Event> {
+        match event {
+            Event::ReducedMotionChanged { enabled } => self.enabled = Some(enabled),
+            event => return Some(event),
+        }
+        None
+    }
+}
+
 impl EventStreamStatePart for EventStreamState {
     fn replicate(&self) -> Vec<Event> {
         let mut events = Vec::new();
@@ -102,6 +129,7 @@ impl EventStreamStatePart for EventStreamState {
         events.extend(self.overview.replicate());
         events.extend(self.config.replicate());
         events.extend(self.casts.replicate());
+        events.extend(self.reduced_motion.replicate());
         events
     }
 
@@ -112,6 +140,7 @@ impl EventStreamStatePart for EventStreamState {
         let event = self.overview.apply(event)?;
         let event = self.config.apply(event)?;
         let event = self.casts.apply(event)?;
+        let event = self.reduced_motion.apply(event)?;
         Some(event)
     }
 }

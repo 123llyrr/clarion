@@ -164,6 +164,9 @@ class _ShellHostState extends State<ShellHost> with WidgetsBindingObserver {
     _mainViewId =
         dispatcher.implicitView?.viewId ?? dispatcher.views.firstOrNull?.viewId;
     WidgetsBinding.instance.addObserver(this);
+    widget.controller.setPlatformReducedMotion(
+      dispatcher.accessibilityFeatures.disableAnimations,
+    );
     unawaited(_refreshOutputGeometry());
   }
 
@@ -171,6 +174,17 @@ class _ShellHostState extends State<ShellHost> with WidgetsBindingObserver {
   void didChangeMetrics() {
     if (mounted) setState(() {});
     unawaited(_refreshOutputGeometry());
+  }
+
+  @override
+  void didChangeAccessibilityFeatures() {
+    widget.controller.setPlatformReducedMotion(
+      WidgetsBinding
+          .instance
+          .platformDispatcher
+          .accessibilityFeatures
+          .disableAnimations,
+    );
   }
 
   Future<void> _refreshOutputGeometry() async {
@@ -296,7 +310,6 @@ class _DockApplicationState extends State<DockApplication> {
   Rect? _appliedGlassRegion;
   Map<int, Rect> _targets = const {};
   Timer? _targetTimer;
-  bool _presentationReducedMotion = false;
   int _geometryRevision = 0;
   bool _targetRegistrationRunning = false;
   bool _targetRegistrationDirty = false;
@@ -375,7 +388,6 @@ class _DockApplicationState extends State<DockApplication> {
     Map<int, Rect> targets,
     bool reducedMotion,
   ) {
-    _presentationReducedMotion = reducedMotion;
     _glassRegion = glass;
     _targets = targets;
     _queueGeometry();
@@ -404,7 +416,11 @@ class _DockApplicationState extends State<DockApplication> {
           continue;
         }
         final targets = Map<int, Rect>.of(_targets);
-        final reducedMotion = _presentationReducedMotion;
+        final reducedMotion = WidgetsBinding
+            .instance
+            .platformDispatcher
+            .accessibilityFeatures
+            .disableAnimations;
         final origin = await _window.invokeMapMethod<String, dynamic>(
           'surfaceOrigin',
           'dock',

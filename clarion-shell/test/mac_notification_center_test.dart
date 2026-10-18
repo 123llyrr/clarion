@@ -212,7 +212,7 @@ void main() {
       await tester.pumpWidget(const SizedBox());
       controller.selectPanel(ShellPanel.notifications);
       await mount(tester);
-      expect(find.text('没有新通知'), findsOneWidget);
+      expect(find.text('暂无通知'), findsOneWidget);
       expect(
         tester
             .widget<CupertinoSwitch>(

@@ -2288,3 +2288,104 @@ fn workspace_cancel_settles_from_core_pose_with_live_tracker_velocity() {
         }
     }
 }
+
+#[test]
+fn runtime_reduced_motion_settles_windows_and_desktops_without_reviving_them() {
+    for mode in [
+        clarion_ipc::TilingMode::Scrolling,
+        clarion_ipc::TilingMode::Dwindle,
+    ] {
+        for is_floating in [false, true] {
+            let mut layout = check_ops([
+                Op::AddOutput(1),
+                Op::SwitchTilingMode(Some(mode)),
+                Op::AddWindow {
+                    params: TestWindowParams {
+                        is_floating,
+                        ..TestWindowParams::new(1)
+                    },
+                },
+                Op::CompleteAnimations,
+            ]);
+            layout.start_open_animation_for_window(&1);
+            layout.active_monitor().unwrap().activate_workspace(1);
+            assert!(layout.are_transitions_ongoing(None));
+            layout.set_reduced_motion(true);
+            assert!(layout.reduced_motion());
+            assert!(!layout.are_transitions_ongoing(None));
+            // Config reload must not erase the runtime accessibility choice.
+            layout.update_config(&Config::default());
+            layout.clock.set_complete_instantly(false);
+            assert!(layout.clock.should_complete_instantly());
+            layout.start_open_animation_for_window(&1);
+            layout.set_reduced_motion(false);
+            assert!(!layout.reduced_motion());
+            assert!(!layout.are_transitions_ongoing(None));
+            layout.start_open_animation_for_window(&1);
+            assert!(layout.are_transitions_ongoing(None));
+            layout.set_reduced_motion(true);
+            assert!(!layout.are_transitions_ongoing(None));
+            layout.verify_invariants();
+        }
+    }
+}
+
+#[test]
+fn expanded_border_thickness_and_geometry_reverse_continuously() {
+    for scale in [1., 1.25, 2.] {
+        let mut clock = Clock::with_time(Duration::ZERO);
+        let mut options = Options::default();
+        options.layout.border.off = false;
+        options.layout.border.width = 8.;
+        let resources = crate::scene::resources::SceneResources::new();
+        let mut tile = Tile::new(
+            TestWindow::new(TestWindowParams {
+                bbox: Rectangle::from_size((800, 600).into()),
+                ..TestWindowParams::new(1)
+            }),
+            (1920., 1080.).into(),
+            scale,
+            clock.clone(),
+            Rc::new(options),
+            resources.allocator().windows.allocate(),
+        );
+        tile.window_mut()
+            .request_size((1920, 1080).into(), SizingMode::Fullscreen, true, None);
+        tile.window().communicate();
+        tile.update_window();
+        assert_eq!(tile.presentation.visual_border_width(), Some(8.));
+        clock.set_unadjusted(Duration::from_millis(60));
+        let pose = |tile: &Tile<TestWindow>| {
+            (
+                tile.animated_window_size(),
+                tile.animated_tile_size(),
+                tile.window_loc(),
+                tile.presentation.visual_border_width(),
+            )
+        };
+        let before = pose(&tile);
+        let width = before.3.unwrap();
+        assert!(width > 0. && width < 8.);
+        tile.update_render_elements(true, Rectangle::from_size((1920., 1080.).into()));
+        assert_eq!(
+            tile.scene().resources.decorations.borrow().border.width(),
+            width
+        );
+        tile.window_mut()
+            .request_size((800, 600).into(), SizingMode::Normal, true, None);
+        tile.window().communicate();
+        tile.update_window();
+        assert_eq!(pose(&tile), before);
+        clock.set_unadjusted(Duration::from_secs(2));
+        tile.advance_animations();
+        assert_eq!(tile.presentation.visual_border_width(), Some(8.));
+        assert_eq!(tile.animated_window_size(), (800., 600.).into());
+        tile.window_mut()
+            .request_size((1920, 1080).into(), SizingMode::Fullscreen, true, None);
+        tile.window().communicate();
+        tile.update_window();
+        clock.set_unadjusted(Duration::from_secs(4));
+        tile.advance_animations();
+        assert_eq!(tile.presentation.visual_border_width(), None);
+    }
+}

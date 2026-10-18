@@ -244,7 +244,7 @@ pub struct Clarion {
     core_protocol_ops: Vec<crate::layout::CoreProtocolOp>,
     screenshot_tasks: crate::platform::capture::CaptureSlots,
     screencopy_tasks: crate::platform::capture::CaptureSlots,
-    capture_scene_epoch: crate::platform::capture::CaptureEpoch,
+    pub(crate) capture_scene_epoch: crate::platform::capture::CaptureEpoch,
 
     // This space does not actually contain any windows, but all outputs are mapped into it
     // according to their global position.
@@ -352,7 +352,7 @@ pub struct Clarion {
     /// Button codes of the mouse buttons to suppress.
     pub suppressed_buttons: HashSet<u32>,
     pub bind_cooldown_timers: HashMap<Key, RegistrationToken>,
-    pub bind_repeat_timer: Option<RegistrationToken>,
+    pub bind_repeat_timer: Option<crate::input::BindRepeat>,
     pub keyboard_focus: KeyboardFocus,
     pub layer_shell_on_demand_focus: Option<LayerSurface>,
     pub idle_inhibiting_surfaces: HashSet<WlSurface>,
@@ -2669,6 +2669,7 @@ impl State {
         let options = crate::platform::capture::ScreenshotSaveOptions {
             destination: Some((path, true)),
             publish_clipboard: false,
+            is_preview: false,
             completion: reply,
         };
         let result = self
@@ -6803,8 +6804,39 @@ impl Clarion {
         WindowScreenshotRenderElement<R>: RenderElement<R>,
         for<'a> R::Framebuffer<'a>: Texture,
     {
+        self.screenshot_window_with_preview(
+            renderer,
+            output,
+            mapped,
+            write_to_disk,
+            show_pointer,
+            path,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn screenshot_window_with_preview<R>(
+        &self,
+        renderer: &mut R,
+        output: &Output,
+        mapped: &Mapped,
+        write_to_disk: bool,
+        show_pointer: bool,
+        path: Option<String>,
+        is_preview: bool,
+    ) -> anyhow::Result<()>
+    where
+        R: crate::platform::pixel_readback::DeferredCaptureRenderer
+            + Offscreen<<R as RendererSuper>::TextureId>
+            + Bind<<R as RendererSuper>::TextureId>,
+        WindowScreenshotRenderElement<R>: RenderElement<R>,
+        for<'a> R::Framebuffer<'a>: Texture,
+    {
         let permit = self.screenshot_tasks.acquire()?;
-        let options = self.screenshot_save_options(write_to_disk, path);
+        let mut options = self.screenshot_save_options(write_to_disk, path);
+        options.publish_clipboard = !is_preview;
+        options.is_preview = is_preview;
         let (size, texture) =
             self.prepare_window_screenshot(renderer, output, mapped, show_pointer)?;
         let job = renderer.enqueue_pixels(
@@ -6883,6 +6915,7 @@ impl Clarion {
         crate::platform::capture::ScreenshotSaveOptions {
             destination: path,
             publish_clipboard: true,
+            is_preview: false,
             completion: Default::default(),
         }
     }
@@ -6898,42 +6931,30 @@ impl Clarion {
         let path = options.destination;
         let reply = options.completion;
         let publish_clipboard = options.publish_clipboard;
-        let tx = if publish_clipboard {
+        let is_preview = options.is_preview;
+        let event_tx = if publish_clipboard || is_preview {
             let scene_epoch = scene_epoch.clone();
-            let (tx, rx) = calloop::channel::sync_channel::<Arc<[u8]>>(1);
+            let (tx, rx) = calloop::channel::sync_channel::<(Option<Arc<[u8]>>, Option<String>)>(1);
             self.event_loop
                 .insert_source(rx, move |event, _, state| {
-                    if let calloop::channel::Event::Msg(buf) = event {
+                    if let calloop::channel::Event::Msg((pixels, path)) = event {
                         if scene_epoch.is_current() && !state.clarion.is_locked() {
-                            set_data_device_selection(
-                                &state.clarion.display_handle,
-                                &state.clarion.seat,
-                                vec![String::from("image/png")],
-                                buf,
-                            );
+                            // Clipboard ownership and completion share one main-loop
+                            // callback, so feedback cannot race an old selection.
+                            if let Some(pixels) = pixels {
+                                set_data_device_selection(
+                                    &state.clarion.display_handle,
+                                    &state.clarion.seat,
+                                    vec![String::from("image/png")],
+                                    pixels,
+                                );
+                            }
+                            state.ipc_screenshot_taken(path, is_preview);
                         }
                     }
                 })
                 .map_err(|error| {
-                    anyhow::anyhow!("error registering screenshot clipboard: {}", error.error)
-                })?;
-            Some(tx)
-        } else {
-            None
-        };
-        let event_tx = if publish_clipboard {
-            let scene_epoch = scene_epoch.clone();
-            let (tx, rx) = calloop::channel::sync_channel::<Option<String>>(1);
-            self.event_loop
-                .insert_source(rx, move |event, _, state| {
-                    if let calloop::channel::Event::Msg(path) = event {
-                        if scene_epoch.is_current() && !state.clarion.is_locked() {
-                            state.ipc_screenshot_taken(path);
-                        }
-                    }
-                })
-                .map_err(|error| {
-                    anyhow::anyhow!("error registering screenshot notification: {}", error.error)
+                    anyhow::anyhow!("error registering screenshot completion: {}", error.error)
                 })?;
             Some(tx)
         } else {
@@ -6958,9 +6979,6 @@ impl Clarion {
                     return;
                 }
                 let buf: Arc<[u8]> = Arc::from(buf.into_boxed_slice());
-                if let Some(tx) = tx {
-                    let _ = tx.send(buf.clone());
-                }
                 let mut image_path = None;
                 if let Some((path, create_parent)) = path {
                     if create_parent {
@@ -6970,12 +6988,26 @@ impl Clarion {
                             }
                         }
                     }
-                    match std::fs::write(&path, buf) {
-                        Ok(()) => image_path = Some(path),
+                    match std::fs::write(&path, buf.as_ref()) {
+                        Ok(()) => {
+                            // Shell and compositor can have different working
+                            // directories; completion actions always name the
+                            // file that was actually saved.
+                            image_path = Some(path.canonicalize().unwrap_or(path));
+                        }
                         Err(error) => warn!("error saving screenshot image: {error:#}"),
                     }
                 }
                 drop(_permit);
+                // Publish completion before best-effort D-Bus work. The shell
+                // can give immediate feedback without waiting on another daemon.
+                if let Some(tx) = event_tx {
+                    let path_string = image_path
+                        .as_ref()
+                        .and_then(|p| p.to_str())
+                        .map(str::to_owned);
+                    let _ = tx.send((publish_clipboard.then_some(buf), path_string));
+                }
                 #[cfg(all(feature = "dbus", not(test)))]
                 if publish_clipboard && scene_epoch.is_current() {
                     if let Err(error) =
@@ -6983,13 +7015,6 @@ impl Clarion {
                     {
                         warn!("error showing screenshot notification: {error:#}");
                     }
-                }
-                if let Some(tx) = event_tx {
-                    let path_string = image_path
-                        .as_ref()
-                        .and_then(|p| p.to_str())
-                        .map(str::to_owned);
-                    let _ = tx.send(path_string);
                 }
                 reply.complete(image_path);
             })

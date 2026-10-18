@@ -18,6 +18,7 @@ Future<String> runSystemCommand(
   String executable,
   List<String> arguments, {
   Map<String, String>? environment,
+  Duration timeout = const Duration(seconds: 5),
 }) async {
   final process = await Process.start(
     executable,
@@ -27,7 +28,7 @@ Future<String> runSystemCommand(
   final output = _CommandPipe(process.stdout);
   final error = _CommandPipe(process.stderr);
   try {
-    final code = await process.exitCode.timeout(const Duration(seconds: 5));
+    final code = await process.exitCode.timeout(timeout);
     final results = await Future.wait([output.finish(), error.finish()]);
     if (code != 0) {
       throw StateError(
@@ -145,10 +146,12 @@ class SystemService {
     ApplicationLauncher? applicationLauncher,
     this.powerSupplyRoot = '/sys/class/power_supply',
   }) : command = command ?? runSystemCommand,
+       _usesDefaultCommand = command == null,
        environment = environment ?? Platform.environment,
        _applicationLauncher =
            applicationLauncher ?? ApplicationLauncher(environment: environment);
   final CommandRunner command;
+  final bool _usesDefaultCommand;
   final Map<String, String> environment;
   final String powerSupplyRoot;
   final ApplicationLauncher _applicationLauncher;
@@ -403,27 +406,91 @@ class SystemService {
   }
 
   Future<List<WifiNetwork>> scanWifiNetworks() async {
+    final output = await command('nmcli', [
+      '-t',
+      '-f',
+      'IN-USE,SSID,SIGNAL,SECURITY',
+      'device',
+      'wifi',
+      'list',
+    ]);
+    return parseWifiNetworks(output);
+  }
+
+  Future<bool> hasSavedWifiConnection(String ssid) async {
     try {
-      final output = await command('nmcli', [
+      final profiles = await command('nmcli', [
         '-t',
         '-f',
-        'IN-USE,SSID,SIGNAL,SECURITY',
-        'device',
-        'wifi',
-        'list',
+        'UUID,TYPE',
+        'connection',
+        'show',
       ]);
-      return parseWifiNetworks(output);
-    } catch (_) {
-      return const [];
+      final uuids = profiles
+          .split('\n')
+          .map((line) => line.split(':'))
+          .where(
+            (fields) =>
+                fields.length == 2 &&
+                (fields[1] == '802-11-wireless' || fields[1] == 'wifi'),
+          )
+          .map((fields) => fields[0])
+          .where((uuid) => RegExp(r'^[0-9a-fA-F-]{36}$').hasMatch(uuid))
+          .take(64)
+          .toList();
+      // Profile names can differ from SSIDs. Read the actual wireless setting,
+      // without asking NetworkManager to disclose any stored credentials.
+      for (var offset = 0; offset < uuids.length; offset += 4) {
+        final matches = await Future.wait(
+          uuids.skip(offset).take(4).map((uuid) async {
+            try {
+              return await command('nmcli', [
+                    '--escape',
+                    'no',
+                    '-g',
+                    '802-11-wireless.ssid',
+                    'connection',
+                    'show',
+                    'uuid',
+                    uuid,
+                  ]) ==
+                  ssid;
+            } on Object {
+              return false;
+            }
+          }),
+        );
+        if (matches.any((match) => match)) return true;
+      }
+    } on Object {
+      // A missing profile query must still allow entering a new password.
     }
+    return false;
   }
 
   Future<void> connectWifi(String ssid, {String? password}) async {
-    final args = <String>['device', 'wifi', 'connect', ssid];
+    final args = <String>['--wait', '30', 'device', 'wifi', 'connect', ssid];
     if (password != null && password.isNotEmpty) {
       args.addAll(['password', password]);
     }
-    await command('nmcli', args);
+    try {
+      if (_usesDefaultCommand) {
+        // Authentication and DHCP commonly take longer than a status read.
+        await runSystemCommand(
+          'nmcli',
+          args,
+          timeout: const Duration(seconds: 35),
+        );
+      } else {
+        await command('nmcli', args);
+      }
+    } on Object catch (error) {
+      // Never retain a tool's diagnostic containing the supplied secret.
+      final message = password == null || password.isEmpty
+          ? error.toString()
+          : error.toString().replaceAll(password, '••••••••');
+      throw StateError(message);
+    }
   }
 
   Future<List<BluetoothDevice>> listBluetoothDevices() async {

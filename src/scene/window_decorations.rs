@@ -110,6 +110,11 @@ impl WindowDecorations {
         self.last_size = Some(tile_size);
         self.last_view = Some(view);
 
+        // Render the actual animated thickness. Keeping the configured full
+        // width here would make the border protrude past its shrinking tile.
+        let mut border_config = *self.border.config();
+        border_config.width = border_width;
+        self.border.update_config(border_config);
         let mut border_window_size = tile_size;
         border_window_size.w -= border_width * 2.;
         border_window_size.h -= border_width * 2.;

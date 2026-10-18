@@ -36,6 +36,8 @@ class _Ipc extends ClarionIpc {
   @override
   void start() => connectionEvents.add(true);
   @override
+  Future<dynamic> request(Object request) async => null;
+  @override
   Future<void> action(
     String name, [
     Map<String, Object?> arguments = const {},

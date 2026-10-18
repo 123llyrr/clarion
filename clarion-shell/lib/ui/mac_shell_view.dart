@@ -1248,7 +1248,7 @@ class _MacMenuBar extends StatelessWidget {
       muted: controller.muted,
       battery: controller.batteryFraction,
       charging: controller.charging,
-      notifications: controller.notifications.length,
+      notifications: controller.unreadNotificationCount,
       dnd: controller.doNotDisturb,
       tray: controller.trayItems,
     ),
@@ -1476,14 +1476,17 @@ class _MacMenuBar extends StatelessWidget {
                         buttonKey: 'mac-notifications',
                         panel: ShellPanel.notifications,
                         controller: controller,
-                        label: '通知中心',
+                        label: controller.unreadNotificationCount > 0
+                            ? '通知中心，${controller.unreadNotificationCount} 条未读'
+                            : '通知中心',
                         selected: controller.panel == ShellPanel.notifications,
                         onPressed: () =>
                             controller.selectPanel(ShellPanel.notifications),
                         child: Badge(
+                          key: const ValueKey('mac-notification-unread-badge'),
                           isLabelVisible:
                               !controller.doNotDisturb &&
-                              controller.notifications.isNotEmpty,
+                              controller.unreadNotificationCount > 0,
                           smallSize: 5,
                           child: Icon(
                             controller.doNotDisturb

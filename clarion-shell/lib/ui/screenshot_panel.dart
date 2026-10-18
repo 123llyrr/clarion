@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../models.dart';
@@ -17,7 +19,12 @@ class _ScreenshotPanelState extends State<ScreenshotPanel> {
   bool _showPointer = false;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: widget.controller,
+    builder: (context, _) => _content(context),
+  );
+
+  Widget _content(BuildContext context) {
     final controller = widget.controller;
     final busy = controller.busy.contains('screenshot');
     final enabled = controller.connected && !busy;
@@ -78,6 +85,81 @@ class _ScreenshotPanelState extends State<ScreenshotPanel> {
             controller.demo ? '演示预览 · 不执行截图' : '按你的截图设置保存，并复制到剪贴板',
             style: Theme.of(context).textTheme.bodySmall,
           ),
+          if (controller.lastScreenshotAt != null) ...[
+            const Divider(height: 28),
+            Text('最近截图', style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: 10),
+            if (controller.lastScreenshotPath case final path?)
+              Card(
+                clipBehavior: Clip.antiAlias,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ListTile(
+                      key: const ValueKey('screenshot-last-file'),
+                      leading: ClipRRect(
+                        borderRadius: BorderRadius.circular(6),
+                        child: Image.file(
+                          File(path),
+                          width: 64,
+                          height: 48,
+                          cacheWidth: 176,
+                          fit: BoxFit.contain,
+                          semanticLabel: '最近截图预览',
+                          errorBuilder: (_, _, _) => const SizedBox(
+                            width: 64,
+                            height: 48,
+                            child: Icon(Icons.image_outlined),
+                          ),
+                        ),
+                      ),
+                      title: Text(
+                        File(path).uri.pathSegments.last,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: const Text('已保存并复制到剪贴板'),
+                      onTap: controller.busy.contains('screenshot-open')
+                          ? null
+                          : () => controller.openLastScreenshot(),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+                      child: Wrap(
+                        alignment: WrapAlignment.end,
+                        spacing: 8,
+                        children: [
+                          TextButton.icon(
+                            key: const ValueKey('screenshot-open-folder'),
+                            onPressed:
+                                controller.busy.contains('screenshot-open')
+                                ? null
+                                : () => controller.openLastScreenshot(
+                                    containingFolder: true,
+                                  ),
+                            icon: const Icon(
+                              Icons.folder_open_outlined,
+                              size: 18,
+                            ),
+                            label: const Text('打开所在文件夹'),
+                          ),
+                          FilledButton.tonal(
+                            key: const ValueKey('screenshot-open-image'),
+                            onPressed:
+                                controller.busy.contains('screenshot-open')
+                                ? null
+                                : () => controller.openLastScreenshot(),
+                            child: const Text('打开图片'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else
+              const ShellStatusMessage(text: '已复制到剪贴板，可以直接粘贴'),
+          ],
           if (!controller.connected)
             const ShellStatusMessage(text: '桌面连接暂时不可用，请稍后重试。'),
           if (controller.error != null)

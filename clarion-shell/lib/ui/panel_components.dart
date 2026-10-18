@@ -64,31 +64,34 @@ class ShellStatusMessage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    return Container(
-      margin: const EdgeInsets.only(top: 12),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: error ? colors.errorContainer : colors.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            error ? Icons.error_outline_rounded : Icons.info_outline_rounded,
-            color: error ? colors.onErrorContainer : colors.onSurfaceVariant,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              text,
-              style: TextStyle(
-                color: error
-                    ? colors.onErrorContainer
-                    : colors.onSurfaceVariant,
+    return Semantics(
+      liveRegion: true,
+      child: Container(
+        margin: const EdgeInsets.only(top: 12),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: error ? colors.errorContainer : colors.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              error ? Icons.error_outline_rounded : Icons.info_outline_rounded,
+              color: error ? colors.onErrorContainer : colors.onSurfaceVariant,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                text,
+                style: TextStyle(
+                  color: error
+                      ? colors.onErrorContainer
+                      : colors.onSurfaceVariant,
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

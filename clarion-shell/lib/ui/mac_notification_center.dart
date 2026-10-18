@@ -264,7 +264,7 @@ class _MacNotificationCenterState extends State<MacNotificationCenter> {
                                   padding: EdgeInsets.symmetric(vertical: 52),
                                   child: Center(
                                     child: Text(
-                                      '没有新通知',
+                                      '暂无通知',
                                       style: TextStyle(
                                         fontSize: 18,
                                         fontWeight: FontWeight.w300,

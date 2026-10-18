@@ -376,6 +376,21 @@ class ShellController extends ChangeNotifier {
   int _errorRevision = 0;
   ThemeMode _themeMode = ThemeMode.dark;
   bool _reduceMotion = false;
+  bool? _runtimeMotionSupported;
+  (bool, bool)? _runtimeMotionApplied;
+  bool _runtimeMotionNeedsState = true;
+  bool _runtimeMotionPendingChoice = false;
+  int _runtimeMotionChoiceRevision = 0;
+  int _runtimeMotionStateRevision = 0;
+  bool _runtimeMotionRunning = false;
+  bool _runtimeMotionDirty = false;
+  int _runtimeMotionConnection = 0;
+  bool _demoNotificationsRead = false;
+  String? _wifiConnectingSsid;
+  String? _wifiConnectionError;
+  String? _wifiScanError;
+  String? _lastScreenshotPath;
+  DateTime? _lastScreenshotAt;
   BarPosition _barPosition = BarPosition.top;
   ShellStyle _shellStyle = ShellStyle.material;
   MacShellPreferences _macPreferences = const MacShellPreferences();
@@ -753,6 +768,7 @@ class ShellController extends ChangeNotifier {
   void setMacNotificationView(MacNotificationView view) {
     if (_disposed || _macNotificationView == view) return;
     _macNotificationView = view;
+    _syncNotificationVisibility();
     _changed();
   }
 
@@ -764,6 +780,38 @@ class ShellController extends ChangeNotifier {
       (_status.isWireless && (wifiEnabled ?? false)) ? _status.networkName : '';
   List<WifiNetwork> get wifiNetworks => _wifiNetworks;
   bool get wifiScanning => _wifiScanning;
+  String? get wifiConnectingSsid => _wifiConnectingSsid;
+  String? get wifiConnectionError => _wifiConnectionError;
+  String? get wifiScanError => _wifiScanError;
+  String? get lastScreenshotPath => _lastScreenshotPath;
+  DateTime? get lastScreenshotAt => _lastScreenshotAt;
+  int get unreadNotificationCount => demo
+      ? (_demoNotificationsRead ? 0 : _notifications.length)
+      : _notificationService?.unreadCount ?? 0;
+
+  void markNotificationsRead() {
+    if (_disposed) return;
+    if (demo) {
+      if (_demoNotificationsRead) return;
+      _demoNotificationsRead = true;
+    } else {
+      _notificationService?.markRead();
+    }
+    _changed();
+  }
+
+  void _syncNotificationVisibility() {
+    final visible =
+        _panel == ShellPanel.notifications &&
+        (_shellStyle == ShellStyle.material ||
+            _macNotificationView == MacNotificationView.notifications);
+    if (demo) {
+      if (visible) _demoNotificationsRead = true;
+    } else {
+      _notificationService?.setHistoryVisible(visible);
+    }
+  }
+
   List<BluetoothDevice> get bluetoothDevices => _bluetoothDevices;
   bool get bluetoothScanning => _bluetoothScanning;
   String? get error => _error;
@@ -862,6 +910,13 @@ class ShellController extends ChangeNotifier {
             (!connected &&
                 (_workspaceState.isNotEmpty || _windowState.isNotEmpty));
         _connected = connected;
+        if (changed) {
+          _runtimeMotionConnection++;
+          _runtimeMotionSupported = null;
+          _runtimeMotionApplied = null;
+          _runtimeMotionNeedsState = true;
+          if (connected) unawaited(_syncRuntimeMotion());
+        }
         // Disconnect invalidates the snapshot. The next stream supplies all state.
         if (!connected) {
           _observedRecentFocus = null;
@@ -1267,6 +1322,44 @@ class ShellController extends ChangeNotifier {
 
   void _applyEvent(Map<String, dynamic> event) {
     if (_disposed) return;
+    final motion = event['ReducedMotionChanged'];
+    if (motion is Map && motion['enabled'] is bool) {
+      _runtimeMotionStateRevision++;
+      // This event carries the user's choice, not the platform flag. It must
+      // not acknowledge an accessibility update that this client never sent.
+      _runtimeMotionApplied = null;
+    }
+    if (motion is Map &&
+        motion['enabled'] is bool &&
+        !_runtimeMotionPendingChoice) {
+      final enabled = motion['enabled'] as bool;
+      if (_reduceMotion != enabled) {
+        _reduceMotion = enabled;
+        unawaited(setDockMinimizeTargets(Map.of(_dockDesiredTargets)));
+        _changed();
+      }
+    }
+    final capture = event['ScreenshotCaptured'];
+    if (capture is Map &&
+        capture['is_preview'] != true &&
+        (capture['path'] == null || capture['path'] is String)) {
+      final path = capture['path'] as String?;
+      if (path == null || (path.startsWith('/') && !path.contains('\u0000'))) {
+        _lastScreenshotPath = path;
+        _lastScreenshotAt = DateTime.now();
+        // Only the notification-name owner handles feedback. Auxiliary shells
+        // on other monitors must not play the same sound several times.
+        if (_notificationServerAvailable) {
+          unawaited(_soundService.playCameraShutter());
+          _notificationService?.showScreenshot(
+            path,
+            openLocation: _system.openLocation,
+          );
+          _notifications = _notificationService!.notifications;
+        }
+        _changed();
+      }
+    }
     var desktopChanged = false;
     final changedWorkspaces = event['WorkspacesChanged'];
     if (changedWorkspaces is Map && changedWorkspaces['workspaces'] is List) {
@@ -1590,8 +1683,100 @@ class ShellController extends ChangeNotifier {
   void setReduceMotion(bool value) {
     if (_reduceMotion == value) return;
     _reduceMotion = value;
+    if (_started) {
+      _runtimeMotionPendingChoice = true;
+      _runtimeMotionChoiceRevision++;
+    }
+    unawaited(_syncRuntimeMotion());
     unawaited(setDockMinimizeTargets(Map.of(_dockDesiredTargets)));
     _changed();
+  }
+
+  void setPlatformReducedMotion(bool value) {
+    if (_disposed || _dockPlatformReducedMotion == value) return;
+    _dockPlatformReducedMotion = value;
+    unawaited(_syncRuntimeMotion());
+    unawaited(setDockMinimizeTargets(Map.of(_dockDesiredTargets)));
+  }
+
+  Future<void> _syncRuntimeMotion() async {
+    if (_disposed || demo || !_connected) return;
+    _runtimeMotionDirty = true;
+    if (_runtimeMotionRunning) return;
+    _runtimeMotionRunning = true;
+    try {
+      while (!_disposed && _connected && _runtimeMotionDirty) {
+        _runtimeMotionDirty = false;
+        final connection = _runtimeMotionConnection;
+        if (_runtimeMotionSupported == null) {
+          final response = await _ipc.request('Capabilities');
+          if (_disposed ||
+              !_connected ||
+              connection != _runtimeMotionConnection) {
+            continue;
+          }
+          _runtimeMotionSupported =
+              response is Map &&
+              response['Capabilities'] is List &&
+              (response['Capabilities'] as List).contains(
+                'runtime-reduced-motion',
+              );
+        }
+        if (_runtimeMotionSupported != true) continue;
+        var initialize = false;
+        if (_runtimeMotionNeedsState) {
+          final stateRevision = _runtimeMotionStateRevision;
+          final response = await _ipc.request('ReducedMotionState');
+          if (_disposed ||
+              !_connected ||
+              connection != _runtimeMotionConnection) {
+            continue;
+          }
+          final choice = response is Map
+              ? response['ReducedMotionState']
+              : null;
+          final fresh = stateRevision == _runtimeMotionStateRevision;
+          initialize = choice is! bool && fresh;
+          _runtimeMotionNeedsState = false;
+          if (fresh &&
+              choice is bool &&
+              !_runtimeMotionPendingChoice &&
+              _reduceMotion != choice) {
+            _reduceMotion = choice;
+            unawaited(setDockMinimizeTargets(Map.of(_dockDesiredTargets)));
+            _changed();
+          }
+        }
+        final desired = (_reduceMotion, _dockPlatformReducedMotion);
+        if (_runtimeMotionApplied == desired && !initialize) continue;
+        final revision = _runtimeMotionChoiceRevision;
+        await _ipc.action('SetReducedMotion', {
+          'enabled': desired.$1,
+          'platform': desired.$2,
+          'initialize_only': !_runtimeMotionPendingChoice,
+        });
+        if (!_disposed &&
+            _connected &&
+            connection == _runtimeMotionConnection) {
+          _runtimeMotionApplied = desired;
+          if (_runtimeMotionChoiceRevision == revision) {
+            _runtimeMotionPendingChoice = false;
+          }
+          // Other shells may change the choice while this request's reply is
+          // in flight. Reconcile after every write, including explicit clicks.
+          _runtimeMotionNeedsState = true;
+          _runtimeMotionDirty = true;
+        }
+      }
+    } on Object {
+      // A restarting/older core must not break Shell preferences. A fresh
+      // connection or user change retries without replaying obsolete work.
+    } finally {
+      _runtimeMotionRunning = false;
+      if (_runtimeMotionDirty && !_disposed && _connected) {
+        unawaited(_syncRuntimeMotion());
+      }
+    }
   }
 
   void setBarPosition(BarPosition value) {
@@ -2059,7 +2244,6 @@ class ShellController extends ChangeNotifier {
             if (mode == ScreenshotMode.window) 'id': null,
           },
         );
-        unawaited(_soundService.playCameraShutter());
       } on Object {
         if (_disposed || request != _screenshotRequest) return;
         failed = true;
@@ -2070,7 +2254,9 @@ class ShellController extends ChangeNotifier {
         failed &&
         request == _screenshotRequest &&
         _panel == ShellPanel.none) {
+      final error = _error;
       _setPanel(ShellPanel.screenshot);
+      _setError(error);
       _changed();
     }
   }
@@ -2132,7 +2318,10 @@ class ShellController extends ChangeNotifier {
     Map<int, Rect> targets, {
     bool? reduceMotion,
   }) async {
-    if (reduceMotion != null) _dockPlatformReducedMotion = reduceMotion;
+    if (reduceMotion != null && _dockPlatformReducedMotion != reduceMotion) {
+      _dockPlatformReducedMotion = reduceMotion;
+      unawaited(_syncRuntimeMotion());
+    }
     if (_disposed || demo || !canMinimize) return;
     _dockDesiredTargets.clear();
     _dockDesiredTargets.addAll(targets);
@@ -2454,6 +2643,11 @@ class ShellController extends ChangeNotifier {
   }
 
   void _setPanel(ShellPanel panel) {
+    if (_panel != panel) {
+      // Async work from the old panel must not paint an unrelated error in the
+      // next one, including direct transitions that bypass selectPanel().
+      _setError(null);
+    }
     if (_panel == ShellPanel.launcher || panel == ShellPanel.launcher) {
       _invalidateExternalLauncher();
     }
@@ -2474,6 +2668,7 @@ class ShellController extends ChangeNotifier {
     }
     _panelRevision++;
     _panel = panel;
+    _syncNotificationVisibility();
     audioOutputs.setActive(panel == ShellPanel.volume);
   }
 
@@ -2829,6 +3024,7 @@ class ShellController extends ChangeNotifier {
 
   Future<void> scanWifiNetworks() async {
     if (_disposed || _busy.contains('wifi-scan')) return;
+    _wifiScanError = null;
     _wifiScanning = true;
     _changed();
     if (demo) {
@@ -2847,18 +3043,25 @@ class ShellController extends ChangeNotifier {
       _changed();
       return;
     }
-    await _perform('wifi-scan', () async {
-      try {
-        _wifiNetworks = await _system.scanWifiNetworks();
-      } finally {
-        _wifiScanning = false;
-        _changed();
-      }
-    });
+    _busy.add('wifi-scan');
+    try {
+      final networks = await _system.scanWifiNetworks();
+      if (!_disposed) _wifiNetworks = networks;
+    } on Object {
+      if (!_disposed) _wifiScanError = '无法扫描网络，请重试';
+    } finally {
+      _busy.remove('wifi-scan');
+      _wifiScanning = false;
+      _changed();
+    }
   }
 
-  Future<void> connectWifi(String ssid, {String? password}) async {
-    if (_disposed) return;
+  Future<bool> hasSavedWifiConnection(String ssid) =>
+      demo ? Future.value(false) : _system.hasSavedWifiConnection(ssid);
+
+  Future<bool> connectWifi(String ssid, {String? password}) async {
+    if (_disposed || _busy.contains('wifi-connect')) return false;
+    _wifiConnectionError = null;
     if (demo) {
       _status = SystemSnapshot(
         volume: _status.volume,
@@ -2872,12 +3075,38 @@ class ShellController extends ChangeNotifier {
         isWireless: true,
       );
       await scanWifiNetworks();
-      return;
+      return true;
     }
-    await _perform('wifi-connect', () async {
+    _busy.add('wifi-connect');
+    _wifiConnectingSsid = ssid;
+    _changed();
+    try {
       await _system.connectWifi(ssid, password: password);
+      if (_disposed) return false;
       await _refreshSystem(reconcile: true);
       await scanWifiNetworks();
+      return !_disposed;
+    } on Object catch (error) {
+      if (!_disposed) {
+        final message = error is StateError ? error.message : error.toString();
+        _wifiConnectionError = '连接失败：$message';
+      }
+      return false;
+    } finally {
+      _busy.remove('wifi-connect');
+      _wifiConnectingSsid = null;
+      _changed();
+    }
+  }
+
+  Future<void> openLastScreenshot({bool containingFolder = false}) async {
+    final path = _lastScreenshotPath;
+    if (_disposed || path == null) return;
+    await _perform('screenshot-open', () async {
+      if (!await File(path).exists()) throw StateError('截图文件已移动或删除');
+      await _system.openLocation(
+        containingFolder ? File(path).parent.path : path,
+      );
     });
   }
 
