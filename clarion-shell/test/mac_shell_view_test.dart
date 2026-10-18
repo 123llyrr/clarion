@@ -479,38 +479,37 @@ void main() {
     },
   );
 
-  testWidgets(
-    'System menu uses the Clarion mark, not Apple artwork',
-    (tester) async {
-      final (controller, _, _) = await _fixture(tester);
-      await _mount(tester, controller);
-      // Clarion ships no Apple assets; the slot draws the project mark instead.
-      expect(find.byKey(const ValueKey('mac-apple-logo')), findsOneWidget);
-      expect(
-        find.descendant(
-          of: find.byKey(const ValueKey('mac-apple-logo')),
-          matching: find.byType(Image),
-        ),
-        findsNothing,
-      );
-      expect(
-        tester
-            .getSize(find.byKey(const ValueKey('mac-menu-bar-position')))
-            .height,
-        22,
-      );
-      expect(
-        buildMacShellTheme(Brightness.light).textTheme.bodyMedium?.fontFamily,
-        shellFontFamily,
-      );
-      await tester.tap(find.byKey(const ValueKey('dock-finder')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('dock-trash')));
-      await tester.pumpAndSettle();
-      expect(_System.opened, ['home', 'trash']);
-      expect(tester.takeException(), isNull);
-    },
-  );
+  testWidgets('System menu uses the Clarion mark, not Apple artwork', (
+    tester,
+  ) async {
+    final (controller, _, _) = await _fixture(tester);
+    await _mount(tester, controller);
+    // Clarion ships no Apple assets; the slot draws the project mark instead.
+    expect(find.byKey(const ValueKey('mac-apple-logo')), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('mac-apple-logo')),
+        matching: find.byType(Image),
+      ),
+      findsNothing,
+    );
+    expect(
+      tester
+          .getSize(find.byKey(const ValueKey('mac-menu-bar-position')))
+          .height,
+      22,
+    );
+    expect(
+      buildMacShellTheme(Brightness.light).textTheme.bodyMedium?.fontFamily,
+      shellFontFamily,
+    );
+    await tester.tap(find.byKey(const ValueKey('dock-finder')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('dock-trash')));
+    await tester.pumpAndSettle();
+    expect(_System.opened, ['home', 'trash']);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'continuous magnification expands neighbors and keeps edge hits correct',
@@ -746,7 +745,7 @@ void main() {
         return (source as AssetImage).assetName;
       }).toSet();
       expect(assets, contains('assets/shell/launchpad.png'));
-      expect(assets, contains('assets/shell/mission-control.png'));
+      expect(assets, isNot(contains('assets/shell/mission-control.png')));
       expect(tester.takeException(), isNull);
     },
   );
@@ -986,6 +985,20 @@ void main() {
       expect(find.text('窗口'), findsOneWidget);
       expect(find.text('帮助'), findsOneWidget);
 
+      await tester.tap(find.byKey(const ValueKey('global-menu-app-window')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('global-menu-app-spaces')),
+        findsNothing,
+      );
+      expect(find.text('调度中心'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('global-menu-app-minimize')),
+        findsOneWidget,
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+
       // Active app button is content-sized and hugs its text
       final appRect = tester.getRect(
         find.byKey(const ValueKey('mac-active-app-button')),
@@ -1007,6 +1020,20 @@ void main() {
       expect(find.text('前往'), findsOneWidget);
       expect(find.text('窗口'), findsOneWidget);
       expect(find.text('帮助'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('global-menu-finder-window')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('global-menu-finder-spaces')),
+        findsNothing,
+      );
+      expect(find.text('调度中心'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('global-menu-finder-show-all')),
+        findsOneWidget,
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
 
       // Tap clock button to open notifications
       await tester.tap(find.byKey(const ValueKey('mac-clock-button')));

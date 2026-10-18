@@ -25,6 +25,11 @@ class _Ipc extends ClarionIpc {
   Stream<Map<String, dynamic>> get events => event.stream;
   @override
   void start() {}
+  // Keep this preferences fixture independent of the running compositor's
+  // capabilities and its asynchronous reduced-motion initialization.
+  @override
+  Future<dynamic> request(Object request) async =>
+      request == 'Capabilities' ? {'Capabilities': <String>[]} : null;
   @override
   Future<void> action(
     String name, [

@@ -17,7 +17,6 @@ void main() {
     showRunningIndicators: false,
     animateOpeningApplications: false,
     showLaunchpad: false,
-    showMissionControl: false,
     showDownloads: false,
     showRecentApplications: false,
     downloadsView: MacDownloadsView.list,
@@ -45,7 +44,6 @@ void main() {
       'show_running_indicators': true,
       'animate_opening_applications': true,
       'show_launchpad': true,
-      'show_mission_control': true,
       'show_downloads': true,
       'show_recent_applications': true,
       'downloads_view': 'automatic',
@@ -87,6 +85,16 @@ void main() {
     // Exported maps are fresh snapshots, so a caller cannot mutate the model.
     configured.toJson()['dock_size'] = 32;
     expect(configured.dockSize, 64);
+  });
+
+  test('retired Mission Control preference cannot restore a shell entry', () {
+    for (final legacy in [true, false]) {
+      final restored = MacShellPreferences.fromJson({
+        'show_mission_control': legacy,
+      });
+      expect(restored, defaults);
+      expect(restored.toJson(), isNot(contains('show_mission_control')));
+    }
   });
 
   test('malformed booleans, numbers and future positions use defaults', () {

@@ -1235,14 +1235,9 @@ impl<W: LayoutElement> Workspace<W> {
                         // Auto-stack: new windows enter the active column as a Hyprland-style
                         // dwindle 2D puzzle until it fills up, then overflow to a new column
                         // to the right (which repeats the same rule).
-                        let auto_stack = this.options.layout.auto_stack_new_windows;
-                        let capacity = this.options.layout.max_windows_per_column as usize;
-                        let can_stack = auto_stack
-                            && !this.scrolling.is_empty()
-                            && this.scrolling.active_column_tile_count() < capacity
-                            && this.scrolling.active_column_is_normal();
-
-                        if can_stack {
+                        if tile.window().pending_sizing_mode().is_normal()
+                            && this.scrolling.can_auto_stack_new_window()
+                        {
                             this.scrolling.add_tile_to_active_column(tile, activate);
                         } else {
                             this.scrolling.add_tile(
@@ -1503,19 +1498,29 @@ impl<W: LayoutElement> Workspace<W> {
         width: Option<PresetSize>,
         height: Option<PresetSize>,
         is_floating: bool,
+        allow_auto_stack: bool,
         rules: &ResolvedWindowRules,
         (min_size, max_size): (Size<i32, Logical>, Size<i32, Logical>),
     ) -> Size<i32, Logical> {
+        let (min_size, max_size) = rules.apply_min_max_size(min_size, max_size);
+        let stacked_size = (allow_auto_stack
+            && !is_floating
+            && !self.canvas_enabled()
+            && self.tiling_mode() == clarion_ipc::TilingMode::Scrolling)
+            .then(|| {
+                self.scrolling
+                    .auto_stack_new_window_size(rules, (min_size, max_size))
+            })
+            .flatten();
         let mut size = if is_floating {
             self.floating.new_window_size(width, height, rules)
         } else {
-            self.scrolling.new_window_size(width, height, rules)
+            stacked_size.unwrap_or_else(|| self.scrolling.new_window_size(width, height, rules))
         };
 
         // If the window has a fixed size, or we're picking some fixed size, apply min and max
         // size. This is to ensure that a fixed-size window rule works on open, while still
         // allowing the window freedom to pick its default size otherwise.
-        let (min_size, max_size) = rules.apply_min_max_size(min_size, max_size);
         size.w = ensure_min_max_size_maybe_zero(size.w, min_size.w, max_size.w);
         // For scrolling (where height is > 0) only ensure fixed height, since at runtime scrolling
         // will only honor fixed height currently.
@@ -1547,14 +1552,23 @@ impl<W: LayoutElement> Workspace<W> {
             let current = guard.current();
             (current.min_size, current.max_size)
         });
+        let allow_auto_stack = toplevel.parent().is_none();
         toplevel.with_pending_state(|state| {
             if state.states.contains(xdg_toplevel::State::Fullscreen) {
                 state.size = Some(self.view_size.to_i32_round());
             } else if state.states.contains(xdg_toplevel::State::Maximized) {
                 state.size = Some(self.working_area.size.to_i32_round());
             } else {
-                let size =
-                    self.new_window_size(width, height, is_floating, rules, (min_size, max_size));
+                // Parent-relative insertion follows a different target; reserve
+                // automatic stacking prediction for ordinary new toplevels.
+                let size = self.new_window_size(
+                    width,
+                    height,
+                    is_floating,
+                    allow_auto_stack,
+                    rules,
+                    (min_size, max_size),
+                );
                 state.size = Some(size);
             }
 

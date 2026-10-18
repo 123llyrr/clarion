@@ -1803,7 +1803,6 @@ class ShellController extends ChangeNotifier {
         previous.magnificationScale != next.magnificationScale ||
         previous.dockAutoHide != next.dockAutoHide ||
         previous.showLaunchpad != next.showLaunchpad ||
-        previous.showMissionControl != next.showMissionControl ||
         previous.showDownloads != next.showDownloads ||
         previous.showRecentApplications != next.showRecentApplications ||
         previous.minimizeIntoApp != next.minimizeIntoApp) {

@@ -52,6 +52,8 @@ pub struct ClippedSurfaceRenderElement<R: ClipRenderer> {
     geometry: Rectangle<f64, Logical>,
     scale: f32,
     rounding_power: f32,
+    surface_origin: Point<i32, Physical>,
+    surface_scale: Scale<f64>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -75,6 +77,8 @@ impl<R: ClipRenderer> ClippedSurfaceRenderElement<R> {
             geometry,
             scale: scale.x as f32,
             rounding_power: 2.,
+            surface_origin: Point::from((0, 0)),
+            surface_scale: Scale::from(1.),
         }
     }
 
@@ -83,9 +87,18 @@ impl<R: ClipRenderer> ClippedSurfaceRenderElement<R> {
         self
     }
 
+    /// Scale a live surface tree into an animated client geometry. Clipping
+    /// stays in destination coordinates, so rounded corners retain their
+    /// intended radius even when horizontal and vertical scales differ.
+    pub fn with_surface_scale(mut self, origin: Point<i32, Physical>, scale: Scale<f64>) -> Self {
+        self.surface_origin = origin;
+        self.surface_scale = scale;
+        self
+    }
+
     fn clip_matrix(&self) -> Mat3 {
         let scale = Scale::from(f64::from(self.scale));
-        let elem_geo = self.inner.geometry(scale);
+        let elem_geo = self.geometry(scale);
 
         let elem_geo_loc = Vec2::new(elem_geo.loc.x as f32, elem_geo.loc.y as f32);
         let elem_geo_size = Vec2::new(elem_geo.size.w as f32, elem_geo.size.h as f32);
@@ -213,7 +226,11 @@ impl<R: ClipRenderer> Element for ClippedSurfaceRenderElement<R> {
     }
 
     fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
-        self.inner.geometry(scale)
+        let mut geometry = self.inner.geometry(scale);
+        geometry.loc -= self.surface_origin;
+        geometry = geometry.to_f64().upscale(self.surface_scale).to_i32_round();
+        geometry.loc += self.surface_origin;
+        geometry
     }
 
     fn src(&self) -> Rectangle<f64, Buffer> {
@@ -230,26 +247,29 @@ impl<R: ClipRenderer> Element for ClippedSurfaceRenderElement<R> {
         commit: Option<CommitCounter>,
     ) -> DamageSet<i32, Physical> {
         // FIXME: radius changes need to cause damage.
-        let damage = self.inner.damage_since(scale, commit);
+        let damage = self
+            .inner
+            .damage_since(scale, commit)
+            .into_iter()
+            .map(|rect| rect.to_f64().upscale(self.surface_scale).to_i32_up());
 
         // Intersect with geometry, since we're clipping by it.
         let mut geo = self.geometry.to_physical_precise_round(scale);
         geo.loc -= self.geometry(scale).loc;
-        damage
-            .into_iter()
-            .filter_map(|rect| rect.intersection(geo))
-            .collect()
+        damage.filter_map(|rect| rect.intersection(geo)).collect()
     }
 
     fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
-        let regions = self.inner.opaque_regions(scale);
+        let regions = self
+            .inner
+            .opaque_regions(scale)
+            .into_iter()
+            .map(|rect| rect.to_f64().upscale(self.surface_scale).to_i32_down());
 
         // Intersect with geometry, since we're clipping by it.
         let mut geo = self.geometry.to_physical_precise_round(scale);
         geo.loc -= self.geometry(scale).loc;
-        let regions = regions
-            .into_iter()
-            .filter_map(|rect| rect.intersection(geo));
+        let regions = regions.filter_map(|rect| rect.intersection(geo));
 
         // Subtract the rounded corners.
         if self.corner_radius == CornerRadius::default() {

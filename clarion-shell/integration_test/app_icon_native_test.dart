@@ -249,7 +249,6 @@ void main() {
           dockSize: 64,
           magnificationScale: 2,
           showLaunchpad: false,
-          showMissionControl: false,
           showDownloads: false,
         ),
       );
@@ -262,7 +261,6 @@ void main() {
           dockSize: 64,
           magnificationScale: 2,
           showLaunchpad: false,
-          showMissionControl: false,
           showDownloads: false,
           useOriginalIcons: true,
         ),

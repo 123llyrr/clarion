@@ -324,7 +324,14 @@ impl Layout {
         let min_size = window.min_size();
         let max_size = window.max_size();
         window.request_size(
-            ws.new_window_size(width, None, false, window.rules(), (min_size, max_size)),
+            ws.new_window_size(
+                width,
+                None,
+                false,
+                true,
+                window.rules(),
+                (min_size, max_size),
+            ),
             SizingMode::Normal,
             false,
             None,
@@ -353,7 +360,14 @@ impl Layout {
         let min_size = window.min_size();
         let max_size = window.max_size();
         window.request_size(
-            ws.new_window_size(width, None, false, window.rules(), (min_size, max_size)),
+            ws.new_window_size(
+                width,
+                None,
+                false,
+                false,
+                window.rules(),
+                (min_size, max_size),
+            ),
             SizingMode::Normal,
             false,
             None,

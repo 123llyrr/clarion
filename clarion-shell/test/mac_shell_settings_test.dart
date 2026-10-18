@@ -26,6 +26,10 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('mac-dock-mission-control')),
+      findsNothing,
+    );
     final form = find.byKey(const ValueKey('mac-shell-settings'));
     final heightSlider = find.byKey(const ValueKey('mac-menu-height'));
     final oldForm = tester.widget(form);
@@ -228,8 +232,7 @@ void main() {
         home: Scaffold(
           body: AnimatedBuilder(
             animation: controller,
-            builder: (context, _) =>
-                MacShellSettings(controller: controller),
+            builder: (context, _) => MacShellSettings(controller: controller),
           ),
         ),
       ),

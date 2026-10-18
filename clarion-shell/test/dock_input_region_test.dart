@@ -98,7 +98,6 @@ Future<_Fixture> _mount(
         magnificationScale: 1.8,
         dockAutoHide: autoHide,
         showLaunchpad: false,
-        showMissionControl: false,
         showDownloads: false,
         showRecentApplications: false,
       ),

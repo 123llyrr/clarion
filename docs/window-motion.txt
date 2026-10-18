@@ -1,0 +1,90 @@
+Opening and tiling motion (2026-10-18)
+
+Problem
+
+The d21fe58 desktop configured a new auto-stacked window as a full-height
+column before mapping it into a smaller spiral cell. On the sampled SDR
+desktop, foot's second window committed 948x1088, then 948x540 after 16.55 ms;
+the third committed 948x1088, then 469x540 after 11.82 ms. An opening transform
+was therefore combined with a substantial, independently started resize.
+
+The same bounded capture contained two continuous-activity presentation
+intervals of 33.356/33.359 ms out of 98 intervals. This was a three-window SDR
+sample at 3840x2400/60 Hz, scale 2, not an HDR measurement or a representative
+desktop-wide drop rate. Render CPU wall P95 was 6.100205 ms; GPU observations
+were incomplete, so no whole-capture GPU percentile is justified.
+
+There was also a deterministic position discontinuity when an inserted window
+changed a Dwindle column's width: the inner geometry update and outer insertion
+both applied the same movement compensation. Geometry must retain its visible
+position at the instant of a layout change, before any time passes.
+
+Implementation
+
+* Predict ordinary auto-stacked opening sizes with the same spiral geometry,
+  column constraints, scale and border rounding used at insertion. Prediction
+  is read-only. Client size constraints remain authoritative; impossible cell
+  constraints and concurrent unmapped opens are not slot reservations.
+* Apply insertion movement compensation once. A nonanimated interactive layout
+  update must also cancel position animation, rather than only disabling size
+  animation. New expanded windows must retain their expanded state.
+* A layout-induced new-column camera movement shares the windows' movement
+  trajectory. Ordinary focus navigation retains its independent configuration.
+* The built-in opening fade uses the configured progress for both opacity and
+  geometry. It no longer applies a second easing and compresses opacity into
+  the first 65% of already-eased progress. This removes the opaque plateau
+  without adding a delay before first-buffer feedback.
+* Ordinary Dwindle spring resizes publish a separate visual size goal when the
+  layout requests it. Position and size can then start on the same event clock.
+  The committed surface is scaled into the current geometry, with clipping in
+  destination coordinates, instead of requiring a resize snapshot. A matching
+  late buffer replaces the content without restarting the trajectory. Repeated
+  maintenance of the same goal must not cancel it; an older buffer must not
+  replace the latest goal. A completed pending goal may be held without keeping
+  the output's animation loop active.
+
+The early geometry path is deliberately restricted to Dwindle's immediately
+published positions, normal sizing and built-in spring resizes. Traditional
+vertical columns depend on committed heights for following tile positions and
+retain their existing policy. Fullscreen, maximized, floating, custom shader,
+interactive resize and explicit easing paths retain their established owners.
+Changing mode during a pending resize cancels that pending geometry; a complete
+cross-mode visual handoff and transformed input coordinates are separate work.
+
+The Shell also removes the bar and Dock Mission Control buttons, their fallback
+window-menu actions and their display preference. A retired reserved utility
+pin is filtered when displayed, including old saved pins and recent items.
+Ordinary applications, Control Center, workspace switching and existing
+compositor/keyboard overview commands remain available.
+
+References and interpretation
+
+Hyprland was inspected at 8010b4e5c66f97aa82cd5b3332b4ec613779b9a7,
+with its locked hyprutils 95983ee836ff205e615bba67d1f67098e1231941.
+Its client configuration uses the geometric goal, while rendering reads the
+current geometry. Unchanged animation goals are deduplicated and interrupted
+spring movement can inherit velocity. These are useful mechanisms, not a
+reason to copy a configuration's duration or a 1 ms timer into this compositor.
+
+https://github.com/hyprwm/Hyprland/blob/8010b4e5c66f97aa82cd5b3332b4ec613779b9a7/src/layout/target/WindowTarget.cpp#L462-L468
+https://github.com/hyprwm/Hyprland/blob/8010b4e5c66f97aa82cd5b3332b4ec613779b9a7/src/render/Renderer.cpp#L598-L611
+https://github.com/hyprwm/hyprutils/blob/95983ee836ff205e615bba67d1f67098e1231941/include/hyprutils/animation/AnimatedVariable.hpp#L225-L247
+
+The local Big Sur reverse-engineering evidence showed transaction assembly,
+display timestamps/deadlines and separate content/composition work. Its
+NSResizeMoveHelper sin-squared resize, QuartzCore analytic springs and Dock
+workspace feedback are distinct paths. None proves a universal macOS window
+opening spring. Clarion keeps its own configurable motion and presentation
+clock, and preserves physical per-axis velocity when retargeting.
+
+Validation boundaries
+
+Geometry and delayed-client tests exercise actual layout requests, visual
+positions/sizes and interrupted trajectories. Native GPU probes cover SDR/HDR
+working/output color paths without taking display master or changing the
+active panel. They do not measure client startup, KMS scanout or subjective
+desktop feel. Cold-target preparation is measured separately from warmed
+output command-buffer timestamps; nested timings must not be added together.
+Target allocation readiness also does not cover the first real recording and
+submission of that image. Cold owner CPU work is reported separately, including
+the probe's startup/bootstrap scope, rather than inferred from GPU timestamps.

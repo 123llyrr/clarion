@@ -10,7 +10,7 @@ use smithay::utils::{Logical, Point, Rectangle, Size};
 
 use super::opening_window::OpenAnimation;
 use super::window_presentation::{
-    resize_decoration_animation, AlphaAnimation, ResizeAnimation, ResizeMomentum,
+    resize_decoration_animation, AlphaAnimation, ResizeAnimation, ResizeMomentum, ResizeRequest,
     WindowPresentationState,
 };
 use super::wobble::{WobbleAnchor, WobbleState};
@@ -184,6 +184,16 @@ impl<W: LayoutElement> Tile<W> {
         self.presentation.view_size = view_size;
         self.presentation.scale = scale;
         self.presentation.options = options;
+        if self
+            .presentation
+            .options
+            .animations
+            .window_resize
+            .custom_shader
+            .is_some()
+        {
+            self.cancel_requested_resize();
+        }
 
         if self.presentation.options.animations.off
             || self.presentation.options.animations.window_wobble.off
@@ -266,6 +276,11 @@ impl<W: LayoutElement> Tile<W> {
         let Some(resize) = &self.presentation.resize_animation else {
             return;
         };
+        if resize.request.is_some() {
+            // Ordinary tiling keeps its numeric goal while live client buffers
+            // change. There is no previous/next image blend to flatten.
+            return;
+        }
         if resize.anim.is_clamped_done()
             && self
                 .presentation
@@ -319,9 +334,60 @@ impl<W: LayoutElement> Tile<W> {
 
         let resources = self.resources.lease();
         let pending = resources.pending_resize.borrow_mut().take();
-        if let Some((animate_from, continuous)) =
-            pending.or_else(|| self.take_resize_snapshot().map(|raw| (raw, None)))
-        {
+        let snapshot = pending.or_else(|| self.take_resize_snapshot().map(|raw| (raw, None)));
+        let requested = self
+            .presentation
+            .resize_animation
+            .as_ref()
+            .and_then(|resize| resize.request.as_ref())
+            .map(|request| request.protocol_size);
+        let keep_requested = requested.is_some()
+            && prev_sizing_mode.is_normal()
+            && self.presentation.sizing_mode.is_normal()
+            && self.window.pending_sizing_mode().is_normal()
+            && !self.window.is_windowed_fullscreen()
+            && !self.window.is_pending_windowed_fullscreen()
+            && self.window.interactive_resize_data().is_none()
+            && !self.restore_to_floating;
+        if requested.is_some() && !keep_requested {
+            self.cancel_requested_resize();
+        }
+        if let Some(goal) = requested.filter(|_| keep_requested) {
+            let actual = self.window.size();
+            let visible_goal = self
+                .presentation
+                .resize_animation
+                .as_ref()
+                .unwrap()
+                .request
+                .as_ref()
+                .unwrap()
+                .window_size
+                .to_i32_round();
+            if actual == visible_goal
+                || (self.window.expected_size() == Some(goal) && actual != goal)
+            {
+                // An older applied commit must not become the new goal. A
+                // matching latest buffer only replaces pixels, never time.
+                self.presentation
+                    .resize_animation
+                    .as_mut()
+                    .unwrap()
+                    .request
+                    .as_mut()
+                    .unwrap()
+                    .pending_buffer = actual != visible_goal;
+            } else if self.window.requested_size() == Some(goal) {
+                // The latest configure was accepted with a client-selected
+                // geometry (e.g. terminal cell increments). Converge from the
+                // current pose instead of stretching it forever to our hint.
+                self.retarget_requested_resize(goal, actual, false);
+            } else {
+                self.cancel_requested_resize();
+            }
+            resources.resize.borrow_mut().take();
+            drop(snapshot);
+        } else if let Some((animate_from, continuous)) = snapshot {
             let previous_images = resources.resize.borrow_mut().take();
             let buffers = previous_images
                 .map(|images| images.buffers)
@@ -439,6 +505,7 @@ impl<W: LayoutElement> Tile<W> {
                     momentum,
                     size_from,
                     tile_size_from,
+                    request: None,
                     fullscreen_progress,
                     expanded_progress,
                 });
@@ -494,6 +561,12 @@ impl<W: LayoutElement> Tile<W> {
     }
 
     pub fn advance_animations(&mut self) {
+        if self.restore_to_floating
+            || self.window.interactive_resize_data().is_some()
+            || !self.window.pending_sizing_mode().is_normal()
+        {
+            self.cancel_requested_resize();
+        }
         if self.presentation.clock.should_complete_instantly()
             && self.presentation.wobble.borrow().is_active()
         {
@@ -529,7 +602,27 @@ impl<W: LayoutElement> Tile<W> {
         }
 
         if let Some(resize) = &mut self.presentation.resize_animation {
-            if resize.is_done() {
+            if resize.request.is_some() && self.presentation.clock.should_complete_instantly() {
+                // Instant completion must be permanent even while an old
+                // buffer keeps this goal alive after the temporary clock flag.
+                resize.anim = Animation::new(
+                    self.presentation.clock.clone(),
+                    1.,
+                    1.,
+                    0.,
+                    clarion_config::Animation {
+                        off: true,
+                        ..self.presentation.options.animations.window_resize.anim
+                    },
+                );
+                resize.momentum = None;
+            }
+            if resize.is_done()
+                && resize
+                    .request
+                    .as_ref()
+                    .is_none_or(|request| !request.pending_buffer)
+            {
                 self.presentation.resize_animation = None;
                 self.resources.lease().resize.borrow_mut().take();
             }
@@ -593,7 +686,11 @@ impl<W: LayoutElement> Tile<W> {
     pub fn are_transitions_ongoing(&self) -> bool {
         self.presentation.genie.borrow().is_some()
             || self.presentation.open_animation.is_some()
-            || self.presentation.resize_animation.is_some()
+            || self
+                .presentation
+                .resize_animation
+                .as_ref()
+                .is_some_and(|resize| !resize.is_done())
             || self.move_x_animation.is_some()
             || self.move_y_animation.is_some()
             || self
@@ -976,9 +1073,30 @@ impl<W: LayoutElement> Tile<W> {
 
     pub fn request_tile_size(
         &mut self,
+        size: Size<f64, Logical>,
+        animate: bool,
+        transaction: Option<Transaction>,
+    ) {
+        self.request_tile_size_impl(size, animate, transaction, false);
+    }
+
+    /// Dwindle publishes destination positions immediately, so its sizes can
+    /// share that event-time trajectory while the client prepares new pixels.
+    pub fn request_tile_size_with_geometry_animation(
+        &mut self,
+        size: Size<f64, Logical>,
+        animate: bool,
+        transaction: Option<Transaction>,
+    ) {
+        self.request_tile_size_impl(size, animate, transaction, true);
+    }
+
+    fn request_tile_size_impl(
+        &mut self,
         mut size: Size<f64, Logical>,
         animate: bool,
         transaction: Option<Transaction>,
+        allow_geometry_animation: bool,
     ) {
         // Can't go through effective_border_width() because we might be fullscreen.
         if !self.presentation.border_config.off {
@@ -990,12 +1108,132 @@ impl<W: LayoutElement> Tile<W> {
         // The size request has to be i32 unfortunately, due to Wayland. We floor here instead of
         // round to avoid situations where proportionally-sized columns don't fit on the screen
         // exactly.
-        self.window.request_size(
-            size.to_i32_floor(),
-            SizingMode::Normal,
-            animate,
-            transaction,
+        let size = size.to_i32_floor();
+        let config = &self.presentation.options.animations.window_resize;
+        let same_requested_goal = self
+            .presentation
+            .resize_animation
+            .as_ref()
+            .and_then(|resize| resize.request.as_ref())
+            .is_some_and(|request| request.protocol_size == size);
+        let direct = allow_geometry_animation
+            && (animate || same_requested_goal)
+            && !self.restore_to_floating
+            && self.presentation.sizing_mode.is_normal()
+            && self.window.pending_sizing_mode().is_normal()
+            && !self.window.is_windowed_fullscreen()
+            && !self.window.is_pending_windowed_fullscreen()
+            && self.window.interactive_resize_data().is_none()
+            && config.custom_shader.is_none()
+            && !config.anim.off
+            && !self.presentation.options.animations.off
+            && !self.presentation.clock.should_complete_instantly()
+            && matches!(
+                config.anim.kind,
+                clarion_config::animations::Kind::Spring(_)
+            )
+            && self
+                .presentation
+                .resize_animation
+                .as_ref()
+                .is_none_or(|resize| resize.request.is_some());
+        if direct {
+            if self.window.requested_size() != Some(size)
+                || (animate && self.presentation.resize_animation.is_none())
+            {
+                let minimum = self.window.min_size();
+                let maximum = self.window.max_size();
+                let visible_goal = Size::from((
+                    crate::utils::ensure_min_max_size(size.w, minimum.w, maximum.w),
+                    crate::utils::ensure_min_max_size(size.h, minimum.h, maximum.h),
+                ));
+                self.retarget_requested_resize(
+                    size,
+                    visible_goal,
+                    self.window.size() != visible_goal,
+                );
+            }
+        } else {
+            self.cancel_requested_resize();
+        }
+        self.window
+            .request_size(size, SizingMode::Normal, animate && !direct, transaction);
+    }
+
+    fn retarget_requested_resize(
+        &mut self,
+        protocol_size: Size<i32, Logical>,
+        goal: Size<i32, Logical>,
+        pending_buffer: bool,
+    ) {
+        let window_size = self.window_size();
+        let tile_size = self.tile_size();
+        let previous = self.presentation.resize_animation.take();
+        let ((size_from, velocity), (tile_size_from, tile_velocity)) = previous.as_ref().map_or(
+            (
+                (window_size, Point::from((0., 0.))),
+                (tile_size, Point::from((0., 0.))),
+            ),
+            |resize| {
+                (
+                    resize.size_state(window_size, false),
+                    resize.size_state(tile_size, true),
+                )
+            },
         );
+        let window_goal = goal
+            .to_f64()
+            .to_physical_precise_round(self.presentation.scale)
+            .to_logical(self.presentation.scale);
+        let tile_goal = Size::from((
+            self.tile_width_for_window_width(window_goal.w),
+            self.tile_height_for_window_height(window_goal.h),
+        ));
+        let change = (window_goal.w - size_from.w)
+            .abs()
+            .max((window_goal.h - size_from.h).abs());
+        let config = self.presentation.options.animations.window_resize.anim;
+        let momentum = ResizeMomentum::new(
+            self.presentation.clock.clone(),
+            velocity,
+            tile_velocity,
+            config,
+        );
+        if change <= RESIZE_ANIMATION_THRESHOLD && momentum.is_none() && previous.is_none() {
+            // Small fresh requests retain the established no-animation policy.
+            return;
+        }
+        self.presentation.resize_animation = Some(ResizeAnimation {
+            anim: Animation::new(self.presentation.clock.clone(), 0., 1., 0., config),
+            momentum,
+            size_from,
+            tile_size_from,
+            request: Some(ResizeRequest {
+                protocol_size,
+                window_size: window_goal,
+                tile_size: tile_goal,
+                pending_buffer,
+            }),
+            fullscreen_progress: None,
+            expanded_progress: None,
+        });
+    }
+
+    /// A new interaction or layout mode owns subsequent sizes; ordinary tiling
+    /// must not keep scaling a stale goal after that ownership changes.
+    pub fn cancel_requested_resize(&mut self) {
+        if self
+            .presentation
+            .resize_animation
+            .as_ref()
+            .is_some_and(|resize| resize.request.is_some())
+        {
+            self.presentation.resize_animation = None;
+            let resources = self.resources.lease();
+            resources.resize.borrow_mut().take();
+            resources.pending_resize.borrow_mut().take();
+            let _ = self.take_resize_snapshot();
+        }
     }
 
     pub fn tile_width_for_window_width(&self, size: f64) -> f64 {
@@ -1036,6 +1274,7 @@ impl<W: LayoutElement> Tile<W> {
         animate: bool,
         transaction: Option<Transaction>,
     ) {
+        self.cancel_requested_resize();
         self.window.request_size(
             size.to_i32_round(),
             SizingMode::Maximized,
@@ -1045,6 +1284,7 @@ impl<W: LayoutElement> Tile<W> {
     }
 
     pub fn request_fullscreen(&mut self, animate: bool, transaction: Option<Transaction>) {
+        self.cancel_requested_resize();
         self.window.request_size(
             self.presentation.view_size.to_i32_round(),
             SizingMode::Fullscreen,
@@ -1580,6 +1820,7 @@ mod resize_tests {
             ),
             size_from: Size::from((500., 800.)),
             tile_size_from: Size::from((508., 808.)),
+            request: None,
             fullscreen_progress: resize_decoration_animation(
                 None,
                 0.,

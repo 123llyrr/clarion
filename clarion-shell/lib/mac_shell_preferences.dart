@@ -29,7 +29,6 @@ class MacShellPreferences {
     this.showRunningIndicators = true,
     this.animateOpeningApplications = true,
     this.showLaunchpad = true,
-    this.showMissionControl = true,
     this.showDownloads = true,
     this.showRecentApplications = true,
     this.downloadsView = MacDownloadsView.automatic,
@@ -92,7 +91,6 @@ class MacShellPreferences {
   final bool showRunningIndicators;
   final bool animateOpeningApplications;
   final bool showLaunchpad;
-  final bool showMissionControl;
   final bool showDownloads;
   final bool showRecentApplications;
   final MacDownloadsView downloadsView;
@@ -134,7 +132,6 @@ class MacShellPreferences {
           true,
         ),
         showLaunchpad: _boolean(json['show_launchpad'], true),
-        showMissionControl: _boolean(json['show_mission_control'], true),
         showDownloads: _boolean(json['show_downloads'], true),
         showRecentApplications: _boolean(
           json['show_recent_applications'],
@@ -181,7 +178,6 @@ class MacShellPreferences {
     bool? showRunningIndicators,
     bool? animateOpeningApplications,
     bool? showLaunchpad,
-    bool? showMissionControl,
     bool? showDownloads,
     bool? showRecentApplications,
     MacDownloadsView? downloadsView,
@@ -212,7 +208,6 @@ class MacShellPreferences {
     animateOpeningApplications:
         animateOpeningApplications ?? this.animateOpeningApplications,
     showLaunchpad: showLaunchpad ?? this.showLaunchpad,
-    showMissionControl: showMissionControl ?? this.showMissionControl,
     showDownloads: showDownloads ?? this.showDownloads,
     showRecentApplications:
         showRecentApplications ?? this.showRecentApplications,
@@ -245,7 +240,6 @@ class MacShellPreferences {
     'show_running_indicators': showRunningIndicators,
     'animate_opening_applications': animateOpeningApplications,
     'show_launchpad': showLaunchpad,
-    'show_mission_control': showMissionControl,
     'show_downloads': showDownloads,
     'show_recent_applications': showRecentApplications,
     'downloads_view': downloadsView.name,
@@ -275,7 +269,6 @@ class MacShellPreferences {
           showRunningIndicators == other.showRunningIndicators &&
           animateOpeningApplications == other.animateOpeningApplications &&
           showLaunchpad == other.showLaunchpad &&
-          showMissionControl == other.showMissionControl &&
           showDownloads == other.showDownloads &&
           showRecentApplications == other.showRecentApplications &&
           downloadsView == other.downloadsView &&
@@ -298,11 +291,10 @@ class MacShellPreferences {
     magnification,
     magnificationScale,
     dockAutoHide,
-        dockHidden,
+    dockHidden,
     showRunningIndicators,
     animateOpeningApplications,
     showLaunchpad,
-    showMissionControl,
     showDownloads,
     showRecentApplications,
     downloadsView,
