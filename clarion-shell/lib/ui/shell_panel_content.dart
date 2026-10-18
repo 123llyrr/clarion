@@ -17,7 +17,7 @@ import 'wallpaper_panel.dart';
 import 'mac_dock_app_menu.dart';
 import 'mac_dock_context_menu.dart';
 import 'mac_downloads_stack_panel.dart';
-import 'mac_app_menu.dart';
+import 'recent_content_panel.dart';
 
 /// Both shells share the same controls and controller-owned services.
 class ShellPanelContent extends StatelessWidget {
@@ -54,7 +54,29 @@ class ShellPanelContent extends StatelessWidget {
       controller.shellStyle == ShellStyle.macos
           ? MacSystemMenu(controller: controller, preview: preview)
           : _SystemMenu(controller: controller),
-    ShellPanel.appMenu => MacAppMenu(controller: controller),
+    ShellPanel.recentContent => ListenableBuilder(
+      listenable: controller.recentContent,
+      builder: (context, _) {
+        final history = controller.recentContent;
+        return RecentContentPanel(
+          entries: history.entries,
+          onCopy: controller.copyRecentContent,
+          onPin: (entry) => history.togglePinned(entry),
+          onDelete: (entry) => history.delete(entry),
+          onClear: () => history.clear(),
+          onClose: controller.closePanel,
+          onOpenScreenshot: controller.openRecentScreenshot,
+          onTogglePaused: () => history.setPaused(!history.paused),
+          onReconnect: history.reconnect,
+          clipboardAvailable: history.available,
+          loading: history.loading,
+          paused: history.paused,
+          error: history.error,
+          busyEntryIds: history.busyEntryIds,
+          macos: controller.shellStyle == ShellStyle.macos,
+        );
+      },
+    ),
     ShellPanel.dockAppMenu =>
       controller.shellStyle == ShellStyle.macos
           ? MacDockAppMenu(controller: controller)

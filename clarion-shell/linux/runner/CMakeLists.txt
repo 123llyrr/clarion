@@ -13,6 +13,14 @@ add_custom_command(OUTPUT "${BACKGROUND_EFFECT_HEADER}" "${BACKGROUND_EFFECT_COD
   COMMAND "${WAYLAND_SCANNER}" private-code "${BACKGROUND_EFFECT_XML}" "${BACKGROUND_EFFECT_CODE}"
   DEPENDS "${BACKGROUND_EFFECT_XML}" VERBATIM)
 
+set(DATA_CONTROL_XML "${CMAKE_CURRENT_SOURCE_DIR}/protocols/ext-data-control-v1.xml")
+set(DATA_CONTROL_HEADER "${CMAKE_CURRENT_BINARY_DIR}/ext-data-control-v1-client-protocol.h")
+set(DATA_CONTROL_CODE "${CMAKE_CURRENT_BINARY_DIR}/ext-data-control-v1-protocol.c")
+add_custom_command(OUTPUT "${DATA_CONTROL_HEADER}" "${DATA_CONTROL_CODE}"
+  COMMAND "${WAYLAND_SCANNER}" client-header "${DATA_CONTROL_XML}" "${DATA_CONTROL_HEADER}"
+  COMMAND "${WAYLAND_SCANNER}" private-code "${DATA_CONTROL_XML}" "${DATA_CONTROL_CODE}"
+  DEPENDS "${DATA_CONTROL_XML}" VERBATIM)
+
 # Define the application target. To change its name, change BINARY_NAME in the
 # top-level CMakeLists.txt, not the value here, or `flutter run` will no longer
 # work.
@@ -24,9 +32,12 @@ add_executable(${BINARY_NAME}
   "desktop_windows.cc"
   "window_controller.cc"
   "native_tray_menu.cc"
+  "native_clipboard.cc"
   "background_effect.cc"
   "${BACKGROUND_EFFECT_HEADER}"
   "${BACKGROUND_EFFECT_CODE}"
+  "${DATA_CONTROL_HEADER}"
+  "${DATA_CONTROL_CODE}"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
 )
 

@@ -139,9 +139,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Needs to be done before starting Tracy, so that it applies to Tracy's threads.
-    let app_menu_environment = cli
+    let legacy_app_menu_environment = cli
         .session
-        .then(clarion::utils::app_menu_environment::AppMenuEnvironment::enable);
+        .then(clarion::utils::app_menu_environment::disable_legacy_appmenu_environment);
     clarion::utils::signals::block_early().unwrap();
 
     // Avoid starting Tracy for the `clarion msg` code path since starting/stopping Tracy is a bit
@@ -254,7 +254,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if cli.session {
         // We're starting as a session. Import our variables.
-        import_environment(app_menu_environment.as_ref());
+        if let Some(legacy) = &legacy_app_menu_environment {
+            legacy.migrate_activation_environment();
+        }
+        import_environment();
 
         // Inhibit power key handling so we can suspend on it.
         #[cfg(feature = "dbus")]
@@ -333,10 +336,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn import_environment(
-    app_menu_environment: Option<&clarion::utils::app_menu_environment::AppMenuEnvironment>,
-) {
-    let mut variables = vec![
+fn import_environment() {
+    let variables = [
         "WAYLAND_DISPLAY",
         "DISPLAY",
         "XDG_CURRENT_DESKTOP",
@@ -344,9 +345,6 @@ fn import_environment(
         SOCKET_PATH_ENV,
         LEGACY_SOCKET_PATH_ENV,
     ];
-    if let Some(environment) = app_menu_environment {
-        variables.extend(environment.variables());
-    }
     let variables = variables.join(" ");
 
     let mut init_system_import = String::new();

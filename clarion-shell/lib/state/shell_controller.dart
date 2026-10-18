@@ -9,8 +9,8 @@ import 'package:flutter/services.dart';
 import '../models.dart';
 import '../mac_notification_view.dart';
 import '../mac_shell_preferences.dart';
-import '../app_menu_models.dart';
-import '../services/global_app_menu_service.dart';
+import '../recent_content_models.dart';
+import '../services/recent_content_service.dart';
 import '../services/desktop_apps.dart';
 import '../services/launcher_bridge.dart';
 import '../services/login_items_service.dart';
@@ -45,7 +45,7 @@ class ShellController extends ChangeNotifier {
     NotificationService? notificationService,
     WallpaperService? wallpaperService,
     TrayService? trayService,
-    GlobalAppMenuService? appMenuService,
+    RecentContentService? recentContentService,
     PowerProfilesService? powerProfiles,
     DockFolderService? dockFolderService,
     TrashStateService? trashStateService,
@@ -59,7 +59,12 @@ class ShellController extends ChangeNotifier {
        _launcherBridgeInjected = launcherBridge != null,
        _useExternalLauncher = useExternalLauncher,
        _ipc = ipc ?? ClarionIpc(),
-       appMenu = appMenuService ?? GlobalAppMenuService(),
+       recentContent =
+           recentContentService ??
+           RecentContentService(
+             enabled:
+                 !demo && !Platform.environment.containsKey('FLUTTER_TEST'),
+           ),
        _system = system ?? SystemService(),
        _desktopApps = desktopApps ?? DesktopApps(),
        loginItems = loginItemsService ?? LoginItemsService(demo: demo),
@@ -95,7 +100,7 @@ class ShellController extends ChangeNotifier {
        _trayService = tray ? trayService ?? TrayService() : trayService {
     _system.bindOutputBrightness(_ipc.request, () => _outputName);
     _subscriptions.add(_launcherBridge.events.listen(_launcherEvent));
-    appMenu.addListener(_appMenuChanged);
+    recentContent.addListener(_changed);
     audioOutputs.addListener(_audioOutputsChanged);
     media.addListener(_changed);
     dockFolder.addListener(_changed);
@@ -110,7 +115,7 @@ class ShellController extends ChangeNotifier {
   final bool mediaEnabled;
   final MediaService media;
   final PowerProfilesService powerProfiles;
-  final GlobalAppMenuService appMenu;
+  final RecentContentService recentContent;
   final DockFolderService dockFolder;
   final LoginItemsService loginItems;
   final AudioOutputService audioOutputs;
@@ -129,13 +134,7 @@ class ShellController extends ChangeNotifier {
     await Future.wait([dockFolder.start(), trashState.start()]);
   }
 
-  Object? _appMenuTargetKey;
-  bool? _appMenuActive;
-  int? _menuWindowId;
-  bool _appMenuOpen = false;
-  int _appMenuDismissRevision = 0;
-  bool get appMenuOpen => _appMenuOpen;
-  int get appMenuDismissRevision => _appMenuDismissRevision;
+  int? _contextWindowId;
   bool get canMinimize =>
       demo || _windowState.values.any((w) => w.containsKey('is_minimized'));
   Future<void> Function()? prepareScreenshot;
@@ -446,9 +445,6 @@ class ShellController extends ChangeNotifier {
             isFocused: window['is_focused'] == true,
             pid: window['pid'] as int?,
             isMinimized: window['is_minimized'] == true,
-            appMenu:
-                _canonicalMenuExport(window['app_menu']) ??
-                _menuExport(window['gtk_app_menu']),
           ),
       ]..sort((a, b) => a.id.compareTo(b.id)),
     );
@@ -456,132 +452,33 @@ class ShellController extends ChangeNotifier {
     return _windowsSnapshot;
   }
 
-  static AppMenuExport? _canonicalMenuExport(Object? raw) {
-    if (raw is! Map) return null;
-    final bus = raw['bus_name'];
-    final path = raw['menu_path'];
-    if (bus is! String || bus.isEmpty || path is! String || path.isEmpty) {
-      return null;
-    }
-    return AppMenuExport(
-      busName: bus,
-      menuPath: path,
-      protocol: AppMenuProtocol.dbusmenu,
-    );
-  }
-
-  static AppMenuExport? _menuExport(Object? raw) {
-    if (raw is! Map) return null;
-    final bus = raw['unique_bus_name'];
-    final menubar = raw['menubar_path'];
-    final path = menubar is String && menubar.isNotEmpty
-        ? menubar
-        : raw['app_menu_path'];
-    if (bus is! String || bus.isEmpty || path is! String || path.isEmpty) {
-      return null;
-    }
-    return AppMenuExport(
-      busName: bus,
-      menuPath: path,
-      applicationActionsPath: raw['application_object_path'] is String
-          ? raw['application_object_path'] as String
-          : null,
-      windowActionsPath: raw['window_object_path'] is String
-          ? raw['window_object_path'] as String
-          : null,
-    );
-  }
-
-  ShellWindow? get menuFocusedWindow {
+  /// Keep application actions attached to the last real window while a Shell
+  /// panel has keyboard focus. This does not export or discover native menus.
+  ShellWindow? get contextWindow {
     final focused = focusedWindow;
     if (focused != null) {
-      _menuWindowId = focused.id;
+      _contextWindowId = focused.id;
       return focused;
     }
-    if (_appMenuOpen || _panel != ShellPanel.none) {
-      final remembered = windows
-          .where((w) => w.id == _menuWindowId)
-          .firstOrNull;
-      if (remembered != null) return remembered;
+    if (_panel != ShellPanel.none) {
+      return windows.where((w) => w.id == _contextWindowId).firstOrNull;
     }
     return null;
   }
 
-  void _appMenuChanged() {
-    if (!_disposed) notifyListeners();
+  Future<void> copyRecentContent(RecentContentEntry entry) async {
+    final revision = _panelRevision;
+    if (await recentContent.copy(entry)) _closePanelIfCurrent(revision);
   }
 
-  /// Some Qt clients keep their native menu hidden after the host disappears.
-  /// Material offers the already exported menu without advertising a new host.
-  bool get materialAppMenuAvailable =>
-      _shellStyle == ShellStyle.material &&
-      menuFocusedWindow?.appMenu?.protocol == AppMenuProtocol.dbusmenu &&
-      appMenu.available;
-
-  void setAppMenuOpen(bool open) {
-    if (_disposed ||
-        _appMenuOpen == open ||
-        (open &&
-            _shellStyle != ShellStyle.macos &&
-            !materialAppMenuAvailable)) {
+  Future<void> openRecentScreenshot(RecentContentEntry entry) async {
+    final path = entry.filePath;
+    if (path == null || !path.startsWith('/') || path.contains('\u0000')) {
       return;
     }
-    _appMenuOpen = open;
-    if (open) {
-      _clearTrayMenu();
-      _barTooltip = null;
-      if (_panel != ShellPanel.none) _setPanel(ShellPanel.none);
-    }
-    _changed();
-  }
-
-  /// Exporters such as Qt cache registrar availability when creating menus.
-  /// Bootstrap the host before showing the shell or launching a new client.
-  Future<void> prepareAppMenus() async {
-    if (_disposed || demo || _shellStyle != ShellStyle.macos) return;
-    try {
-      await appMenu.setActive(true);
-      if (_disposed || _shellStyle != ShellStyle.macos) return;
-      await appMenu.start();
-    } on Object {
-      // A missing bus must not prevent the desktop or applications from opening.
-    }
-  }
-
-  void _syncAppMenu() {
-    if (_disposed || demo || !_started) return;
-    final active = _shellStyle == ShellStyle.macos;
-    if (_appMenuActive != active) {
-      _appMenuActive = active;
-      _appMenuTargetKey = null;
-      unawaited(appMenu.setActive(active));
-    }
-    final candidate = menuFocusedWindow;
-    final window =
-        active || candidate?.appMenu?.protocol == AppMenuProtocol.dbusmenu
-        ? candidate
-        : null;
-    final export = window?.appMenu;
-    final key = (
-      window?.id,
-      window?.pid,
-      window?.appId,
-      export?.busName,
-      export?.menuPath,
-      export?.protocol,
-      export?.applicationActionsPath,
-      export?.windowActionsPath,
-    );
-    if (key == _appMenuTargetKey) return;
-    _appMenuTargetKey = key;
-    _menuWindowId = window?.id;
-    unawaited(
-      appMenu.focusedTarget(
-        pid: window?.pid,
-        appId: window?.appId ?? '',
-        windowId: window?.id,
-        export: export,
-      ),
+    await _perform(
+      'recent-screenshot:${entry.id}',
+      () => _system.openLocation(path),
     );
   }
 
@@ -734,7 +631,6 @@ class ShellController extends ChangeNotifier {
   void showBarTooltip(Object owner, String message, Offset anchor) {
     if (_disposed ||
         _panel != ShellPanel.none ||
-        _appMenuOpen ||
         _nativeTrayMenuOpen ||
         message.isEmpty ||
         !anchor.dx.isFinite ||
@@ -896,6 +792,7 @@ class ShellController extends ChangeNotifier {
     if (_started || _disposed) return;
     _started = true;
     if (demo) return;
+    unawaited(recentContent.start());
     if (_shellStyle == ShellStyle.macos) {
       unawaited(_windowDecorationService.applyForStyle(_shellStyle));
     }
@@ -1345,6 +1242,7 @@ class ShellController extends ChangeNotifier {
         (capture['path'] == null || capture['path'] is String)) {
       final path = capture['path'] as String?;
       if (path == null || (path.startsWith('/') && !path.contains('\u0000'))) {
+        if (path != null) recentContent.recordScreenshot(path);
         _lastScreenshotPath = path;
         _lastScreenshotAt = DateTime.now();
         // Only the notification-name owner handles feedback. Auxiliary shells
@@ -1589,15 +1487,11 @@ class ShellController extends ChangeNotifier {
   void toggleSpotlight() => selectPanel(ShellPanel.spotlight);
 
   void closePanel() {
-    final hadAppMenu = _appMenuOpen;
-    _appMenuOpen = false;
-    _appMenuDismissRevision++;
-    _menuWindowId = null;
+    _contextWindowId = null;
     _screenshotRequest++;
     if (_disposed ||
         (_panel == ShellPanel.none &&
             _barTooltip == null &&
-            !hadAppMenu &&
             !_nativeTrayMenuOpen)) {
       return;
     }
@@ -1846,12 +1740,7 @@ class ShellController extends ChangeNotifier {
       unawaited(_windowDecorationService.applyForStyle(value));
     }
     unawaited(setDockMinimizeTargets(Map.of(_dockDesiredTargets)));
-    _appMenuOpen = false;
-    _appMenuDismissRevision++;
     _changed();
-    if (_started && value == ShellStyle.macos) {
-      unawaited(prepareAppMenus());
-    }
   }
 
   void shellStyleFailed(String message) {
@@ -2267,7 +2156,6 @@ class ShellController extends ChangeNotifier {
     }
     final panelRevision = _panelRevision;
     await _perform('launch:${app.id}', () async {
-      await prepareAppMenus();
       if (_disposed) return;
       await _desktopApps.launch(app);
       _rememberRecentApp(app.id);
@@ -2660,10 +2548,6 @@ class ShellController extends ChangeNotifier {
         panel != ShellPanel.dockFinderMenu &&
         panel != ShellPanel.dockDownloadsMenu) {
       _dockMenuAnchor = null;
-    }
-    if (panel != ShellPanel.none) {
-      _appMenuOpen = false;
-      _appMenuDismissRevision++;
     }
     _panelRevision++;
     _panel = panel;
@@ -3702,7 +3586,8 @@ class ShellController extends ChangeNotifier {
 
   void _changed() {
     audioOutputs.setPaused(_systemProtected('volume'));
-    _syncAppMenu();
+    final focused = focusedWindow;
+    if (focused != null) _contextWindowId = focused.id;
     if (_panel == ShellPanel.dockAppMenu && selectedDockApp == null) {
       _selectedDockAppId = null;
       _setPanel(ShellPanel.none);
@@ -3821,7 +3706,7 @@ class ShellController extends ChangeNotifier {
     for (final subscription in _subscriptions) {
       unawaited(subscription.cancel());
     }
-    appMenu.removeListener(_appMenuChanged);
+    recentContent.removeListener(_changed);
     audioOutputs.removeListener(_audioOutputsChanged);
     audioOutputs.dispose();
     media.removeListener(_changed);
@@ -3830,7 +3715,7 @@ class ShellController extends ChangeNotifier {
     dockFolder.dispose();
     trashState.removeListener(_changed);
     trashState.dispose();
-    appMenu.dispose();
+    recentContent.dispose();
     unawaited(_launcherBridge.dispose());
     _ipc.dispose();
     _notificationService?.dispose();

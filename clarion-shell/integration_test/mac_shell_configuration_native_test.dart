@@ -10,13 +10,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
-import 'package:clarion_shell/app_menu_models.dart';
 import 'package:clarion_shell/mac_shell_preferences.dart';
 import 'package:clarion_shell/main.dart';
 import 'package:clarion_shell/models.dart';
 import 'package:clarion_shell/preferences.dart';
 import 'package:clarion_shell/services/desktop_apps.dart';
-import 'package:clarion_shell/services/global_app_menu_service.dart';
 import 'package:clarion_shell/services/power_profiles_service.dart';
 import 'package:clarion_shell/services/clarion_ipc.dart';
 import 'package:clarion_shell/services/system_service.dart';
@@ -183,44 +181,6 @@ class _Ipc extends ClarionIpc {
   }
 }
 
-class _Menus extends GlobalAppMenuService {
-  _Menus() : super(hostRegistrar: false);
-  final action = GlobalMenuItem(
-    id: 'configuration-action',
-    label: 'Configuration action',
-  );
-  late final items = [
-    GlobalMenuItem(id: 'file', label: 'File', children: [action]),
-  ];
-  int activations = 0;
-  @override
-  List<GlobalMenuItem> get menus => items;
-  @override
-  bool get available => true;
-  @override
-  Future<void> start() async {}
-  @override
-  Future<void> setActive(bool active) async {}
-  @override
-  Future<void> focusedTarget({
-    int? pid,
-    String appId = '',
-    int? windowId,
-    int? x11WindowId,
-    AppMenuExport? export,
-  }) async {}
-  @override
-  Future<void> submenu(GlobalMenuItem item, {required bool opened}) async {}
-  @override
-  Future<bool> activate(GlobalMenuItem item) async {
-    if (!identical(item, action)) {
-      throw StateError('Unknown fixture menu action');
-    }
-    activations++;
-    return true;
-  }
-}
-
 class _System extends SystemService {
   _System()
     : super(
@@ -255,11 +215,11 @@ class _Wallpapers extends WallpaperService {
 // SetMinimizeTarget serialization are production paths. Fake Outputs mirror the
 // native monitor geometry so no real compositor window action is issued.
 class _Controller extends ShellController {
-  _Controller(this.fixtureIpc, _Apps apps, _Menus menus)
+  _Controller(this.fixtureIpc, _Apps apps)
     : super(
         ipc: fixtureIpc,
         desktopApps: apps,
-        appMenuService: menus,
+
         system: _System(),
         wallpaperService: _Wallpapers(),
         powerProfiles: PowerProfilesService(demo: true),
@@ -1169,8 +1129,7 @@ void main() {
     await captures.create(recursive: true);
     final ipc = _Ipc();
     final apps = _Apps();
-    final menus = _Menus();
-    final controller = _Controller(ipc, apps, menus);
+    final controller = _Controller(ipc, apps);
     final heightOnly =
         Platform.environment['CLARION_SHELL_MENU_HEIGHT_ONLY'] == '1';
     final lifecycleOnly =
@@ -1716,20 +1675,16 @@ void main() {
         880,
       );
       await record('06-menu-sensor-revealed-48px-zone-zero', target: true);
-      await tester.tap(find.byKey(const ValueKey('global-menu-file')));
+      await tester.tap(find.byKey(const ValueKey('mac-recent-content')));
       await remove(menuMouse);
       await tester.pump(const Duration(milliseconds: 500));
-      await record(
-        '07-open-application-menu-keeps-bar-visible',
-        expanded: true,
-      );
-      expect(controller.appMenuOpen, isTrue);
-      await tester.tap(find.text('Configuration action'));
+      await record('07-open-recent-content-keeps-bar-visible', expanded: true);
+      expect(controller.panel, ShellPanel.recentContent);
+      controller.closePanel();
       await tester.pump();
-      expect(menus.activations, 1);
       await tester.pump(const Duration(milliseconds: 500));
       await record(
-        '08-application-menu-closed-bar-hidden',
+        '08-recent-content-closed-bar-hidden',
         menuVisible: false,
         target: true,
       );

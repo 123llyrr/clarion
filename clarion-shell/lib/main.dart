@@ -12,7 +12,7 @@ import 'models.dart';
 import 'mac_shell_preferences.dart';
 import 'desktop/desktop_application.dart';
 import 'preferences.dart';
-import 'services/global_app_menu_service.dart';
+import 'services/recent_content_service.dart';
 import 'services/shell_startup.dart';
 import 'state/shell_controller.dart';
 import 'theme/shell_theme.dart';
@@ -73,7 +73,7 @@ Future<void> main(List<String> arguments) async {
     notifications: !preview && !arguments.contains('--no-notifications'),
     tray: !preview && !arguments.contains('--no-tray'),
     restoreWallpaperOnStart: !preview && !arguments.contains('--no-wallpaper'),
-    appMenuService: GlobalAppMenuService(hostRegistrar: !preview),
+    recentContentService: RecentContentService(enabled: !preview),
     monitor: monitor,
   );
   controller.setThemeMode(preferences.themeMode);
@@ -112,9 +112,6 @@ Future<void> main(List<String> arguments) async {
     unawaited(
       announceShellReady(
         firstFrame: WidgetsBinding.instance.waitUntilFirstFrameRasterized,
-        prepareAppMenus: controller.prepareAppMenus,
-        // Qt clients sample registrar availability while creating their menus.
-        // Keep session autostart after preparation, without delaying rendering.
         notifyReady: () async {
           if (Platform.environment['NOTIFY_SOCKET']?.isNotEmpty ?? false) {
             final ready = await Process.run('systemd-notify', [
@@ -698,7 +695,6 @@ class _ShellApplicationState extends State<ShellApplication> {
     final controller = widget.controller;
     final expanded =
         controller.panel != ShellPanel.none ||
-        controller.appMenuOpen ||
         _launcherSurfaceVisible ||
         _notificationSurfaceVisible ||
         _controlExiting;

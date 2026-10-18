@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import 'dart:typed_data';
-import 'app_menu_models.dart';
 
 enum ShellPanel {
   none,
@@ -13,7 +12,7 @@ enum ShellPanel {
   trayItems,
   screenshot,
   systemMenu,
-  appMenu,
+  recentContent,
   dockAppMenu,
   dockDownloads,
   dockContextMenu,
@@ -40,7 +39,6 @@ class ShellWindow {
     this.isFocused = false,
     this.pid,
     this.isMinimized = false,
-    this.appMenu,
   });
   final int id;
   final String title;
@@ -49,7 +47,6 @@ class ShellWindow {
   final bool isFocused;
   final int? pid;
   final bool isMinimized;
-  final AppMenuExport? appMenu;
 }
 
 /// One application, even when it is both pinned and has several windows.

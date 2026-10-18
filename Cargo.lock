@@ -1369,7 +1369,6 @@ dependencies = [
  "tracy-client",
  "wayland-backend",
  "wayland-client",
- "wayland-protocols-plasma 0.3.12",
  "wayland-scanner",
  "wayland-server",
  "xcursor",
@@ -9104,7 +9103,6 @@ dependencies = [
  "wayland-client",
  "wayland-protocols 0.32.13",
  "wayland-scanner",
- "wayland-server",
 ]
 
 [[package]]

@@ -1,12 +1,11 @@
-//! GTK Wayland menu metadata, associated with the actual owning wl_surface.
+//! Minimal GTK surface identity, associated with its actual owning wl_surface.
 //!
-//! Advertise version 1 and capabilities 0: exporting GMenu does not require
-//! hiding client menus. Material mode and applications without menu support
-//! consequently keep their own menu bars. This protocol never grants focus.
+//! Version 1 and capabilities 0 keep application menus local. Menu addresses
+//! sent by GTK clients are ignored; only the application id used by Clarion's
+//! desktop shortcut routing is retained. This protocol never grants focus.
 
 use std::sync::Mutex;
 
-use clarion_ipc::GtkAppMenu;
 use smithay::reexports::wayland_server::backend::GlobalId;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{
@@ -35,50 +34,23 @@ pub struct GtkSurfaceData {
 }
 
 #[derive(Default)]
-struct MenuMetadata(Mutex<Option<GtkAppMenu>>);
+struct SurfaceIdentity(Mutex<Option<String>>);
 
-/// Check surface identity without cloning menu strings on the input path.
+/// Check the identity without cloning strings on the input path.
 pub fn surface_application_id_matches(surface: &WlSurface, application_id: &str) -> bool {
     if !surface.is_alive() {
         return false;
     }
     with_states(surface, |states| {
-        states.data_map.get::<MenuMetadata>().is_some_and(|cache| {
-            cache.0.lock().is_ok_and(|menu| {
-                menu.as_ref()
-                    .and_then(|menu| menu.application_id.as_deref())
-                    == Some(application_id)
-            })
-        })
-    })
-}
-
-pub fn surface_menu(surface: &WlSurface) -> Option<GtkAppMenu> {
-    if !surface.is_alive() {
-        return None;
-    }
-    with_states(surface, |states| {
         states
             .data_map
-            .get::<MenuMetadata>()?
-            .0
-            .lock()
-            .ok()?
-            .clone()
-    })
-}
-
-/// Compare a cached IPC value without allocating six menu strings per window
-/// on every IPC refresh. The caller must be outside any with_states role lock.
-pub fn surface_menu_matches(surface: &WlSurface, current: Option<&GtkAppMenu>) -> bool {
-    if !surface.is_alive() {
-        return current.is_none();
-    }
-    with_states(surface, |states| {
-        let Some(cache) = states.data_map.get::<MenuMetadata>() else {
-            return current.is_none();
-        };
-        cache.0.lock().is_ok_and(|menu| menu.as_ref() == current)
+            .get::<SurfaceIdentity>()
+            .is_some_and(|cache| {
+                cache
+                    .0
+                    .lock()
+                    .is_ok_and(|identity| identity.as_deref() == Some(application_id))
+            })
     })
 }
 
@@ -128,7 +100,7 @@ impl Dispatch<GtkShell1, ()> for State {
 
 impl Dispatch<GtkSurface1, GtkSurfaceData> for State {
     fn request(
-        state: &mut Self,
+        _state: &mut Self,
         _client: &Client,
         _resource: &GtkSurface1,
         request: gtk_surface1::Request,
@@ -139,34 +111,18 @@ impl Dispatch<GtkSurface1, GtkSurfaceData> for State {
         if !data.surface.is_alive() {
             return;
         }
-        if let gtk_surface1::Request::SetDbusProperties {
-            application_id,
-            app_menu_path,
-            menubar_path,
-            window_object_path,
-            application_object_path,
-            unique_bus_name,
-        } = request
-        {
-            let menu = GtkAppMenu {
-                application_id: bounded(application_id),
-                app_menu_path: bounded(app_menu_path),
-                menubar_path: bounded(menubar_path),
-                window_object_path: bounded(window_object_path),
-                application_object_path: bounded(application_object_path),
-                unique_bus_name: bounded(unique_bus_name),
-            };
+        if let gtk_surface1::Request::SetDbusProperties { application_id, .. } = request {
+            let identity = bounded(application_id);
             with_states(&data.surface, |states| {
-                states.data_map.insert_if_missing(MenuMetadata::default);
+                states.data_map.insert_if_missing(SurfaceIdentity::default);
                 *states
                     .data_map
-                    .get::<MenuMetadata>()
+                    .get::<SurfaceIdentity>()
                     .unwrap()
                     .0
                     .lock()
-                    .unwrap() = Some(menu);
+                    .unwrap() = identity;
             });
-            state.ipc_refresh_windows();
         }
     }
 }
@@ -175,7 +131,7 @@ impl Dispatch<GtkSurface1, GtkSurfaceData> for State {
 mod tests {
     use super::bounded;
     #[test]
-    fn metadata_text_is_bounded_even_before_ipc_serialization() {
+    fn identity_text_is_bounded_before_retention() {
         assert_eq!(bounded(None), None);
         assert_eq!(bounded(Some(String::new())), None);
         assert_eq!(bounded(Some("x".repeat(4096))).unwrap().len(), 4096);

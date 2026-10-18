@@ -3,7 +3,6 @@ import 'package:clarion_shell/mac_notification_view.dart';
 import 'package:clarion_shell/models.dart';
 import 'package:clarion_shell/services/clarion_ipc.dart';
 import 'package:clarion_shell/services/desktop_apps.dart';
-import 'package:clarion_shell/services/global_app_menu_service.dart';
 import 'package:clarion_shell/services/notification_service.dart';
 import 'package:clarion_shell/services/system_service.dart';
 import 'package:clarion_shell/services/wallpaper_service.dart';
@@ -35,13 +34,6 @@ class _System extends SystemService {
 class _Apps extends DesktopApps {
   @override
   Future<List<DesktopApp>> load() async => [];
-}
-
-class _AppMenus extends GlobalAppMenuService {
-  @override
-  Future<void> start() async {}
-  @override
-  Future<void> setActive(bool active) async {}
 }
 
 class _Wallpapers extends WallpaperService {
@@ -79,7 +71,6 @@ void main() {
       system: _System(),
       desktopApps: _Apps(),
       wallpaperService: _Wallpapers(),
-      appMenuService: _AppMenus(),
     );
     addTearDown(controller.dispose);
     controller.setShellStyle(ShellStyle.macos);

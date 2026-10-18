@@ -80,7 +80,7 @@ class _MacForceQuitDialogState extends State<MacForceQuitDialog> {
     _items = [...running, if (!hasFinder) _finderItem];
 
     // Pre-select focused window app if any
-    final focused = widget.controller.menuFocusedWindow;
+    final focused = widget.controller.contextWindow;
     if (focused != null) {
       final index = _items.indexWhere(
         (item) =>

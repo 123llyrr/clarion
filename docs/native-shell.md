@@ -101,7 +101,7 @@ bounds after each animation frame. Transparent space reserved for future
 magnification or bounce passes through to windows below; drawing thickness is
 independent of pointer activation. Flutter previews use the same visible hit
 regions, and automatic hiding retains its separate two-pixel edge sensor. Input
-becomes empty while a modal control panel or application menu is active; macOS
+becomes empty while a modal control panel or recent-content panel is active; macOS
 Launchpad keeps the Dock interactive. Keyboard mode stays None.
 The menu reservation follows the configured height, or zero with automatic hiding. Desktop icons,
 page controls and tooltips use the configured menu and Dock edges, including
@@ -135,8 +135,8 @@ most three installed apps from successful launch and actual focus history. Apps
 already displayed as pinned/running are excluded to avoid duplicate icons;
 this placement policy is not proof that Catalina's recent section requires an
 app to have exited. The history is bounded and persisted independently of pins.
-Mission Control stays in the application section before recent apps and the
-folder/Trash separator.
+Mission Control has no button in the bar or Dock. Existing keyboard access to
+the workspace overview remains available.
 
 Downloads now reads the real XDG directory through `DockFolderService`: bounded
 one-level enumeration, coalesced watching, directory deletion/recreation recovery
@@ -176,74 +176,66 @@ scales 1, 1.25 and 2, including region clearing/remapping, a second simulated
 output and protected screenshot/recording pixels. These fixtures do not establish
 physical display hotplug or support across other GPU and driver combinations.
 
-The menu bar reads GTK GMenu/GAction and canonical D-Bus menus exported by the
-focused process. A GTK Wayland v1 bridge associates exported paths with the real
-`wl_surface`; it advertises no menu-hiding capability, so Material mode retains
-client menus. D-Bus unique-owner process credentials must match the window before
-any action is invoked. Window-specific action groups require an unambiguous
-path. Compositor window IDs are never interpreted as X11 IDs. Menus follow live
-layout, enabled/check states, owner disappearance and focus changes. Opening a
-menu expands the main native surface while keeping the application's menu target;
-Escape, focus changes and surface teardown close it. Applications exporting no
-menu retain Clarion's system menu. App-owned title bars remain application-owned.
-The menu bar keeps its menu open through the native surface's
-vertical expansion, while popup layout and input use the real overlay bounds.
-An action completes before menu dismissal releases its application target;
-late completions cannot dismiss a new window's menu. Static GTK submenus keep
-their item identities, while exporter signals update dynamic menus.
+## Recent content and application menus
 
-Qt's `org_kde_kwin_appmenu_manager` v1/v2 bridge also associates each canonical
-D-Bus address with its owning `wl_surface`. This address travels in the optional
-IPC `Window.app_menu` field; GTK's `gtk_app_menu` field remains independent.
-Invalid addresses, obsolete appmenu objects, destruction and disconnects cannot
-replace another window's menu. The macOS shell renders while preparing the
-registrar and prepares it before launching applications: Qt 6 caches its first registrar
-availability check. Switching into macOS on an empty desktop prepares it too.
-No Qt platform theme is forced.
-The installed systemd shell unit starts after `graphical-session.target` and
-precedes `xdg-desktop-autostart.target`. GTK can synchronously activate the
-Portal Inhibit proxy while registering its application; Portal itself starts
-after the graphical target. Placing the shell before that target creates a
-25-second activation wait and can cause the shell's startup timeout. Explicit
-ordering after the target removes the cycle while retaining GTK menu export.
-The application notifies the manager after its first rasterized frame and
-bounded menu preparation, so XDG autostart clients do not race the registrar.
-Preview mode neither claims the registrar nor sends session readiness.
-`CLARION_SHELL_STARTUP_TRACE=1` records native entry, GTK registration, view
-creation and the main/Dock first frames using a monotonic clock. It is off by
-default and does not alter the session environment.
+Both bar layouts offer a **Recent content** button for clipboard history and
+recent screenshots. The strip shows only an icon and item count; copied text,
+image previews and file names appear only inside the opened panel. The macOS
+bar retains the focused application's name as a plain label. It does not expose
+an application-name menu or synthesize File/Edit/View menus.
 
-Qt clients created while a global menu host was available can keep hiding their
-local menu after the registrar disappears. When switching to Material, an
-explicit canonical address remains readable with the same process validation,
-while the registrar is released. A compact Application menu button preserves
-access to those real commands at either bar edge. It performs no PID-based menu
-guessing while inactive and does not cause newly started clients to hide menus.
+The shared panel searches text, source and capture date, with All, Text, Images
+and Screenshots filters. Images includes screenshots. Pinned items appear first,
+then newer records. Copy restores the selected payload to the clipboard; Open
+uses the screenshot's existing file. Delete removes one history item and Clear
+removes unpinned history. Neither operation deletes screenshot files. Pinning
+protects an item from normal eviction and clearing, but does not persist it
+across a Shell restart. Escape closes the panel and Ctrl+F focuses search.
+The panel and its history scroll within the available output height.
 
-Traditional GTK 3 `GtkMenuBar` applications can use the separately installed
-[Vala Panel Appmenu module](https://github.com/rilian-la-te/vala-panel-appmenu).
-`scripts/install-gtk-appmenu.py --source <staged-install>` installs a complete
-user-local module, private parser library, source archive, license and compiled
-schema under `~/.local/lib/clarion-appmenu/current`, with an atomic release switch
-and a backup. It requires `patchelf` and `glib-compile-schemas`. The stage must
-include `source-provenance.json` identifying the source tree used for the build.
-The module's `unity.*` actions are resolved only against the menu object's own
-action group, including subsequent enabled-state changes.
+History stays in the running Shell process: it is not saved to disk. The default
+limits are 80 records and 64 MiB of retained payloads, with up to 1 MiB per text
+record and 16 MiB per PNG. Duplicate payloads are coalesced by content hash.
+Thumbnails are generated separately at a maximum of 320 pixels. Pause stops new
+recording while preserving existing items; the bar shows the paused state.
+An unavailable clipboard connection keeps existing history visible and offers
+reconnection, while copying is disabled until the transport is available.
 
-`clarion --session` enables this module only when its complete installation is
-present, appending its absolute path to existing `GTK_MODULES`. It imports the
-module and schema environment for activated applications and restores the prior
-values when the compositor exits. Nested compositors and CLI commands do not
-enable it. A custom GSettings schema directory is preserved; an incompatible
-custom source disables automatic module loading. The installed schema defaults
-to keeping application menus visible and never changes persistent user dconf.
+The Linux runner uses `ext-data-control-v1` asynchronously, with bounded transfer
+sizes; it does not poll a focused application's clipboard. Successful compositor
+screenshot completion events add recent screenshots, while `is_preview` captures
+are ignored. Shell preview and demo sessions disable collection. The installed
+session starts one `--monitor=0` Shell engine; additional views do not create
+another collector. Independently started Shell processes keep independent
+in-memory histories; shared history across multiple Shell processes is not
+implemented.
 
-Updating the installed executable does not change a running compositor's
-protocols. Log out and back in to use the new bridges, then start fresh application
-processes so their toolkit sees the exporter/registrar. An existing process may
-already have cached a missing host. GTK 4 header-bar menus and applications that
-do not export menus cannot be synthesized into a functional global menu. A tray
-menu is never substituted for a window's application menu.
+Application commands now remain in the application's own menu bar or header-bar
+menu. Clarion no longer hosts a D-Bus global-menu registrar, renders GTK/Qt
+exported application menus, or advertises Qt's appmenu-manager protocol. GTK
+Wayland identity integration remains available for matching windows to their
+application; it does not request clients to hide menus. StatusNotifier tray
+items retain their native D-Bus menu support independently of application menus.
+Dock app menus still provide Clarion-owned window actions such as focus,
+minimize/restore, pin and close-all-windows.
+
+A real session removes only the absolute GTK exporter module/schema paths
+previously managed by Clarion from its launch and activation environments.
+Other GTK modules and custom schema directories are preserved; installed
+exporter files and release backups are retained for rollback. The retired
+`scripts/install-gtk-appmenu.py` entry point reports retirement without installing
+or removing files. Existing application processes may have cached their old
+menu-export state; start them again after logging into the updated session to
+use their normal in-window menus. No Qt platform theme is forced.
+
+The installed systemd Shell unit starts after `graphical-session.target` and
+before `xdg-desktop-autostart.target`. GTK can synchronously activate a Portal
+proxy while registering its application; starting the Shell after the graphical
+target avoids that activation cycle. The Shell notifies the manager after its
+first rendered frame, without waiting for menu discovery. Preview mode sends no
+session-readiness notification. `CLARION_SHELL_STARTUP_TRACE=1` records native
+entry, GTK registration, view creation and the main/Dock first frames using a
+monotonic clock. It is off by default and does not alter the session environment.
 
 The Dock context menu offers real minimize/restore when the compositor advertises
 minimized-window state. A minimized tile retains its stable window/workspace ID,

@@ -107,6 +107,8 @@ WindowController::WindowController(GtkWindow* window, FlView* view, bool preview
       fl_engine_get_binary_messenger(fl_view_get_engine(view_)),
       "clarion.shell/window", FL_METHOD_CODEC(codec));
   fl_method_channel_set_method_call_handler(channel_, MethodCall, this, nullptr);
+  native_clipboard_ = std::make_unique<NativeClipboardBridge>(
+      fl_engine_get_binary_messenger(fl_view_get_engine(view_)), display_, !preview_);
   native_tray_menu_ = std::make_unique<NativeTrayMenu>(window_, GTK_WIDGET(view_),
       [this](bool active) {
         native_tray_menu_keyboard_ = active;
@@ -132,6 +134,7 @@ WindowController::~WindowController() {
     g_clear_object(&channel_);
   }
   native_tray_menu_.reset();
+  native_clipboard_.reset();
   DestroyDock();
   DestroyReservations();
   panel_glass_region_.reset();
@@ -684,6 +687,7 @@ void WindowController::StyleUpdated(GtkWidget*, gpointer data) {
 void WindowController::WindowDestroyed(GtkWidget*, gpointer data) {
   auto* self = static_cast<WindowController*>(data);
   self->closed_ = true;
+  self->native_clipboard_.reset();
   if (self->native_tray_menu_ != nullptr) self->native_tray_menu_->Dismiss();
   self->panel_glass_region_.reset();
   self->main_effect_.reset();

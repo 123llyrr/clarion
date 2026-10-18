@@ -2,7 +2,6 @@ pub mod background_effect;
 mod compositor;
 pub mod gtk_shell;
 mod layer_shell;
-pub mod qt_app_menu;
 mod xdg_shell;
 
 use std::fs::File;

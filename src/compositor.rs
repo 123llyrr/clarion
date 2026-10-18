@@ -303,7 +303,6 @@ pub struct Clarion {
     pub viewporter_state: ViewporterState,
     pub background_effect_state: BackgroundEffectState,
     pub gtk_shell_state: crate::handlers::gtk_shell::GtkShellState,
-    pub qt_app_menu_state: crate::handlers::qt_app_menu::QtAppMenuState,
     pub xdg_foreign_state: XdgForeignState,
     pub shm_state: ShmState,
     pub output_manager_state: OutputManagerState,
@@ -2955,7 +2954,6 @@ impl Clarion {
         let viewporter_state = ViewporterState::new::<State>(&display_handle);
         let background_effect_state = BackgroundEffectState::new::<State>(&display_handle);
         let gtk_shell_state = crate::handlers::gtk_shell::GtkShellState::new(&display_handle);
-        let qt_app_menu_state = crate::handlers::qt_app_menu::QtAppMenuState::new(&display_handle);
         let xdg_foreign_state = XdgForeignState::new::<State>(&display_handle);
 
         let is_tty = matches!(backend, Backend::Tty(_));
@@ -3191,7 +3189,6 @@ impl Clarion {
             viewporter_state,
             background_effect_state,
             gtk_shell_state,
-            qt_app_menu_state,
             xdg_foreign_state,
             text_input_state,
             input_method_state,
@@ -6945,7 +6942,10 @@ impl Clarion {
                                 set_data_device_selection(
                                     &state.clarion.display_handle,
                                     &state.clarion.seat,
-                                    vec![String::from("image/png")],
+                                    vec![
+                                        String::from("image/png"),
+                                        String::from("application/x-clarion-screenshot"),
+                                    ],
                                     pixels,
                                 );
                             }

@@ -10,21 +10,12 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:clarion_shell/models.dart';
 import 'package:clarion_shell/services/audio_output_service.dart';
-import 'package:clarion_shell/services/global_app_menu_service.dart';
 import 'package:clarion_shell/services/system_service.dart';
 import 'package:clarion_shell/state/shell_controller.dart';
 import 'package:clarion_shell/theme/mac_shell_theme.dart';
 import 'package:clarion_shell/ui/mac_shell_view.dart';
 import 'package:clarion_shell/ui/mac_volume_menu.dart';
 import 'package:clarion_shell/ui/mac_control_center.dart';
-
-class _Menus extends GlobalAppMenuService {
-  _Menus() : super(hostRegistrar: false);
-  @override
-  Future<void> start() async {}
-  @override
-  Future<void> setActive(bool active) async {}
-}
 
 class _Backend {
   final events = StreamController<void>.broadcast(sync: true);
@@ -131,7 +122,7 @@ class _Fixture {
         ShellController(
             system: system,
             audioOutputService: outputs,
-            appMenuService: _Menus(),
+
             notifications: false,
             tray: false,
             powerProfilesEnabled: false,

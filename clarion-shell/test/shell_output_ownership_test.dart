@@ -3,10 +3,8 @@ import 'dart:async';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:clarion_shell/app_menu_models.dart';
 import 'package:clarion_shell/models.dart';
 import 'package:clarion_shell/services/desktop_apps.dart';
-import 'package:clarion_shell/services/global_app_menu_service.dart';
 import 'package:clarion_shell/services/clarion_ipc.dart';
 import 'package:clarion_shell/services/system_service.dart';
 import 'package:clarion_shell/services/wallpaper_service.dart';
@@ -80,22 +78,6 @@ class _Ipc extends ClarionIpc {
   }
 }
 
-class _Menus extends GlobalAppMenuService {
-  _Menus() : super(hostRegistrar: false);
-  @override
-  Future<void> start() async {}
-  @override
-  Future<void> setActive(bool active) async {}
-  @override
-  Future<void> focusedTarget({
-    int? pid,
-    String appId = '',
-    int? windowId,
-    int? x11WindowId,
-    AppMenuExport? export,
-  }) async {}
-}
-
 class _Apps extends DesktopApps {
   @override
   Future<List<DesktopApp>> load() async => const [];
@@ -114,7 +96,7 @@ class _Wallpapers extends WallpaperService {
 Future<ShellController> _fixture(_Ipc ipc) async {
   final controller = ShellController(
     ipc: ipc,
-    appMenuService: _Menus(),
+
     desktopApps: _Apps(),
     system: _System(),
     wallpaperService: _Wallpapers(),

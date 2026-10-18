@@ -12,7 +12,6 @@ import 'package:clarion_shell/main.dart';
 import 'package:clarion_shell/models.dart';
 import 'package:clarion_shell/preferences.dart';
 import 'package:clarion_shell/services/desktop_apps.dart';
-import 'package:clarion_shell/services/global_app_menu_service.dart';
 import 'package:clarion_shell/services/notification_service.dart';
 import 'package:clarion_shell/services/clarion_ipc.dart';
 import 'package:clarion_shell/services/sound_service.dart';
@@ -217,7 +216,7 @@ void main() {
       system: _System(),
       soundService: SoundService(enabled: false),
       windowDecorationService: WindowDecorationService(enabled: false),
-      appMenuService: GlobalAppMenuService(hostRegistrar: false),
+
       wallpaperService: WallpaperService(
         directoryPath: '$root/wallpapers',
         preferenceFile: File('$root/wallpaper.json'),

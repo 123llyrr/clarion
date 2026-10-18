@@ -788,19 +788,14 @@ fn make_ipc_window(
     workspace_id: Option<WorkspaceId>,
     layout: WindowLayout,
 ) -> clarion_ipc::Window {
-    // Reading SurfaceData inside with_toplevel_role would acquire the same
-    // Smithay surface mutex twice and deadlock IPC/focus refresh.
-    let gtk_app_menu =
-        crate::handlers::gtk_shell::surface_menu(mapped.toplevel().wl_surface()).map(Box::new);
-    let app_menu =
-        crate::handlers::qt_app_menu::surface_menu(mapped.toplevel().wl_surface()).map(Box::new);
     with_toplevel_role(mapped.toplevel(), |role| clarion_ipc::Window {
         id: mapped.id().get(),
         title: role.title.clone(),
         app_id: role.app_id.clone(),
         pid: mapped.credentials().map(|c| c.pid),
-        gtk_app_menu,
-        app_menu,
+        // Kept as optional compatibility fields; application menus stay local.
+        gtk_app_menu: None,
+        app_menu: None,
         workspace_id: workspace_id.map(|id| id.get()),
         is_focused: mapped.is_focused(),
         is_minimized: mapped.is_minimized(),
@@ -1005,15 +1000,6 @@ impl State {
             changed |= with_toplevel_role(mapped.toplevel(), |role| {
                 ipc_win.title != role.title || ipc_win.app_id != role.app_id
             });
-            changed |= !crate::handlers::gtk_shell::surface_menu_matches(
-                mapped.toplevel().wl_surface(),
-                ipc_win.gtk_app_menu.as_deref(),
-            );
-            changed |= !crate::handlers::qt_app_menu::surface_menu_matches(
-                mapped.toplevel().wl_surface(),
-                ipc_win.app_menu.as_deref(),
-            );
-
             if changed {
                 let window = make_ipc_window(mapped, ws_id, window_layout);
                 events.push(Event::WindowOpenedOrChanged { window });

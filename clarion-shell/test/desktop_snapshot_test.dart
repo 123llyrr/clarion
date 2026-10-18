@@ -5,10 +5,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:clarion_shell/app_menu_models.dart';
 import 'package:clarion_shell/models.dart';
 import 'package:clarion_shell/services/desktop_apps.dart';
-import 'package:clarion_shell/services/global_app_menu_service.dart';
 import 'package:clarion_shell/services/clarion_ipc.dart';
 import 'package:clarion_shell/services/system_service.dart';
 import 'package:clarion_shell/services/wallpaper_service.dart';
@@ -36,22 +34,6 @@ class _Ipc extends ClarionIpc {
     unawaited(eventsController.close());
     super.dispose();
   }
-}
-
-class _Menus extends GlobalAppMenuService {
-  _Menus() : super(hostRegistrar: false);
-  @override
-  Future<void> start() async {}
-  @override
-  Future<void> setActive(bool active) async {}
-  @override
-  Future<void> focusedTarget({
-    int? pid,
-    String appId = '',
-    int? windowId,
-    int? x11WindowId,
-    AppMenuExport? export,
-  }) async {}
 }
 
 class _CountedApp extends DesktopApp {
@@ -111,7 +93,7 @@ Future<(ShellController, _Ipc, _Apps)> _fixture({int apps = 8}) async {
   final controller = ShellController(
     ipc: ipc,
     desktopApps: catalogue,
-    appMenuService: _Menus(),
+
     system: _System(),
     wallpaperService: _Wallpapers(),
     notifications: false,
@@ -169,7 +151,7 @@ void main() {
       final controller = ShellController(
         ipc: _Ipc(),
         desktopApps: _Apps(0),
-        appMenuService: _Menus(),
+
         system: _System(),
         wallpaperService: _Wallpapers(),
         notifications: false,
@@ -281,7 +263,6 @@ void main() {
       });
       expect(controller.windows.first.title, 'Renamed');
       expect(controller.windows.first.isMinimized, isTrue);
-      expect(controller.windows.first.appMenu?.busName, ':1.99');
       expect(
         controller.dockApps
             .firstWhere((app) => app.id == 'app-1.desktop')

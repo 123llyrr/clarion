@@ -11,6 +11,7 @@
 #include "shell_geometry.h"
 #include "background_effect.h"
 #include "native_tray_menu.h"
+#include "native_clipboard.h"
 
 // Lives on the GTK main thread. The Flutter channel owns no window reference,
 // so closing a preview or losing an output cannot leave callbacks with a stale
@@ -82,6 +83,7 @@ class WindowController final {
   std::optional<bool> keyboard_interactivity_override_;
   bool native_tray_menu_keyboard_ = false;
   std::unique_ptr<NativeTrayMenu> native_tray_menu_;
+  std::unique_ptr<NativeClipboardBridge> native_clipboard_;
   bool tooltip_visible_ = false;
   bool bar_bottom_ = false;
   bool macos_ = false;

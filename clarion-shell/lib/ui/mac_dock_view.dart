@@ -81,7 +81,6 @@ class _MacDockViewState extends State<MacDockView> {
   late bool _lastReducedMotion;
   late ShellPanel _lastPanel;
   late ShellStyle _lastStyle;
-  late bool _lastAppMenuOpen;
   late MacShellPreferences _lastPreferences;
   bool? _lastPlatformReducedMotion;
   (Size, Rect)? _requestedGeometry;
@@ -190,7 +189,6 @@ class _MacDockViewState extends State<MacDockView> {
     _lastReducedMotion = widget.controller.reduceMotion;
     _lastPanel = widget.controller.panel;
     _lastStyle = widget.controller.shellStyle;
-    _lastAppMenuOpen = widget.controller.appMenuOpen;
     _lastPreferences = widget.controller.macPreferences;
     widget.controller.addListener(_clearRemovedHover);
     _scroll.addListener(_schedulePresentation);
@@ -211,13 +209,11 @@ class _MacDockViewState extends State<MacDockView> {
     final reduced = widget.controller.reduceMotion;
     final panel = widget.controller.panel;
     final style = widget.controller.shellStyle;
-    final appMenuOpen = widget.controller.appMenuOpen;
     final preferences = widget.controller.macPreferences;
     final preferencesChanged = preferences != _lastPreferences;
     if ((reduced && !_lastReducedMotion) ||
         (panel != _lastPanel && _panelBlocked) ||
         (style != _lastStyle) ||
-        (appMenuOpen && !_lastAppMenuOpen) ||
         preferencesChanged) {
       _stopScroll(
         finishTarget: reduced && !_panelBlocked && style == ShellStyle.macos,
@@ -226,7 +222,6 @@ class _MacDockViewState extends State<MacDockView> {
     _lastReducedMotion = reduced;
     _lastPanel = panel;
     _lastStyle = style;
-    _lastAppMenuOpen = appMenuOpen;
     _lastPreferences = preferences;
     if (preferencesChanged) {
       _cancelPointerUpdate();
@@ -241,9 +236,7 @@ class _MacDockViewState extends State<MacDockView> {
         });
       }
     }
-    if (_panelBlocked ||
-        widget.controller.appMenuOpen ||
-        widget.controller.shellStyle != ShellStyle.macos) {
+    if (_panelBlocked || widget.controller.shellStyle != ShellStyle.macos) {
       _cancelPointerUpdate();
       if (mounted &&
           (_hoveredName != null ||
@@ -291,7 +284,6 @@ class _MacDockViewState extends State<MacDockView> {
   void _pointer(PointerEvent event) {
     _hideTimer?.cancel();
     if (_panelBlocked ||
-        widget.controller.appMenuOpen ||
         widget.controller.shellStyle != ShellStyle.macos ||
         (event is PointerEnterEvent && _needsPointerMove)) {
       return;
@@ -310,7 +302,6 @@ class _MacDockViewState extends State<MacDockView> {
   void _updatePointer(PointerEvent event) {
     _hideTimer?.cancel();
     if (_panelBlocked ||
-        widget.controller.appMenuOpen ||
         widget.controller.shellStyle != ShellStyle.macos ||
         (event is PointerEnterEvent && _needsPointerMove)) {
       return;
@@ -396,7 +387,6 @@ class _MacDockViewState extends State<MacDockView> {
     if (_edgeRevealed ||
         (event is PointerEnterEvent && _needsPointerMove) ||
         _panelBlocked ||
-        widget.controller.appMenuOpen ||
         widget.controller.shellStyle != ShellStyle.macos) {
       return;
     }
@@ -411,7 +401,6 @@ class _MacDockViewState extends State<MacDockView> {
         !_scroll.hasClients ||
         _scroll.position.maxScrollExtent <= 0 ||
         _panelBlocked ||
-        widget.controller.appMenuOpen ||
         (widget.controller.macPreferences.dockAutoHide && !_edgeRevealed)) {
       return;
     }
@@ -481,7 +470,6 @@ class _MacDockViewState extends State<MacDockView> {
         (name == null && _hoveredAppId != id) ||
         (name != null && _needsPointerMove) ||
         _panelBlocked ||
-        widget.controller.appMenuOpen ||
         widget.controller.shellStyle != ShellStyle.macos) {
       return;
     }
@@ -672,7 +660,6 @@ class _MacDockViewState extends State<MacDockView> {
       _lastReducedMotion = widget.controller.reduceMotion;
       _lastPanel = widget.controller.panel;
       _lastStyle = widget.controller.shellStyle;
-      _lastAppMenuOpen = widget.controller.appMenuOpen;
       _lastPreferences = widget.controller.macPreferences;
       _edgeRevealed = false;
       _lastGlass = null;
@@ -775,7 +762,6 @@ class _MacDockViewState extends State<MacDockView> {
       folderEntries: widget.controller.dockFolder.entries,
       panel: widget.controller.panel,
       externalLauncher: widget.controller.externalLauncherEnabled,
-      appMenuOpen: widget.controller.appMenuOpen,
       reduced: widget.controller.reduceMotion,
       preferences: widget.controller.macPreferences,
     ),
@@ -817,7 +803,6 @@ class _MacDockViewState extends State<MacDockView> {
         final blocked =
             (controller.panel != ShellPanel.none &&
                 controller.panel != ShellPanel.launcher) ||
-            controller.appMenuOpen ||
             controller.shellStyle != ShellStyle.macos;
         if (preferences.dockHidden) {
           // A hidden dock leaves no surface, no edge sensor and no input region;

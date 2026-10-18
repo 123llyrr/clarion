@@ -8,10 +8,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:clarion_shell/app_menu_models.dart';
 import 'package:clarion_shell/models.dart';
 import 'package:clarion_shell/services/desktop_apps.dart';
-import 'package:clarion_shell/services/global_app_menu_service.dart';
 import 'package:clarion_shell/services/clarion_ipc.dart';
 import 'package:clarion_shell/services/system_service.dart';
 import 'package:clarion_shell/services/wallpaper_service.dart';
@@ -19,7 +17,6 @@ import 'package:clarion_shell/state/shell_controller.dart';
 import 'package:clarion_shell/theme/font_fallback.dart';
 import 'package:clarion_shell/theme/mac_shell_theme.dart';
 import 'package:clarion_shell/ui/mac_dock_view.dart';
-import 'package:clarion_shell/ui/global_app_menu_bar.dart';
 import 'package:clarion_shell/ui/mac_shell_view.dart';
 import 'package:clarion_shell/ui/screenshot_icon.dart';
 import 'package:clarion_shell/ui/tray_icon.dart';
@@ -96,25 +93,6 @@ class _Wallpapers extends WallpaperService {
   Future<List<ShellWallpaper>> scan() async => [];
 }
 
-// Dock presentation tests isolate every desktop service, including the host
-// readiness awaited by launching a new application. Real menu wiring is
-// exercised by the private bus and native integration fixtures.
-class _Menus extends GlobalAppMenuService {
-  _Menus() : super(hostRegistrar: false);
-  @override
-  Future<void> start() async {}
-  @override
-  Future<void> setActive(bool active) async {}
-  @override
-  Future<void> focusedTarget({
-    int? pid,
-    String appId = '',
-    int? windowId,
-    int? x11WindowId,
-    AppMenuExport? export,
-  }) async {}
-}
-
 Future<(ShellController, _Ipc, _Apps)> _fixture(
   WidgetTester tester, {
   int additionalApps = 0,
@@ -127,7 +105,6 @@ Future<(ShellController, _Ipc, _Apps)> _fixture(
           desktopApps: apps,
           system: _System(),
           wallpaperService: _Wallpapers(),
-          appMenuService: _Menus(),
           tray: false,
           notifications: false,
           powerProfilesEnabled: false,
@@ -278,24 +255,21 @@ void main() {
         );
         expect(logo.size, const Size(17, 18));
         expect(logo.center.dy, closeTo(bar.center.dy, .01));
-        final app = tester.widget<Text>(
-          find.byKey(const ValueKey('mac-active-app')),
-        );
-        expect(app.style?.fontSize, 13);
-        expect(
-          tester.getCenter(find.byKey(const ValueKey('mac-active-app'))).dy,
-          closeTo(bar.center.dy, .01),
-        );
+        final appLabel = find.byKey(const ValueKey('mac-active-app'));
+        if (width > 280) {
+          expect(tester.widget<Text>(appLabel).style?.fontSize, 13);
+          expect(tester.getCenter(appLabel).dy, closeTo(bar.center.dy, .01));
+        } else {
+          expect(appLabel, findsNothing);
+        }
         final button = tester.getRect(
           find.byKey(const ValueKey('mac-quick-settings')),
         );
         expect(button.height, height);
         expect(button.center.dy, closeTo(bar.center.dy, .01));
         expect(
-          tester
-              .widget<GlobalAppMenuBar>(find.byType(GlobalAppMenuBar))
-              .barHeight,
-          height,
+          find.byKey(const ValueKey('mac-recent-content')),
+          findsOneWidget,
         );
         if (width > 320) {
           expect(
@@ -973,69 +947,32 @@ void main() {
   });
 
   testWidgets(
-    'Finder and app fallback menus and clock notification toggle on macOS bar',
+    'macOS bar keeps application context and opens recent content without global menus',
     (tester) async {
       final (controller, ipc, _) = await _fixture(tester);
       await _mount(tester, controller);
-
-      // Window 21 ('editor') is focused in fixture
       expect(find.text('文本编辑器'), findsOneWidget);
-      expect(find.text('文件'), findsOneWidget);
-      expect(find.text('编辑'), findsOneWidget);
-      expect(find.text('窗口'), findsOneWidget);
-      expect(find.text('帮助'), findsOneWidget);
-
-      await tester.tap(find.byKey(const ValueKey('global-menu-app-window')));
+      for (final label in ['文件', '编辑', '窗口', '帮助']) {
+        expect(find.text(label), findsNothing);
+      }
+      expect(find.byKey(const ValueKey('mac-active-app-button')), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('mac-recent-content')));
       await tester.pumpAndSettle();
+      expect(controller.panel, ShellPanel.recentContent);
       expect(
-        find.byKey(const ValueKey('global-menu-app-spaces')),
-        findsNothing,
-      );
-      expect(find.text('调度中心'), findsNothing);
-      expect(
-        find.byKey(const ValueKey('global-menu-app-minimize')),
+        find.byKey(const ValueKey('recent-content-panel')),
         findsOneWidget,
       );
+      expect(find.text('调度中心'), findsNothing);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
-
-      // Active app button is content-sized and hugs its text
-      final appRect = tester.getRect(
-        find.byKey(const ValueKey('mac-active-app-button')),
-      );
-      expect(appRect.width, lessThan(100.0));
-      final menuRect = tester.getRect(find.byType(GlobalAppMenuBar));
-      expect(menuRect.left - appRect.right, closeTo(0.0, 0.1));
-
-      // Clear focused windows so desktop (Finder) becomes active
+      expect(controller.panel, ShellPanel.none);
       ipc.event.add({
         'WindowsChanged': {'windows': []},
       });
       await tester.pumpAndSettle();
-
       expect(find.text('Home'), findsOneWidget);
-      expect(find.text('文件'), findsOneWidget);
-      expect(find.text('编辑'), findsOneWidget);
-      expect(find.text('显示'), findsOneWidget);
-      expect(find.text('前往'), findsOneWidget);
-      expect(find.text('窗口'), findsOneWidget);
-      expect(find.text('帮助'), findsOneWidget);
-
-      await tester.tap(find.byKey(const ValueKey('global-menu-finder-window')));
-      await tester.pumpAndSettle();
-      expect(
-        find.byKey(const ValueKey('global-menu-finder-spaces')),
-        findsNothing,
-      );
-      expect(find.text('调度中心'), findsNothing);
-      expect(
-        find.byKey(const ValueKey('global-menu-finder-show-all')),
-        findsOneWidget,
-      );
-      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-      await tester.pumpAndSettle();
-
-      // Tap clock button to open notifications
+      expect(find.text('文件'), findsNothing);
       await tester.tap(find.byKey(const ValueKey('mac-clock-button')));
       await tester.pumpAndSettle();
       expect(controller.panel, ShellPanel.notifications);

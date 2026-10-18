@@ -8,7 +8,7 @@ import '../models.dart';
 import '../state/shell_controller.dart';
 import '../theme/shell_theme.dart';
 import 'controller_selector.dart';
-import 'global_app_menu_bar.dart';
+import 'recent_content_panel.dart';
 import 'launcher_surface.dart';
 import 'shell_geometry.dart';
 import 'shell_panel_content.dart';
@@ -330,10 +330,8 @@ class _SystemBar extends StatelessWidget {
       notifications: controller.unreadNotificationCount,
       doNotDisturb: controller.doNotDisturb,
       trayItems: controller.trayItems,
-      appMenuAvailable: controller.materialAppMenuAvailable,
-      appMenuRevision: controller.appMenu.revision,
-      appMenuItems: controller.appMenu.menus,
-      appMenuDismissRevision: controller.appMenuDismissRevision,
+      recentCount: controller.recentContent.entries.length,
+      recentPaused: controller.recentContent.paused,
     ),
     builder: (context, _) => _buildThemedBar(context),
   );
@@ -367,7 +365,7 @@ class _SystemBar extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final wide = constraints.maxWidth > 720;
+          final wide = constraints.maxWidth > 960;
           final time =
               '${controller.now.hour.toString().padLeft(2, '0')}:${controller.now.minute.toString().padLeft(2, '0')}';
           final launcher = ShellBarTooltip(
@@ -383,31 +381,23 @@ class _SystemBar extends StatelessWidget {
               ),
             ),
           );
-          final menuRevision = controller.appMenuDismissRevision;
-          final appMenu = controller.materialAppMenuAvailable
-              ? SizedBox(
-                  key: const ValueKey('material-app-menu'),
-                  width: 36,
-                  height: ShellGeometry.barHeight,
-                  child: ShellBarTooltip(
-                    controller: controller,
-                    message: '应用菜单',
-                    labelSemantics: false,
-                    child: GlobalAppMenuBar(
-                      key: ValueKey(('material-app-menu', menuRevision)),
-                      service: controller.appMenu,
-                      compact: true,
-                      barHeight: ShellGeometry.barHeight,
-                      onOpenChanged: (open) {
-                        if (controller.appMenuDismissRevision == menuRevision &&
-                            controller.shellStyle == ShellStyle.material) {
-                          controller.setAppMenuOpen(open);
-                        }
-                      },
-                    ),
-                  ),
-                )
-              : null;
+          final recentContent = SizedBox(
+            width: 56,
+            height: ShellGeometry.barHeight,
+            child: ShellBarTooltip(
+              controller: controller,
+              message: '最近内容 · 剪贴板与截图',
+              child: RecentContentBarButton(
+                key: const ValueKey('bar-recent-content'),
+                count: controller.recentContent.entries.length,
+                paused: controller.recentContent.paused,
+                selected: controller.panel == ShellPanel.recentContent,
+                tooltipEnabled: false,
+                onPressed: () =>
+                    controller.selectPanel(ShellPanel.recentContent),
+              ),
+            ),
+          );
           final clock = Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Semantics(
@@ -530,15 +520,15 @@ class _SystemBar extends StatelessWidget {
           ];
           if (!wide) {
             // Keep every action reachable even on narrow portrait outputs.
-            // Leave room for an application's retained menu entry when present.
+            // Keep the recent-content entry reachable alongside the status actions.
             // A scrollable strip preserves each existing 36px action target.
-            if (constraints.maxWidth < 180 + (appMenu == null ? 0 : 36)) {
+            if (constraints.maxWidth < 236) {
               return SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 child: Row(
                   children: [
                     launcher,
-                    ?appMenu,
+                    recentContent,
                     ...status,
                     _workspaces(context),
                   ],
@@ -548,7 +538,7 @@ class _SystemBar extends StatelessWidget {
             return Row(
               children: [
                 launcher,
-                ?appMenu,
+                recentContent,
                 Expanded(child: _workspaces(context)),
                 if (constraints.maxWidth >= 320) clock,
                 ...status,
@@ -572,7 +562,7 @@ class _SystemBar extends StatelessWidget {
                 child: Row(
                   children: [
                     launcher,
-                    ?appMenu,
+                    recentContent,
                     const SizedBox(width: 8),
                     _workspaces(context),
                     const SizedBox(width: 8),

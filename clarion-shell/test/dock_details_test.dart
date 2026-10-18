@@ -5,13 +5,11 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:clarion_shell/mac_shell_preferences.dart';
-import 'package:clarion_shell/app_menu_models.dart';
 import 'package:clarion_shell/models.dart';
 import 'package:clarion_shell/preferences.dart';
 import 'package:clarion_shell/main.dart' show DockApplication;
 import 'package:clarion_shell/services/desktop_apps.dart';
 import 'package:clarion_shell/services/dock_folder_service.dart';
-import 'package:clarion_shell/services/global_app_menu_service.dart';
 import 'package:clarion_shell/services/clarion_ipc.dart';
 import 'package:clarion_shell/services/system_service.dart';
 import 'package:clarion_shell/services/trash_state_service.dart';
@@ -126,22 +124,6 @@ class _Wallpapers extends WallpaperService {
   Future<List<ShellWallpaper>> scan() async => [];
 }
 
-class _Menus extends GlobalAppMenuService {
-  _Menus() : super(hostRegistrar: false);
-  @override
-  Future<void> start() async {}
-  @override
-  Future<void> setActive(bool value) async {}
-  @override
-  Future<void> focusedTarget({
-    int? pid,
-    String appId = '',
-    int? windowId,
-    int? x11WindowId,
-    AppMenuExport? export,
-  }) async {}
-}
-
 Future<(ShellController, _Ipc, _System)> _fixture(
   WidgetTester tester, {
   _Apps? applications,
@@ -156,7 +138,7 @@ Future<(ShellController, _Ipc, _System)> _fixture(
           desktopApps: applications ?? _Apps(),
           dockFolderService: _Folder(),
           wallpaperService: _Wallpapers(),
-          appMenuService: _Menus(),
+
           tray: false,
           notifications: false,
           powerProfilesEnabled: false,

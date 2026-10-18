@@ -10,7 +10,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
-import 'package:clarion_shell/app_menu_models.dart';
 import 'package:clarion_shell/mac_shell_preferences.dart';
 import 'package:clarion_shell/main.dart';
 import 'package:clarion_shell/models.dart';
@@ -18,7 +17,6 @@ import 'package:clarion_shell/preferences.dart';
 import 'package:clarion_shell/services/application_launcher.dart';
 import 'package:clarion_shell/services/desktop_apps.dart';
 import 'package:clarion_shell/services/dock_folder_service.dart';
-import 'package:clarion_shell/services/global_app_menu_service.dart';
 import 'package:clarion_shell/services/power_profiles_service.dart';
 import 'package:clarion_shell/services/clarion_ipc.dart';
 import 'package:clarion_shell/services/system_service.dart';
@@ -144,24 +142,6 @@ class _Ipc extends ClarionIpc {
     unawaited(event.close());
     super.dispose();
   }
-}
-
-class _Menus extends GlobalAppMenuService {
-  _Menus() : super(hostRegistrar: false);
-  @override
-  bool get available => false;
-  @override
-  Future<void> start() async {}
-  @override
-  Future<void> setActive(bool active) async {}
-  @override
-  Future<void> focusedTarget({
-    int? pid,
-    String appId = '',
-    int? windowId,
-    int? x11WindowId,
-    AppMenuExport? export,
-  }) async {}
 }
 
 class _System extends SystemService {
@@ -544,7 +524,7 @@ void main() {
       final controller = ShellController(
         ipc: ipc,
         desktopApps: _Apps(root),
-        appMenuService: _Menus(),
+
         system: _System(),
         wallpaperService: _Wallpapers(),
         dockFolderService: folder,

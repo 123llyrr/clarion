@@ -8,7 +8,6 @@ import 'package:clarion_shell/main.dart';
 import 'package:clarion_shell/models.dart';
 import 'package:clarion_shell/preferences.dart';
 import 'package:clarion_shell/services/desktop_apps.dart';
-import 'package:clarion_shell/services/global_app_menu_service.dart';
 import 'package:clarion_shell/services/clarion_ipc.dart';
 import 'package:clarion_shell/services/sound_service.dart';
 import 'package:clarion_shell/services/system_service.dart';
@@ -52,14 +51,6 @@ class _Wallpapers extends WallpaperService {
   Future<void> restore({bool applySaved = false}) async {}
 }
 
-class _Menus extends GlobalAppMenuService {
-  _Menus() : super(hostRegistrar: false);
-  @override
-  Future<void> start() async {}
-  @override
-  Future<void> setActive(bool active) async {}
-}
-
 Future<void> _drain(WidgetTester tester) async {
   for (var i = 0; i < 8; i++) {
     await tester.pump();
@@ -83,7 +74,7 @@ Future<ShellController> _mount(
     ipc: _Ipc(),
     desktopApps: _Apps(),
     wallpaperService: _Wallpapers(),
-    appMenuService: _Menus(),
+
     soundService: SoundService(enabled: false),
   );
   addTearDown(controller.dispose);

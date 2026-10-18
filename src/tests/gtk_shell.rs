@@ -1,17 +1,16 @@
-//! GTK menu metadata is sent over a real, private Wayland connection. It must
-//! stay attached to the exporting toplevel and never grant keyboard focus.
+//! Minimal GTK identity is sent over a real, private Wayland connection. It
+//! stays attached to its owning surface without exporting application menus.
 
 use std::sync::{Arc, Mutex};
 
 use clarion_config::Config;
-use clarion_ipc::GtkAppMenu;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface as ServerSurface;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 
 use super::client::ClientId;
 use super::Fixture;
-use crate::handlers::gtk_shell::{surface_application_id_matches, surface_menu};
+use crate::handlers::gtk_shell::surface_application_id_matches;
 
 mod protocol {
     #![allow(dead_code, non_camel_case_types, unused_unsafe, unused_variables)]
@@ -95,7 +94,7 @@ fn map_window(f: &mut Fixture, client: ClientId) -> (WlSurface, ServerSurface) {
 }
 
 #[test]
-fn gtk_menu_metadata_is_owned_bounded_updateable_and_never_grants_focus() {
+fn gtk_identity_is_owned_bounded_updateable_without_exporting_menus_or_granting_focus() {
     let mut config = Config::default();
     config.animations.off = true;
     config.input.focus_follows_mouse = None;
@@ -118,51 +117,54 @@ fn gtk_menu_metadata_is_owned_bounded_updateable_and_never_grants_focus() {
         Some(":1.42".into()),
     );
     f.double_roundtrip(first);
-    let expected = GtkAppMenu {
-        application_id: Some("org.example.First".into()),
-        app_menu_path: Some("/org/example/First/appmenu".into()),
-        menubar_path: Some("/org/example/First/menubar".into()),
-        window_object_path: Some("/org/example/First/window/1".into()),
-        application_object_path: Some("/org/example/First".into()),
-        unique_bus_name: Some(":1.42".into()),
-    };
-    assert_eq!(surface_menu(&server_surface), Some(expected));
-    assert_eq!(
-        surface_menu(&second_surface),
-        None,
-        "metadata must not follow active-window focus onto another client's surface"
-    );
+    assert!(surface_application_id_matches(
+        &server_surface,
+        "org.example.First"
+    ));
+    assert!(!surface_application_id_matches(
+        &second_surface,
+        "org.example.First"
+    ));
     assert_eq!(f.clarion().keyboard_focus, focused);
+    let windows = f.clarion().ipc_server.as_ref().unwrap().test_windows();
+    assert_eq!(windows.len(), 2);
+    for window in &windows {
+        let json = serde_json::to_value(window).unwrap();
+        assert!(json.get("gtk_app_menu").is_none());
+        assert!(json.get("app_menu").is_none());
+    }
 
     gtk_surface.present(0);
     shell.set_startup_id(Some("arbitrary-client-string".into()));
     shell.system_bell(Some(&gtk_surface));
     f.double_roundtrip(first);
-    assert_eq!(
-        f.clarion().keyboard_focus,
-        focused,
-        "GTK metadata timestamps/startup IDs must not authorize focus"
-    );
+    assert_eq!(f.clarion().keyboard_focus, focused);
 
+    // The private Wayland transport caps complete requests at 4096 bytes.
+    // Oversized identities are covered by the handler's direct boundary test;
+    // sending one here would disconnect before our handler can receive it.
+    for value in [Some(String::new()), None] {
+        gtk_surface.set_dbus_properties(value, None, None, None, None, Some(":1.43".into()));
+        f.double_roundtrip(first);
+        assert!(!surface_application_id_matches(
+            &server_surface,
+            "org.example.First"
+        ));
+        assert_eq!(f.clarion().keyboard_focus, focused);
+    }
     gtk_surface.set_dbus_properties(
-        Some(String::new()),
+        Some("org.example.Updated".into()),
         None,
         None,
         None,
-        Some("/org/example/Updated".into()),
-        Some(":1.43".into()),
+        None,
+        None,
     );
     f.double_roundtrip(first);
-    let updated = surface_menu(&server_surface).unwrap();
-    assert_eq!(updated.application_id, None);
-    assert_eq!(updated.app_menu_path, None);
-    assert_eq!(updated.menubar_path, None);
-    assert_eq!(
-        updated.application_object_path.as_deref(),
-        Some("/org/example/Updated")
-    );
-    assert_eq!(updated.unique_bus_name.as_deref(), Some(":1.43"));
-    assert_eq!(f.clarion().keyboard_focus, focused);
+    assert!(surface_application_id_matches(
+        &server_surface,
+        "org.example.Updated"
+    ));
 
     let window = f.client(first).window(&surface);
     window.xdg_toplevel.destroy();
@@ -170,15 +172,27 @@ fn gtk_menu_metadata_is_owned_bounded_updateable_and_never_grants_focus() {
     window.viewport.destroy();
     window.surface.destroy();
     f.double_roundtrip(first);
-    assert_eq!(
-        surface_menu(&server_surface),
+    assert!(!surface_application_id_matches(
+        &server_surface,
+        "org.example.Updated"
+    ));
+    gtk_surface.set_dbus_properties(
+        Some("org.example.Dead".into()),
         None,
-        "a destroyed wl_surface must not retain a usable export"
+        None,
+        None,
+        None,
+        None,
     );
-    gtk_surface.set_dbus_properties(None, None, None, None, None, Some(":1.44".into()));
     f.double_roundtrip(first);
-    assert_eq!(surface_menu(&server_surface), None);
-    assert_eq!(surface_menu(&second_surface), None);
+    assert!(!surface_application_id_matches(
+        &server_surface,
+        "org.example.Dead"
+    ));
+    assert!(!surface_application_id_matches(
+        &second_surface,
+        "org.example.Dead"
+    ));
     assert_eq!(f.clarion().keyboard_focus, focused);
 }
 

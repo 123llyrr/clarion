@@ -136,7 +136,7 @@ ConditionEnvironment=XDG_CURRENT_DESKTOP=clarion
 PartOf=graphical-session.target
 # GTK may synchronously activate xdg-desktop-portal while registering its
 # application. Portal waits for graphical-session.target, so the shell must
-# start after that target. Keep client autostart behind the menu registrar.
+# start after that target. Keep client autostart behind the first rendered Shell frame.
 After=clarion.service graphical-session.target
 Before=xdg-desktop-autostart.target
 

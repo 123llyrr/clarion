@@ -7,7 +7,6 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 
 import '../models.dart';
-import '../app_menu_models.dart';
 import '../mac_shell_preferences.dart';
 import '../state/shell_controller.dart';
 import '../theme/shell_theme.dart';
@@ -22,7 +21,7 @@ import 'mac_dock_panel_geometry.dart';
 import 'mac_downloads_stack_panel.dart';
 import 'mac_spotlight_panel.dart';
 import 'mac_mission_control_panel.dart';
-import 'global_app_menu_bar.dart';
+import 'recent_content_panel.dart';
 import 'shell_panel_content.dart';
 import 'screenshot_icon.dart';
 import 'mac_volume_menu.dart';
@@ -76,14 +75,14 @@ class _MacShellViewState extends State<MacShellView> {
     }
   }
 
-  double? _appMenuLeft;
+  double? _recentContentLeft;
 
-  void _appMenuAnchorChanged(Rect rect) {
+  void _recentContentAnchorChanged(Rect rect) {
     final surface = _surface.currentContext?.findRenderObject();
     if (mounted && surface is RenderBox) {
       final left = surface.globalToLocal(rect.topLeft).dx;
-      if (_appMenuLeft != left) {
-        setState(() => _appMenuLeft = left);
+      if (_recentContentLeft != left) {
+        setState(() => _recentContentLeft = left);
       }
     }
   }
@@ -169,7 +168,7 @@ class _MacShellViewState extends State<MacShellView> {
       final bar = _MacMenuBar(
         controller: controller,
         volumeAnchorChanged: _volumeAnchorChanged,
-        appMenuAnchorChanged: _appMenuAnchorChanged,
+        recentContentAnchorChanged: _recentContentAnchorChanged,
       );
       final reduced =
           controller.reduceMotion || MediaQuery.disableAnimationsOf(context);
@@ -193,7 +192,7 @@ class _MacShellViewState extends State<MacShellView> {
           ): () =>
               showForceQuitDialog(context: context, controller: controller),
           const SingleActivator(LogicalKeyboardKey.keyH, meta: true): () {
-            final focused = controller.menuFocusedWindow;
+            final focused = controller.contextWindow;
             if (focused != null && focused.appId.isNotEmpty) {
               unawaited(controller.hideApp(focused.appId));
             }
@@ -203,13 +202,13 @@ class _MacShellViewState extends State<MacShellView> {
             meta: true,
             alt: true,
           ): () {
-            final focused = controller.menuFocusedWindow;
+            final focused = controller.contextWindow;
             if (focused != null && focused.appId.isNotEmpty) {
               unawaited(controller.hideOthers(focused.appId));
             }
           },
           const SingleActivator(LogicalKeyboardKey.keyQ, meta: true): () {
-            final focused = controller.menuFocusedWindow;
+            final focused = controller.contextWindow;
             if (focused != null && focused.appId.isNotEmpty) {
               unawaited(controller.closeAppWindows(focused.appId));
             }
@@ -266,8 +265,8 @@ class _MacShellViewState extends State<MacShellView> {
                     ? 280.0
                     : panel == ShellPanel.systemMenu
                     ? 280.0
-                    : panel == ShellPanel.appMenu
-                    ? 240.0
+                    : panel == ShellPanel.recentContent
+                    ? 460.0
                     : 420.0,
                 math.max(0.0, width - 24),
               );
@@ -308,7 +307,7 @@ class _MacShellViewState extends State<MacShellView> {
                       MacDownloadsView.fan;
               final menu =
                   panel == ShellPanel.systemMenu ||
-                  panel == ShellPanel.appMenu ||
+                  panel == ShellPanel.recentContent ||
                   dockMenu;
               final maxPanelHeight = math.max(
                 0.0,
@@ -363,7 +362,7 @@ class _MacShellViewState extends State<MacShellView> {
                                       panel == ShellPanel.quickSettings ||
                                       panel == ShellPanel.notifications ||
                                       panel == ShellPanel.systemMenu ||
-                                      panel == ShellPanel.appMenu
+                                      panel == ShellPanel.recentContent
                                   ? 0
                                   : 0.10,
                             ),
@@ -464,8 +463,8 @@ class _MacShellViewState extends State<MacShellView> {
                               0.0,
                               math.max(0.0, width - panelWidth),
                             )
-                          : panel == ShellPanel.appMenu
-                          ? (_appMenuLeft ?? (menuInset + 40)).clamp(
+                          : panel == ShellPanel.recentContent
+                          ? (_recentContentLeft ?? (menuInset + 40)).clamp(
                               0.0,
                               math.max(0.0, width - panelWidth),
                             )
@@ -474,7 +473,7 @@ class _MacShellViewState extends State<MacShellView> {
                           dockPanel ||
                               wide ||
                               panel == ShellPanel.systemMenu ||
-                              panel == ShellPanel.appMenu
+                              panel == ShellPanel.recentContent
                           ? null
                           : (menuInset + 12).clamp(
                               0.0,
@@ -665,7 +664,6 @@ class _MacMenuRevealState extends State<_MacMenuReveal> {
 
   bool get _open =>
       widget.controller.panel != ShellPanel.none ||
-      widget.controller.appMenuOpen ||
       widget.controller.nativeTrayMenuOpen;
 
   @override
@@ -929,14 +927,14 @@ class _MacMenuBar extends StatelessWidget {
   const _MacMenuBar({
     required this.controller,
     this.volumeAnchorChanged,
-    this.appMenuAnchorChanged,
+    this.recentContentAnchorChanged,
   });
   final ShellController controller;
   final ValueChanged<Rect>? volumeAnchorChanged;
-  final ValueChanged<Rect>? appMenuAnchorChanged;
+  final ValueChanged<Rect>? recentContentAnchorChanged;
 
   String get _activeAppName {
-    final focused = controller.menuFocusedWindow;
+    final focused = controller.contextWindow;
     if (focused == null) return 'Home';
     for (final app in controller.dockApps) {
       if (app.windows.any((window) => window.id == focused.id)) return app.name;
@@ -947,275 +945,6 @@ class _MacMenuBar extends StatelessWidget {
   static String _weekdayName(int weekday) {
     const names = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
     return (weekday >= 1 && weekday <= 7) ? names[weekday - 1] : '';
-  }
-
-  List<GlobalMenuItem> _buildFallbackMenus(BuildContext context) {
-    final focused = controller.menuFocusedWindow;
-    final isFinder = focused == null;
-
-    if (isFinder) {
-      return [
-        GlobalMenuItem(
-          id: 'finder-file',
-          label: '文件',
-          children: [
-            GlobalMenuItem(
-              id: 'finder-new-window',
-              label: '新建Home窗口',
-              shortcut: '⌘N',
-              onAction: () => controller.openHomeFolder(),
-            ),
-            GlobalMenuItem(
-              id: 'finder-new-folder',
-              label: '新建文件夹',
-              shortcut: '⇧⌘N',
-              onAction: () => controller.openHomeFolder(),
-            ),
-            GlobalMenuItem(id: 'finder-file-sep1', label: '', separator: true),
-            GlobalMenuItem(
-              id: 'finder-quick-look',
-              label: '快速查看',
-              shortcut: '空格',
-              onAction: () => controller.showBarTooltip(
-                Object(),
-                '按下空格键或 ⌘Y 可快速查看所选项目',
-                const Offset(160, 24),
-              ),
-            ),
-            GlobalMenuItem(
-              id: 'finder-get-info',
-              label: '显示简介',
-              shortcut: '⌘I',
-              onAction: () => controller.showBarTooltip(
-                Object(),
-                '按下 ⌘I 可显示当前所选项目简介',
-                const Offset(160, 24),
-              ),
-            ),
-            GlobalMenuItem(id: 'finder-file-sep2', label: '', separator: true),
-            GlobalMenuItem(
-              id: 'finder-empty-trash',
-              label: '清倒废纸篓…',
-              onAction: () => controller.emptyTrash(),
-            ),
-          ],
-        ),
-        GlobalMenuItem(
-          id: 'finder-edit',
-          label: '编辑',
-          children: [
-            GlobalMenuItem(
-              id: 'finder-undo',
-              label: '撤销',
-              shortcut: '⌘Z',
-              enabled: false,
-            ),
-            GlobalMenuItem(
-              id: 'finder-redo',
-              label: '重做',
-              shortcut: '⇧⌘Z',
-              enabled: false,
-            ),
-            GlobalMenuItem(id: 'finder-edit-sep', label: '', separator: true),
-            GlobalMenuItem(
-              id: 'finder-cut',
-              label: '剪切',
-              shortcut: '⌘X',
-              enabled: false,
-            ),
-            GlobalMenuItem(id: 'finder-copy', label: '拷贝', shortcut: '⌘C'),
-            GlobalMenuItem(id: 'finder-paste', label: '粘贴', shortcut: '⌘V'),
-            GlobalMenuItem(
-              id: 'finder-select-all',
-              label: '全选',
-              shortcut: '⌘A',
-            ),
-          ],
-        ),
-        GlobalMenuItem(
-          id: 'finder-view',
-          label: '显示',
-          children: [
-            GlobalMenuItem(
-              id: 'finder-use-stacks',
-              label: '使用叠放',
-              onAction: () => controller.showBarTooltip(
-                Object(),
-                '在桌面上右键点按可开启或配置叠放功能',
-                const Offset(220, 24),
-              ),
-            ),
-            GlobalMenuItem(
-              id: 'finder-clean-up',
-              label: '整理',
-              onAction: () => controller.showBarTooltip(
-                Object(),
-                '在桌面上右键可执行整理与排序',
-                const Offset(220, 24),
-              ),
-            ),
-            GlobalMenuItem(
-              id: 'finder-preferences',
-              label: '桌面偏好设置…',
-              onAction: () => controller.openSettings(),
-            ),
-          ],
-        ),
-        GlobalMenuItem(
-          id: 'finder-go',
-          label: '前往',
-          children: [
-            GlobalMenuItem(
-              id: 'finder-go-home',
-              label: '个人',
-              shortcut: '⇧⌘H',
-              onAction: () => controller.openHomeFolder(),
-            ),
-            GlobalMenuItem(
-              id: 'finder-go-desktop',
-              label: '桌面',
-              shortcut: '⇧⌘D',
-              onAction: () => controller.openDesktopFolder(),
-            ),
-            GlobalMenuItem(
-              id: 'finder-go-apps',
-              label: '应用程序',
-              shortcut: '⇧⌘A',
-              onAction: () => controller.selectPanel(ShellPanel.launcher),
-            ),
-            GlobalMenuItem(
-              id: 'finder-go-downloads',
-              label: '下载',
-              shortcut: '⌥⌘L',
-              onAction: () => controller.openDownloadsFolder(),
-            ),
-            GlobalMenuItem(
-              id: 'finder-go-trash',
-              label: '废纸篓',
-              onAction: () => controller.openTrash(),
-            ),
-          ],
-        ),
-        GlobalMenuItem(
-          id: 'finder-window',
-          label: '窗口',
-          children: [
-            GlobalMenuItem(
-              id: 'finder-minimize',
-              label: '最小化',
-              shortcut: '⌘M',
-              enabled: false,
-            ),
-            GlobalMenuItem(
-              id: 'finder-show-all',
-              label: '全部显示',
-              onAction: () => controller.showAll(),
-            ),
-          ],
-        ),
-        GlobalMenuItem(
-          id: 'finder-help',
-          label: '帮助',
-          children: [
-            GlobalMenuItem(
-              id: 'finder-help-about',
-              label: 'Clarion 帮助',
-              onAction: () => controller.openSettings(),
-            ),
-          ],
-        ),
-      ];
-    } else {
-      return [
-        GlobalMenuItem(
-          id: 'app-file',
-          label: '文件',
-          children: [
-            GlobalMenuItem(
-              id: 'app-close-window',
-              label: '关闭窗口',
-              shortcut: '⌘W',
-              onAction: () {
-                if (focused.appId.isNotEmpty) {
-                  controller.closeAppWindows(focused.appId);
-                }
-              },
-            ),
-          ],
-        ),
-        GlobalMenuItem(
-          id: 'app-edit',
-          label: '编辑',
-          children: [
-            GlobalMenuItem(
-              id: 'app-undo',
-              label: '撤销',
-              shortcut: '⌘Z',
-              enabled: false,
-            ),
-            GlobalMenuItem(
-              id: 'app-redo',
-              label: '重做',
-              shortcut: '⇧⌘Z',
-              enabled: false,
-            ),
-            GlobalMenuItem(id: 'app-edit-sep', label: '', separator: true),
-            GlobalMenuItem(
-              id: 'app-cut',
-              label: '剪切',
-              shortcut: '⌘X',
-              enabled: false,
-            ),
-            GlobalMenuItem(
-              id: 'app-copy',
-              label: '复制',
-              shortcut: '⌘C',
-              enabled: false,
-            ),
-            GlobalMenuItem(
-              id: 'app-paste',
-              label: '粘贴',
-              shortcut: '⌘V',
-              enabled: false,
-            ),
-            GlobalMenuItem(
-              id: 'app-select-all',
-              label: '全选',
-              shortcut: '⌘A',
-              enabled: false,
-            ),
-          ],
-        ),
-        GlobalMenuItem(
-          id: 'app-window',
-          label: '窗口',
-          children: [
-            GlobalMenuItem(
-              id: 'app-minimize',
-              label: '最小化',
-              shortcut: '⌘M',
-              onAction: () => controller.minimizeWindow(focused.id),
-            ),
-            GlobalMenuItem(
-              id: 'app-show-all',
-              label: '全部显示',
-              onAction: () => controller.showAll(),
-            ),
-          ],
-        ),
-        GlobalMenuItem(
-          id: 'app-help',
-          label: '帮助',
-          children: [
-            GlobalMenuItem(
-              id: 'app-help-doc',
-              label: '帮助',
-              onAction: () => controller.openSettings(),
-            ),
-          ],
-        ),
-      ];
-    }
   }
 
   @override
@@ -1232,7 +961,8 @@ class _MacMenuBar extends StatelessWidget {
           : null,
       preferences: controller.macPreferences,
       panel: controller.panel,
-      appMenuDismiss: controller.appMenuDismissRevision,
+      recentCount: controller.recentContent.entries.length,
+      recentPaused: controller.recentContent.paused,
       muted: controller.muted,
       battery: controller.batteryFraction,
       charging: controller.charging,
@@ -1241,7 +971,6 @@ class _MacMenuBar extends StatelessWidget {
       tray: controller.trayItems,
     ),
     builder: (context, _) {
-      final menuRevision = controller.appMenuDismissRevision;
       final theme = Theme.of(context);
       final dark = theme.brightness == Brightness.dark;
       return Theme(
@@ -1319,41 +1048,45 @@ class _MacMenuBar extends StatelessWidget {
                           ),
                         ),
                       ),
-                      _MacAppMenuButton(
-                        controller: controller,
-                        appName: _activeAppName,
-                        width: math.min(
-                          math.min(
-                            180.0,
-                            math.max(width > 240 ? 60.0 : 40.0, width * .16),
+                      if (width > 280)
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth: math.min(180, width * .16),
                           ),
-                          // Reserve the always-present status buttons and the
-                          // overflow tray before giving the app name a minimum.
-                          math.max(
-                            0,
-                            width - 22 * (hiddenTrays > 0 ? 5 : 4) - 8,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 9),
+                            child: Text(
+                              _activeAppName,
+                              key: const ValueKey('mac-active-app'),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.labelLarge?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 13,
+                              ),
+                            ),
                           ),
                         ),
-                        selected: controller.panel == ShellPanel.appMenu,
-                        anchorChanged: appMenuAnchorChanged,
-                      ),
-                      Expanded(
-                        child: GlobalAppMenuBar(
-                          key: ValueKey(controller.appMenuDismissRevision),
-                          service: controller.appMenu,
-                          fallbackMenus: _buildFallbackMenus(context),
-                          barHeight: controller.macPreferences.menuBarHeight,
-                          barWidth: constraints.maxWidth,
-                          onOpenChanged: (open) {
-                            // A closing menu from a previous host revision
-                            // cannot collapse a newly opened native surface.
-                            if (controller.appMenuDismissRevision ==
-                                menuRevision) {
-                              controller.setAppMenuOpen(open);
-                            }
-                          },
+                      _SurfaceAnchor(
+                        onChanged: recentContentAnchorChanged ?? (_) {},
+                        child: ShellBarTooltip(
+                          controller: controller,
+                          message: '最近内容 · 剪贴板与截图',
+                          child: RecentContentBarButton(
+                            key: const ValueKey('mac-recent-content'),
+                            count: controller.recentContent.entries.length,
+                            paused: controller.recentContent.paused,
+                            selected:
+                                controller.panel == ShellPanel.recentContent,
+                            macos: true,
+                            tooltipEnabled: false,
+                            onPressed: () => controller.selectPanel(
+                              ShellPanel.recentContent,
+                            ),
+                          ),
                         ),
                       ),
+                      const Spacer(),
                       if (width > 420)
                         _MacBarButton(
                           buttonKey: 'mac-screenshot',
@@ -1573,84 +1306,6 @@ class _MacBarButton extends StatelessWidget {
         ),
       ),
     );
-    return anchorChanged == null
-        ? button
-        : _SurfaceAnchor(onChanged: anchorChanged!, child: button);
-  }
-}
-
-class _MacAppMenuButton extends StatelessWidget {
-  const _MacAppMenuButton({
-    required this.controller,
-    required this.appName,
-    required this.width,
-    required this.selected,
-    this.anchorChanged,
-  });
-
-  final ShellController controller;
-  final String appName;
-  final double width;
-  final bool selected;
-  final ValueChanged<Rect>? anchorChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final dark = theme.brightness == Brightness.dark;
-    final isSelected = selected;
-
-    final button = MouseRegion(
-      onEnter: (_) {
-        if (controller.panel != ShellPanel.none &&
-            controller.panel != ShellPanel.appMenu) {
-          controller.dismissBarTooltip();
-          controller.selectPanel(ShellPanel.appMenu);
-        }
-      },
-      child: ShellBarTooltip(
-        controller: controller,
-        message: '$appName 菜单',
-        child: InkWell(
-          key: const ValueKey('mac-active-app-button'),
-          borderRadius: BorderRadius.circular(3.5),
-          onTap: () {
-            controller.dismissBarTooltip();
-            if (controller.panel == ShellPanel.appMenu) {
-              controller.closePanel();
-            } else {
-              controller.selectPanel(ShellPanel.appMenu);
-            }
-          },
-          child: Container(
-            height: controller.macPreferences.menuBarHeight,
-            padding: EdgeInsets.symmetric(horizontal: width > 50 ? 9 : 4),
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: isSelected ? const Color(0xff007aff) : Colors.transparent,
-              borderRadius: BorderRadius.circular(3.5),
-            ),
-            child: ConstrainedBox(
-              constraints: BoxConstraints(maxWidth: width),
-              child: Text(
-                appName,
-                key: const ValueKey('mac-active-app'),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.labelLarge?.copyWith(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 13,
-                  color: isSelected
-                      ? Colors.white
-                      : (dark ? Colors.white : Colors.black87),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-
     return anchorChanged == null
         ? button
         : _SurfaceAnchor(onChanged: anchorChanged!, child: button);
