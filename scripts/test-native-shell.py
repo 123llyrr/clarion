@@ -27,6 +27,18 @@ from xml.sax.saxutils import escape
 
 ROOT = Path(__file__).resolve().parents[1]
 MARKER = ".native-shell-smoke-owner"
+FIXTURE_BAR_HEIGHT = 24
+PREFERENCES_WINDOW_RULE = r'''window-rule {
+    match app-id=r#"^io\.github\.clarion\.DesktopPreferences$"#
+    open-floating true
+    default-column-width { fixed 640; }
+    default-window-height { fixed 520; }
+    border { off; }
+    focus-ring { off; }
+    geometry-corner-radius 10
+    clip-to-geometry true
+}
+'''
 
 
 def require(condition, message):
@@ -65,6 +77,83 @@ def run(command, env, timeout=10):
     result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=timeout)
     require(result.returncode == 0, f"Command failed: {command!r}\n{result.stderr[-3000:]}")
     return result.stdout
+
+
+def ppm_center_sample(data):
+    """Read grim's single binary P6 frame without treating RGB bytes as a header.
+
+    Comments and ordinary header whitespace are accepted. The separator after
+    maxval is consumed exactly once, so a pixel beginning with space/newline/#
+    remains pixel data rather than being skipped as additional header text.
+    """
+    whitespace = b" \t\r\n\v\f"
+    position = 0
+    tokens = []
+    for _ in range(4):
+        while position < len(data) and position < 4096:
+            if data[position] in whitespace:
+                position += 1
+            elif data[position] == ord('#'):
+                newline = data.find(b"\n", position, 4096)
+                require(newline != -1, "Malformed PPM header comment")
+                position = newline + 1
+            else:
+                break
+        start = position
+        while position < len(data) and position < 4096 and data[position] not in whitespace:
+            position += 1
+        require(position > start and position < 4096, "Malformed or oversized PPM header")
+        tokens.append(data[start:position])
+    require(tokens[0] == b"P6", "grim did not return binary P6 RGB")
+    require(all(token.isdigit() and len(token) <= 10 for token in tokens[1:]),
+            "Malformed PPM dimensions or maxval")
+    width, height, maxval = map(int, tokens[1:])
+    require(0 < width <= 16384 and 0 < height <= 16384 and maxval == 255,
+            "Unsupported PPM dimensions or sample depth")
+    require(position < len(data) and data[position] in whitespace, "Missing PPM pixel separator")
+    position += 2 if data[position:position + 2] == b"\r\n" else 1
+    require(len(data) - position == width * height * 3, "Truncated or oversized PPM RGB frame")
+    pixel = position + ((height // 2) * width + width // 2) * 3
+    return {"width": width, "height": height, "center_rgb": list(data[pixel:pixel + 3])}
+
+
+def diagnostic_wallpaper_visible(rgb):
+    # This predicate identifies only our owned colorful diagnostic fixture. It
+    # is not a claim that arbitrary wallpapers or Apple reference art match.
+    return rgb[0] > 100 and max(rgb) - min(rgb) > 35
+
+
+def wait_for_diagnostic_wallpaper(env, processes, timeout, evidence):
+    started = time.monotonic()
+    deadline = started + timeout
+    evidence.update(ready=False, probe_count=0, samples=[],
+                    scope="owned winit diagnostic pattern only; never parent output",
+                    criterion="center R > 100 and RGB spread > 35")
+
+    def visible():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        # The regular captures use a ten-second subprocess limit. Clip that
+        # same maximum to the remaining, unchanged args.timeout readiness budget.
+        command = ["grim", "-t", "ppm", "-o", "winit", "-"]
+        evidence["probe_count"] += 1
+        captured = subprocess.run(command, env=env, capture_output=True,
+                                  timeout=min(10, remaining))
+        require(captured.returncode == 0,
+                f"Owned wallpaper pixel probe failed: {captured.stderr[-3000:]!r}")
+        sample = ppm_center_sample(captured.stdout)
+        sample["elapsed_seconds"] = round(time.monotonic() - started, 3)
+        evidence["samples"] = (evidence["samples"] + [sample])[-32:]
+        evidence["actual_center_rgb"] = sample["center_rgb"]
+        return diagnostic_wallpaper_visible(sample["center_rgb"])
+
+    try:
+        wait_for("owned diagnostic wallpaper visible", visible, processes, timeout)
+        evidence["ready"] = True
+        evidence["ready_seconds"] = round(time.monotonic() - started, 3)
+    finally:
+        evidence["elapsed_seconds"] = round(time.monotonic() - started, 3)
 
 
 def isolated_environment(private):
@@ -182,7 +271,8 @@ def seed_catalog(private, env, theme="dark", visual=False):
     preferences = Path(env["XDG_CONFIG_HOME"]) / "clarion-shell"
     preferences.mkdir(parents=True)
     (preferences / "preferences.json").write_text(json.dumps(
-        {"theme": theme, "pinned_app_ids": identifiers[:6], "recent_app_ids": identifiers[6:9]},
+        {"theme": theme, "bar_height": FIXTURE_BAR_HEIGHT,
+         "pinned_app_ids": identifiers[:6], "recent_app_ids": identifiers[6:9]},
         ensure_ascii=False) + "\n")
     if visual:
         wallpaper = private / "visual-wallpaper.png"
@@ -227,6 +317,115 @@ def protocol_evidence(trace):
                 "Desktop identity exported non-nil menu/object paths")
     return {"background_effect_objects": len(effect_get), "blur_region_requests": len(effect_set),
             "metadata_only_desktop_identities": len(identity), "trace_scope": "owned nested Shell only"}
+
+
+def negotiated_layer_geometry(trace, namespace, logical):
+    """Combine actual server configure sizes with IPC output coordinates.
+
+    Layers IPC currently reports roles, not rectangles. Keep that distinction
+    explicit rather than claiming a requested WindowOptions size was displayed.
+    """
+    requests = list(re.finditer(
+        r'get_layer_surface\(new id zwlr_layer_surface_v1[@#](\d+),[^\n]*"'
+        + re.escape(namespace) + r'"\)', trace))
+    if not requests:
+        return None
+    request = requests[-1]
+    tail = trace[request.end():]
+    name = r"zwlr_layer_surface_v1[@#]" + request.group(1)
+    if re.search(name + r"\.destroy\(\)", tail):
+        return None
+    configured = re.findall(name + r"\.configure\(\d+,\s*(\d+),\s*(\d+)\)", tail)
+    requested = re.findall(name + r"\.set_size\((\d+),\s*(\d+)\)", tail)
+    anchors = re.findall(name + r"\.set_anchor\((\d+)\)", tail)
+    margins = re.findall(name + r"\.set_margin\((-?\d+),\s*(-?\d+),\s*(-?\d+),\s*(-?\d+)\)", tail)
+    zones = re.findall(name + r"\.set_exclusive_zone\((-?\d+)\)", tail)
+    if not (configured and anchors and margins and zones):
+        return None
+    width, height = map(int, configured[-1])
+    top, right, bottom, left = map(int, margins[-1])
+    anchor = int(anchors[-1])
+    output_width, output_height = logical["width"], logical["height"]
+    x = (output_width - width + left - right) / 2
+    y = (output_height - height + top - bottom) / 2
+    if anchor & 4 and not anchor & 8:
+        x = left
+    elif anchor & 8 and not anchor & 4:
+        x = output_width - right - width
+    if anchor & 1 and not anchor & 2:
+        y = top
+    elif anchor & 2 and not anchor & 1:
+        y = output_height - bottom - height
+    return {"x": x, "y": y, "width": width, "height": height,
+            "requested_size": list(map(int, requested[-1])) if requested else None,
+            "surface_role_id": int(request.group(1)),
+            "anchor": anchor, "margins": [top, right, bottom, left],
+            "exclusive_zone": int(zones[-1]),
+            "source": "compositor IPC Outputs.logical plus negotiated Wayland configure/anchors/margins"}
+
+
+def preferences_window_geometry(window, logical, bar):
+    layout = window["layout"]
+    width = round(max(min(640, logical["width"] - 32), 280))
+    height = round(max(min(520, logical["height"] - 48), 240))
+    tile_position = layout.get("tile_pos_in_workspace_view")
+    offset = layout.get("window_offset_in_tile", [0, 0])
+    actual = ([tile_position[0] + offset[0], tile_position[1] + offset[1]]
+              if tile_position is not None else None)
+    # SetFixed is work-area-relative; the Shell compensates for that origin so
+    # the actual window ends up centered in the full output's logical bounds.
+    working_area_origin = [0, bar["height"]]
+    expected = [(logical["width"] - width) / 2, (logical["height"] - height) / 2]
+    return {"ready": (window.get("is_floating") is True
+                      and layout["window_size"] == [width, height]
+                      and actual is not None
+                      and all(abs(a - b) <= 2 for a, b in zip(actual, expected))),
+            "actual_window_origin": actual, "expected_window_origin": expected,
+            "expected_window_size": [width, height], "working_area_origin": working_area_origin,
+            "position_tolerance": 2,
+            "source": "compositor IPC Windows.layout tile position plus window offset; output-local logical coordinates"}
+
+
+def shell_surface_sizes_ready(logical, bar, desktop):
+    if not (logical and bar and desktop):
+        return False
+    expected_bar = [logical["width"], FIXTURE_BAR_HEIGHT]
+    expected_desktop = [logical["width"], logical["height"]]
+    requested = desktop["requested_size"]
+    desktop_size = [requested[index] if requested and requested[index] > 0 else desktop[key]
+                    for index, key in enumerate(("width", "height"))]
+    return (bar["requested_size"] == expected_bar
+            and [bar["width"], bar["height"]] == expected_bar
+            and desktop_size == expected_desktop
+            and [desktop["width"], desktop["height"]] == expected_desktop)
+
+
+def assert_component_geometry(command, actual, logical, bar, dock):
+    width, height = logical["width"], logical["height"]
+    top = bar["height"] + 8
+    available = max(height - top - 12, 100)
+    if command == "launcher":
+        expected, anchor = [0, 0, width, height], 15
+    elif command == "screenshot":
+        tool_width = min(390, width - 24)
+        # This fixture uses the default visible bottom Dock. Its canvas includes
+        # 12 px of top shadow, leaving a further 4 px gap before the toolbar.
+        require(dock is not None and dock["anchor"] == 2, "Fixture bottom Dock missing")
+        bottom = dock["height"] + 12
+        expected, anchor = [(width - tool_width) / 2, height - bottom - 64, tool_width, 64], 2
+    else:
+        preferred_width, panel_height = {
+            "control-center": (320, min(424, available)),
+            "notifications": (368, min(available, 1800)),
+            "recent-content": (400, min(600, available)),
+        }[command]
+        panel_width = min(preferred_width, width - 24)
+        expected, anchor = [width - panel_width - 12, top, panel_width, panel_height], 9
+    observed = [actual[key] for key in ("x", "y", "width", "height")]
+    require(actual["anchor"] == anchor and actual["exclusive_zone"] == -1
+            and all(abs(a - b) <= 1 for a, b in zip(observed, expected)),
+            f"{command} geometry mismatch: actual={actual}, expected={expected}, anchor={anchor}")
+    return actual | {"expected_bounds": expected, "output_logical": logical}
 
 
 def probe_ipc(path):
@@ -310,7 +509,11 @@ def exercise(args):
                           'output "winit" { scale 1; }\nxwayland-satellite { off; }\n'
                           'hotkey-overlay { skip-at-startup; }\n'
                           'layer-rule { match namespace="^clarion-(shell|dock)$"; '
-                          'background-effect { liquid-glass false; }; }\n')
+                          'background-effect { liquid-glass false; }; }\n'
+                          + PREFERENCES_WINDOW_RULE)
+        report["preferences_window_rule"] = {
+            "app_id": "io.github.clarion.DesktopPreferences", "config": PREFERENCES_WINDOW_RULE,
+            "scope": "explicit owned fixture rule for initial floating/size and native frame; IPC placement also verified"}
         shutil.copyfile(config, artifacts / "nested.kdl")
         core_env = env | {"WAYLAND_DISPLAY": str(parent),
                           "RUST_LOG": os.environ.get("CLARION_NATIVE_SMOKE_RUST_LOG", "clarion=info")}
@@ -397,18 +600,100 @@ def exercise(args):
         def panel():
             return [layer for layer in ipc("layers") if layer["namespace"] == "clarion-panel"]
 
+        def preferences_windows():
+            # A normal xdg_toplevel belongs to this exact owned Shell process;
+            # an app_id alone must not mistake another Settings app for it.
+            return [window for window in ipc("windows")
+                    if window.get("app_id") == "io.github.clarion.DesktopPreferences" and window.get("pid") == shell.pid]
+
         def send(command):
             run([sys.executable, str(ROOT / "resources/clarion-shell-msg"), command], env)
 
+        confirmed_desktop = None
+        report["surface_size_readiness"] = {}
+
+        def align_shell_surfaces(phase):
+            nonlocal confirmed_desktop
+            evidence = report["surface_size_readiness"].setdefault(phase, {"ready": False})
+            deadline = time.monotonic() + args.timeout
+
+            def aligned():
+                logical = ipc("outputs")["winit"]["logical"]
+                if not logical:
+                    return None
+                trace = (artifacts / "shell.log").read_text()
+                bar_geometry = negotiated_layer_geometry(trace, "clarion-shell", logical)
+                desktop_geometry = negotiated_layer_geometry(trace, "clarion-desktop", logical)
+                if not (bar_geometry and desktop_geometry):
+                    evidence.update(output_logical=logical, bar=bar_geometry, desktop=desktop_geometry)
+                    return None
+                desktop_request = desktop_geometry["requested_size"]
+                desktop_size = [
+                    desktop_request[index] if desktop_request and desktop_request[index] > 0
+                    else desktop_geometry[key]
+                    for index, key in enumerate(("width", "height"))]
+                evidence.update(output_logical=logical, bar=bar_geometry, desktop=desktop_geometry,
+                                effective_desktop_size=desktop_size,
+                                required_bar_size=[logical["width"], FIXTURE_BAR_HEIGHT])
+                if not shell_surface_sizes_ready(logical, bar_geometry, desktop_geometry):
+                    return None
+                fingerprint = (bar_geometry["surface_role_id"], desktop_geometry["surface_role_id"],
+                               logical["width"], logical["height"],
+                               logical.get("scale"), logical.get("transform"))
+                return {"fingerprint": fingerprint, "logical": logical}
+
+            while time.monotonic() < deadline:
+                remaining = deadline - time.monotonic()
+                current = wait_for(f"{phase} client bar/desktop size matches IPC output",
+                                   aligned, (core, shell), remaining)
+                fingerprint = current["fingerprint"]
+                if args.capture and args.visual_fixture and fingerprint != confirmed_desktop:
+                    # Recreated desktop surfaces reload images asynchronously.
+                    # Keep this pixel check inside the same readiness deadline.
+                    wallpaper = {}
+                    evidence.setdefault("wallpaper_checks", []).append(wallpaper)
+                    wait_for_diagnostic_wallpaper(env, (core, shell),
+                                                  max(0., deadline - time.monotonic()), wallpaper)
+                    after = aligned()
+                    if not after or after["fingerprint"] != fingerprint:
+                        continue
+                confirmed_desktop = fingerprint
+                evidence["ready"] = True
+                return current
+            raise RuntimeError(f"Timed out: {phase} stable client geometry and diagnostic wallpaper")
+
+        if args.capture and args.visual_fixture:
+            report["wallpaper_readiness"] = {}
+            wait_for_diagnostic_wallpaper(env, (core, shell), args.timeout,
+                                          report["wallpaper_readiness"])
+            report["checks"]["diagnostic_wallpaper_visible"] = True
+        align_shell_surfaces("first-desktop")
         report["panel_timings"] = {}
+        report["panel_geometry"] = {}
         if args.capture:
             run(["grim", "-o", "winit", str(artifacts / "desktop.png")], env)
         for command in ("launcher", "control-center", "notifications", "screenshot", "preferences", "recent-content"):
+            align_shell_surfaces(f"before-{command}")
             started = time.monotonic()
+            trace_offset = len((artifacts / "shell.log").read_text())
             send(command)
             observed = []
             def configured_panel():
                 nonlocal observed
+                if command == "preferences":
+                    observed = preferences_windows()
+                    workspaces = {workspace["id"]: workspace for workspace in ipc("workspaces")}
+                    logical = ipc("outputs")["winit"]["logical"]
+                    bar_geometry = negotiated_layer_geometry(
+                        (artifacts / "shell.log").read_text(), "clarion-shell", logical)
+                    geometry = (preferences_window_geometry(observed[0], logical, bar_geometry)
+                                if len(observed) == 1 and bar_geometry else None)
+                    report["preferences_geometry"] = geometry
+                    return observed if (len(observed) == 1 and not panel()
+                                        and workspaces.get(observed[0].get("workspace_id"), {}).get("output") == "winit"
+                                        and observed[0].get("is_focused") is True
+                                        and not observed[0].get("is_minimized", False)
+                                        and geometry is not None and geometry["ready"]) else None
                 observed = panel()
                 return observed if (len(observed) == 1 and observed[0]["output"] == "winit"
                                     and observed[0]["layer"] == "Overlay"
@@ -419,17 +704,47 @@ def exercise(args):
             except RuntimeError as error:
                 raise RuntimeError(f"{error}; last observed panel roles: {observed}") from error
             timing = {"configured_seconds": round(time.monotonic() - started, 3)}
+            if command == "preferences":
+                report["preferences_window"] = layers[0]
+            else:
+                logical = ipc("outputs")["winit"]["logical"]
+                geometry = wait_for(
+                    f"{command} negotiated geometry",
+                    lambda: negotiated_layer_geometry(
+                        (artifacts / "shell.log").read_text()[trace_offset:], "clarion-panel", logical),
+                    (core, shell), args.timeout)
+                trace = (artifacts / "shell.log").read_text()
+                bar_geometry = negotiated_layer_geometry(trace, "clarion-shell", logical)
+                require(bar_geometry is not None, "Bar geometry evidence missing")
+                dock_geometry = negotiated_layer_geometry(trace, "clarion-dock", logical)
+                report["panel_geometry"][command] = assert_component_geometry(
+                    command, geometry, logical, bar_geometry, dock_geometry)
             if args.capture:
+                if command == "preferences":
+                    # The IPC reports the committed target geometry while a
+                    # compositor resize snapshot may still be on the screen.
+                    # Present one owned frame before taking the static UI shot.
+                    started = time.monotonic()
+                    frame = subprocess.run(["grim", "-t", "ppm", "-o", "winit", "-"],
+                                           env=env, capture_output=True, timeout=10)
+                    require(frame.returncode == 0, "Owned preferences presentation barrier failed")
+                    ppm_center_sample(frame.stdout)
+                    timing["presentation_barrier_seconds"] = round(time.monotonic() - started, 3)
                 started = time.monotonic()
                 run(["grim", "-o", "winit", str(artifacts / f"{command}.png")], env)
                 timing["capture_seconds"] = round(time.monotonic() - started, 3)
             started = time.monotonic()
             send("close")
-            wait_for(f"{command} closed", lambda: not panel(), (core, shell), args.timeout)
+            if command == "preferences":
+                wait_for(f"{command} closed", lambda: not preferences_windows() and not panel(),
+                         (core, shell), args.timeout)
+            else:
+                wait_for(f"{command} closed", lambda: not panel(), (core, shell), args.timeout)
             timing["closed_seconds"] = round(time.monotonic() - started, 3)
             report["panel_timings"][command] = timing
             report["checks"][command] = True
             require_no_legacy_launcher({core.pid, shell.pid})
+        align_shell_surfaces("after-panels-desktop")
         if args.capture:
             run(["grim", "-o", "winit", str(artifacts / "desktop.png")], env)
         require(not (runtime / "clarion-launcher.sock").exists(),

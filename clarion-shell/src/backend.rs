@@ -84,12 +84,22 @@ pub enum Event {
 #[derive(Clone, Debug)]
 pub enum Command {
     Action(Action),
+    PlacePreferences {
+        id: u64,
+        width: i32,
+        height: i32,
+        x: f64,
+        y: f64,
+    },
     LaunchDesktop(PathBuf),
     OpenPath(PathBuf),
     OpenSettings,
     SetVolume(f64),
     SetMuted(bool),
-    SetOutputBrightness { output: String, value: f64 },
+    SetOutputBrightness {
+        output: String,
+        value: f64,
+    },
     RefreshCatalog,
     SavePreferences(Preferences),
 }
@@ -534,6 +544,33 @@ fn perform(
     match command {
         Command::Action(action) => {
             request(&options.environment, Request::Action(action))?;
+        }
+        Command::PlacePreferences {
+            id,
+            width,
+            height,
+            x,
+            y,
+        } => {
+            use clarion_ipc::{PositionChange, SizeChange};
+            for action in [
+                Action::MoveWindowToFloating { id: Some(id) },
+                Action::SetWindowWidth {
+                    id: Some(id),
+                    change: SizeChange::SetFixed(width),
+                },
+                Action::SetWindowHeight {
+                    id: Some(id),
+                    change: SizeChange::SetFixed(height),
+                },
+                Action::MoveFloatingWindow {
+                    id: Some(id),
+                    x: PositionChange::SetFixed(x),
+                    y: PositionChange::SetFixed(y),
+                },
+            ] {
+                request(&options.environment, Request::Action(action))?;
+            }
         }
         Command::LaunchDesktop(path) => {
             anyhow::ensure!(

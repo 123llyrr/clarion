@@ -14,6 +14,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+mod panels;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Panel {
     Apps,
@@ -121,6 +123,7 @@ pub struct Host {
     toast_id: Option<u32>,
     options: Options,
     ready: bool,
+    preferences_placed: Option<u64>,
     last_target: HashMap<u64, DockTarget>,
     auto_hidden: bool,
     dock_hover: bool,
@@ -174,6 +177,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 toast_id: None,
                 options,
                 ready: false,
+                preferences_placed: None,
                 last_target: HashMap::new(),
                 auto_hidden,
                 dock_hover: false,
@@ -307,6 +311,7 @@ impl Host {
                 }
                 self.desktop = snapshot;
                 self.reconcile_outputs(cx);
+                self.place_preferences();
                 self.targets();
             }
             backend::Event::System(mut snapshot) => {
@@ -469,8 +474,26 @@ impl Host {
             }
         }
         if let Some(popup) = self.popup {
-            let _ = popup.update(cx, |v, _, cx| {
+            let dynamic_size = self
+                .panel
+                .as_ref()
+                .filter(|panel| matches!(panel, Panel::Tray(_) | Panel::Dock(_)))
+                .map(|panel| {
+                    let output = self.active_output();
+                    let (w, h) = self
+                        .outputs
+                        .get(&output)
+                        .map(|v| (v.width, v.height))
+                        .unwrap_or((1200., 800.));
+                    panels::placement(&state, panel, w, h).bounds.size
+                });
+            let _ = popup.update(cx, |v, window, cx| {
                 v.state = state.clone();
+                if let Some(desired) = dynamic_size {
+                    if window.viewport_size() != desired {
+                        window.resize(desired);
+                    }
+                }
                 cx.notify()
             });
         }
@@ -644,7 +667,53 @@ impl Host {
             .backend
             .send(backend::Command::SavePreferences(self.prefs.clone()));
     }
+    fn place_preferences(&mut self) {
+        if self.preview || self.panel != Some(Panel::Preferences) {
+            return;
+        }
+        let Some(window) = self.desktop.windows.iter().find(|window| {
+            window.app_id.as_deref() == Some("io.github.clarion.DesktopPreferences")
+                && window.pid == Some(std::process::id() as i32)
+        }) else {
+            return;
+        };
+        if self.preferences_placed == Some(window.id) {
+            return;
+        }
+        let id = window.id;
+        let output = self.active_output();
+        let (w, h) = self
+            .outputs
+            .get(&output)
+            .map(|view| (view.width, view.height))
+            .unwrap_or((1200., 800.));
+        let geometry = panels::placement(&self.snapshot(), &Panel::Preferences, w, h).bounds;
+        // xdg_toplevel's initial bounds are only a request on Wayland. Place
+        // this one owned window explicitly, without changing any client rule.
+        if self
+            .backend
+            .send(backend::Command::PlacePreferences {
+                id,
+                width: f32::from(geometry.size.width).round() as i32,
+                height: f32::from(geometry.size.height).round() as i32,
+                x: f64::from(f32::from(geometry.origin.x))
+                    - if self.prefs.dock_position == DockPosition::Left
+                        && !self.prefs.dock_hidden
+                        && !self.prefs.dock_auto_hide
+                    {
+                        self.prefs.dock_size + 40.
+                    } else {
+                        0.
+                    },
+                y: f64::from(f32::from(geometry.origin.y)) - self.prefs.bar_height,
+            })
+            .is_ok()
+        {
+            self.preferences_placed = Some(id);
+        }
+    }
     fn close(&mut self, cx: &mut Context<Self>) {
+        self.preferences_placed = None;
         self.panel = None;
         self.tray_menu.clear();
         if let Some(window) = self.popup.take() {
@@ -668,32 +737,61 @@ impl Host {
         let display = view.map(|v| v.display);
         let (w, h) = view.map(|v| (v.width, v.height)).unwrap_or((1200., 800.));
         let kind = Surface::Panel;
-        let bounds = Bounds::centered(
+        let placement = panels::placement(&self.snapshot(), self.panel.as_ref().unwrap(), w, h);
+        let bounds = if placement.normal {
+            Bounds::centered(display, placement.bounds.size, cx)
+        } else {
+            placement.bounds
+        };
+        let mut options = window_options(
+            "clarion-panel",
             display,
-            size(px(w.min(760.) - 32.), px((h - 100.).clamp(180., 680.))),
-            cx,
+            bounds,
+            self.preview,
+            placement.anchor,
+            -1,
+            LayerShellKeyboardInteractivity::Exclusive,
+            placement.margins,
+            LayerShellLayer::Overlay,
         );
+        if placement.normal {
+            options.kind = WindowKind::Normal;
+            options.is_movable = true;
+            options.is_minimizable = true;
+            options.app_id = Some("io.github.clarion.DesktopPreferences".into());
+        }
         let host = cx.entity();
         let state = Arc::new(self.snapshot());
-        match cx.open_window(
-            window_options(
-                "clarion-panel",
-                display,
-                bounds,
-                self.preview,
-                LayerShellAnchor::default(),
-                0,
-                LayerShellKeyboardInteractivity::Exclusive,
-                LayerShellMargins::default(),
-                LayerShellLayer::Overlay,
-            ),
-            move |window, cx| {
-                let view = cx.new(|cx| ShellView::new(host, kind, output, state, cx));
-                view.update(cx, |view, cx| view.observe_activation(window, cx));
-                view.read(cx).focus(window, cx);
-                view
-            },
-        ) {
+        match cx.open_window(options, move |window, cx| {
+            if placement.normal {
+                window.set_window_title("桌面与程序坞");
+                let close_host = host.downgrade();
+                let window_id = window.window_handle().window_id();
+                window.on_window_should_close(cx, move |_, cx| {
+                    let close_host = close_host.clone();
+                    // Leave the platform's close callback and Window lease
+                    // before Host removes this ordinary window. A queued close
+                    // from an old window must never dismiss a replacement.
+                    cx.spawn(async move |cx| {
+                        let _ = close_host.update(cx, |host, cx| {
+                            if host
+                                .popup
+                                .is_some_and(|popup| popup.window_id() == window_id)
+                            {
+                                host.close(cx);
+                                host.changed(cx);
+                            }
+                        });
+                    })
+                    .detach();
+                    false
+                });
+            }
+            let view = cx.new(|cx| ShellView::new(host, kind, output, state, cx));
+            view.update(cx, |view, cx| view.observe_activation(window, cx));
+            view.read(cx).focus(window, cx);
+            view
+        }) {
             Ok(window) => self.popup = Some(window),
             Err(error) => {
                 self.error = Some(format!("无法打开面板：{error}"));
@@ -829,12 +927,21 @@ impl Host {
                 DockApp {
                     id: id.clone(),
                     name: app.map(|a| a.name.clone()).unwrap_or_else(|| {
+                        if windows.first().and_then(|window| window.app_id.as_deref())
+                            == Some("io.github.clarion.DesktopPreferences")
+                        {
+                            return "桌面与程序坞".into();
+                        }
                         windows
                             .first()
                             .and_then(|w| w.app_id.clone())
                             .unwrap_or_else(|| "应用".into())
                     }),
-                    icon: if self.prefs.use_original_icons {
+                    icon: if windows.first().and_then(|window| window.app_id.as_deref())
+                        == Some("io.github.clarion.DesktopPreferences")
+                    {
+                        themed_dock_icons().get("generic-application.svg").cloned()
+                    } else if self.prefs.use_original_icons {
                         app.and_then(|app| app.icon_path.clone())
                     } else {
                         let name = app
@@ -902,11 +1009,15 @@ impl Host {
                 continue;
             }
             live.push(name.clone());
-            let bounds = display.bounds();
+            let (width, height) = output_dimensions(
+                self.desktop
+                    .outputs
+                    .get(&name)
+                    .and_then(|output| output.logical),
+                display.bounds().size,
+            );
             let changed = self.outputs.get(&name).is_some_and(|view| {
-                view.width != f32::from(bounds.size.width)
-                    || view.height != f32::from(bounds.size.height)
-                    || view.display != display.id()
+                view.width != width || view.height != height || view.display != display.id()
             });
             if changed {
                 self.remove_output(&name, cx);
@@ -914,9 +1025,6 @@ impl Host {
             if self.outputs.contains_key(&name) {
                 continue;
             }
-            let bounds = display.bounds();
-            let width = f32::from(bounds.size.width);
-            let height = f32::from(bounds.size.height);
             let did = Some(display.id());
             let host = cx.entity();
             let output = name.clone();
@@ -1337,6 +1445,18 @@ fn notify_ready() {
             });
     }
 }
+// The compositor's logical geometry is authoritative after a mode/scale change;
+// a toolkit display cache may retain the first advertised dimensions.
+fn output_dimensions(
+    logical: Option<clarion_ipc::LogicalOutput>,
+    fallback: Size<Pixels>,
+) -> (f32, f32) {
+    logical
+        .filter(|output| output.width > 0 && output.height > 0)
+        .map(|output| (output.width as f32, output.height as f32))
+        .unwrap_or((f32::from(fallback.width), f32::from(fallback.height)))
+}
+
 // Mirror the layer-shell role declaration at each call site.
 #[allow(clippy::too_many_arguments)]
 fn window_options(
@@ -1400,6 +1520,15 @@ impl AssetSource for ShellAssets {
             "circle.svg" => include_bytes!("../assets/icons/circle.svg"),
             "control-center.svg" => include_bytes!("../assets/icons/control-center.svg"),
             "moon.svg" => include_bytes!("../assets/icons/moon.svg"),
+            "capture-screen.svg" => include_bytes!("../assets/icons/capture-screen.svg"),
+            "capture-window.svg" => include_bytes!("../assets/icons/capture-window.svg"),
+            "capture-region.svg" => include_bytes!("../assets/icons/capture-region.svg"),
+            "sun.svg" => include_bytes!("../assets/icons/sun.svg"),
+            "speaker.svg" => include_bytes!("../assets/icons/speaker.svg"),
+            "speaker-muted.svg" => include_bytes!("../assets/icons/speaker-muted.svg"),
+            "display.svg" => include_bytes!("../assets/icons/display.svg"),
+            "settings.svg" => include_bytes!("../assets/icons/settings.svg"),
+            "wallpaper.svg" => include_bytes!("../assets/icons/wallpaper.svg"),
             _ => return Ok(None),
         };
         Ok(Some(std::borrow::Cow::Borrowed(bytes)))

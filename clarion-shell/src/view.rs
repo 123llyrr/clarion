@@ -10,7 +10,11 @@ use crate::{
 use gpui::{prelude::*, *};
 use std::{path::PathBuf, sync::Arc};
 
+mod macos_controls;
 mod macos_dock;
+mod macos_launchpad;
+mod macos_notifications;
+mod macos_preferences;
 
 actions!(shell, [Dismiss, Activate, Previous, Next]);
 pub fn bind_keys(cx: &mut App) {
@@ -129,7 +133,17 @@ impl ShellView {
         state: Arc<ViewState>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let input = cx.new(|cx| TextInput::new(cx).with_placeholder("搜索应用、窗口与内容"));
+        let launchpad = state.panel == Some(Panel::Apps);
+        let dark_input = launchpad || state.dark();
+        let input = cx.new(|cx| {
+            TextInput::new(cx)
+                .with_placeholder(if launchpad {
+                    "搜索"
+                } else {
+                    "搜索最近内容"
+                })
+                .with_compact(dark_input)
+        });
         cx.subscribe(&input, |this, _, QueryChanged(query), cx| {
             this.query = query.clone();
             this.selection = 0;
@@ -158,7 +172,10 @@ impl ShellView {
         cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
                 this.activated = true;
-            } else if this.activated && matches!(this.kind, Surface::Panel) {
+            } else if this.activated
+                && matches!(this.kind, Surface::Panel)
+                && this.state.panel != Some(Panel::Preferences)
+            {
                 this.activated = false;
                 let host = this.host.clone();
                 let panel = this.state.panel.clone();
@@ -228,47 +245,14 @@ impl ShellView {
         let host = self.host.clone();
         div()
             .id(id.into())
-            .px_3()
-            .py_2()
-            .rounded(px(9.))
-            .bg(p.card)
+            .px(px(8.))
+            .py(px(5.))
+            .rounded(px(5.))
             .text_color(p.fg)
-            .text_sm()
+            .text_size(px(13.))
             .cursor_pointer()
             .hover(move |s| s.bg(p.line))
             .child(text.into())
-            .on_click(move |_, _, cx| host.update(cx, |host, cx| host.handle(action.clone(), cx)))
-            .into_any_element()
-    }
-    fn toggle(
-        &self,
-        id: &'static str,
-        label: &'static str,
-        enabled: bool,
-        action: Action,
-        p: Palette,
-    ) -> AnyElement {
-        let host = self.host.clone();
-        div()
-            .id(id)
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap_4()
-            .py_2()
-            .cursor_pointer()
-            .child(label)
-            .child(
-                div()
-                    .w(px(38.))
-                    .h(px(22.))
-                    .p(px(2.))
-                    .rounded_full()
-                    .flex()
-                    .when(enabled, |s| s.justify_end())
-                    .bg(if enabled { p.accent } else { p.line })
-                    .child(div().size(px(18.)).rounded_full().bg(rgb(0xffffff))),
-            )
             .on_click(move |_, _, cx| host.update(cx, |host, cx| host.handle(action.clone(), cx)))
             .into_any_element()
     }
@@ -322,34 +306,6 @@ impl ShellView {
             .on_click(move |_, _, cx| host.update(cx, |h, cx| h.handle(action.clone(), cx)))
             .into_any_element()
     }
-    fn header(&self, title: &str, subtitle: &str, p: Palette) -> AnyElement {
-        div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap_3()
-            .pb_4()
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_xl()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(title.to_owned()),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(p.muted)
-                            .child(subtitle.to_owned()),
-                    ),
-            )
-            .child(self.glyph_button("panel-close", "x", Action::Close, p))
-            .into_any_element()
-    }
     fn bar(&self, host: &ViewState, p: Palette, width: f32, cx: &App) -> AnyElement {
         // Menu-bar content sits on the compositor's live backdrop. In particular,
         // do not cover it with the old opaque application-panel background.
@@ -357,6 +313,9 @@ impl ShellView {
         let appname = focused
             .and_then(|w| w.app_id.as_deref())
             .map(|id| {
+                if id == "io.github.clarion.DesktopPreferences" {
+                    return "桌面与程序坞".into();
+                }
                 host.catalog
                     .apps()
                     .iter()
@@ -590,107 +549,6 @@ impl ShellView {
             .on_click(move |_, _, cx| h.update(cx, |h, cx| h.handle(action.clone(), cx)))
             .into_any_element()
     }
-    fn apps(&self, host: &ViewState, p: Palette) -> AnyElement {
-        let found = host.catalog.search(&self.query);
-        let mut content = div().flex().flex_col().gap_5();
-        if !self.query.is_empty() {
-            let query = self.query.to_lowercase();
-            for w in host
-                .desktop
-                .windows
-                .iter()
-                .filter(|w| {
-                    w.title
-                        .as_deref()
-                        .unwrap_or_default()
-                        .to_lowercase()
-                        .contains(&query)
-                })
-                .take(4)
-            {
-                content = content.child(self.button(
-                    format!("window-{}", w.id),
-                    format!("切换窗口 · {}", w.title.as_deref().unwrap_or("未命名窗口")),
-                    Action::Focus(w.id),
-                    p,
-                ));
-            }
-        }
-        if found.is_empty() {
-            if !self.query.is_empty()
-                && host.desktop.windows.iter().any(|w| {
-                    w.title
-                        .as_deref()
-                        .unwrap_or_default()
-                        .to_lowercase()
-                        .contains(&self.query.to_lowercase())
-                })
-            {
-                return content.into_any_element();
-            }
-            return self.empty("没有找到应用", "试试应用名称、用途或关键词。", p);
-        }
-        for (index, row) in found.chunks(5).enumerate() {
-            let mut grid = div().flex().gap_2();
-            for (col, app) in row.iter().enumerate() {
-                let id = app.id.clone();
-                let h = self.host.clone();
-                let context = id.clone();
-                let selected = index * 5 + col == self.selection;
-                grid = grid.child(
-                    div()
-                        .id(SharedString::from(format!("app-{id}")))
-                        .flex_1()
-                        .min_w(px(0.))
-                        .p_3()
-                        .rounded(px(14.))
-                        .bg(if selected {
-                            p.card
-                        } else {
-                            Hsla::transparent_black()
-                        })
-                        .border_1()
-                        .border_color(if selected {
-                            p.accent
-                        } else {
-                            Hsla::transparent_black()
-                        })
-                        .flex()
-                        .flex_col()
-                        .items_center()
-                        .gap_3()
-                        .cursor_pointer()
-                        .hover(move |s| s.bg(p.line))
-                        .child(self.icon(app.icon_path.clone(), 48., p))
-                        .child(
-                            div()
-                                .w_full()
-                                .text_sm()
-                                .text_center()
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .child(app.name.clone()),
-                        )
-                        .on_click(move |_, _, cx| {
-                            h.update(cx, |h, cx| h.handle(Action::Launch(id.clone()), cx))
-                        })
-                        .on_mouse_down(MouseButton::Right, {
-                            let h = self.host.clone();
-                            move |_, _, cx| {
-                                h.update(cx, |h, cx| {
-                                    h.handle(Action::Panel(Panel::Dock(context.clone())), cx)
-                                })
-                            }
-                        }),
-                );
-            }
-            for _ in row.len()..5 {
-                grid = grid.child(div().flex_1());
-            }
-            content = content.child(grid);
-        }
-        content.into_any_element()
-    }
     fn empty(&self, title: &str, detail: &str, p: Palette) -> AnyElement {
         div()
             .flex()
@@ -857,421 +715,6 @@ impl ShellView {
         )
         .into_any_element()
     }
-    fn notifications(&self, host: &ViewState, p: Palette) -> AnyElement {
-        let mut list = div().flex().flex_col().gap_3();
-        if host.notifications.is_empty() {
-            return self.empty("暂时没有通知", "新的消息和任务提醒会出现在这里。", p);
-        }
-        for item in host.notifications.iter().rev() {
-            let mut actions = div().flex().flex_wrap().gap_2();
-            for (key, label) in &item.actions {
-                actions = actions.child(self.button(
-                    format!("notification-{}-{key}", item.id),
-                    label.clone(),
-                    Action::Service(services::Command::NotificationAction {
-                        id: item.id,
-                        action: key.clone(),
-                    }),
-                    p,
-                ));
-            }
-            actions = actions.child(self.button(
-                format!("dismiss-{}", item.id),
-                "移除",
-                Action::Service(services::Command::DismissNotification(item.id)),
-                p,
-            ));
-            list = list.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .p_4()
-                    .rounded(px(12.))
-                    .bg(p.card)
-                    .child(div().text_xs().text_color(p.muted).child(item.app.clone()))
-                    .child(
-                        div()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(item.title.clone()),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .child(item.body.chars().take(2000).collect::<String>()),
-                    )
-                    .child(actions),
-            );
-        }
-        list.into_any_element()
-    }
-    fn slider(
-        &self,
-        id: &str,
-        label: &str,
-        value: Option<f64>,
-        action: impl Fn(f64) -> Action + Clone + 'static,
-        p: Palette,
-    ) -> AnyElement {
-        let mut row = div().flex().flex_col().gap_3().child(
-            div()
-                .flex()
-                .justify_between()
-                .child(label.to_owned())
-                .child(
-                    div().text_xs().text_color(p.muted).child(
-                        value
-                            .map(|v| format!("{}%", (v * 100.).round()))
-                            .unwrap_or_else(|| "设备不可用".into()),
-                    ),
-                ),
-        );
-        if let Some(value) = value {
-            let key = SharedString::from(format!("slider-{id}"));
-            let selector = format!("slider-{id}");
-            let host = self.host.clone();
-            let action: std::rc::Rc<dyn Fn(f64) -> Action> = std::rc::Rc::new(action);
-            row = row.child(
-                div()
-                    .id(key.clone())
-                    .w_full()
-                    .h(px(28.))
-                    .cursor_pointer()
-                    .debug_selector(move || selector)
-                    .child(
-                        canvas(
-                            move |bounds, window, cx| {
-                                let gesture = window
-                                    .use_keyed_state(key, cx, |_, _| SliderGesture::default());
-                                let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
-                                (gesture, hitbox)
-                            },
-                            move |bounds, (gesture, hitbox), window, cx| {
-                                let (displayed, dragging) = gesture.update(cx, |state, _| {
-                                    if !state.dragging
-                                        && state.preview.is_some_and(|(preview, changed)| {
-                                            (preview - value).abs() < 0.001
-                                                || changed.elapsed()
-                                                    > std::time::Duration::from_secs(2)
-                                        })
-                                    {
-                                        state.preview = None;
-                                    }
-                                    (
-                                        state
-                                            .preview
-                                            .map(|(value, _)| value)
-                                            .unwrap_or(value)
-                                            .clamp(0., 1.),
-                                        state.dragging,
-                                    )
-                                });
-                                let center_y = bounds.center().y;
-                                let start = bounds.left() + px(8.);
-                                let width = (bounds.size.width - px(16.)).max(px(1.));
-                                let thumb_x = start + width * displayed as f32;
-                                window.paint_quad(
-                                    fill(
-                                        Bounds::new(
-                                            point(start, center_y - px(2.)),
-                                            size(width, px(4.)),
-                                        ),
-                                        p.line,
-                                    )
-                                    .corner_radii(px(2.)),
-                                );
-                                window.paint_quad(
-                                    fill(
-                                        Bounds::new(
-                                            point(start, center_y - px(2.)),
-                                            size((thumb_x - start).max(px(0.)), px(4.)),
-                                        ),
-                                        p.accent,
-                                    )
-                                    .corner_radii(px(2.)),
-                                );
-                                let radius = if dragging { 9. } else { 8. };
-                                window.paint_quad(
-                                    fill(
-                                        Bounds::new(
-                                            point(thumb_x - px(radius), center_y - px(radius)),
-                                            size(px(radius * 2.), px(radius * 2.)),
-                                        ),
-                                        p.fg,
-                                    )
-                                    .corner_radii(px(radius))
-                                    .border_widths(px(1.))
-                                    .border_color(p.line),
-                                );
-
-                                let down_state = gesture.clone();
-                                let down_host = host.clone();
-                                let down_action = action.clone();
-                                window.on_mouse_event(
-                                    move |event: &MouseDownEvent, phase, window, cx| {
-                                        if phase != DispatchPhase::Bubble
-                                            || event.button != MouseButton::Left
-                                            || !hitbox.is_hovered(window)
-                                        {
-                                            return;
-                                        }
-                                        down_state.update(cx, |state, _| state.dragging = true);
-                                        if let Some(value) = update_slider(
-                                            &down_state,
-                                            bounds,
-                                            event.position.x,
-                                            true,
-                                            window,
-                                            cx,
-                                        ) {
-                                            down_host.update(cx, |host, cx| {
-                                                host.handle(down_action(value), cx)
-                                            });
-                                        }
-                                        cx.stop_propagation();
-                                    },
-                                );
-                                let move_state = gesture.clone();
-                                let move_host = host.clone();
-                                let move_action = action.clone();
-                                window.on_mouse_event(
-                                    move |event: &MouseMoveEvent, phase, window, cx| {
-                                        if phase != DispatchPhase::Bubble
-                                            || !move_state.read(cx).dragging
-                                        {
-                                            return;
-                                        }
-                                        if event.pressed_button != Some(MouseButton::Left) {
-                                            move_state.update(cx, |state, cx| {
-                                                state.dragging = false;
-                                                cx.notify();
-                                            });
-                                            return;
-                                        }
-                                        if let Some(value) = update_slider(
-                                            &move_state,
-                                            bounds,
-                                            event.position.x,
-                                            false,
-                                            window,
-                                            cx,
-                                        ) {
-                                            move_host.update(cx, |host, cx| {
-                                                host.handle(move_action(value), cx)
-                                            });
-                                        }
-                                    },
-                                );
-                                window.on_mouse_event(
-                                    move |event: &MouseUpEvent, phase, window, cx| {
-                                        if phase != DispatchPhase::Bubble
-                                            || event.button != MouseButton::Left
-                                            || !gesture.read(cx).dragging
-                                        {
-                                            return;
-                                        }
-                                        if let Some(value) = update_slider(
-                                            &gesture,
-                                            bounds,
-                                            event.position.x,
-                                            true,
-                                            window,
-                                            cx,
-                                        ) {
-                                            host.update(cx, |host, cx| {
-                                                host.handle(action(value), cx)
-                                            });
-                                        }
-                                        gesture.update(cx, |state, cx| {
-                                            state.dragging = false;
-                                            cx.notify();
-                                        });
-                                        cx.stop_propagation();
-                                    },
-                                );
-                            },
-                        )
-                        .size_full(),
-                    ),
-            );
-        }
-        row.into_any_element()
-    }
-    fn controls(&self, host: &ViewState, p: Palette) -> AnyElement {
-        let output = self.output.clone();
-        let brightness = host
-            .desktop
-            .outputs
-            .get(&output)
-            .filter(|output| output.hdr_active)
-            .and_then(|output| output.hdr_brightness)
-            .map(|value| f64::from(value) / 100.)
-            .or(host.system.brightness);
-        div()
-            .flex()
-            .flex_col()
-            .gap_5()
-            .child(self.slider(
-                "volume",
-                "音量",
-                host.system.volume,
-                |v| Action::Backend(backend::Command::SetVolume(v)),
-                p,
-            ))
-            .child(self.button(
-                "mute",
-                if host.system.muted {
-                    "取消静音"
-                } else {
-                    "静音"
-                },
-                Action::Backend(backend::Command::SetMuted(!host.system.muted)),
-                p,
-            ))
-            .child(self.slider(
-                "brightness",
-                "屏幕亮度",
-                brightness,
-                move |v| {
-                    Action::Backend(backend::Command::SetOutputBrightness {
-                        output: output.clone(),
-                        value: v,
-                    })
-                },
-                p,
-            ))
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap_2()
-                    .child(self.button(
-                        "desktop-prefs",
-                        "桌面与 Dock",
-                        Action::Panel(Panel::Preferences),
-                        p,
-                    ))
-                    .child(self.button("system-settings", "系统设置", Action::Settings, p))
-                    .child(self.button("wallpaper", "更换壁纸", Action::PickWallpaper, p))
-                    .child(self.button(
-                        "dnd",
-                        if host.dnd {
-                            "✓ 勿扰模式"
-                        } else {
-                            "勿扰模式"
-                        },
-                        Action::DoNotDisturb(!host.dnd),
-                        p,
-                    ))
-                    .child(self.button(
-                        "screen-capture",
-                        "截图",
-                        Action::Panel(Panel::Screenshot),
-                        p,
-                    )),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(p.muted)
-                    .child("显示器、HDR、平铺和动画参数可在系统设置中调整。"),
-            )
-            .into_any_element()
-    }
-    fn preferences(&self, host: &ViewState, p: Palette) -> AnyElement {
-        let mut themes = div().flex().gap_2();
-        for (key, label) in [("dark", "深色"), ("light", "浅色")] {
-            themes = themes.child(self.button(
-                format!("theme-{key}"),
-                if host.prefs.theme == key {
-                    format!("✓ {label}")
-                } else {
-                    label.into()
-                },
-                Action::Theme(key.into()),
-                p,
-            ));
-        }
-        let mut accents = div().flex().gap_2();
-        for color in ["#0a84ff", "#bf5af2", "#ff375f", "#ff9f0a", "#30d158"] {
-            let host = self.host.clone();
-            let fill = u32::from_str_radix(&color[1..], 16).unwrap();
-            accents = accents.child(
-                div()
-                    .id(SharedString::from(format!("accent-{color}")))
-                    .size(px(26.))
-                    .rounded_full()
-                    .bg(rgb(fill))
-                    .border_2()
-                    .border_color(if self.state.prefs.accent == color {
-                        p.fg
-                    } else {
-                        Hsla::transparent_black()
-                    })
-                    .cursor_pointer()
-                    .on_click(move |_, _, cx| {
-                        host.update(cx, |host, cx| host.handle(Action::Accent(color.into()), cx))
-                    }),
-            );
-        }
-        let mut positions = div().flex().gap_2();
-        for (key, label) in [
-            (DockPosition::Bottom, "底部"),
-            (DockPosition::Left, "左侧"),
-            (DockPosition::Right, "右侧"),
-        ] {
-            positions = positions.child(self.button(
-                format!("dock-{label}"),
-                label,
-                Action::DockPosition(key),
-                p,
-            ));
-        }
-        div()
-            .flex()
-            .flex_col()
-            .gap_5()
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(p.muted)
-                    .child("修改后自动保存并应用。"),
-            )
-            .child(themes)
-            .child(div().text_sm().child("强调色"))
-            .child(accents)
-            .child(self.slider(
-                "dock-size",
-                "Dock 图标大小",
-                Some((host.prefs.dock_size - 32.) / 32.),
-                |v| Action::DockSize(32. + 32. * v),
-                p,
-            ))
-            .child(positions)
-            .child(self.toggle(
-                "dock-auto-hide",
-                "自动隐藏 Dock",
-                host.prefs.dock_auto_hide,
-                Action::AutoHide(!host.prefs.dock_auto_hide),
-                p,
-            ))
-            .child(self.slider(
-                "bar-height",
-                "顶部栏高度",
-                Some((host.prefs.bar_height - 22.) / 26.),
-                |v| Action::BarHeight(22. + 26. * v),
-                p,
-            ))
-            .child(self.toggle(
-                "reduce-motion",
-                "减少动态效果",
-                host.prefs.reduce_motion,
-                Action::ReduceMotion(!host.prefs.reduce_motion),
-                p,
-            ))
-            .child(self.button("display-settings", "显示器与 HDR 设置", Action::Settings, p))
-            .into_any_element()
-    }
     fn tray_menu(&self, host: &ViewState, p: Palette) -> AnyElement {
         let Some(Panel::Tray(id)) = &host.panel else {
             return div().into_any_element();
@@ -1382,60 +825,107 @@ impl ShellView {
         }
         row.into_any_element()
     }
-    fn panel(&self, host: &ViewState, p: Palette, cx: &Context<Self>) -> AnyElement {
+    fn panel(
+        &self,
+        host: &ViewState,
+        p: Palette,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let panel = host.panel.clone().unwrap_or(Panel::Apps);
-        let (title, subtitle) = match &panel {
-            Panel::Apps => ("应用", "浏览应用，或直接搜索"),
-            Panel::Recent => ("最近内容", "剪贴板与最近截图"),
-            Panel::Controls => ("控制中心", "常用控制，触手可及"),
-            Panel::Notifications => ("通知", "消息、提醒与进行中的任务"),
-            Panel::Preferences => ("桌面与 Dock", "Clarion 桌面偏好设置"),
-            Panel::Screenshot => ("截图", "先选择方式，再拖动选区"),
-            Panel::Tray(_) => ("应用菜单", "系统托盘"),
-            Panel::Dock(_) => ("应用与窗口", "Dock"),
-        };
+        match &panel {
+            Panel::Apps => return self.macos_launchpad(host, p, window, cx),
+            Panel::Preferences => return self.macos_preferences(host, p),
+            Panel::Notifications => return self.macos_notifications(host, p, cx),
+            _ => {}
+        }
         let mut body = div()
             .size_full()
-            .flex()
-            .flex_col()
-            .p_5()
-            .gap_3()
-            .rounded(px(18.))
+            .rounded(px(16.))
             .bg(p.panel)
             .border_1()
             .border_color(p.line)
             .text_color(p.fg)
-            .child(self.header(title, subtitle, p));
-        if matches!(panel, Panel::Apps | Panel::Recent) {
-            body = body.child(
-                div()
-                    .p_3()
-                    .rounded(px(10.))
-                    .bg(p.card)
-                    .child(self.input.clone()),
-            );
+            .text_size(px(13.));
+        if panel == Panel::Controls {
+            return body
+                .p(px(12.))
+                .child(self.macos_controls(host, p))
+                .into_any_element();
+        }
+        if panel == Panel::Screenshot {
+            let mut tools = div().flex().items_center().gap(px(5.));
+            for (id, label, symbol, mode) in [
+                ("capture-screen", "整个屏幕", "capture-screen", 1),
+                ("capture-window", "当前窗口", "capture-window", 2),
+                ("capture-region", "所选部分", "capture-region", 0),
+            ] {
+                let h = self.host.clone();
+                tools = tools.child(
+                    div()
+                        .id(id)
+                        .w(px(96.))
+                        .h(px(44.))
+                        .rounded(px(7.))
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .gap(px(2.))
+                        .cursor_pointer()
+                        .hover(move |s| s.bg(p.line))
+                        .child(self.symbol(symbol, 24., p))
+                        .child(
+                            div()
+                                .text_size(px(10.))
+                                .line_height(px(12.))
+                                .child(menu_text(label.into(), FontWeight::NORMAL, p.fg, cx)),
+                        )
+                        .on_click(move |_, _, cx| {
+                            h.update(cx, |h, cx| h.handle(Action::Screenshot(mode), cx))
+                        }),
+                );
+            }
+            return body
+                .p(px(10.))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(self.glyph_button("capture-close", "x", Action::Close, p))
+                .child(div().w(px(1.)).h(px(28.)).bg(p.line))
+                .child(tools)
+                .into_any_element();
         }
         let content = match &panel {
-            Panel::Apps => self.apps(host, p),
             Panel::Recent => self.recent(host, p, cx),
-            Panel::Controls => self.controls(host, p),
-            Panel::Preferences => self.preferences(host, p),
-            Panel::Notifications => self.notifications(host, p),
-            Panel::Screenshot => div()
-                .flex()
-                .flex_col()
-                .gap_3()
-                .child(self.button("capture-region", "选区截图", Action::Screenshot(0), p))
-                .child(self.button("capture-screen", "整个屏幕", Action::Screenshot(1), p))
-                .child(self.button("capture-window", "当前窗口", Action::Screenshot(2), p))
-                .into_any_element(),
             Panel::Tray(_) => self.tray_menu(host, p),
             Panel::Dock(id) => self.dock_menu(host, id, p),
+            _ => unreachable!(),
         };
+        body = body.p(px(10.)).flex().flex_col().gap(px(8.));
+        if panel == Panel::Recent {
+            body = body
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .pl(px(4.))
+                        .child(menu_text("最近内容".into(), FontWeight::SEMIBOLD, p.fg, cx))
+                        .child(self.glyph_button("recent-close", "x", Action::Close, p)),
+                )
+                .child(
+                    div()
+                        .h(px(28.))
+                        .rounded(px(6.))
+                        .bg(p.card)
+                        .child(self.input.clone()),
+                );
+        }
         if let Some(error) = &host.error {
             body = body.child(
                 div()
-                    .text_xs()
+                    .text_size(px(11.))
                     .text_color(rgb(0xe5a87f))
                     .child(error.clone()),
             );
@@ -1444,7 +934,7 @@ impl ShellView {
             div()
                 .id("panel-scroll")
                 .flex_1()
-                .min_h(px(0.))
+                .min_h_0()
                 .overflow_y_scroll()
                 .track_scroll(&self.scroll)
                 .child(content),
@@ -1463,7 +953,7 @@ impl Render for ShellView {
         let content = match self.kind {
             Surface::Bar => self.bar(host, p, width, cx),
             Surface::Dock => self.macos_dock(host, p, window),
-            Surface::Panel => self.panel(host, p, cx),
+            Surface::Panel => self.panel(host, p, window, cx),
             Surface::Toast(id) => {
                 if let Some(item) = host.notifications.iter().find(|n| n.id == id) {
                     div()
@@ -1522,10 +1012,26 @@ impl Render for ShellView {
                     DockPosition::Left => (0., 12., width - 12., height - 24., 20.),
                     DockPosition::Right => (12., 12., width - 12., height - 24., 20.),
                 }
+            } else if matches!(self.kind, Surface::Panel) && host.panel == Some(Panel::Apps) {
+                (0., 0., width, height, 0.)
             } else {
                 (0., 0., width, height, 16.)
             };
-            let mut regions = rounded_region(w, h, radius);
+            let mut regions =
+                if matches!(self.kind, Surface::Panel) && host.panel == Some(Panel::Apps) {
+                    macos_launchpad::backdrop_regions(host, width, height)
+                } else if matches!(self.kind, Surface::Panel)
+                    && host.panel == Some(Panel::Notifications)
+                {
+                    macos_notifications::card_regions(
+                        width,
+                        height,
+                        host.notifications.len(),
+                        f32::from(self.scroll.offset().y),
+                    )
+                } else {
+                    rounded_region(w, h, radius)
+                };
             for region in &mut regions {
                 region.origin.x += px(x);
                 region.origin.y += px(y);
@@ -1559,16 +1065,22 @@ impl Render for ShellView {
                     this.invoke(Action::Launch(id), cx);
                 }
             }))
-            .on_action(cx.listener(|this, _: &Previous, _, cx| {
+            .on_action(cx.listener(|this, _: &Previous, window, cx| {
                 if !this.input.read(cx).has_preedit() {
                     this.selection = this.selection.saturating_sub(1);
+                    if this.state.panel == Some(Panel::Apps) {
+                        this.keyboard_selection_into_view(this.state.as_ref(), window);
+                    }
                     cx.notify();
                 }
             }))
-            .on_action(cx.listener(|this, _: &Next, _, cx| {
+            .on_action(cx.listener(|this, _: &Next, window, cx| {
                 if !this.input.read(cx).has_preedit() {
                     let count = this.state.catalog.search(&this.query).len();
                     this.selection = (this.selection + 1).min(count.saturating_sub(1));
+                    if this.state.panel == Some(Panel::Apps) {
+                        this.keyboard_selection_into_view(this.state.as_ref(), window);
+                    }
                     cx.notify();
                 }
             }))

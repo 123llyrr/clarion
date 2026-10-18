@@ -1,9 +1,9 @@
 //! Preference semantics and installed asset lookup without a real desktop.
 use super::{
-    append_recent_dock_apps, dock_icon_name, dock_icon_roots, resolve_dock_icon, testing,
-    AppCatalog, AppCategory,
+    append_recent_dock_apps, dock_icon_name, dock_icon_roots, output_dimensions, resolve_dock_icon,
+    testing, AppCatalog, AppCategory,
 };
-use gpui::TestAppContext;
+use gpui::{px, size, TestAppContext};
 use std::collections::HashMap;
 
 struct Fixture {
@@ -246,4 +246,29 @@ fn disabling_minimize_into_app_clears_an_existing_destination_without_losing_win
         assert!(host.last_target.is_empty());
         assert_eq!(host.dock_apps()[0].windows[0].id, 42);
     });
+}
+
+#[::core::prelude::v1::test]
+fn compositor_logical_size_supersedes_a_stale_toolkit_display_cache_without_double_scaling() {
+    let logical = clarion_ipc::LogicalOutput {
+        x: 0,
+        y: 0,
+        width: 1920,
+        height: 1200,
+        scale: 2.,
+        transform: clarion_ipc::Transform::Normal,
+    };
+    let stale = size(px(947.), px(1056.));
+    assert_eq!(output_dimensions(Some(logical), stale), (1920., 1200.));
+    assert_eq!(output_dimensions(None, stale), (947., 1056.));
+    assert_eq!(
+        output_dimensions(
+            Some(clarion_ipc::LogicalOutput {
+                width: 0,
+                ..logical
+            }),
+            stale
+        ),
+        (947., 1056.)
+    );
 }

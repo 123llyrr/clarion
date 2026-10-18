@@ -201,9 +201,11 @@ fn every_non_search_panel_has_a_real_escape_dispatch_path(cx: &mut TestAppContex
 
 #[gpui::test]
 fn header_mouse_close_destroys_the_current_popup_after_event_dispatch(cx: &mut TestAppContext) {
-    let (_fixture, host, _view, mut visual, window) = panel(cx, Panel::Controls);
-    let width = visual.update(|window, _| f32::from(window.viewport_size().width));
-    visual.simulate_click(point(px(width - 35.), px(40.)), Modifiers::default());
+    let (_fixture, host, _view, mut visual, window) = panel(cx, Panel::Preferences);
+    let close = visual
+        .debug_bounds("preferences-close")
+        .expect("Preferences exposes the real red close control");
+    visual.simulate_click(close.center(), Modifiers::default());
     visual.run_until_parked();
     host.read_with(cx, |host, _| {
         assert!(
@@ -218,6 +220,52 @@ fn header_mouse_close_destroys_the_current_popup_after_event_dispatch(cx: &mut T
             .any(|handle| handle.window_id() == window.window_id())),
         "mouse close lost the Host handle but leaked the exclusive surface"
     );
+}
+
+#[gpui::test]
+fn preferences_wm_close_clears_host_and_one_real_bar_click_opens_it_again(cx: &mut TestAppContext) {
+    let (_fixture, host, view, mut visual, window) = panel(cx, Panel::Preferences);
+    assert!(
+        !visual.simulate_close(),
+        "Host owns destruction after the platform callback returns"
+    );
+    visual.run_until_parked();
+    host.read_with(cx, |host, _| assert!(host.panel.is_none()));
+    assert!(!cx.read(|cx| cx
+        .windows()
+        .iter()
+        .any(|handle| handle.window_id() == window.window_id())));
+    let state = view.read_with(cx, |view, _| view.state.clone());
+    let bar = cx.add_window(|window, cx| {
+        window.resize(gpui::size(px(640.), px(24.)));
+        ShellView::new(host.clone(), super::Surface::Bar, "test".into(), state, cx)
+    });
+    let mut bar_visual = VisualTestContext::from_window(*bar, cx);
+    bar_visual.run_until_parked();
+    // The actual menu-mark control occupies x=10..42, across the menu-bar height.
+    bar_visual.simulate_click(point(px(26.), px(12.)), Modifiers::default());
+    bar_visual.run_until_parked();
+    host.read_with(cx, |host, _| {
+        assert_eq!(host.panel, Some(Panel::Preferences))
+    });
+    assert!(cx.read(|cx| cx
+        .windows()
+        .iter()
+        .any(|handle| handle.window_id() != bar.window_id())));
+}
+
+#[gpui::test]
+fn delayed_old_preferences_wm_close_cannot_dismiss_a_replacement_panel(cx: &mut TestAppContext) {
+    let (_fixture, host, _view, mut visual, _old) = panel(cx, Panel::Preferences);
+    assert!(!visual.simulate_close());
+    // Replace the window before the queued platform-close task runs.
+    let replacement = cx.update(|cx| testing::open_panel(&host, Panel::Controls, cx));
+    cx.run_until_parked();
+    host.read_with(cx, |host, _| assert_eq!(host.panel, Some(Panel::Controls)));
+    assert!(cx.read(|cx| cx
+        .windows()
+        .iter()
+        .any(|handle| handle.window_id() == replacement.window_id())));
 }
 
 #[gpui::test]

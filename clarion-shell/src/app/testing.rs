@@ -50,6 +50,7 @@ pub(crate) fn test_host(
             no_wallpaper: true,
         },
         ready: false,
+        preferences_placed: None,
         last_target: HashMap::new(),
         auto_hidden: false,
         dock_hover: false,

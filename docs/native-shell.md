@@ -11,7 +11,8 @@ Shell 通过 Clarion IPC 接收桌面快照并发送动作，通过 layer-shell 
 单独的启动器可执行文件。主进程持有运行时命令 socket 的锁；重复启动不能替换已有连接入口。
 
 栏使用 `clarion-shell` namespace 和 Top 层，不请求键盘焦点；Dock 为 `clarion-dock`。
-交互面板为 `clarion-panel`，打开时在 Overlay 层按需请求键盘，关闭时释放其表面。
+临时交互面板为 `clarion-panel`，打开时在 Overlay 层按需请求键盘，关闭时释放其表面；
+桌面偏好设置采用独立的普通窗口角色，失焦时保留窗口。
 合成器保留对这些明确角色的输入、工作区和全屏策略，不能依靠普通窗口标题判断。
 
 `--preview` / `--demo` 使用普通窗口和示例数据，不连接真实剪贴板、桌面 IPC 或 D-Bus。
@@ -79,9 +80,12 @@ python3 scripts/test-native-shell.py \
 
 ## Big Sur 顶栏与 Dock
 
+各组件的几何、Launchpad 与真实 Dock 的点击穿透、通知卡片和视觉证据边界见
+[GPUI Big Sur 组件布局](gpui-bigsur-components.md)。
+
 顶栏和 Dock 以真实 macOS 11.7.2（20G1020）的本地静态分析为依据，保留 Clarion 品牌；
 Rust/GPUI 界面不提供全局应用菜单或调度中心入口。视觉参照见 [Apple 官方 Big Sur 介绍](https://www.apple.com/newsroom/2020/06/apple-introduces-macos-big-sur-with-a-beautiful-new-design/)。
-顶栏采用现代分支的 24pt：SkyLight `default_menu_bar_rect` 的 `0x184c6374c..0x184c6376c`
+顶栏默认采用 24pt 分支：SkyLight `default_menu_bar_rect` 的 `0x184c6374c..0x184c6376c`
 同时保留 22/24 两分支，因此24不是所有系统状态的统一常量。
 菜单默认字号13pt来自 `menuBarFontOfSize:0` 调用链与 UIFoundation 表项 `0x7fff8041b680`。
 Dock 运行标记依据 `DOCKIndicatorLayer updateIndicatorForSize:` 的 `0x10001f064..0x10001f07c`：

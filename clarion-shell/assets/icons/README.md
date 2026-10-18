@@ -36,3 +36,9 @@ project owner.
 distributed under the project GPL-3.0-or-later license. The native GPUI interface
 uses a single macOS-inspired appearance; the retired Flutter and Material UIs
 are not shipped as alternative styles.
+
+`sun.svg`, `speaker.svg`, `speaker-muted.svg`, `display.svg`, `settings.svg` and
+`wallpaper.svg` are also original Clarion action marks under GPL-3.0-or-later,
+used by the native Control Center. They contain no Apple artwork.
+
+`capture-screen.svg`, `capture-window.svg`, and `capture-region.svg` are original capture-toolbar glyphs under GPL-3.0-or-later.

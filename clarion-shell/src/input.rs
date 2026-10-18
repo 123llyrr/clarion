@@ -47,6 +47,8 @@ pub struct TextInput {
     last_ime_coordinates: Option<ImeCoordinates>,
     is_selecting: bool,
     horizontal_offset: Pixels,
+    compact: bool,
+    light: bool,
 }
 
 pub struct QueryChanged(pub String);
@@ -87,6 +89,11 @@ impl TextInput {
         self.placeholder = placeholder.to_owned().into();
         self
     }
+    pub fn with_compact(mut self, dark: bool) -> Self {
+        self.compact = true;
+        self.light = !dark;
+        self
+    }
     pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
@@ -101,6 +108,8 @@ impl TextInput {
             last_ime_coordinates: None,
             is_selecting: false,
             horizontal_offset: px(0.),
+            compact: false,
+            light: false,
         }
     }
 
@@ -519,7 +528,14 @@ impl Element for SpikeTextElement {
         let style = window.text_style();
 
         let (display_text, text_color) = if content.is_empty() {
-            (input.placeholder.clone(), rgba(0xe6e8f28c).into())
+            (
+                input.placeholder.clone(),
+                if input.light {
+                    rgba(0x24242a80).into()
+                } else {
+                    rgba(0xffffffb3).into()
+                },
+            )
         } else {
             (content, style.color)
         };
@@ -694,19 +710,27 @@ impl Render for TextInput {
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
-            .rounded(px(16.))
+            .rounded(px(if self.compact { 6. } else { 16. }))
             .border_1()
             .border_color(rgba(0xffffff24))
-            .bg(rgba(0x080d1699))
-            .text_color(rgb(0xf4f6ff))
-            .line_height(px(30.))
-            .text_size(px(18.))
+            .bg(if self.compact {
+                rgba(0x00000000)
+            } else {
+                rgba(0x080d1699)
+            })
+            .text_color(if self.light {
+                rgb(0x24242a)
+            } else {
+                rgb(0xf4f6ff)
+            })
+            .line_height(px(if self.compact { 18. } else { 30. }))
+            .text_size(px(if self.compact { 13. } else { 18. }))
             .child(
                 div()
-                    .h(px(54.))
+                    .h(px(if self.compact { 28. } else { 54. }))
                     .w_full()
-                    .px(px(18.))
-                    .py(px(12.))
+                    .px(px(if self.compact { 8. } else { 18. }))
+                    .py(px(if self.compact { 5. } else { 12. }))
                     .child(SpikeTextElement { input: cx.entity() }),
             )
     }
