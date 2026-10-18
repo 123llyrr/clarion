@@ -48,10 +48,22 @@ completion. Private, fully overwritten color intermediates can return after
 successful submission on the same graphics queue: barriers order later writes
 after earlier reads, and completion owners still keep every image alive.
 These intermediates cannot be acquired as capture/blur history. Both classes
-share the existing total of eight cached images and 256 MiB of actual Vulkan
+share a total of 64 cached images and 256 MiB of actual Vulkan
 allocation sizes, including driver padding. Device/queue changes invalidate the
 ordered reuse scope. See [HDR implementation](hdr.md) for protocol, brightness,
 gamut and KMS transition semantics.
+
+The object limit must accommodate client subsurfaces as well as large window
+images. The previous eight-image limit caused even one decorated window to
+evict its full-size conversion on every animated frame, despite remaining well
+below the byte budget. `hdr_decorated_client_reuses_large_and_small_conversions_across_inflight_frames`
+uses 24 real EGL DMA-BUF sources, a 3840×2400 FP16 scene and three 10-bit HDR
+outputs. It retains three asynchronous completions and verifies stable image
+identities and zero new conversion allocations after warmup. Its printed CPU
+record/submit timing excludes explicit completion waits; it is not a physical
+presentation or input-latency measurement. Unowned `NativeRenderer` DMA-BUF
+imports deliberately wait inside `Frame::finish`, so that API's elapsed time
+must not be reported as asynchronous submission cost.
 
 Default perceptual SDR can bypass the redundant scene transform on HDR outputs
 whose nonzero black point cancels through black/white adaptation and sRGB

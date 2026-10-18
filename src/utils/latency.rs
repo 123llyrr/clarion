@@ -30,9 +30,14 @@ pub enum Operation {
     TransitionCapture,
     VulkanRecordSubmit,
     VulkanFenceExport,
+    VulkanCommandLock,
+    VulkanDescriptors,
+    VulkanRecord,
+    VulkanQueueSubmit,
+    VulkanRecycle,
 }
 impl Operation {
-    const COUNT: usize = Self::VulkanFenceExport as usize + 1;
+    const COUNT: usize = Self::VulkanRecycle as usize + 1;
 
     fn threshold(self) -> Duration {
         match self {
@@ -47,7 +52,12 @@ impl Operation {
             | Self::NativeAllocation
             | Self::TransitionCapture
             | Self::VulkanRecordSubmit
-            | Self::VulkanFenceExport => SLOW_SUBPHASE,
+            | Self::VulkanFenceExport
+            | Self::VulkanCommandLock
+            | Self::VulkanDescriptors
+            | Self::VulkanRecord
+            | Self::VulkanQueueSubmit
+            | Self::VulkanRecycle => SLOW_SUBPHASE,
             _ => SLOW,
         }
     }
@@ -76,6 +86,11 @@ impl Operation {
             Self::TransitionCapture => "transition-capture",
             Self::VulkanRecordSubmit => "vulkan-record-submit",
             Self::VulkanFenceExport => "vulkan-fence-export",
+            Self::VulkanCommandLock => "vulkan-command-lock",
+            Self::VulkanDescriptors => "vulkan-descriptors",
+            Self::VulkanRecord => "vulkan-record",
+            Self::VulkanQueueSubmit => "vulkan-queue-submit",
+            Self::VulkanRecycle => "vulkan-recycle",
         }
     }
 }
@@ -247,6 +262,11 @@ mod tests {
             Operation::TransitionCapture,
             Operation::VulkanRecordSubmit,
             Operation::VulkanFenceExport,
+            Operation::VulkanCommandLock,
+            Operation::VulkanDescriptors,
+            Operation::VulkanRecord,
+            Operation::VulkanQueueSubmit,
+            Operation::VulkanRecycle,
         ];
         assert_eq!(phases.len(), Operation::COUNT);
         let mut labels = std::collections::HashSet::new();

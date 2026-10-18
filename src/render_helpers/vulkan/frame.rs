@@ -17,7 +17,7 @@ use super::pipeline::{
 use super::VulkanTexture;
 use crate::render_helpers::particles::ParticleVertex;
 
-const MAX_IDLE_SCRATCH_IMAGES: usize = 8;
+const MAX_IDLE_SCRATCH_IMAGES: usize = 64;
 const MAX_IDLE_SCRATCH_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,7 +32,10 @@ struct ScratchEntry {
     class: ScratchClass,
 }
 
-/// Separate reuse classes share one existing 8-image / 256-MiB idle budget.
+/// Separate reuse classes share a 64-image / 256-MiB idle budget.
+/// A single decorated client can need more than eight color intermediates.
+/// Keep small subsurfaces from exhausting the object limit and evicting large
+/// window conversions every frame; actual allocation bytes remain bounded.
 #[derive(Debug, Default)]
 pub struct ScratchPool {
     entries: Vec<ScratchEntry>,
@@ -1275,7 +1278,14 @@ impl<'frame> VulkanFrame<'frame> {
                 crate::render_helpers::sync::ProducerNotReady::Failed(error) => error,
             });
         }
-        let _command_lock = self.ctx.command_lock.lock().unwrap();
+        let _command_lock = {
+            let _latency = crate::utils::latency::Span::new(
+                crate::utils::latency::Operation::VulkanCommandLock,
+            );
+            self.ctx.command_lock.lock().unwrap()
+        };
+        let descriptors_latency =
+            crate::utils::latency::Span::new(crate::utils::latency::Operation::VulkanDescriptors);
         let pipes = self.pipeline_mgr.get_pipelines(self.target_format)?;
         let output_descriptor = if self
             .output
@@ -1427,6 +1437,9 @@ impl<'frame> VulkanFrame<'frame> {
         } else {
             None
         };
+        drop(descriptors_latency);
+        let record_latency =
+            crate::utils::latency::Span::new(crate::utils::latency::Operation::VulkanRecord);
         let device = &self.ctx.device;
         unsafe {
             device.begin_command_buffer(
@@ -2463,6 +2476,7 @@ impl<'frame> VulkanFrame<'frame> {
                 timing.end(self.command_buffer);
             }
             device.end_command_buffer(self.command_buffer)?;
+            drop(record_latency);
             let fence = self.completion_fence;
             device.reset_fences(&[fence])?;
             let buffers = [self.command_buffer];
@@ -2482,7 +2496,12 @@ impl<'frame> VulkanFrame<'frame> {
             if let Some(error) = self.queue_submit_error_for_test.take() {
                 return Err(error);
             }
-            device.queue_submit(self.ctx.graphics_queue, &[submit], fence)?;
+            {
+                let _latency = crate::utils::latency::Span::new(
+                    crate::utils::latency::Operation::VulkanQueueSubmit,
+                );
+                device.queue_submit(self.ctx.graphics_queue, &[submit], fence)?;
+            }
             self.fence = Some(fence);
             // Track the queued layout as soon as submission succeeds. A CPU wait
             // failure does not cancel these transitions; later work uses this queue.
@@ -2505,6 +2524,9 @@ impl<'frame> VulkanFrame<'frame> {
                     .set(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
             }
             if let Some(pool) = &self.color_scratch_pool {
+                let _latency = crate::utils::latency::Span::new(
+                    crate::utils::latency::Operation::VulkanRecycle,
+                );
                 // Queue submission has succeeded and all layout metadata now
                 // describes its queued reads. The next full color pass uses an
                 // ALL_COMMANDS/MEMORY_READ|WRITE -> attachment-write barrier.
@@ -3073,6 +3095,183 @@ mod tests {
     use crate::render_helpers::vulkan::hardware_tests::setup;
 
     #[test]
+    #[ignore = "4K HDR DMA-BUF scene; run serially on a real DRM render node"]
+    fn hdr_decorated_client_reuses_large_and_small_conversions_across_inflight_frames() {
+        use smithay::backend::allocator::dmabuf::AsDmabuf;
+        use smithay::backend::allocator::{Allocator, Fourcc};
+        use smithay::backend::renderer::{Bind, Color32F, Frame, Renderer};
+        use smithay::utils::{Rectangle, Transform};
+
+        let (renderer, mut gles, mut allocator) = setup();
+        let ctx = renderer.ctx.as_ref().unwrap();
+        let modifiers = crate::render_helpers::vulkan::hardware_tests::modifiers(
+            &renderer,
+            &gles,
+            Fourcc::Argb8888,
+        );
+        // One application plus its title, corners, edges and labels exceeded
+        // the old eight-object cache despite using far less than 256 MiB.
+        let sizes = [
+            (3840, 2160),
+            (3840, 128),
+            (26, 26),
+            (26, 26),
+            (5, 2160),
+            (5, 2160),
+            (3840, 5),
+            (3840, 5),
+        ]
+        .into_iter()
+        .chain((0..16).map(|n| (64 + n * 3, 24)))
+        .collect::<Vec<_>>();
+        let mut buffers = Vec::new();
+        let mut sources = Vec::new();
+        for (width, height) in sizes {
+            let mut buffer = allocator
+                .create_buffer(width, height, Fourcc::Argb8888, &modifiers)
+                .unwrap()
+                .export()
+                .unwrap();
+            let size = (width as i32, height as i32).into();
+            let mut target = gles.bind(&mut buffer).unwrap();
+            let mut frame = gles.render(&mut target, size, Transform::Normal).unwrap();
+            frame
+                .clear(
+                    Color32F::new(0.1, 0.2, 0.3, 0.5),
+                    &[Rectangle::from_size(size)],
+                )
+                .unwrap();
+            frame.finish().unwrap().wait().unwrap();
+            drop(target);
+            sources.push(renderer.import_dmabuf(&buffer).unwrap());
+            buffers.push(buffer);
+        }
+        let target = allocate_texture(
+            ctx,
+            3840,
+            2400,
+            vk::Format::R16G16B16A16_SFLOAT,
+            vk::ImageTiling::OPTIMAL,
+            vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            vk::ImageLayout::UNDEFINED,
+            true,
+        )
+        .unwrap();
+        let output_modifiers = crate::render_helpers::vulkan::hardware_tests::modifiers(
+            &renderer,
+            &gles,
+            Fourcc::Argb2101010,
+        );
+        let output_buffers = (0..3)
+            .map(|_| {
+                allocator
+                    .create_buffer(3840, 2400, Fourcc::Argb2101010, &output_modifiers)
+                    .unwrap()
+                    .export()
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let outputs = output_buffers
+            .iter()
+            .map(|buffer| renderer.import_dmabuf_as_target(buffer).unwrap())
+            .collect::<Vec<_>>();
+        let output_color = crate::color::HdrOutputSettings::default().description();
+        let pool = ColorScratchPool::new(ctx, renderer.scratch_textures.clone());
+        let mut pending = std::collections::VecDeque::<Arc<GpuCompletion>>::new();
+        let mut images = Vec::new();
+        let mut samples = Vec::new();
+        for index in 0..64 {
+            // Exercise ordered reuse while the previous two completion owners
+            // still retain every image. These test-owned DMA-BUFs are immutable
+            // until all submitted reads finish; no Wayland lease is invented.
+            if pending.len() == 3 {
+                pending.pop_front().unwrap().prepare_retirement().unwrap();
+            }
+            let before_allocations = scratch_allocation_count_for_test();
+            let started = std::time::Instant::now();
+            let mut frame = renderer
+                .render_frame(
+                    target.image(),
+                    target.image_view(),
+                    vk::Format::R16G16B16A16_SFLOAT,
+                    true,
+                    3840,
+                    2400,
+                    Some([0.; 4]),
+                )
+                .unwrap();
+            frame.retain_target(&target);
+            frame.target_layout = target.current_layout().get();
+            frame.set_color_scratch_pool(pool.clone()).unwrap();
+            frame.set_color_scene(
+                super::super::color::scene_description(Some(output_color)),
+                output_color.primaries,
+                output_color.reference_luminance,
+            );
+            frame.set_color_output(
+                &outputs[index % 3],
+                output_color,
+                &[Rectangle::from_size((3840, 2400).into())],
+            );
+            for (n, source) in sources.iter().enumerate() {
+                frame
+                    .draw_texture(
+                        source,
+                        n as f32 * 2.,
+                        n as f32 * 2.,
+                        source.width as f32 * (1. - (index % 8) as f32 * 0.01),
+                        source.height as f32,
+                        None,
+                        1.,
+                        None,
+                        0.,
+                    )
+                    .unwrap();
+            }
+            let converted = frame
+                .converted
+                .iter()
+                .map(|(_, texture)| texture.image())
+                .collect::<Vec<_>>();
+            if index == 0 {
+                assert_eq!(converted.len(), sources.len());
+                images = converted;
+            } else {
+                assert_eq!(
+                    converted, images,
+                    "decorations evicted a live scene's conversion working set"
+                );
+                assert_eq!(
+                    scratch_allocation_count_for_test(),
+                    before_allocations,
+                    "steady HDR animation must not allocate new color images"
+                );
+            }
+            let completion = frame.finish_async_unexported(target.clone()).unwrap();
+            let elapsed = started.elapsed().as_secs_f64() * 1000.;
+            pending.push_back(completion);
+            if index >= 16 {
+                samples.push(elapsed);
+            }
+            let (count, _, bytes) = pool.stats_for_test();
+            assert!(count <= MAX_IDLE_SCRATCH_IMAGES && bytes <= MAX_IDLE_SCRATCH_BYTES);
+        }
+        for completion in pending {
+            completion.prepare_retirement().unwrap();
+        }
+        samples.sort_by(f64::total_cmp);
+        eprintln!(
+            "HDR_DECORATED_SUBMISSION {}",
+            serde_json::json!({
+                "sources": sources.len(), "samples": samples.len(), "p50_ms": samples[24],
+                "p95_ms": samples[45], "max_ms": samples[47],
+                "scope": "4K EGL DMA-BUF sources, FP16 scene, 10-bit HDR outputs; CPU record/submit only; explicit completion waits excluded"
+            })
+        );
+        drop(buffers);
+    }
+
+    #[test]
     #[ignore = "requires real DRM render node and Vulkan validation"]
     fn ordered_color_pool_publishes_only_successful_submissions_and_separates_reuse_classes() {
         let (renderer, _, _) = setup();
@@ -3186,7 +3385,8 @@ mod tests {
         );
         recycle_scratch(
             &renderer.scratch_textures,
-            (0..9).map(|_| renderer.create_solid_texture([1, 2, 3, 255]).unwrap()),
+            (0..MAX_IDLE_SCRATCH_IMAGES + 1)
+                .map(|_| renderer.create_solid_texture([1, 2, 3, 255]).unwrap()),
         );
         assert_eq!(pool.stats_for_test().1, 0);
         assert!(
@@ -3342,14 +3542,17 @@ mod tests {
             weak.upgrade().is_none(),
             "oversized idle allocation must be released"
         );
-        recycle_scratch(&pool, (0..9).map(|_| make_texture(16, 16)));
+        recycle_scratch(
+            &pool,
+            (0..MAX_IDLE_SCRATCH_IMAGES + 1).map(|_| make_texture(16, 16)),
+        );
         let cached = pool.lock().unwrap();
         assert_eq!(cached.len(), MAX_IDLE_SCRATCH_IMAGES);
         assert!(cached.iter().map(scratch_bytes).sum::<u64>() <= MAX_IDLE_SCRATCH_BYTES);
         drop(cached);
         recycle_scratch_as(
             &pool,
-            (0..9).map(|_| make_texture(16, 16)),
+            (0..MAX_IDLE_SCRATCH_IMAGES + 1).map(|_| make_texture(16, 16)),
             ScratchClass::OrderedColor,
         );
         recycle_scratch(&pool, (0..4).map(|_| make_texture(16, 16)));
