@@ -359,14 +359,13 @@ animations {
         }
     }
 
-    // Reveal grows from 90% size. The spring is deliberately soft: a gentle
-    // overshoot then a settling rise reads as growth instead of a pop, and an
-    // interrupted open keeps its velocity.
+    // A small rise and 3.5% growth with a short, monotonic fade; no rebound tail.
     window-open {
         // Reveal starts with the first mapped buffer; no extra fixed warm-up delay.
-        spring damping-ratio=0.66 stiffness=420 epsilon=0.0015
+        duration-ms 220
+        curve "cubic-bezier" 0.22 0.0 0.26 1.0
         effect "fade"
-        popin 0.90
+        popin 0.965
 
         glide {
             off

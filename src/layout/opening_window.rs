@@ -23,6 +23,9 @@ pub(crate) struct OpeningWindowPose {
     pub(crate) clamped_progress: f64,
     /// Geometry for the built-in fade and renderer-independent fallback.
     pub(crate) scale: f64,
+    /// Built-in fade has visible first-buffer feedback and a small upward rise.
+    pub(crate) opacity: f64,
+    pub(crate) offset_y: f64,
     /// Legacy GLES texture fallback has a distinct custom-shader scale policy.
     pub(crate) texture_scale: f64,
     pub(crate) shader_popin_ratio: f32,
@@ -75,7 +78,7 @@ impl OpenAnimation {
     pub fn popin_ratio(&self) -> f64 {
         self.popin_ratio
             .unwrap_or(if self.lightweight {
-                0.90
+                0.965
             } else if self.denial_reveal {
                 1.
             } else {
@@ -129,6 +132,19 @@ impl OpenAnimation {
             progress,
             clamped_progress,
             scale,
+            opacity: if self.lightweight {
+                // Begin visibly on the first mapped buffer, then finish opacity
+                // before the small geometry settle. This is group opacity.
+                let fade = (clamped_progress / 0.65).clamp(0., 1.);
+                0.18 + 0.82 * fade * fade * (3. - 2. * fade)
+            } else {
+                clamped_progress
+            },
+            offset_y: if self.lightweight {
+                8. * (1. - clamped_progress)
+            } else {
+                0.
+            },
             texture_scale,
             shader_popin_ratio: self
                 .popin_ratio
@@ -286,19 +302,22 @@ mod tests {
             let open =
                 OpenAnimation::new(anim, config.popin_ratio, config.glide, true, config.effect);
             assert_eq!(open.progress(), 0.);
+            assert!(open.pose().opacity > 0.);
             clock.set_unadjusted(Duration::from_secs_f64(1. / hz));
             assert!(
                 open.progress() > 0.,
                 "hz={hz}: first refresh has no feedback"
             );
+            assert!(open.pose().opacity > 0.18);
+            assert!(open.pose().scale >= 0.965 && open.pose().scale <= 1.);
+            assert!(open.pose().offset_y < 8.);
             assert!(!open.is_done());
             clock.set_unadjusted(Duration::from_millis(50));
             assert!(
                 open.progress() < 1.,
                 "hz={hz}: the reveal skipped its motion"
             );
-            // The default spring owns its schedule: no refresh may skip ahead of
-            // it, and the reveal must finish on the spring's own arrival.
+            // The default timeline completes quickly without a spring tail.
             let mut settled_at = None;
             for millis in 51..2000 {
                 clock.set_unadjusted(Duration::from_millis(millis));
@@ -307,18 +326,20 @@ mod tests {
                     break;
                 }
             }
-            let settled_at = settled_at.expect("the spring settles within a second");
+            let settled_at = settled_at.expect("the opening has a fixed completion");
             assert!(
-                (200..=800).contains(&settled_at),
+                (200..=230).contains(&settled_at),
                 "hz={hz}: a soft open settles in {settled_at}ms"
             );
             assert_eq!(open.progress(), 1.);
             assert_eq!(open.pose().scale, 1.);
+            assert_eq!(open.pose().opacity, 1.);
+            assert_eq!(open.pose().offset_y, 0.);
         }
     }
 
     #[test]
-    fn timed_fade_keeps_the_rebound_while_opacity_stays_at_full_strength() {
+    fn default_fade_is_visible_immediately_and_settles_without_rebound() {
         let mut clock = Clock::with_time(Duration::ZERO);
         let config = clarion_config::animations::WindowOpenAnim::default();
         let open = OpenAnimation::new(
@@ -328,13 +349,15 @@ mod tests {
             true,
             config.effect,
         );
-        assert_eq!(open.pose().scale, 0.90);
+        assert_eq!(open.pose().scale, 0.965);
+        assert_eq!(open.pose().opacity, 0.18);
+        assert_eq!(open.pose().offset_y, 8.);
         let mut previous_opacity = 0.;
         let mut peak_scale = 1.;
         let mut settled_at = None;
         for millis in 0..=2000 {
             clock.set_unadjusted(Duration::from_millis(millis));
-            let opacity = open.progress();
+            let opacity = open.pose().opacity;
             assert!(
                 opacity >= previous_opacity,
                 "opacity reversed at {millis}ms"
@@ -346,20 +369,18 @@ mod tests {
                 break;
             }
         }
-        let settled_at = settled_at.expect("the spring settles");
-        // The reveal rebounds past its resting size before settling.
-        assert!(
-            peak_scale > 1.0005,
-            "no visible rebound: peak {peak_scale} at {settled_at}ms"
-        );
-        assert!(peak_scale < 1.02, "rebound too large: {peak_scale}");
+        let settled_at = settled_at.expect("the fade settles");
+        assert_eq!(settled_at, 220);
+        assert_eq!(peak_scale, 1., "the default never exceeds its resting size");
         assert_eq!(open.pose().scale, 1.);
+        assert_eq!(open.pose().offset_y, 0.);
+        assert_eq!(open.pose().opacity, 1.);
         assert!(open.anim.velocity().abs() < 0.01);
         // Opacity reaches full strength before the geometry finishes settling.
         let arrival = (0..=settled_at)
             .find(|millis| {
                 clock.set_unadjusted(Duration::from_millis(*millis));
-                open.progress() >= 1.
+                open.pose().opacity >= 1.
             })
             .expect("opacity arrives");
         assert!(
@@ -409,6 +430,8 @@ mod tests {
             assert!(open.is_done());
             assert_eq!(open.progress(), 1.);
             assert_eq!(open.pose().scale, 1.);
+            assert_eq!(open.pose().opacity, 1.);
+            assert_eq!(open.pose().offset_y, 0.);
         }
     }
 
@@ -427,18 +450,13 @@ mod tests {
         );
         clock.set_unadjusted(Duration::from_millis(16));
         let event_pose = open.pose();
-        // Find the spring's own overshoot instead of assuming a fixed-time peak.
-        let overshoot_ms = (17..900)
-            .find(|millis| {
-                let _projection = clock.project_to(Duration::from_millis(*millis));
-                open.pose().scale > 1.
-            })
-            .expect("the default spring passes its resting size");
         let presented_pose = {
-            let _projection = clock.project_to(Duration::from_millis(overshoot_ms));
+            let _projection = clock.project_to(Duration::from_millis(100));
             let projected = open.pose();
             assert!(projected.clamped_progress > event_pose.clamped_progress);
-            assert!(projected.scale > 1.);
+            assert!(projected.scale > event_pose.scale);
+            assert!(projected.scale <= 1.);
+            assert!(projected.offset_y < event_pose.offset_y);
             projected
         };
         assert_eq!(open.pose(), event_pose);
@@ -451,7 +469,7 @@ mod tests {
         drop(open);
         drop(clock);
         assert!(event_pose.clamped_progress < 1.);
-        assert!(presented_pose.scale > 1.);
+        assert!(presented_pose.scale > event_pose.scale);
     }
 
     #[test]
@@ -480,6 +498,8 @@ mod tests {
             assert_eq!(pose.scale, scale);
             assert_eq!(pose.texture_scale, texture_scale);
             assert_eq!(pose.shader_popin_ratio, shader_ratio);
+            assert_eq!(pose.opacity, 0.);
+            assert_eq!(pose.offset_y, 0.);
             assert!(pose.glide_enabled);
             assert_eq!(pose.glide_tilt, (-17_f64).to_radians() as f32);
             assert_eq!(pose.glide_depth, 0.12_f32);

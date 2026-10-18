@@ -979,10 +979,9 @@ mod tests {
         assert!(!defaults.animations.window_close.glide.off);
         assert_eq!(
             defaults.animations.window_open.anim.kind,
-            animations::Kind::Spring(animations::SpringParams {
-                damping_ratio: 0.66,
-                stiffness: 420,
-                epsilon: 0.0015,
+            animations::Kind::Easing(animations::EasingParams {
+                duration_ms: 220,
+                curve: animations::Curve::CubicBezier(0.22, 0., 0.26, 1.),
             })
         );
         assert_eq!(
@@ -2029,11 +2028,15 @@ mod tests {
                 window_open: WindowOpenAnim {
                     anim: Animation {
                         off: true,
-                        kind: Spring(
-                            SpringParams {
-                                damping_ratio: 0.66,
-                                stiffness: 420,
-                                epsilon: 0.0015,
+                        kind: Easing(
+                            EasingParams {
+                                duration_ms: 220,
+                                curve: CubicBezier(
+                                    0.22,
+                                    0.0,
+                                    0.26,
+                                    1.0,
+                                ),
                             },
                         ),
                     },

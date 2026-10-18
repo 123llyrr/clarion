@@ -428,14 +428,12 @@ impl Default for WindowOpenAnim {
         Self {
             anim: Animation {
                 off: false,
-                // A lightly underdamped spring: one visible overshoot, then a
-                // soft settle. Softer than a snappy timeline so the reveal
-                // reads as growth rather than a pop; duration comes from the
-                // spring, so interrupts keep their velocity.
-                kind: Kind::Spring(SpringParams {
-                    damping_ratio: 0.66,
-                    stiffness: 420,
-                    epsilon: 0.0015,
+                // A short monotonic opening avoids an almost invisible spring
+                // launch and a retained overshoot tail. Explicit springs and
+                // easing settings still replace these defaults unchanged.
+                kind: Kind::Easing(EasingParams {
+                    duration_ms: 220,
+                    curve: Curve::CubicBezier(0.22, 0., 0.26, 1.),
                 }),
             },
             custom_shader: None,
@@ -1385,14 +1383,13 @@ mod tests {
     }
 
     #[test]
-    fn opening_reference_timing_keeps_explicit_overrides() {
+    fn opening_defaults_are_short_and_keep_explicit_timing_overrides() {
         let reference = WindowOpenAnim::default();
         assert_eq!(
             reference.anim.kind,
-            Kind::Spring(SpringParams {
-                damping_ratio: 0.66,
-                stiffness: 420,
-                epsilon: 0.0015,
+            Kind::Easing(EasingParams {
+                duration_ms: 220,
+                curve: Curve::CubicBezier(0.22, 0., 0.26, 1.),
             })
         );
         assert_eq!(reference.effect, WindowOpenEffect::Fade);
@@ -1421,6 +1418,20 @@ mod tests {
                 curve: Curve::Linear,
             })
         );
+        let spring: OpenConfig = knuffel::parse(
+            "test.kdl",
+            r#"window-open { spring damping-ratio=0.66 stiffness=420 epsilon=0.0015; popin 0.90; custom-shader "test"; }"#,
+        ).unwrap();
+        assert_eq!(
+            spring.window_open.anim.kind,
+            Kind::Spring(SpringParams {
+                damping_ratio: 0.66,
+                stiffness: 420,
+                epsilon: 0.0015,
+            })
+        );
+        assert_eq!(spring.window_open.popin_ratio, Some(0.90));
+        assert_eq!(spring.window_open.custom_shader.as_deref(), Some("test"));
     }
 
     #[test]

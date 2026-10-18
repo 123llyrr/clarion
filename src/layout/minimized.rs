@@ -12,10 +12,10 @@ use smithay::utils::{Logical, Rectangle};
 use crate::animation::{Animation, Clock, Curve};
 
 fn duration_ms(effect: MinimizeEffect) -> u64 {
-    // Dock 2092.50.2 defaults recovered from the Big Sur 11.7.2 ARM64e path.
-    // Geometry and interruption handling remain Clarion implementations.
+    // Clarion's visual timing: the shorter Genie duration restores the previous
+    // response speed. Big Sur's recovered 500ms is not a performance target.
     match effect {
-        MinimizeEffect::Genie => 500,
+        MinimizeEffect::Genie => 450,
         MinimizeEffect::Scale => 250,
     }
 }
@@ -24,8 +24,6 @@ fn duration_ms(effect: MinimizeEffect) -> u64 {
 pub struct Genie {
     animation: Animation,
     source: Rectangle<f64, Logical>,
-    // Keep stage weights stable when restoring into a changed layout.
-    phase_source: Rectangle<f64, Logical>,
     target: Rectangle<f64, Logical>,
     minimizing: bool,
     edge: DockEdge,
@@ -40,7 +38,6 @@ pub struct Genie {
 pub(crate) struct GeniePose {
     pub(crate) progress: f64,
     pub(crate) source: Rectangle<f64, Logical>,
-    pub(crate) phase_source: Rectangle<f64, Logical>,
     pub(crate) target: Rectangle<f64, Logical>,
     pub(crate) edge: DockEdge,
     pub(crate) effect: MinimizeEffect,
@@ -76,7 +73,6 @@ impl Genie {
         Self {
             animation: Animation::ease(clock, from, to, 0., duration_ms, Curve::Linear),
             source,
-            phase_source: source,
             target,
             minimizing,
             edge,
@@ -149,7 +145,6 @@ impl Genie {
         GeniePose {
             progress,
             source: self.source_at(progress),
-            phase_source: self.phase_source,
             target: self.target,
             edge: self.edge,
             effect: self.effect,
@@ -168,8 +163,8 @@ mod tests {
     use crate::scene::genie::{minimize_vertices, GenieCache, GenieMesh};
 
     #[test]
-    fn minimize_timing_and_reversal_use_recovered_defaults() {
-        for (effect, duration) in [(MinimizeEffect::Genie, 500), (MinimizeEffect::Scale, 250)] {
+    fn minimize_timing_and_reversal_use_responsive_defaults() {
+        for (effect, duration) in [(MinimizeEffect::Genie, 450), (MinimizeEffect::Scale, 250)] {
             let mut clock = Clock::with_time(Duration::ZERO);
             let source = Rectangle::new((20., 20.).into(), (640., 480.).into());
             let target = Rectangle::new((300., 680.).into(), (48., 48.).into());
@@ -278,7 +273,7 @@ mod tests {
                     for p in [0., 0.05, 0.18, 0.25, 0.5, 0.75, 0.95, 1.] {
                         let (area, vertices) = minimize_vertices(source, target, p, edge, effect);
                         assert_eq!(vertices.len() % 6, 0);
-                        assert!((6..=clarion_core::deformation::GENIE_MAX_SEGMENTS * 6)
+                        assert!((6..=clarion_core::deformation::GENIE_MAX_VERTICES)
                             .contains(&vertices.len()));
                         if effect == MinimizeEffect::Scale {
                             assert_eq!(vertices.len(), 6);
@@ -538,13 +533,11 @@ mod tests {
         genie.reverse(clock.clone(), false);
         genie.retarget_destination(destination);
         let handoff = genie.mesh(texture_area, source.size, CommitCounter::default(), 1);
-        assert_eq!(genie.pose().phase_source, source);
         assert_eq!(before.area, handoff.area);
         assert_eq!(before.vertices, handoff.vertices);
         assert_eq!(before.alpha, handoff.alpha);
         clock.set_unadjusted(Duration::from_millis(400));
         let final_frame = genie.mesh(texture_area, source.size, CommitCounter::default(), 1);
-        assert_eq!(genie.pose().phase_source, source);
         assert_eq!(final_frame.area, destination);
         assert!(genie.is_done());
     }

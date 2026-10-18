@@ -21,6 +21,8 @@ import 'package:clarion_shell/theme/mac_shell_theme.dart';
 import 'package:clarion_shell/ui/mac_dock_view.dart';
 import 'package:clarion_shell/ui/global_app_menu_bar.dart';
 import 'package:clarion_shell/ui/mac_shell_view.dart';
+import 'package:clarion_shell/ui/screenshot_icon.dart';
+import 'package:clarion_shell/ui/tray_icon.dart';
 
 const _editor = DesktopApp(
   id: 'editor.desktop',
@@ -217,6 +219,42 @@ void main() {
           const MethodChannel('clarion.shell/window'),
           null,
         );
+  });
+
+  testWidgets('menu bar capture mark opens the existing screenshot panel', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    try {
+      final (controller, _, _) = await _fixture(tester);
+      await _mount(tester, controller);
+      final button = find.byKey(const ValueKey('mac-screenshot'));
+      final mark = find.descendant(
+        of: button,
+        matching: find.byType(ScreenshotIcon),
+      );
+      expect(mark, findsOneWidget);
+      expect(tester.getSize(mark), const Size(16, 16));
+      final tooltip = tester.widget<ShellBarTooltip>(
+        find.ancestor(of: button, matching: find.byType(ShellBarTooltip)),
+      );
+      expect(tooltip.message, '截图');
+      expect(tooltip.labelSemantics, isTrue);
+      expect(
+        tester
+            .getSemantics(button)
+            .getSemanticsData()
+            .hasAction(ui.SemanticsAction.tap),
+        isTrue,
+      );
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+      expect(controller.panel, ShellPanel.screenshot);
+      expect(find.text('选取区域'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    } finally {
+      semantics.dispose();
+    }
   });
 
   for (final width in [180.0, 900.0]) {

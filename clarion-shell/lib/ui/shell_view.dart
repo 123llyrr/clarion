@@ -12,6 +12,7 @@ import 'global_app_menu_bar.dart';
 import 'launcher_surface.dart';
 import 'shell_geometry.dart';
 import 'shell_panel_content.dart';
+import 'screenshot_icon.dart';
 
 import 'app_icon.dart';
 import 'tray_icon.dart';
@@ -433,7 +434,7 @@ class _SystemBar extends StatelessWidget {
               child: IconButton(
                 isSelected: controller.panel == ShellPanel.screenshot,
                 onPressed: () => controller.selectPanel(ShellPanel.screenshot),
-                icon: const Icon(Icons.screenshot_monitor_rounded),
+                icon: const ScreenshotIcon(),
               ),
             ),
             if (constraints.maxWidth > 960 &&

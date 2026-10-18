@@ -900,7 +900,7 @@ impl<W: LayoutElement> TileScene<'_, W> {
                 );
                 let scaled_loc = Point::new(
                     center.x - tile_size.w * 0.5 * current_scale,
-                    center.y - tile_size.h * 0.5 * current_scale,
+                    center.y - tile_size.h * 0.5 * current_scale + pose.offset_y,
                 );
                 self.render_inner(ctx.r(), scaled_loc, xray_pos, focus_ring, &mut |elem| {
                     push(elem)

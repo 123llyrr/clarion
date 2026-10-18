@@ -88,10 +88,9 @@ impl GenieCache {
             base.loc + Point::from((texture_area.loc.x * sx, texture_area.loc.y * sy)),
             (texture_area.size.w * sx, texture_area.size.h * sy).into(),
         );
-        let (area, vertices) = minimize_vertices_with_geometry(
+        let (area, vertices) = minimize_vertices_with_scale(
             source,
             pose.target,
-            pose.phase_source,
             pose.progress,
             pose.edge,
             pose.effect,
@@ -102,7 +101,7 @@ impl GenieCache {
             commit: self.commit,
             area,
             vertices: vertices.into(),
-            // The recovered warp does not establish an extra fade-out.
+            // Geometry reaches the icon continuously without a separate fade.
             // Completion releases this mesh through the animation lifecycle.
             alpha: 1.,
         };
@@ -112,7 +111,7 @@ impl GenieCache {
 }
 
 /// Sample the common geometry at logical scale 1. Rendering uses the output
-/// scale aware entry point below for the screen-space tessellation budget.
+/// adapter below while retaining output identity in its cache.
 #[cfg(test)]
 pub fn minimize_vertices(
     source: Rectangle<f64, Logical>,
@@ -121,15 +120,14 @@ pub fn minimize_vertices(
     edge: DockEdge,
     effect: MinimizeEffect,
 ) -> (Rectangle<f64, Logical>, Vec<MeshVertex>) {
-    minimize_vertices_with_geometry(source, target, source, progress, edge, effect, 1.)
+    minimize_vertices_with_scale(source, target, progress, edge, effect, 1.)
 }
 
-/// Freeze the phase geometry separately from texture bounds: output rounding
-/// and changing shadow padding must not retime an existing animation.
-fn minimize_vertices_with_geometry(
+/// Geometry uses the same bounded grid on every output. Texture bounds can
+/// include decorations; they never alter the animation's temporal progression.
+fn minimize_vertices_with_scale(
     source: Rectangle<f64, Logical>,
     target: Rectangle<f64, Logical>,
-    phase_source: Rectangle<f64, Logical>,
     progress: f64,
     edge: DockEdge,
     effect: MinimizeEffect,
@@ -149,10 +147,9 @@ fn minimize_vertices_with_geometry(
         MinimizeEffect::Genie => Effect::Genie,
         MinimizeEffect::Scale => Effect::Scale,
     };
-    let (area, vertices) = clarion_core::deformation::minimize_vertices_with_geometry(
+    let (area, vertices) = clarion_core::deformation::minimize_vertices_with_scale(
         convert(source),
         convert(target),
-        convert(phase_source),
         progress,
         edge,
         effect,
@@ -172,7 +169,6 @@ mod tests {
         GeniePose {
             progress: 0.3,
             source: Rectangle::new((20., 20.).into(), (640., 480.).into()),
-            phase_source: Rectangle::new((20., 20.).into(), (640., 480.).into()),
             target: Rectangle::new((300., 680.).into(), (48., 48.).into()),
             edge: DockEdge::Bottom,
             effect: MinimizeEffect::Genie,
@@ -299,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn texture_padding_cannot_retime_the_frozen_window_phases() {
+    fn texture_padding_cannot_retime_window_travel() {
         let mut cache = GenieCache::default();
         let mut pose = pose();
         pose.progress = 0.6;
@@ -312,8 +308,8 @@ mod tests {
             7,
             1.,
         );
-        // Exaggerated decoration bounds exercise phase thresholds as well as
-        // the smaller rounding changes produced by fractional output scales.
+        // Exaggerated decoration bounds and fractional output rounding must
+        // not change the shared temporal travel of the window.
         for texture_area in [
             Rectangle::new((-0.4, -0.8).into(), (640.8, 481.6).into()),
             Rectangle::new((-120., -250.).into(), (880., 980.).into()),

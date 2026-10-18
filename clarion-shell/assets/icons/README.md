@@ -6,6 +6,16 @@ by vinceliuice and contributors, licensed GPL-3.0-or-later (see LICENSE).
 Files were renamed to Clarion's internal role names; the artwork is
 otherwise unmodified.
 
+## Screenshot action mark
+
+`lucide-scan-line.svg` is the unmodified `scan-line` icon from
+[Lucide](https://github.com/lucide-icons/lucide/blob/1ef60af944de207e0d5176905a0759ba12e6ee8d/icons/scan-line.svg),
+revision `1ef60af944de207e0d5176905a0759ba12e6ee8d`, distributed under the ISC
+license. Its complete upstream license is retained in `LUCIDE-LICENSE`, including
+the notices for Feather-derived icons. It is used as a monochrome action mark in
+both bars, the system menu and the Material quick settings; the themed screenshot
+application artwork remains separate.
+
 ## Rasterized icons
 
 `activity-monitor.png`, `preview.png`, `launchpad.png`, `trash-empty.png`,

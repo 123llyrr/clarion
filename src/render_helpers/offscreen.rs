@@ -184,6 +184,10 @@ impl NativeOffscreenBuffer {
                     }
                 })
                 .context("error creating texture")?;
+            // Keep a bounded pool reference while this scene owns the target.
+            // clear() can then release it for the next window without another
+            // cold allocation. Shared scene/GPU/snapshot owners prevent reuse.
+            renderer.recycle_offscreen(texture.clone());
             let capacity = Size::from((texture.width() as i32, texture.height() as i32));
             let _ = inner.insert(NativeInner {
                 texture,
