@@ -48,8 +48,12 @@ completion. Private, fully overwritten color intermediates can return after
 successful submission on the same graphics queue: barriers order later writes
 after earlier reads, and completion owners still keep every image alive.
 These intermediates cannot be acquired as capture/blur history. Both classes
-share a total of 64 cached images and 256 MiB of actual Vulkan
-allocation sizes, including driver padding. Device/queue changes invalidate the
+share a total of 64 cached images. The ordinary pool starts at 256 MiB; enabling
+ordered color reuse selects one eighth of the largest device-local heap,
+clamped to 256–512 MiB. This is an eviction limit on actual Vulkan allocation
+sizes, including driver padding, not an upfront reservation. A 2 GiB device
+retains the 256 MiB limit; devices with at least 4 GiB can retain 512 MiB.
+Device/queue changes invalidate the
 ordered reuse scope. See [HDR implementation](hdr.md) for protocol, brightness,
 gamut and KMS transition semantics.
 
@@ -64,6 +68,19 @@ record/submit timing excludes explicit completion waits; it is not a physical
 presentation or input-latency measurement. Unowned `NativeRenderer` DMA-BUF
 imports deliberately wait inside `Frame::finish`, so that API's elapsed time
 must not be reported as asynchronous submission cost.
+
+The byte limit must also fit multiple large windows during overview. Six 4K
+FP16 conversions exceed 256 MiB and otherwise cycle through the LRU on every
+frame even when the object count fits. On a sufficiently large device,
+`hdr_multiwindow_working_set_avoids_byte_budget_thrashing` compares six
+3840×2160 EGL sources under a constrained 256 MiB control against the device's
+512 MiB limit. The smaller-device row uses six 2560×1440 sources and a
+128 MiB control against its device limit (256 MiB on a 2 GiB device).
+It checks that the control actually churns,
+the device-sized working set performs zero warm allocations, and both remain
+within their configured idle budgets. Queued resource lifetimes and FP16 color
+precision are unchanged. Scenes larger than the bounded cache may still evict;
+this does not promise constant allocation cost for arbitrarily many windows.
 
 Default perceptual SDR can bypass the redundant scene transform on HDR outputs
 whose nonzero black point cancels through black/white adaptation and sRGB
