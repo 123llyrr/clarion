@@ -1,0 +1,3 @@
+
+# Preserve the byte-identical numerical oracle, including its CSV CRLF endings.
+clarion-motion/tests/fixtures/big-sur-arm64.csv -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

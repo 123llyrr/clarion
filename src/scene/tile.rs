@@ -698,6 +698,7 @@ impl<W: LayoutElement> TileScene<'_, W> {
                         self.animated_tile_size(),
                         element.current_commit(),
                         u64::from(element.texture().tex_id()),
+                        self.scale,
                     );
                     let element = MeshRenderElement::new(
                         mesh.id,
@@ -733,6 +734,7 @@ impl<W: LayoutElement> TileScene<'_, W> {
                         self.animated_tile_size(),
                         source_commit,
                         texture.cache_key(),
+                        self.scale,
                     );
                     let used: smithay::utils::Size<f64, smithay::utils::Buffer> =
                         (f64::from(geo.size.w), f64::from(geo.size.h)).into();

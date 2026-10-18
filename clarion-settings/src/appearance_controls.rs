@@ -190,6 +190,9 @@ fn serialize_close(close: &WindowCloseAnim) -> Result<String> {
         result.push_str("    off\n");
     }
     match close.anim.kind {
+        Kind::WorkspaceFeedback => {
+            anyhow::bail!("workspace motion cannot be used for window closing")
+        }
         Kind::Easing(params) => {
             result.push_str(&format!("    duration-ms {}\n", params.duration_ms));
             let curve = match params.curve {

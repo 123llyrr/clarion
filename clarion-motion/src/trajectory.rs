@@ -3,10 +3,12 @@
 //! The core has no clock source, platform configuration or renderer access. A
 //! platform adapter maps its configuration and scales real-time gesture velocity.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::motion::CubicTiming;
 use crate::spring::Spring;
+use crate::workspace_feedback::{FeedbackParams, WorkspaceFeedback};
 
 #[derive(Debug, Clone)]
 pub struct Trajectory {
@@ -21,13 +23,14 @@ pub struct Trajectory {
     kind: Kind,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum Kind {
     Continuation,
     Easing {
         curve: Curve,
     },
     Spring(Spring),
+    WorkspaceFeedback(Arc<WorkspaceFeedback>),
     Deceleration {
         initial_velocity: f64,
         deceleration_rate: f64,
@@ -53,6 +56,15 @@ impl Trajectory {
 
     pub fn initial_velocity(&self) -> f64 {
         self.initial_velocity
+    }
+
+    /// Retained coordinate-domain parameters for adapters that replace config
+    /// while keeping a visible trajectory's pixel threshold and actual bounds.
+    pub fn workspace_feedback_params(&self) -> Option<FeedbackParams> {
+        match &self.kind {
+            Kind::WorkspaceFeedback(feedback) => Some(feedback.params()),
+            _ => None,
+        }
     }
     pub fn clamped_duration(&self) -> Duration {
         self.clamped_duration
@@ -108,6 +120,13 @@ impl Trajectory {
                     Self::ease_at(start_time, from, to, initial_velocity, self.duration, curve)
                 }
             }
+            Kind::WorkspaceFeedback(ref feedback) => Self::workspace_feedback_with_params_at(
+                start_time,
+                from,
+                to,
+                initial_velocity,
+                feedback.params(),
+            ),
             Kind::Spring(spring) => Self::spring_at(
                 start_time,
                 Spring {
@@ -237,6 +256,58 @@ impl Trajectory {
         }
     }
 
+    /// Workspace feedback motion reconstructed from Big Sur 11.7.2. Coordinates and
+    /// velocity use the same units as the other trajectory constructors; the
+    /// recurrence uses caller coordinates independently of workspace index and direction.
+    pub fn workspace_feedback_at(
+        start_time: Duration,
+        from: f64,
+        to: f64,
+        initial_velocity: f64,
+    ) -> Self {
+        Self::workspace_feedback_with_params_at(
+            start_time,
+            from,
+            to,
+            initial_velocity,
+            FeedbackParams::default(),
+        )
+    }
+
+    /// Configure pixel/speed completion thresholds in caller coordinate units,
+    /// the actual domain bounds, and bounce policy. The default pixel threshold
+    /// is a display-independent fallback; a display adapter can supply 1/extent.
+    pub fn workspace_feedback_with_params_at(
+        start_time: Duration,
+        from: f64,
+        to: f64,
+        initial_velocity: f64,
+        params: FeedbackParams,
+    ) -> Self {
+        let from = if from.is_finite() { from } else { 0. };
+        let to = if to.is_finite() { to } else { from };
+        let initial_velocity = if initial_velocity.is_finite() {
+            initial_velocity
+        } else {
+            0.
+        };
+        let Some(feedback) = WorkspaceFeedback::new(from, to, initial_velocity, params) else {
+            // Invalid coordinate domains must not allocate an unbounded
+            // timeline or propagate NaN through a compositor transform.
+            return Self::ease_at(start_time, from, to, 0., Duration::ZERO, Curve::Linear);
+        };
+        Self {
+            from,
+            to,
+            initial_velocity,
+            is_off: false,
+            duration: feedback.duration(),
+            clamped_duration: feedback.clamped_duration(),
+            start_time,
+            kind: Kind::WorkspaceFeedback(Arc::new(feedback)),
+        }
+    }
+
     pub fn decelerate_at(
         start_time: Duration,
         from: f64,
@@ -340,6 +411,7 @@ impl Trajectory {
                 let x = (passed / total).clamp(0., 1.);
                 curve.sample(x) * (self.to - self.from) + self.from
             }
+            Kind::WorkspaceFeedback(ref feedback) => feedback.sample(passed).position,
             Kind::Spring(spring) => {
                 let value = spring.value_at(passed);
 
@@ -378,6 +450,7 @@ impl Trajectory {
                 (self.to - self.from) * (6. * t * (1. - t)) / total
                     + self.initial_velocity * (1. - 4. * t + 3. * t * t)
             }
+            Kind::WorkspaceFeedback(ref feedback) => feedback.sample(elapsed).velocity,
             Kind::Spring(spring) => spring.velocity_at(elapsed),
             Kind::Deceleration {
                 initial_velocity,
@@ -405,7 +478,11 @@ impl Trajectory {
         }
 
         let value = self.value_at(at, complete_instantly);
-        if matches!(self.kind, Kind::Spring(_) | Kind::Continuation) && self.to != self.from {
+        if matches!(
+            self.kind,
+            Kind::Spring(_) | Kind::Continuation | Kind::WorkspaceFeedback(_)
+        ) && self.to != self.from
+        {
             // The deadline rounds up to a nanosecond. Cap only the target side
             // against the final floating-point ulp; launch motion away from
             // the target and the complete spring trajectory remain available.
@@ -448,9 +525,13 @@ impl Trajectory {
         self.from += offset;
         self.to += offset;
 
-        if let Kind::Spring(spring) = &mut self.kind {
-            spring.from += offset;
-            spring.to += offset;
+        match &mut self.kind {
+            Kind::Spring(spring) => {
+                spring.from += offset;
+                spring.to += offset;
+            }
+            Kind::WorkspaceFeedback(feedback) => Arc::make_mut(feedback).offset(offset),
+            _ => {}
         }
     }
 }
@@ -476,6 +557,97 @@ impl Curve {
 mod tests {
     use super::*;
     use crate::spring::SpringParams;
+
+    #[test]
+    fn workspace_feedback_retarget_offset_and_pause_preserve_visible_state() {
+        let motion = Trajectory::workspace_feedback_at(Duration::ZERO, 3., 4., 2.);
+        assert!(!motion.has_fixed_duration());
+        for millis in [0, 83, 177] {
+            let at = Duration::from_millis(millis);
+            let position = motion.value_at(at, false);
+            let velocity = motion.velocity_at(at, false);
+            for target in [2., position] {
+                let mut restarted = motion.restarted_at(at, position, target, velocity);
+                assert_eq!(restarted.value_at(at, false), position);
+                assert_eq!(restarted.velocity_at(at, false), velocity);
+                let dt = Duration::from_nanos(100);
+                let measured = (restarted.value_at(at + dt, false) - position) / dt.as_secs_f64();
+                assert!((measured - velocity).abs() < 0.001);
+                restarted.offset(10.);
+                assert_eq!(restarted.value_at(at, false), position + 10.);
+                assert_eq!(restarted.value_at(Duration::MAX, false), target + 10.);
+                assert_eq!(restarted.velocity_at(Duration::MAX, false), 0.);
+            }
+        }
+        let at = Duration::from_millis(83);
+        let fresh = motion.restarted_fresh_at(at, 5., 6.);
+        assert_eq!(fresh.velocity_at(at, false), 0.);
+        assert_eq!(fresh.value_at(Duration::MAX, false), 6.);
+    }
+
+    #[test]
+    fn workspace_reversal_at_rounded_knots_preserves_differentiable_motion() {
+        let motion = Trajectory::workspace_feedback_at(Duration::ZERO, 0., 1., 0.);
+        for hz in [60., 120., 144., 240., 360.] {
+            let at = Duration::from_secs_f64(5. / hz);
+            let position = motion.value_at(at, false);
+            let velocity = motion.velocity_at(at, false);
+            let restarted = motion.restarted_at(at, position, 0., velocity);
+            let dt = Duration::from_micros(1);
+            let left = (position - motion.value_at(at - dt, false)) / dt.as_secs_f64();
+            let right = (restarted.value_at(at + dt, false) - position) / dt.as_secs_f64();
+            assert!((right - left).abs() < 0.001, "hz={hz}: {left} vs {right}");
+        }
+        // Sampling exactly a rounded n/60 timestamp must not snap nearby
+        // timestamps onto its stored position. A 1 ns secant caught the former
+        // discontinuity: at 5/60 s it was 6.26648 against true velocity 4.69986.
+        let dt = Duration::from_nanos(1);
+        for step in 1..30 {
+            let at = Duration::from_secs_f64(f64::from(step) / 60.);
+            let position = motion.value_at(at, false);
+            let velocity = motion.velocity_at(at, false);
+            let left = (position - motion.value_at(at - dt, false)) / dt.as_secs_f64();
+            let right = (motion.value_at(at + dt, false) - position) / dt.as_secs_f64();
+            assert!(
+                (left - velocity).abs() < 0.00001,
+                "step={step}: left={left} analytic={velocity}"
+            );
+            assert!(
+                (right - velocity).abs() < 0.00001,
+                "step={step}: right={right} analytic={velocity}"
+            );
+        }
+    }
+
+    #[test]
+    fn workspace_params_survive_restart_and_translate_with_offset() {
+        let params = FeedbackParams {
+            single_pixel: 1. / 1440.,
+            bounds: Some((0., 8.)),
+            ..FeedbackParams::default()
+        };
+        let mut motion =
+            Trajectory::workspace_feedback_with_params_at(Duration::ZERO, 3., 4., -2., params);
+        assert_eq!(motion.workspace_feedback_params(), Some(params));
+        motion.offset(10.);
+        let shifted = FeedbackParams {
+            bounds: Some((10., 18.)),
+            ..params
+        };
+        assert_eq!(motion.workspace_feedback_params(), Some(shifted));
+        let at = Duration::from_millis(83);
+        let restarted = motion.restarted_at(
+            at,
+            motion.value_at(at, false),
+            12.,
+            motion.velocity_at(at, false),
+        );
+        assert_eq!(restarted.workspace_feedback_params(), Some(shifted));
+        assert_eq!(
+            restarted.velocity_at(at, false),
+            motion.velocity_at(at, false)
+        );
+    }
 
     #[test]
     fn explicit_sampling_is_independent_of_order_and_frame_frequency() {

@@ -269,10 +269,23 @@ impl WorkspaceSwitch {
 }
 
 impl WorkspaceSwitchGesture {
-    fn animate_from(&mut self, from: f64, clock: Clock, config: clarion_config::Animation) {
+    fn animate_from(
+        &mut self,
+        from: f64,
+        clock: Clock,
+        config: clarion_config::Animation,
+        single_pixel: f64,
+    ) {
         let current = self.animation.as_ref().map_or(0., Animation::value);
         let velocity = self.animation.as_ref().map_or(0., Animation::velocity);
-        self.animation = Some(Animation::new(clock, from + current, 0., velocity, config));
+        self.animation = Some(Animation::workspace(
+            clock,
+            from + current,
+            0.,
+            velocity,
+            config,
+            single_pixel,
+        ));
     }
 }
 
@@ -599,6 +612,7 @@ impl<W: LayoutElement> Monitor<W> {
             .set_space_focus(SpaceId(workspace.id().get()), focused, false);
 
         let config = config.unwrap_or(self.options.animations.workspace_switch.0);
+        let single_pixel = self.workspace_single_pixel();
 
         if self.workspace_gesture_is_dnd() {
             let outcome = self.core.borrow_mut().workspace_switch_action(
@@ -610,19 +624,20 @@ impl<W: LayoutElement> Monitor<W> {
             if let (Some(offset), Some(WorkspaceSwitch::Gesture(gesture))) =
                 (outcome.animation_offset, &mut self.workspace_switch)
             {
-                gesture.animate_from(offset, self.clock.clone(), config);
+                gesture.animate_from(offset, self.clock.clone(), config, single_pixel);
             }
         } else {
             if prev_active_idx == idx {
                 return;
             }
             self.clear_workspace_switch();
-            self.workspace_switch = Some(WorkspaceSwitch::Animation(Animation::new(
+            self.workspace_switch = Some(WorkspaceSwitch::Animation(Animation::workspace(
                 self.clock.clone(),
                 current_idx,
                 idx as f64,
                 velocity,
                 config,
+                single_pixel,
             )));
         }
     }
@@ -1575,6 +1590,15 @@ impl<W: LayoutElement> Monitor<W> {
         let ws_size = self.view_size.upscale(zoom);
         let scale = self.scale.fractional_scale();
         ws_size.to_physical_precise_ceil(scale).to_logical(scale)
+    }
+
+    fn workspace_single_pixel(&self) -> f64 {
+        let physical_height = self.workspace_size_with_gap(1.).h * self.scale.fractional_scale();
+        if physical_height.is_finite() && physical_height > 0. {
+            physical_height.recip()
+        } else {
+            1. / 1080.
+        }
     }
 
     fn workspace_gap(&self, zoom: f64) -> f64 {
@@ -2603,12 +2627,13 @@ impl<W: LayoutElement> Monitor<W> {
         else {
             return false;
         };
-        self.workspace_switch = Some(WorkspaceSwitch::Animation(Animation::new(
+        self.workspace_switch = Some(WorkspaceSwitch::Animation(Animation::workspace(
             self.clock.clone(),
             settlement.from,
             settlement.to,
             settlement.velocity,
             self.options.animations.workspace_switch.0,
+            self.workspace_single_pixel(),
         )));
         true
     }

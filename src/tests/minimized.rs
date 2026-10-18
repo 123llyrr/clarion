@@ -822,7 +822,10 @@ fn test_pixels(native: bool) {
                 );
                 f.clarion().clock.set_unadjusted(
                     now + Duration::from_millis(match effect {
-                        MinimizeEffect::Genie => 250,
+                        // Geometry-dependent narrowing may already finish
+                        // before half-time, notably on a small 2x viewport.
+                        // Sample the bending stage for this fixture's targets.
+                        MinimizeEffect::Genie => 125,
                         MinimizeEffect::Scale => 175,
                     }),
                 );

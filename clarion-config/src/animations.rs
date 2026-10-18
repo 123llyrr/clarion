@@ -116,6 +116,10 @@ pub struct Animation {
 pub enum Kind {
     Easing(EasingParams),
     Spring(SpringParams),
+    /// Internal default for workspace settlement. The KDL decoder exposes the
+    /// existing spring/easing controls, not a separate selectable model.
+    #[doc(hidden)]
+    WorkspaceFeedback,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -192,11 +196,7 @@ impl Default for WorkspaceSwitchAnim {
         Self(
             Animation {
                 off: false,
-                kind: Kind::Spring(SpringParams {
-                    damping_ratio: 1.,
-                    stiffness: 1000,
-                    epsilon: 0.0001,
-                }),
+                kind: Kind::WorkspaceFeedback,
             },
             WorkspaceCube::default(),
         )
@@ -1268,6 +1268,77 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_default_uses_feedback_and_keeps_existing_timing_overrides() {
+        #[derive(Debug, knuffel::Decode)]
+        struct WorkspaceConfig {
+            #[knuffel(child)]
+            workspace_switch: WorkspaceSwitchAnim,
+        }
+        assert_eq!(
+            WorkspaceSwitchAnim::default().0.kind,
+            Kind::WorkspaceFeedback
+        );
+        assert_eq!(
+            crate::Config::load_default()
+                .animations
+                .workspace_switch
+                .0
+                .kind,
+            Kind::WorkspaceFeedback
+        );
+        for (text, off) in [
+            ("workspace-switch {}", false),
+            ("workspace-switch { off; }", true),
+            ("workspace-switch { cube { off; }; }", false),
+        ] {
+            let config: WorkspaceConfig = knuffel::parse("test.kdl", text).unwrap();
+            assert_eq!(config.workspace_switch.0.kind, Kind::WorkspaceFeedback);
+            assert_eq!(config.workspace_switch.0.off, off);
+        }
+        for (text, expected) in [
+            (
+                "workspace-switch { spring damping-ratio=1.0 stiffness=1000 epsilon=0.0001; }",
+                Kind::Spring(SpringParams {
+                    damping_ratio: 1.,
+                    stiffness: 1000,
+                    epsilon: 0.0001,
+                }),
+            ),
+            (
+                "workspace-switch { duration-ms 280; }",
+                Kind::Easing(EasingParams {
+                    duration_ms: 280,
+                    curve: Curve::EaseOutCubic,
+                }),
+            ),
+            (
+                "workspace-switch { curve \"linear\"; }",
+                Kind::Easing(EasingParams {
+                    duration_ms: 250,
+                    curve: Curve::Linear,
+                }),
+            ),
+            (
+                "workspace-switch { off; duration-ms 280; curve \"linear\"; }",
+                Kind::Easing(EasingParams {
+                    duration_ms: 280,
+                    curve: Curve::Linear,
+                }),
+            ),
+        ] {
+            let config: WorkspaceConfig = knuffel::parse("test.kdl", text).unwrap();
+            assert_eq!(config.workspace_switch.0.kind, expected);
+            assert_eq!(config.workspace_switch.0.off, text.contains("{ off;"));
+        }
+        for text in [
+            "workspace-switch { model \"big-sur\"; }",
+            "workspace-switch { duration-ms 280; spring damping-ratio=1.0 stiffness=1000 epsilon=0.0001; }",
+        ] {
+            assert!(knuffel::parse::<WorkspaceConfig>("test.kdl", text).is_err());
+        }
+    }
 
     #[derive(Debug, knuffel::Decode)]
     struct AnimationConfig {
