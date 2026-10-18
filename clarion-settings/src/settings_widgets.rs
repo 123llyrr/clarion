@@ -241,6 +241,21 @@ pub fn slider<Num: egui::emath::Numeric>(
             // Slider's built-in value editor commits each parsed keystroke.
             // A separate DragValue keeps a partial number local until Enter or
             // blur, so an autosave cannot interrupt a slow numeric edit.
+            // Ctrl+S alone does not emit a TextEdit changed event. Commit with
+            // Enter after this frame's queued text, letting egui parse both
+            // earlier edits and text received in the same frame as Save/Close.
+            let editor_id = ui.next_auto_id();
+            if explicit_commit && ui.memory(|memory| memory.has_focus(editor_id)) {
+                ui.input_mut(|input| {
+                    input.events.push(egui::Event::Key {
+                        key: egui::Key::Enter,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    })
+                });
+            }
             let response = ui.add(
                 egui::DragValue::new(value)
                     .range(range)
@@ -248,7 +263,7 @@ pub fn slider<Num: egui::emath::Numeric>(
                     .speed(10.0_f64.powi(-(decimals as i32)))
                     .fixed_decimals(decimals)
                     .suffix(suffix)
-                    .update_while_editing(explicit_commit),
+                    .update_while_editing(false),
             );
             response.widget_info(|| {
                 let mut info = WidgetInfo::drag_value(ui.is_enabled(), value.to_f64());

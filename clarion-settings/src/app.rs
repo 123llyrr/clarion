@@ -20,6 +20,10 @@ use crate::preferences_home;
 use crate::theme::colors as palette;
 use crate::window_manager::WindowManager;
 
+#[path = "display_controls.rs"]
+mod display_controls;
+use display_controls::DisplayControls;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveTab {
     Dashboard,
@@ -72,6 +76,7 @@ pub struct ClarionSettingsApp {
     pending_window_focus: Option<PendingWindowFocus>,
     desktop_theme: crate::theme::DesktopThemeWatcher,
     common: CommonPreferencesState,
+    display: DisplayControls,
 }
 
 struct CommonPreferencesState {
@@ -230,6 +235,7 @@ impl ClarionSettingsApp {
     }
 
     fn clear_common_after_manual_save(&mut self) {
+        self.display = DisplayControls::default();
         self.common.retry = None;
         self.common.settings = None;
         self.common.baseline = None;
@@ -432,6 +438,7 @@ impl ClarionSettingsApp {
             pending_window_focus: None,
             desktop_theme: Default::default(),
             common: CommonPreferencesState::new(_cc.egui_ctx.clone()),
+            display: DisplayControls::default(),
         };
 
         app.refresh_ipc_data();
@@ -604,6 +611,7 @@ impl ClarionSettingsApp {
             && !self.confirm_reload
             && !self.show_hot_corners
             && !self.common.confirm_close
+            && !self.display.confirm_close
             && !self.common.worker.is_busy()
     }
 
@@ -780,6 +788,9 @@ impl ClarionSettingsApp {
         Ok(())
     }
     fn close_guard(&mut self, ctx: &egui::Context) {
+        if self.display_controls_close_guard(ctx) {
+            return;
+        }
         let manual_draft = self.config_mgr.is_dirty() || self.full_config.has_pending();
         if ctx.input(|input| input.viewport().close_requested()) {
             if self.common.worker.is_busy()
@@ -826,6 +837,9 @@ impl ClarionSettingsApp {
             if ctx.input(|i| i.viewport().close_requested()) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 if let Err(error) = self.config_mgr.finish_preview(&self.ipc, false) {
+                    if self.display.owns_preview() && !self.config_mgr.preview_pending() {
+                        self.finish_display_controls_preview(false, Some(error.to_string()));
+                    }
                     self.set_status(error.to_string(), true);
                 }
             }
@@ -935,6 +949,13 @@ impl ClarionSettingsApp {
                             if let Err(error) =
                                 self.config_mgr.finish_preview(&self.ipc, keep && !cancel)
                             {
+                                if self.display.owns_preview() && !self.config_mgr.preview_pending()
+                                {
+                                    self.finish_display_controls_preview(
+                                        false,
+                                        Some(error.to_string()),
+                                    );
+                                }
                                 self.set_status(error.to_string(), true);
                             }
                         }
@@ -996,6 +1017,7 @@ impl ClarionSettingsApp {
     fn refresh_ipc_data(&mut self) {
         self.last_ipc_poll = std::time::Instant::now();
         self.refresh_common_preferences_from_disk();
+        self.refresh_display_controls_from_disk();
         self.ipc.refresh();
         let Some(snapshot) = self.ipc.take_snapshot() else {
             return;
@@ -1038,7 +1060,9 @@ impl ClarionSettingsApp {
             match result {
                 Ok(message) => {
                     let confirmed = message.contains("已确认并保存");
-                    if confirmed {
+                    if self.display.owns_preview() && !self.config_mgr.preview_pending() {
+                        self.finish_display_controls_preview(confirmed, None);
+                    } else if confirmed {
                         self.clear_common_after_manual_save();
                     }
                     self.set_status(message, false);
@@ -1054,6 +1078,9 @@ impl ClarionSettingsApp {
                 }
                 Err(error) => {
                     self.close_after_preview = false;
+                    if self.display.owns_preview() && !self.config_mgr.preview_pending() {
+                        self.finish_display_controls_preview(false, Some(error.to_string()));
+                    }
                     self.set_status(error.to_string(), true);
                 }
             }
@@ -1187,14 +1214,15 @@ impl ClarionSettingsApp {
             || self.confirm_reload
             || self.show_hot_corners
             || self.common.confirm_close
-            || self.common.worker.is_busy();
+            || self.common.worker.is_busy()
+            || self.display.confirm_close;
         let close_requested = ctx.input(|input| input.viewport().close_requested());
         let blocked = blocked_by_state || close_requested;
         let mut save_requested = !blocked
             && ctx.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::S));
         crate::settings_widgets::set_numeric_commit(
             ctx,
-            Self::is_common_pane(self.active_tab)
+            (Self::is_common_pane(self.active_tab) || self.active_tab == ActiveTab::Outputs)
                 && (save_requested || ctx.input(|input| input.viewport().close_requested())),
         );
         let mut check_requested = false;
@@ -1231,6 +1259,11 @@ impl ClarionSettingsApp {
                     ui.disable();
                 }
                 let dirty = self.config_mgr.is_dirty() || self.full_config.has_pending();
+                if self.active_tab == ActiveTab::Outputs && (!dirty || self.display.owns_preview())
+                {
+                    self.ui_display_save_status(ui);
+                    return;
+                }
                 if !dirty
                     && (Self::is_common_pane(self.active_tab)
                         || self.active_tab == ActiveTab::Dashboard
@@ -1324,7 +1357,11 @@ impl ClarionSettingsApp {
                     .inner_margin(Margin::same(20.)),
             )
             .show(ctx, |ui| {
-                if blocked_by_state || (close_requested && !Self::is_common_pane(self.active_tab)) {
+                if blocked_by_state
+                    || (close_requested
+                        && !Self::is_common_pane(self.active_tab)
+                        && self.active_tab != ActiveTab::Outputs)
+                {
                     ui.disable();
                 }
                 if let Some((ref message, is_error, time)) = self.status_message {
@@ -1409,6 +1446,7 @@ impl ClarionSettingsApp {
         // Starting at frame entry would disable the control on its release
         // event and lose a last slider/key/toggle update.
         self.submit_common_if_ready(ctx);
+        self.submit_display_controls_if_ready(ctx);
         let title = preferences_home::title(self.active_tab);
         if ctx.input(|input| input.viewport().title.as_deref() != Some(title)) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.into()));
@@ -1480,6 +1518,10 @@ impl ClarionSettingsApp {
             return;
         }
         let manual_draft = self.config_mgr.is_dirty() || self.full_config.has_pending();
+        if !manual_draft && self.display.needs_save() {
+            self.start_display_controls_preview();
+            return;
+        }
         if !manual_draft && (self.common.pending() || self.common.retry.is_some()) {
             self.start_common_save();
             return;
@@ -2842,156 +2884,42 @@ impl ClarionSettingsApp {
     }
 
     fn ui_outputs(&mut self, ui: &mut Ui) {
-        ScrollArea::vertical().show(ui, |ui| {
+        ScrollArea::vertical().id_salt("direct-output-preferences").auto_shrink([false, false]).show(ui, |ui| {
             if self.cached_outputs.len() > 1 {
                 Self::segmented_tabs(ui, &mut self.output_section, &["显示器", "排列"]);
-                ui.add_space(20.);
+                ui.add_space(16.);
             } else {
                 self.output_section = 0;
             }
-            if !self
-                .cached_outputs
-                .iter()
-                .any(|output| Some(&output.name) == self.selected_output.as_ref())
-            {
-                self.selected_output = self
-                    .cached_outputs
-                    .first()
-                    .map(|output| output.name.clone());
+            if !self.display.selection_locked()
+                && !self.cached_outputs.iter().any(|output| Some(&output.name) == self.selected_output.as_ref()) {
+                self.selected_output = self.cached_outputs.iter().find(|output| output.logical.is_some())
+                    .or_else(|| self.cached_outputs.first()).map(|output| output.name.clone());
             }
-            if self.cached_outputs.len() > 1 {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("显示器：");
-                    for output in &self.cached_outputs {
-                        ui.selectable_value(
-                            &mut self.selected_output,
-                            Some(output.name.clone()),
-                            &output.name,
-                        );
-                    }
-                });
-                ui.add_space(12.);
-            }
+            let selected = self.selected_output.clone();
+            ui.add_enabled_ui(!self.display.selection_locked(), |ui| {
+                crate::output_preferences::selector(ui, &self.cached_outputs, &mut self.selected_output);
+            });
             if self.output_section == 1 {
-                self.ui_output_arrangement(ui);
+                ui.add_enabled_ui(!self.display.selection_locked(), |ui| self.ui_output_arrangement(ui));
                 ui.add_space(18.);
             }
-
-            if self.cached_outputs.is_empty() {
-                if let Some(error) = &self.connection_error {
-                    ui.label("暂时无法读取显示器信息，正在自动重新连接 Clarion。");
-                    ui.label(error);
-                } else {
-                    ui.label("已连接 Clarion，当前没有可用的输出设备。");
-                }
-            } else {
-                for i in 0..self.cached_outputs.len() {
-                    if Some(&self.cached_outputs[i].name) != self.selected_output.as_ref() {
-                        continue;
-                    }
-                    let name = self.cached_outputs[i].name.clone();
-                    let make = self.cached_outputs[i].make.clone();
-                    let model = self.cached_outputs[i].model.clone();
-                    let logical = self.cached_outputs[i].logical;
-                    let vrr_supported = self.cached_outputs[i].vrr_supported;
-                    let vrr_enabled = self.cached_outputs[i].vrr_enabled;
-                    let hdr_active = self.cached_outputs[i].hdr_active;
-                    let hdr_supported = self.cached_outputs[i].hdr_supported;
-                    let hdr_status = self.cached_outputs[i].hdr_status.clone();
-                    let hdr_peak = self.cached_outputs[i].hdr_peak_luminance;
-                    let sdr_white = self.cached_outputs[i].sdr_white_level;
-                    let current_mode = self.cached_outputs[i]
-                        .current_mode
-                        .and_then(|idx| self.cached_outputs[i].modes.get(idx).cloned());
-                    Frame::none()
-                        .fill(palette::background())
-                        .rounding(Rounding::same(4.0))
-                        .inner_margin(Margin::same(12.0))
-                        .show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label(
-                                    RichText::new(&name)
-                                        .size(16.0)
-                                        .color(palette::accent())
-                                        .strong(),
-                                );
-                                ui.label(format!("(制造商: {}, 型号: {})", make, model));
-                            });
-                            ui.add_space(6.0);
-                            if let Some(logical) = &logical {
-                                ui.label(format!(
-                                    "逻辑尺寸: {}x{}，缩放比例: {:.2}x，位置: ({}, {})",
-                                    logical.width,
-                                    logical.height,
-                                    logical.scale,
-                                    logical.x,
-                                    logical.y
-                                ));
-                            }
-                            if let Some(mode) = &current_mode {
-                                ui.label(format!(
-                                    "当前物理分辨率: {}x{} @ {:.2} Hz",
-                                    mode.width,
-                                    mode.height,
-                                    mode.refresh_rate as f32 / 1000.0
-                                ));
-                            }
-                            ui.label(format!(
-                                "可变刷新率（VRR）：{}",
-                                if vrr_enabled {
-                                    "已启用"
-                                } else if vrr_supported {
-                                    "支持，当前未启用"
-                                } else {
-                                    "此显示器不支持"
-                                }
-                            ));
-                            ui.label(format!(
-                                "HDR：{}",
-                                if hdr_active {
-                                    "已启用（HDR10 / BT.2020）"
-                                } else if hdr_supported {
-                                    "支持，当前未启用"
-                                } else {
-                                    "当前输出链路不支持"
-                                }
-                            ));
-                            if let Some(peak) = hdr_peak {
-                                ui.label(format!("HDR 峰值亮度：{peak:.0} 尼特"));
-                            }
-                            if let Some(white) = sdr_white {
-                                ui.label(format!("SDR 内容参考白：{white:.0} 尼特"));
-                            }
-                            if let Some(status) = &hdr_status {
-                                ui.label(status);
-                            }
-                            if icons::button(ui, Icon::Settings, "配置此显示器").clicked() {
-                                match self
-                                    .full_config
-                                    .select_output(self.config_mgr.raw_content(), &name)
-                                {
-                                    Ok(next) => {
-                                        if let Some(next) = next {
-                                            self.config_mgr.set_raw_content(next);
-                                        }
-                                        self.switch_tab(ActiveTab::FullConfig);
-                                    }
-                                    Err(error) => {
-                                        self.status_message = Some((
-                                            error.to_string(),
-                                            true,
-                                            std::time::Instant::now(),
-                                        ));
-                                    }
-                                }
-                            }
-                        });
-                    ui.add_space(10.0);
-                }
+            if selected != self.selected_output && !self.display.selection_locked() {
+                self.display = DisplayControls::default();
             }
-
-            ui.add_space(14.0);
+            if let Some(output) = self.cached_outputs.iter().find(|output| Some(&output.name) == self.selected_output.as_ref()).cloned() {
+                ui.label(RichText::new("更改后会自动预览；点击“保留并保存”后生效并写入配置，15 秒内未确认会恢复。").size(12.).color(palette::muted()));
+                ui.add_space(12.);
+                self.ui_direct_output(ui, &output);
+            } else if let Some(error) = &self.connection_error {
+                ui.label("暂时无法读取显示器信息，正在自动重新连接 Clarion。");
+                ui.add(egui::Label::new(error).wrap());
+            } else if self.display.selection_locked() {
+                ui.label("正在调整的显示器已断开连接，请放弃这次修改后重新选择。");
+            } else {
+                ui.label("已连接 Clarion，当前没有可用的输出设备。");
+            }
+            ui.add_space(14.);
             if icons::button(ui, Icon::Refresh, "刷新显示器状态").clicked() {
                 self.refresh_ipc_data();
                 self.set_status("已请求刷新显示器信息", false);
@@ -3351,6 +3279,7 @@ mod tests {
                 );
                 common
             },
+            display: DisplayControls::default(),
         }
     }
     fn close(app: &mut ClarionSettingsApp) -> egui::FullOutput {

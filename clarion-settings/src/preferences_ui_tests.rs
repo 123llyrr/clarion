@@ -554,10 +554,14 @@ fn chrome_text_stays_inside_480_to_980_point_windows_at_fractional_dpi_without_s
                     "a sidebar consumed content width"
                 );
                 assert_eq!(context.available_rect().right(), width);
-                let automatic =
-                    ClarionSettingsApp::is_common_pane(tab) || tab == ActiveTab::Dashboard;
+                let display = tab == ActiveTab::Outputs;
+                let automatic = ClarionSettingsApp::is_common_pane(tab)
+                    || tab == ActiveTab::Dashboard
+                    || display;
                 let mut labels = vec!["命令中心", "搜索设置"];
-                labels.extend(if automatic {
+                labels.extend(if display {
+                    vec!["更改后自动预览，确认保留才保存"]
+                } else if automatic {
                     vec!["更改会自动保存并应用"]
                 } else {
                     vec!["保存并应用", "检查修改", "当前没有未保存修改"]

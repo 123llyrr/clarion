@@ -330,29 +330,57 @@ impl ConfigManager {
         self.check_disk_unchanged()?;
 
         if self.outputs_changed()? {
-            let dependencies = self.preview_dependencies()?;
-            let reply = ipc.request(clarion_ipc::Request::PreviewOutputConfig {
-                root_path: std::path::absolute(&self.root_path)?
-                    .to_str()
-                    .context("配置路径需要 UTF-8")?
-                    .into(),
-                edited_path: std::path::absolute(&self.config_path)?
-                    .to_str()
-                    .context("配置路径需要 UTF-8")?
-                    .into(),
-                content: self.raw_content.clone(),
-            })?;
-            self.preview = Some(crate::output_preview::Preview {
-                content: self.raw_content.clone(),
-                dependencies,
-                phase: crate::output_preview::Phase::Starting {
-                    reply,
-                    sent: Instant::now(),
-                },
-            });
-            return Ok(());
+            return self.start_output_preview(ipc);
         }
         self.write_and_reload(ipc)
+    }
+
+    /// Preview a change made by the display page. Unlike manual saving, this
+    /// path can never fall through to a disk write or an unguarded reload.
+    pub fn begin_output_preview(&mut self, ipc: &crate::ipc::IpcClient) -> Result<()> {
+        anyhow::ensure!(self.preview.is_none(), "请先确认或恢复显示设置");
+        anyhow::ensure!(!self.visual_is_dirty(), "请先处理其他设置的未保存修改");
+        self.validate();
+        if let ValidationStatus::Error(error) = &self.validation_status {
+            anyhow::bail!("配置校验失败，未写入文件: {error}");
+        }
+        self.check_disk_unchanged()?;
+        let mut previous = self.merged_config(self.disk_content.as_deref().unwrap_or_default())?;
+        let candidate = self.effective_config()?;
+        anyhow::ensure!(
+            previous.outputs != candidate.outputs,
+            "显示设置没有变化，无需预览"
+        );
+        previous.outputs = candidate.outputs.clone();
+        anyhow::ensure!(
+            previous == candidate,
+            "显示器页面不能同时应用其他配置草稿，请先处理高级配置中的修改"
+        );
+        self.start_output_preview(ipc)
+    }
+
+    fn start_output_preview(&mut self, ipc: &crate::ipc::IpcClient) -> Result<()> {
+        let dependencies = self.preview_dependencies()?;
+        let reply = ipc.request(clarion_ipc::Request::PreviewOutputConfig {
+            root_path: std::path::absolute(&self.root_path)?
+                .to_str()
+                .context("配置路径需要 UTF-8")?
+                .into(),
+            edited_path: std::path::absolute(&self.config_path)?
+                .to_str()
+                .context("配置路径需要 UTF-8")?
+                .into(),
+            content: self.raw_content.clone(),
+        })?;
+        self.preview = Some(crate::output_preview::Preview {
+            content: self.raw_content.clone(),
+            dependencies,
+            phase: crate::output_preview::Phase::Starting {
+                reply,
+                sent: Instant::now(),
+            },
+        });
+        Ok(())
     }
 
     pub(crate) fn merged_config(&self, content: &str) -> Result<Config> {
@@ -2566,6 +2594,266 @@ mod tests {
         assert!(!animations.workspace_switch.1.off);
         assert!(!animations.window_open.glide.off);
         assert!(!animations.window_close.glide.off);
+    }
+
+    #[test]
+    fn automatic_display_preview_rejects_unchanged_non_output_and_mixed_drafts() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.kdl");
+        let content = "layout { gaps 8; }\noutput \"test\" { scale 1; }\n";
+        fs::write(&path, content).unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let worker_calls = calls.clone();
+        let ipc = crate::ipc::IpcClient::scripted_for_test(move |_| {
+            worker_calls.fetch_add(1, Ordering::Relaxed);
+            Ok(clarion_ipc::Response::Handled)
+        });
+        let mut mgr = ConfigManager::from_path(&path).unwrap();
+        for (draft, expected_error) in [
+            (content.to_owned(), "没有变化"),
+            (content.replace("gaps 8", "gaps 12"), "没有变化"),
+            (
+                content
+                    .replace("gaps 8", "gaps 12")
+                    .replace("scale 1", "scale 2"),
+                "其他配置草稿",
+            ),
+            ("output {".into(), "配置校验失败"),
+        ] {
+            mgr.set_raw_content(draft.clone());
+            let error = mgr.begin_output_preview(&ipc).unwrap_err().to_string();
+            assert!(error.contains(expected_error), "{error}");
+            assert_eq!(mgr.raw_content(), draft);
+            assert!(!mgr.preview_pending());
+            assert_eq!(fs::read_to_string(&path).unwrap(), content);
+            assert!(!path.with_extension("kdl.bak").exists());
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn automatic_display_preview_only_saves_after_confirmation_and_cancel_keeps_file() {
+        for keep in [false, true] {
+            let (_dir, mut mgr) = preview_manager();
+            let original = fs::read(&mgr.config_path).unwrap();
+            let draft = mgr.raw_content().to_owned();
+            let ipc = preview_ipc();
+            mgr.begin_output_preview(&ipc).unwrap();
+            poll(&mut mgr, &ipc).unwrap();
+            assert!(mgr.preview_pending());
+            assert_eq!(fs::read(&mgr.config_path).unwrap(), original);
+            assert!(!mgr.config_path.with_extension("kdl.bak").exists());
+            mgr.finish_preview(&ipc, keep).unwrap();
+            poll(&mut mgr, &ipc).unwrap();
+            assert!(!mgr.preview_pending());
+            if keep {
+                assert_eq!(fs::read_to_string(&mgr.config_path).unwrap(), draft);
+                assert_eq!(
+                    fs::read(mgr.config_path.with_extension("kdl.bak")).unwrap(),
+                    original
+                );
+                assert!(!mgr.is_dirty());
+            } else {
+                assert_eq!(fs::read(&mgr.config_path).unwrap(), original);
+                assert_eq!(mgr.raw_content(), draft);
+                assert!(mgr.is_dirty());
+                assert!(!mgr.config_path.with_extension("kdl.bak").exists());
+            }
+        }
+    }
+
+    #[test]
+    fn automatic_display_preview_rejects_external_file_changes_without_request() {
+        let (_dir, mut mgr) = preview_manager();
+        let draft = mgr.raw_content().to_owned();
+        fs::write(&mgr.config_path, "// external configuration\n").unwrap();
+        let error = mgr
+            .begin_output_preview(&crate::ipc::IpcClient::disconnected_for_test())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("已被其他程序修改"), "{error}");
+        assert!(!mgr.preview_pending());
+        assert_eq!(mgr.raw_content(), draft);
+        assert_eq!(
+            fs::read_to_string(&mgr.config_path).unwrap(),
+            "// external configuration\n"
+        );
+        assert!(!mgr.config_path.with_extension("kdl.bak").exists());
+    }
+
+    /// The launcher starts/stops a separate winit core. This test deliberately
+    /// avoids session discovery and refuses any socket outside its private root.
+    #[test]
+    #[ignore = "requires an explicitly marked isolated nested winit compositor"]
+    fn isolated_nested_core_previews_and_cancels_without_writing() {
+        use std::io::Write;
+        use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+
+        fn request(socket: &Path, request: &clarion_ipc::Request) -> Result<clarion_ipc::Response> {
+            let mut stream = crate::socket_io::connect(socket)?;
+            let mut bytes = serde_json::to_vec(request)?;
+            bytes.push(b'\n');
+            stream.write_all(&bytes)?;
+            let response =
+                crate::socket_io::read_line(&mut stream, 16 * 1024 * 1024, Duration::from_secs(5))?;
+            serde_json::from_slice::<clarion_ipc::Reply>(&response)?.map_err(anyhow::Error::msg)
+        }
+        fn outputs(
+            socket: &Path,
+        ) -> Result<std::collections::HashMap<String, clarion_ipc::Output>> {
+            match request(socket, &clarion_ipc::Request::Outputs)? {
+                clarion_ipc::Response::Outputs(outputs) => Ok(outputs),
+                _ => anyhow::bail!("unexpected output response"),
+            }
+        }
+        fn wait_scale(socket: &Path, scale: f64) -> Result<()> {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                let outputs = outputs(socket)?;
+                let actual = outputs
+                    .get("winit")
+                    .and_then(|output| output.logical)
+                    .map(|o| o.scale);
+                if actual.is_some_and(|actual| (actual - scale).abs() < 0.0001) {
+                    return Ok(());
+                }
+                anyhow::ensure!(
+                    Instant::now() < deadline,
+                    "nested scale did not reach {scale}"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+
+        let requested_root = PathBuf::from(
+            std::env::var_os("CLARION_AUTOSAVE_TEST_ROOT")
+                .expect("set CLARION_AUTOSAVE_TEST_ROOT to a marked private fixture"),
+        );
+        assert!(requested_root.is_absolute() && !requested_root.is_symlink());
+        let root = requested_root.canonicalize().unwrap();
+        // SAFETY: geteuid has no preconditions or memory arguments.
+        let uid = unsafe { libc::geteuid() };
+        assert_eq!(fs::metadata(&root).unwrap().uid(), uid);
+        assert_eq!(fs::metadata(&root).unwrap().permissions().mode() & 0o077, 0);
+        let marker = root.join(".settings-autosave-fixture");
+        assert!(fs::symlink_metadata(&marker).unwrap().file_type().is_file());
+        assert_eq!(
+            fs::read_to_string(marker).unwrap(),
+            "clarion-settings-autosave-isolated-fixture-v1\n"
+        );
+        let runtime = root.join("runtime");
+        assert!(!runtime.is_symlink());
+        assert_eq!(runtime.canonicalize().unwrap(), runtime);
+        assert_eq!(fs::metadata(&runtime).unwrap().uid(), uid);
+        assert_eq!(
+            fs::metadata(&runtime).unwrap().permissions().mode() & 0o077,
+            0
+        );
+        let socket = PathBuf::from(std::env::var_os("CLARION_SOCKET").expect("set fixture socket"))
+            .canonicalize()
+            .unwrap();
+        assert!(
+            socket.starts_with(&runtime),
+            "refusing a socket outside fixture runtime"
+        );
+        assert!(fs::symlink_metadata(&socket)
+            .unwrap()
+            .file_type()
+            .is_socket());
+        let path = root.join("config.kdl");
+        assert!(fs::symlink_metadata(&path).unwrap().file_type().is_file());
+        assert_eq!(path.canonicalize().unwrap().parent(), Some(root.as_path()));
+        let original_outputs = outputs(&socket).unwrap();
+        assert_eq!(original_outputs.len(), 1, "nested output only");
+        assert!(
+            original_outputs.contains_key("winit"),
+            "physical outputs are forbidden"
+        );
+        let original_scale = original_outputs["winit"].logical.unwrap().scale;
+        let original = fs::read_to_string(&path).unwrap();
+        let original_backup = fs::read(path.with_extension("kdl.bak")).ok();
+        let mut mgr = ConfigManager::from_path(&path).unwrap();
+        assert!(
+            mgr.included_paths().is_empty(),
+            "integration fixture must have no includes"
+        );
+        let configured = mgr.effective_config().unwrap().outputs;
+        assert!(
+            configured.0.len() <= 1 && configured.0.iter().all(|output| output.name == "winit")
+        );
+        let scale = if (original_scale - 1.25).abs() < 0.0001 {
+            1.0
+        } else {
+            1.25
+        };
+        let mut editor = Editor::new(&original).unwrap();
+        if editor.exists(&["output"]) {
+            editor
+                .upsert(&["output"], "scale", &format!("scale {scale}"))
+                .unwrap();
+        } else {
+            editor
+                .upsert(
+                    &[],
+                    "output",
+                    &format!("output \"winit\" {{ scale {scale}; }}"),
+                )
+                .unwrap();
+        }
+        mgr.set_raw_content(editor.finish());
+        let worker_socket = socket.clone();
+        let worker_path = path.clone();
+        let ipc = crate::ipc::IpcClient::scripted_for_test(move |message| {
+            match &message {
+                clarion_ipc::Request::PreviewOutputConfig {
+                    root_path,
+                    edited_path,
+                    ..
+                } => {
+                    if Path::new(root_path) != worker_path || Path::new(edited_path) != worker_path
+                    {
+                        return Err("test refuses paths outside fixed config.kdl".into());
+                    }
+                }
+                clarion_ipc::Request::CancelOutputPreview { .. } => {}
+                _ => return Err("test permits only preview and cancellation requests".into()),
+            }
+            request(&worker_socket, &message).map_err(|error| format!("{error:#}"))
+        });
+        mgr.begin_output_preview(&ipc).unwrap();
+        let ready = poll(&mut mgr, &ipc);
+        let inspected = (|| -> Result<()> {
+            ready?;
+            anyhow::ensure!(
+                mgr.preview_seconds().is_some(),
+                "nested core did not start preview"
+            );
+            wait_scale(&socket, scale)?;
+            anyhow::ensure!(
+                fs::read_to_string(&path)? == original,
+                "preview wrote configuration"
+            );
+            anyhow::ensure!(
+                fs::read(path.with_extension("kdl.bak")).ok() == original_backup,
+                "preview changed backup"
+            );
+            Ok(())
+        })();
+        if mgr.preview_seconds().is_some() {
+            mgr.finish_preview(&ipc, false).unwrap();
+            poll(&mut mgr, &ipc).unwrap();
+        }
+        assert!(!mgr.preview_pending());
+        wait_scale(&socket, original_scale).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
+        assert_eq!(
+            fs::read(path.with_extension("kdl.bak")).ok(),
+            original_backup
+        );
+        inspected.unwrap();
     }
 
     #[test]

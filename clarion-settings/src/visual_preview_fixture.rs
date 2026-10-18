@@ -53,6 +53,62 @@ impl Drop for IsolatedEnvironment {
 struct NativePreview {
     app: ClarionSettingsApp,
     started: Instant,
+    scroll: f32,
+    scroll_sent: bool,
+}
+
+fn synthetic_output(name: &str, active: bool) -> clarion_ipc::Output {
+    clarion_ipc::Output {
+        name: name.to_owned(),
+        make: "Clarion QA".to_owned(),
+        model: if active {
+            "Synthetic active display"
+        } else {
+            "Synthetic disabled display"
+        }
+        .to_owned(),
+        serial: Some(format!("QA-NOT-HARDWARE-{name}")),
+        physical_size: Some((600, 340)),
+        modes: vec![
+            clarion_ipc::Mode {
+                width: 3840,
+                height: 2160,
+                refresh_rate: 60_000,
+                is_preferred: true,
+            },
+            clarion_ipc::Mode {
+                width: 3840,
+                height: 2160,
+                refresh_rate: 120_000,
+                is_preferred: false,
+            },
+            clarion_ipc::Mode {
+                width: 2560,
+                height: 1440,
+                refresh_rate: 144_000,
+                is_preferred: false,
+            },
+        ],
+        current_mode: active.then_some(0),
+        is_custom_mode: false,
+        vrr_supported: true,
+        vrr_enabled: active,
+        logical: active.then_some(clarion_ipc::LogicalOutput {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            scale: 2.,
+            transform: clarion_ipc::Transform::Normal,
+        }),
+        max_bpc: Some(10),
+        hdr_active: active,
+        hdr_supported: true,
+        hdr_status: None,
+        hdr_peak_luminance: Some(1000.),
+        sdr_white_level: Some(203.),
+        hdr_brightness: Some(100.),
+    }
 }
 
 impl eframe::App for NativePreview {
@@ -63,6 +119,20 @@ impl eframe::App for NativePreview {
         input.events.clear();
         input.dropped_files.clear();
         input.hovered_files.clear();
+        if self.scroll > 0.
+            && !self.scroll_sent
+            && self.started.elapsed() >= Duration::from_millis(400)
+        {
+            input
+                .events
+                .push(egui::Event::PointerMoved(egui::pos2(25., 300.)));
+            input.events.push(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0., -self.scroll),
+                modifiers: egui::Modifiers::NONE,
+            });
+            self.scroll_sent = true;
+        }
     }
 
     fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
@@ -85,6 +155,7 @@ fn native_common_preferences_preview() {
         "layout" => ActiveTab::Layout,
         "keyboard" => ActiveTab::InputHotCorners,
         "trackpad" => ActiveTab::Trackpad,
+        "outputs" => ActiveTab::Outputs,
         other => panic!("unknown CLARION_QA_PAGE: {other}"),
     };
     let width = match std::env::var("CLARION_QA_WIDTH").as_deref() {
@@ -98,9 +169,33 @@ fn native_common_preferences_preview() {
         Ok("0") | Err(_) => false,
         Ok(other) => panic!("CLARION_QA_DARK must be 0 or 1: {other}"),
     };
+    let scroll = std::env::var("CLARION_QA_SCROLL")
+        .map(|value| {
+            value
+                .parse::<f32>()
+                .expect("CLARION_QA_SCROLL must be a number")
+        })
+        .unwrap_or(0.);
+    assert!(
+        scroll.is_finite() && (0.0..=2000.0).contains(&scroll),
+        "CLARION_QA_SCROLL must be between 0 and 2000 points"
+    );
     let _environment = IsolatedEnvironment::new();
     let (directory, mut app, _) = fixture(tab);
     let config_path = directory.path().join("config.kdl");
+    if tab == ActiveTab::Outputs {
+        // Synthetic names cannot match hardware. The marker and every config
+        // byte below are checked again when this isolated preview exits.
+        std::fs::write(&config_path, format!("{SOURCE}output \"CLARION-QA-DP-1\" {{ hdr; scale 2; mode \"3840x2160@60\"; variable-refresh-rate on-demand=true; }}\noutput \"CLARION-QA-DP-2\" {{ off; }}\n")).expect("write synthetic display fixture");
+        app.config_mgr
+            .reload_from_disk()
+            .expect("read synthetic display fixture");
+        app.cached_outputs = vec![
+            synthetic_output("CLARION-QA-DP-1", true),
+            synthetic_output("CLARION-QA-DP-2", false),
+        ];
+        app.selected_output = Some("CLARION-QA-DP-1".to_owned());
+    }
     let original_config = std::fs::read(&config_path).expect("read isolated preview config");
     let no_socket = directory.path().join("no-desktop-ipc.sock");
     app.ipc = crate::ipc::IpcClient::disconnected_for_test();
@@ -122,7 +217,7 @@ fn native_common_preferences_preview() {
         ..Default::default()
     };
     eprintln!(
-        "CLARION_QA_PREVIEW pid={} page={page} width={width} dark={dark} lifetime_secs=15",
+        "CLARION_QA_PREVIEW pid={} page={page} width={width} dark={dark} scroll={scroll} lifetime_secs=15",
         std::process::id()
     );
     eframe::run_native(
@@ -138,6 +233,8 @@ fn native_common_preferences_preview() {
             Ok(Box::new(NativePreview {
                 app,
                 started: Instant::now(),
+                scroll,
+                scroll_sent: false,
             }))
         }),
     )
