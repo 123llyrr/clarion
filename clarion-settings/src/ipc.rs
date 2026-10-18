@@ -349,7 +349,7 @@ impl IpcClient {
                             output_refresh = std::time::Instant::now() + Duration::from_secs(3);
                         }
                         Err(error) => {
-                            *shared.lock().unwrap() = Some(Err(error.to_string()));
+                            *shared.lock().unwrap() = Some(Err(format!("{error:#}")));
                             retry = std::time::Instant::now() + Duration::from_secs(3);
                             context.request_repaint();
                         }
@@ -373,7 +373,7 @@ impl IpcClient {
                 if let Err(error) = read_result {
                     connection = None;
                     stream = None;
-                    *shared.lock().unwrap() = Some(Err(error.to_string()));
+                    *shared.lock().unwrap() = Some(Err(format!("{error:#}")));
                     retry = std::time::Instant::now() + Duration::from_secs(1);
                     context.request_repaint();
                 } else if changed {
@@ -694,17 +694,108 @@ fn read_event_batch(
         };
         let end = consumed + end + 1;
         let line = &pending[consumed..end];
-        if let Ok(event) = serde_json::from_slice::<clarion_ipc::Event>(line) {
-            state.apply(event);
-            changed = true;
-        } else {
-            let reply: Reply = serde_json::from_slice(line)?;
-            reply.map_err(|e| anyhow::anyhow!(e))?;
+        match serde_json::from_slice::<clarion_ipc::Event>(line) {
+            Ok(event) => {
+                state.apply(event);
+                changed = true;
+            }
+            Err(event_error) => {
+                let (tag, payload) = event_envelope(line)?;
+                if matches!(tag.as_str(), "Ok" | "Err") {
+                    let reply: Reply = serde_json::from_slice(line)
+                        .context("Invalid Clarion IPC event-stream reply")?;
+                    reply.map_err(anyhow::Error::msg)?;
+                } else if event_tags().contains(&tag.as_str()) {
+                    // An unknown nested enum or malformed payload of a known event is an
+                    // error, rather than an excuse to silently lose existing state updates.
+                    return Err(event_error)
+                        .with_context(|| format!("Invalid Clarion IPC event {tag}"));
+                } else {
+                    // A newer compositor may add events independently of this client.
+                    // Only its unknown top-level event tag is forward compatible.
+                    anyhow::ensure!(
+                        payload.is_object(),
+                        "Unknown Clarion IPC event {tag} must have an object payload"
+                    );
+                }
+            }
         }
         consumed = end;
     }
     pending.drain(..consumed);
     Ok(changed)
+}
+
+/// Validate the wire envelope before allowing an unknown event. Reading the map
+/// directly also rejects duplicate tags, which Value would silently overwrite.
+fn event_envelope(line: &[u8]) -> Result<(String, serde_json::Value)> {
+    struct Envelope;
+    impl<'de> serde::de::Visitor<'de> for Envelope {
+        type Value = (String, serde_json::Value);
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a single-key Clarion IPC event object")
+        }
+
+        fn visit_map<A: serde::de::MapAccess<'de>>(
+            self,
+            mut map: A,
+        ) -> std::result::Result<Self::Value, A::Error> {
+            let entry = map
+                .next_entry()?
+                .ok_or_else(|| serde::de::Error::custom("IPC event must have one tag"))?;
+            if map.next_key::<serde::de::IgnoredAny>()?.is_some() {
+                return Err(serde::de::Error::custom("IPC event must have only one tag"));
+            }
+            Ok(entry)
+        }
+    }
+
+    let mut deserializer = serde_json::Deserializer::from_slice(line);
+    let envelope = serde::Deserializer::deserialize_map(&mut deserializer, Envelope)
+        .context("Invalid Clarion IPC event envelope")?;
+    deserializer
+        .end()
+        .context("Invalid Clarion IPC event JSON")?;
+    Ok(envelope)
+}
+
+/// Read Serde's actual top-level Event tags once, so compatibility does not
+/// depend on a duplicated list or on matching an unknown-variant error string.
+fn event_tags() -> &'static [&'static str] {
+    static TAGS: std::sync::OnceLock<&'static [&'static str]> = std::sync::OnceLock::new();
+    TAGS.get_or_init(|| {
+        struct Tags<'a>(&'a mut Option<&'static [&'static str]>);
+        impl<'de> serde::Deserializer<'de> for Tags<'_> {
+            type Error = serde::de::value::Error;
+
+            fn deserialize_enum<V: serde::de::Visitor<'de>>(
+                self,
+                _name: &'static str,
+                variants: &'static [&'static str],
+                _visitor: V,
+            ) -> std::result::Result<V::Value, Self::Error> {
+                *self.0 = Some(variants);
+                Err(serde::de::Error::custom("only collecting event tags"))
+            }
+
+            fn deserialize_any<V: serde::de::Visitor<'de>>(
+                self,
+                _visitor: V,
+            ) -> std::result::Result<V::Value, Self::Error> {
+                Err(serde::de::Error::custom("Event must be an enum"))
+            }
+
+            serde::forward_to_deserialize_any! {
+                bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str
+                string bytes byte_buf option unit unit_struct newtype_struct seq
+                tuple tuple_struct map struct identifier ignored_any
+            }
+        }
+        let mut tags = None;
+        let _ = <clarion_ipc::Event as serde::Deserialize>::deserialize(Tags(&mut tags));
+        tags.expect("Clarion IPC Event must be a Serde enum")
+    })
 }
 
 fn new_management(
@@ -848,6 +939,123 @@ mod worker_tests {
         assert!(!state.overview.is_open);
         assert!(pending.is_empty());
     }
+
+    #[test]
+    fn reduced_motion_and_future_events_preserve_known_state_updates() {
+        let (mut socket, _writer) = UnixStream::pair().unwrap();
+        socket.set_nonblocking(true).unwrap();
+        let mut state = clarion_ipc::state::EventStreamState::default();
+        let mut pending = br#"{"Ok":"Handled"}
+{"ReducedMotionChanged":{"enabled":false}}
+{"FutureDisplayAnimationState":{"phase":"ready","nested":{"unknown":"allowed"}}}
+{"OverviewOpenedOrClosed":{"is_open":true}}
+"#
+        .to_vec();
+        assert!(read_event_batch(&mut socket, &mut pending, &mut state).unwrap());
+        assert_eq!(state.reduced_motion.enabled, Some(false));
+        assert!(state.overview.is_open);
+        assert!(pending.is_empty());
+
+        pending.extend_from_slice(b"{\"FutureEvent\":{}}\n");
+        assert!(!read_event_batch(&mut socket, &mut pending, &mut state).unwrap());
+        assert!(pending.is_empty());
+        assert!(event_tags().contains(&"ReducedMotionChanged"));
+    }
+
+    #[test]
+    fn malformed_known_events_and_replies_remain_errors() {
+        let cases = [
+            (
+                r#"{"ReducedMotionChanged":{"enabled":"false"}}"#,
+                "ReducedMotionChanged",
+                "invalid type",
+            ),
+            (
+                r#"{"OverviewOpenedOrClosed":{}}"#,
+                "OverviewOpenedOrClosed",
+                "missing field",
+            ),
+            (
+                r#"{"CastsChanged":{"casts":[{"stream_id":1,"session_id":1,"kind":"FutureCastKind","target":{"Nothing":{}},"is_dynamic_target":false,"is_active":true,"pid":null,"pw_node_id":null}]}}"#,
+                "CastsChanged",
+                "unknown variant `FutureCastKind`",
+            ),
+            (
+                r#"{"Err":"subscription denied"}"#,
+                "subscription denied",
+                "subscription denied",
+            ),
+            (
+                r#"{"Ok":{"FutureResponse":{}}}"#,
+                "event-stream reply",
+                "unknown variant `FutureResponse`",
+            ),
+        ];
+        for (line, context, cause) in cases {
+            let (mut socket, _writer) = UnixStream::pair().unwrap();
+            socket.set_nonblocking(true).unwrap();
+            let mut state = clarion_ipc::state::EventStreamState::default();
+            let mut pending = format!("{line}\n").into_bytes();
+            let error = read_event_batch(&mut socket, &mut pending, &mut state).unwrap_err();
+            let error = format!("{error:#}");
+            assert!(error.contains(context), "{line}: {error}");
+            assert!(error.contains(cause), "{line}: {error}");
+        }
+    }
+
+    #[test]
+    fn unknown_events_require_valid_single_tag_object_envelopes() {
+        for line in [
+            r#"{"FutureEvent":[]}"#,
+            r#"{"FutureEvent":null}"#,
+            r#"{"FutureEvent":false}"#,
+            r#"{"FutureEvent":{},"OtherEvent":{}}"#,
+            r#"{"FutureEvent":{},"FutureEvent":{}}"#,
+            r#"{"FutureEvent":{}} trailing"#,
+            r#"{"FutureEvent":{"#,
+            r#"{}"#,
+            r#"[]"#,
+            r#""FutureEvent""#,
+        ] {
+            let (mut socket, _writer) = UnixStream::pair().unwrap();
+            socket.set_nonblocking(true).unwrap();
+            let mut state = clarion_ipc::state::EventStreamState::default();
+            let mut pending = format!("{line}\n").into_bytes();
+            assert!(
+                read_event_batch(&mut socket, &mut pending, &mut state).is_err(),
+                "malformed event accepted: {line}"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a running Clarion session with an active output; read-only IPC smoke"]
+    fn live_ipc_worker_retains_outputs_across_initial_events_and_refresh() {
+        let connection = Connection::new();
+        let expected_version = connection.get_version().unwrap();
+        let expected_outputs = connection.get_outputs().unwrap();
+        assert!(expected_outputs
+            .iter()
+            .any(|output| output.logical.is_some()));
+        let client = IpcClient::new(eframe::egui::Context::default());
+        let deadline = std::time::Instant::now() + Duration::from_secs(4);
+        let mut snapshots = 0;
+        while std::time::Instant::now() < deadline {
+            if let Some(result) = client.take_snapshot() {
+                let snapshot = result.expect("live worker disconnected while receiving events");
+                assert_eq!(snapshot.version, expected_version);
+                assert!(snapshot
+                    .outputs
+                    .iter()
+                    .any(|output| output.logical.is_some()));
+                snapshots += 1;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(snapshots >= 2, "worker did not complete an output refresh");
+        assert!(client.take_errors().is_empty());
+    }
+
     #[test]
     fn slow_action_reply_does_not_block_ui_and_events_populate_snapshot() {
         let dir = tempfile::tempdir().unwrap();
@@ -885,7 +1093,7 @@ mod worker_tests {
                         continue;
                     }
                     Request::EventStream => {
-                        socket.write_all(b"{\"Ok\":\"Handled\"}\n{\"WorkspacesChanged\":{\"workspaces\":[]}}\n{\"WindowsChanged\":{\"windows\":[]}}\n").unwrap();
+                        socket.write_all(b"{\"Ok\":\"Handled\"}\n{\"ReducedMotionChanged\":{\"enabled\":false}}\n{\"FutureEvent\":{}}\n{\"WorkspacesChanged\":{\"workspaces\":[{\"id\":7,\"idx\":1,\"name\":null,\"output\":\"test-output\",\"is_urgent\":false,\"is_active\":true,\"is_focused\":true,\"active_window_id\":null}]}}\n{\"WindowsChanged\":{\"windows\":[]}}\n").unwrap();
                         event_stream = Some(socket);
                         continue;
                     }
@@ -904,9 +1112,16 @@ mod worker_tests {
         let client = IpcClient::with_socket(eframe::egui::Context::default(), Some(path));
         let deadline = std::time::Instant::now() + Duration::from_secs(3);
         loop {
-            if let Some(Ok(snapshot)) = client.take_snapshot() {
+            if let Some(result) = client.take_snapshot() {
+                let snapshot = result.expect("event stream failed before populating state");
                 assert_eq!(snapshot.version, "test");
-                break;
+                if snapshot
+                    .workspaces
+                    .iter()
+                    .any(|workspace| workspace.id == 7)
+                {
+                    break;
+                }
             }
             assert!(
                 std::time::Instant::now() < deadline,

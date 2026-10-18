@@ -1452,6 +1452,7 @@ dependencies = [
  "directories",
  "eframe",
  "egui",
+ "git-version",
  "image",
  "knuffel",
  "libc",

@@ -2493,7 +2493,12 @@ impl ClarionSettingsApp {
             }
 
             if self.cached_outputs.is_empty() {
-                ui.label("暂未检测到活动的输出设备或未连接 Clarion IPC。");
+                if let Some(error) = &self.connection_error {
+                    ui.label("暂时无法读取显示器信息，正在自动重新连接 Clarion。");
+                    ui.label(error);
+                } else {
+                    ui.label("已连接 Clarion，当前没有可用的输出设备。");
+                }
             } else {
                 for i in 0..self.cached_outputs.len() {
                     if Some(&self.cached_outputs[i].name) != self.selected_output.as_ref() {
@@ -2604,11 +2609,7 @@ impl ClarionSettingsApp {
             ui.add_space(14.0);
             if icons::button(ui, Icon::Refresh, "刷新显示器状态").clicked() {
                 self.refresh_ipc_data();
-                if let Some(error) = &self.connection_error {
-                    self.set_status(format!("暂时无法连接桌面：{error}"), true);
-                } else {
-                    self.set_status("已刷新显示器信息", false);
-                }
+                self.set_status("已请求刷新显示器信息", false);
             }
         });
     }

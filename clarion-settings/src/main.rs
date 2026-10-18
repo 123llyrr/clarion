@@ -21,8 +21,14 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 
+fn version() -> String {
+    let commit = option_env!("CLARION_BUILD_COMMIT")
+        .unwrap_or(git_version::git_version!(fallback = "unknown commit"));
+    format!("{} ({commit})", env!("CARGO_PKG_VERSION"))
+}
+
 #[derive(Parser)]
-#[command(version, about = "Clarion settings")]
+#[command(version = version(), about = "Clarion settings")]
 struct Cli {
     /// Close the settings window when focused; otherwise focus or open it.
     #[arg(long, conflicts_with = "command_palette")]
