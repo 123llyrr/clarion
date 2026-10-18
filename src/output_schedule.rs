@@ -37,6 +37,7 @@ pub(crate) struct OutputSchedule {
     core: OutputScheduler<RegistrationToken>,
     stats: FrameStats,
     continue_after_presentation: bool,
+    gpu_budget_sequence: u64,
 }
 
 impl OutputSchedule {
@@ -45,18 +46,21 @@ impl OutputSchedule {
             core: OutputScheduler::new(refresh_interval, vrr, latch_enabled),
             stats: FrameStats::default(),
             continue_after_presentation: false,
+            gpu_budget_sequence: 0,
         }
     }
     pub(crate) fn clock(&self) -> &FrameClock {
         self.core.clock()
     }
     pub(crate) fn reset_timing(&mut self, interval: Option<Duration>, vrr: bool) {
+        self.reset_gpu_budget_sequence();
         self.core.reset_timing(interval, vrr);
         self.stats.reset_presentation_history();
         self.continue_after_presentation = false;
     }
     pub(crate) fn set_vrr(&mut self, enabled: bool) {
         if self.core.clock().vrr() != enabled {
+            self.reset_gpu_budget_sequence();
             self.stats.reset_presentation_history();
             self.continue_after_presentation = false;
         }
@@ -148,11 +152,24 @@ impl OutputSchedule {
         })
     }
     pub(crate) fn record_gpu_timing(&mut self, sample: GpuTimingSample) -> bool {
-        self.stats.record_gpu_timing(
+        let accepted = self.stats.record_gpu_timing(
             sample.tag.output_generation,
             sample.tag.redraw_sequence,
             sample.gpu_time,
-        )
+        );
+        // Diagnostics accept out-of-order completions; the predictor must not
+        // replay old work or use a pre-modeset sample for the new refresh grid.
+        if accepted && sample.tag.redraw_sequence > self.gpu_budget_sequence {
+            self.gpu_budget_sequence = sample.tag.redraw_sequence;
+            self.core.gpu_completed(sample.gpu_time);
+        }
+        accepted
+    }
+
+    fn reset_gpu_budget_sequence(&mut self) {
+        if let Some((_, next)) = self.stats.gpu_timing_identity() {
+            self.gpu_budget_sequence = next.saturating_sub(1);
+        }
     }
     pub(crate) fn cancel_timers<D>(&mut self, event_loop: &LoopHandle<'_, D>) {
         self.stats.latch_cancelled();
@@ -500,5 +517,40 @@ mod tests {
             .timings("DP-1".into())
             .gpu_frame_work_ms
             .is_none());
+    }
+
+    #[test]
+    fn gpu_budget_ignores_old_completions_after_newer_work_or_mode_changes() {
+        let mut schedule = OutputSchedule::new(Some(Duration::from_millis(16)), false, true);
+        let first = schedule.gpu_timing_tag().unwrap();
+        schedule.finish_redraw(Duration::from_millis(1), &RenderResult::Submitted);
+        let second = schedule.gpu_timing_tag().unwrap();
+        schedule.finish_redraw(Duration::from_millis(1), &RenderResult::Submitted);
+        assert!(schedule.record_gpu_timing(GpuTimingSample {
+            tag: second,
+            gpu_time: Duration::from_millis(4),
+        }));
+        let budget = schedule.clock().latch_budget();
+        assert!(schedule.record_gpu_timing(GpuTimingSample {
+            tag: first,
+            gpu_time: Duration::from_secs(1),
+        }));
+        assert_eq!(schedule.clock().latch_budget(), budget);
+        let third = schedule.gpu_timing_tag().unwrap();
+        schedule.finish_redraw(Duration::from_millis(1), &RenderResult::Submitted);
+        schedule.reset_timing(Some(Duration::from_millis(8)), false);
+        let reset = schedule.clock().latch_budget();
+        assert!(schedule.record_gpu_timing(GpuTimingSample {
+            tag: third,
+            gpu_time: Duration::from_secs(1),
+        }));
+        assert_eq!(schedule.clock().latch_budget(), reset);
+        let fourth = schedule.gpu_timing_tag().unwrap();
+        schedule.finish_redraw(Duration::from_millis(1), &RenderResult::Submitted);
+        assert!(schedule.record_gpu_timing(GpuTimingSample {
+            tag: fourth,
+            gpu_time: Duration::from_millis(5),
+        }));
+        assert!(schedule.clock().latch_budget() > reset);
     }
 }

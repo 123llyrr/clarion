@@ -157,6 +157,12 @@ impl<T: Copy> OutputScheduler<T> {
         }
     }
 
+    pub fn gpu_completed(&mut self, elapsed: Duration) {
+        if self.latch_enabled {
+            self.clock.gpu_completed(elapsed);
+        }
+    }
+
     pub fn latch_deadline(&self, now: Duration) -> Option<Duration> {
         (self.latch_enabled && !self.latch_ready && self.is_queued()).then(|| {
             let deadline = self.clock.next_latch_time_at(now);

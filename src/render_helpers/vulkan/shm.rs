@@ -17,6 +17,9 @@ use super::native::{NativeError, NativeRenderer};
 use super::VulkanTexture;
 
 const MAX_DAMAGE_REGIONS: usize = 64;
+// One lazily allocated scratch vector per renderer, enough for 4K packed RGB.
+// Larger client buffers remain supported but must not pin unbounded CPU RAM.
+const MAX_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
 
 /// Vulkan uploads require disjoint destinations. Keep the subtraction work
 /// bounded even when a client supplies many overlapping or fragmented regions;
@@ -196,6 +199,30 @@ impl ImportMemWl for NativeRenderer {
         surface: Option<&SurfaceData>,
         damage: &[Rectangle<i32, Buffer>],
     ) -> Result<VulkanTexture, NativeError> {
+        let _latency =
+            crate::utils::latency::Span::new(crate::utils::latency::Operation::VulkanShmImport);
+        let mut pixels = std::mem::take(&mut self.shm_snapshot);
+        let result = self.import_shm_snapshot(buffer, surface, damage, &mut pixels);
+        // The upload routines copy into independently owned Vulkan staging
+        // storage synchronously, including when the GPU queue is blocked.
+        // Recycle after errors too; never expose a previous surface's bytes.
+        pixels.clear();
+        if pixels.capacity() <= MAX_SNAPSHOT_BYTES {
+            self.shm_snapshot = pixels;
+        }
+        result
+    }
+}
+
+impl NativeRenderer {
+    fn import_shm_snapshot(
+        &mut self,
+        buffer: &WlBuffer,
+        surface: Option<&SurfaceData>,
+        damage: &[Rectangle<i32, Buffer>],
+        pixels: &mut Vec<u8>,
+    ) -> Result<VulkanTexture, NativeError> {
+        pixels.clear();
         let id = self.context_id();
         let cache = surface.map(|s| s.data_map.get_or_insert(ShmCache::default));
         let cached = cache.and_then(|c| c.get(&id));
@@ -245,7 +272,7 @@ impl ImportMemWl for NativeRenderer {
             if same_texture {
                 regions = upload_regions(damage, data.width as u32, data.height as u32);
                 if regions.is_empty() {
-                    return Ok((None, format, data.width, data.height, row, regions));
+                    return Ok((false, format, data.width, data.height, row, regions));
                 }
             }
             let size = if same_texture {
@@ -261,7 +288,6 @@ impl ImportMemWl for NativeRenderer {
             } else {
                 row.checked_mul(data.height as usize).ok_or_else(invalid)?
             };
-            let mut pixels = Vec::<u8>::new();
             pixels
                 .try_reserve_exact(size)
                 .map_err(|e| NativeError::Other(e.to_string()))?;
@@ -305,27 +331,27 @@ impl ImportMemWl for NativeRenderer {
             // sizes. The allocation covers size, and no slice of this storage
             // was exposed before the copy completed.
             unsafe { pixels.set_len(size) };
-            Ok((Some(pixels), format, data.width, data.height, row, regions))
+            Ok((true, format, data.width, data.height, row, regions))
         })
         .map_err(|e| NativeError::Other(format!("SHM buffer access failed: {e:?}")))??;
-        let (pixels, format, width, height, stride, regions) = snapshot;
+        let (has_pixels, format, width, height, stride, regions) = snapshot;
         let previous = cached.filter(|t| {
             t.width == width as u32 && t.height == height as u32 && t.format() == Some(format)
         });
-        let Some(pixels) = pixels else {
+        if !has_pixels {
             return previous
                 .ok_or_else(|| NativeError::Other("missing unchanged SHM texture".into()));
-        };
+        }
         let permit = self.reserve_upload()?;
         let (mut texture, upload) = if let Some(texture) = previous {
             let upload = self
                 .vulkan()
-                .update_memory_texture_packed_regions_deferred(&texture, &pixels, &regions)?;
+                .update_memory_texture_packed_regions_deferred(&texture, pixels, &regions)?;
             (texture, upload)
         } else {
             // First use or size/format change needs all pixels even with empty damage.
             let (texture, upload) = self.vulkan().import_memory_texture_deferred(
-                &pixels,
+                pixels,
                 format,
                 width as u32,
                 height as u32,

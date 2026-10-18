@@ -35,9 +35,10 @@ pub enum Operation {
     VulkanRecord,
     VulkanQueueSubmit,
     VulkanRecycle,
+    VulkanShmImport,
 }
 impl Operation {
-    const COUNT: usize = Self::VulkanRecycle as usize + 1;
+    const COUNT: usize = Self::VulkanShmImport as usize + 1;
 
     fn threshold(self) -> Duration {
         match self {
@@ -57,7 +58,8 @@ impl Operation {
             | Self::VulkanDescriptors
             | Self::VulkanRecord
             | Self::VulkanQueueSubmit
-            | Self::VulkanRecycle => SLOW_SUBPHASE,
+            | Self::VulkanRecycle
+            | Self::VulkanShmImport => SLOW_SUBPHASE,
             _ => SLOW,
         }
     }
@@ -79,6 +81,7 @@ impl Operation {
             Self::GlesRender => "gles-render",
             Self::KmsSubmit => "kms-submit",
             Self::VulkanImport => "vulkan-dmabuf-import",
+            Self::VulkanShmImport => "vulkan-shm-import",
             Self::NativeOffscreen => "animation-offscreen",
             Self::NativeBackground => "background-prepare",
             Self::NativeBlur => "background-blur",
@@ -267,6 +270,7 @@ mod tests {
             Operation::VulkanRecord,
             Operation::VulkanQueueSubmit,
             Operation::VulkanRecycle,
+            Operation::VulkanShmImport,
         ];
         assert_eq!(phases.len(), Operation::COUNT);
         let mut labels = std::collections::HashSet::new();

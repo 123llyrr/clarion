@@ -36,6 +36,9 @@ pub struct FrameClock {
     refresh_interval_ns: Option<NonZeroU64>,
     latch_budget: Duration,
     latch_delay_budget: Duration,
+    /// Measured asynchronous output work; presentation feedback also covers
+    /// unmeasured uploads, offscreen passes, queue contention and KMS latency.
+    gpu_budget: Duration,
     presentation_margin: Duration,
     on_time_presentations: u32,
     decay_probe: Option<DecayProbe>,
@@ -62,6 +65,7 @@ impl FrameClock {
             refresh_interval_ns,
             latch_budget,
             latch_delay_budget: Duration::ZERO,
+            gpu_budget: Duration::ZERO,
             presentation_margin: Duration::ZERO,
             on_time_presentations: 0,
             decay_probe: None,
@@ -90,6 +94,7 @@ impl FrameClock {
         self.vrr = vrr;
         self.last_presentation_time = None;
         self.latch_delay_budget = Duration::ZERO;
+        self.gpu_budget = Duration::ZERO;
         self.presentation_margin = Duration::ZERO;
         self.on_time_presentations = 0;
         self.late_presentation_streak = 0;
@@ -110,7 +115,7 @@ impl FrameClock {
                 .max(MIN_LATCH_BUDGET);
             self.latch_budget
                 .saturating_add(self.latch_delay_budget)
-                .saturating_add(self.presentation_margin)
+                .saturating_add(self.presentation_margin.max(self.gpu_budget))
                 .min(max_budget)
         })
     }
@@ -151,6 +156,23 @@ impl FrameClock {
             // Decay slowly to avoid one cheap direct-scanout frame erasing the budget needed
             // for a following composited frame.
             self.latch_budget -= (self.latch_budget - sample) / 16;
+        }
+    }
+
+    /// Use a completed output command buffer as a lower bound on the GPU tail.
+    /// CPU submission and GPU execution can overlap, so this reserves their sum
+    /// conservatively. Do not add the inferred presentation margin a second time.
+    /// Callers must reject stale/output-mismatched samples before reaching here.
+    pub fn gpu_completed(&mut self, elapsed: Duration) {
+        let Some(interval) = self.refresh_interval().filter(|_| !self.vrr) else {
+            return;
+        };
+        let limit = interval.saturating_sub(MIN_LATCH_BUDGET);
+        let sample = elapsed.saturating_add(RENDER_SAFETY_MARGIN).min(limit);
+        if sample >= self.gpu_budget {
+            self.gpu_budget = sample;
+        } else {
+            self.gpu_budget -= (self.gpu_budget - sample) / 16;
         }
     }
 
@@ -265,6 +287,7 @@ impl FrameClock {
                 .saturating_sub(self.latch_delay_budget);
             self.presentation_margin = self
                 .presentation_margin
+                .max(self.gpu_budget)
                 .saturating_add(step)
                 .min(max_margin);
             self.on_time_presentations = 0;
@@ -374,6 +397,77 @@ mod tests {
 
     const REFRESH: Duration = Duration::from_millis(10);
     const LAST: Duration = Duration::from_secs(1);
+
+    #[test]
+    fn measured_gpu_work_reduces_misses_when_async_load_changes() {
+        for hz in [60, 120, 144, 240, 360] {
+            let interval = Duration::from_nanos(1_000_000_000 / hz);
+            let simulate = |measured: bool| {
+                let mut clock = FrameClock::new(Some(interval), false);
+                let mut actual = LAST;
+                let mut misses = 0;
+                clock.presented(actual);
+                for frame in 0..1200 {
+                    let cpu = interval / 32;
+                    let gpu = if frame % 200 < 100 {
+                        interval / 10
+                    } else {
+                        interval * 3 / 5
+                    };
+                    let now = actual + interval / 100;
+                    let target = clock.next_presentation_time_at(now);
+                    let start = clock.next_latch_time_at(now);
+                    let ready = start + cpu + gpu + interval / 50;
+                    actual = if ready > target {
+                        misses += 1;
+                        target + interval
+                    } else {
+                        target
+                    };
+                    clock.rendered(cpu);
+                    if measured {
+                        clock.gpu_completed(gpu);
+                    }
+                    clock.presented_with_target(actual, target);
+                    assert!(clock.latch_budget().unwrap() < interval);
+                }
+                misses
+            };
+            let inferred = simulate(false);
+            let measured = simulate(true);
+            eprintln!("GPU_BUDGET_SIMULATION hz={hz} inferred_misses={inferred} measured_misses={measured}");
+            assert!(measured < inferred, "{hz} Hz: {measured} vs {inferred}");
+        }
+    }
+
+    #[test]
+    fn gpu_budget_decays_and_does_not_double_count_the_inferred_tail() {
+        let mut clock = clock(false);
+        for _ in 0..128 {
+            clock.rendered(Duration::from_micros(500));
+        }
+        clock.gpu_completed(Duration::from_millis(6));
+        let measured = clock.latch_budget().unwrap();
+        assert!(measured >= Duration::from_millis(7));
+        clock.presentation_margin = Duration::from_millis(5);
+        assert_eq!(clock.latch_budget().unwrap(), measured);
+        clock.presentation_margin = Duration::ZERO;
+        for _ in 0..128 {
+            clock.gpu_completed(Duration::from_micros(250));
+        }
+        assert!(clock.latch_budget().unwrap() < Duration::from_millis(2));
+        clock.gpu_completed(Duration::MAX);
+        assert_eq!(clock.latch_budget(), Some(REFRESH - MIN_LATCH_BUDGET));
+        clock.set_vrr(true);
+        let reset = clock.latch_budget();
+        clock.gpu_completed(Duration::MAX);
+        assert_eq!(clock.latch_budget(), reset);
+        clock.set_vrr(false);
+        assert_eq!(clock.latch_budget(), reset);
+        let mut unknown = FrameClock::new(None, false);
+        unknown.gpu_completed(Duration::MAX);
+        assert_eq!(unknown.latch_budget(), None);
+    }
 
     fn clock(vrr: bool) -> FrameClock {
         let mut clock = FrameClock::new(Some(REFRESH), vrr);
