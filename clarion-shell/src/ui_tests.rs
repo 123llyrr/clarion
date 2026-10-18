@@ -337,3 +337,22 @@ fn image_cache_survives_unrelated_snapshots_and_replaces_only_changed_tray_pixel
         });
     });
 }
+
+#[gpui::test]
+fn wallpaper_chooser_releases_the_exclusive_panel_before_requesting_a_dialog(
+    cx: &mut TestAppContext,
+) {
+    let (_fixture, host, _view, visual, window) = panel(cx, Panel::Controls);
+    host.update(cx, |host, cx| {
+        host.handle(crate::app::Action::PickWallpaper, cx)
+    });
+    visual.run_until_parked();
+    host.read_with(cx, |host, _| assert!(host.panel.is_none()));
+    assert!(
+        !cx.read(|cx| cx
+            .windows()
+            .iter()
+            .any(|handle| handle.window_id() == window.window_id())),
+        "file chooser must not leave an exclusive layer above its dialog"
+    );
+}

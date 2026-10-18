@@ -914,7 +914,12 @@ impl LinuxClient for WaylandClient {
         }
 
         let client_state = self.0.borrow();
-        let active_window = client_state.keyboard_focused_window.as_ref();
+        // xdg-foreign only accepts xdg_toplevel surfaces. Exporting a layer
+        // surface is a fatal protocol error on the shared Wayland connection.
+        // Portals accept an empty parent identifier for desktop-shell surfaces.
+        let active_window = client_state.keyboard_focused_window.as_ref().filter(|window| {
+            window.toplevel().is_some_and(|toplevel| toplevel.is_alive())
+        });
         inner(active_window.map(|aw| aw.surface()))
     }
 }

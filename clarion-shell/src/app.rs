@@ -269,6 +269,9 @@ impl Host {
                 }
             }
             DesktopAction::Wallpaper(None) => {
+                // Release the panel's exclusive keyboard role before a portal
+                // opens an ordinary file chooser window.
+                self.close(cx);
                 if self.preview {
                     return;
                 }
