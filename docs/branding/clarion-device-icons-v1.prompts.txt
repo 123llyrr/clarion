@@ -1,3 +1,0 @@
-Tool: built-in image_gen. Both transparent-background monochrome white UI concepts for Clarion, intended for 20px settings/menu bar use.
-Display prompt: Front-facing desktop monitor, thick softly rounded rectangular frame, transparent screen opening, short centered pedestal and compact foot; flat solid white, no text, shading, glass or extra objects.
-Storage prompt: Compact softly rounded disk enclosure, broad simple body, transparent horizontal status slot and round indicator; flat solid white, no text, shading, glass or extra objects.
