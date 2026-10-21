@@ -1,0 +1,38 @@
+[package]
+name = "clarion-render-vulkan"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Vulkan rendering backend and Smithay renderer adapter for Clarion and Wayland compositors"
+
+[dependencies]
+anyhow.workspace = true
+ash = { version = "0.38.0", default-features = false, features = ["std", "libloading"] }
+bitflags.workspace = true
+bytemuck = { version = "1.25.2", features = ["derive"] }
+calloop = { version = "0.14.4", features = ["executor", "futures-io", "signals"] }
+drm-ffi = "0.9.1"
+glam = "0.33"
+libc = "0.2.189"
+smallvec = "1.15.2"
+tracing.workspace = true
+
+smithay = { workspace = true, features = [
+    "backend_drm",
+    "backend_egl",
+    "backend_gbm",
+    "backend_vulkan",
+    "backend_winit",
+    "desktop",
+    "renderer_gl",
+    "wayland_frontend",
+] }
+smithay-drm-extras.workspace = true
+
+clarion-core = { version = "0.1.0", path = "../clarion-core" }
+
+[dev-dependencies]
+clarion-config = { version = "0.1.0", path = "../clarion-config" }

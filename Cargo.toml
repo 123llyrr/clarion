@@ -11,6 +11,7 @@ members = [
     "clarion-settings",
     "clarion-launcher",
     "clarion-shell",
+    "clarion-render-vulkan",
 ]
 
 [workspace.package]
@@ -90,6 +91,7 @@ clarion-motion = { version = "0.1.0", path = "clarion-motion" }
 clarion-timing = { version = "0.1.0", path = "clarion-timing" }
 clarion-scene = { version = "0.1.0", path = "clarion-scene" }
 clarion-ipc = { version = "0.1.0", path = "clarion-ipc", features = ["clap"] }
+clarion-render-vulkan = { version = "0.1.0", path = "clarion-render-vulkan" }
 ordered-float = "5.3.0"
 pango = { version = "0.21.5", features = ["v1_44"] }
 pangocairo = "0.21.5"
