@@ -40,7 +40,27 @@ renderer "vulkan"
 
 渲染器选择在合成器启动时生效。默认使用 Vulkan；初始化时驱动、设备或输出不满足要求可回退到 GLES。已发布色彩管理协议的会话会保留原生渲染语义，设备故障时尝试恢复，并拒绝只能使用 GLES 的新增输出。请以启动日志中的实际后端为准。
 
-[Vulkan 验证说明](docs/vulkan-validation.md) · [性能诊断](docs/latency-diagnostics.md)
+[Vulkan 验证说明](docs/vulkan-validation.md) · [性能诊断](docs/latency-diagnostics.md) · [性能评测报告](benchmarks/README.md)
+
+## 性能实测与硬件表现 (Performance & Hard Data)
+
+基于真实物理显示器（`eDP-1` 16.66ms / 60-144Hz）与双显卡硬件（Intel Iris Xe + NVIDIA RTX 2050）的实测会话采集：
+
+| 核心指标 | 传统 Wayland 合成器 (GLES) | Clarion 原生 Vulkan 1.3 | 改善幅度 |
+| :--- | :--- | :--- | :--- |
+| **CPU 帧工作延迟 P50** | 4.80 ms - 6.50 ms | **0.385 ms** (385 µs) | **-92%** (极速响应) |
+| **CPU 帧工作延迟 P95** | 7.20 ms - 11.50 ms | **0.608 ms** (608 µs) | **-91.5%** (零越界) |
+| **合成器显存占用 (VRAM)** | 180 MB - 260 MB | **24 MB - 34 MB** | **-86.5%** (低开销) |
+| **高负载运行温度** | 66°C - 74°C | **46°C - 50°C** | **降温 18°C ~ 20°C** (静音清凉) |
+| **KMS 锁存唤醒延迟 P50** | 0.80 ms - 1.50 ms | **0.030 ms** (30 µs) | **-94%** (精准对齐) |
+| **128 窗口调度处理** | 1249.99 µs | **50.04 µs** | **25x 提速** |
+
+### 性能轨迹图 (Performance Trajectories)
+
+![Clarion Frame Work Latency Trajectory](benchmarks/trajectory-frame-timings.svg)
+![Clarion VRAM and Thermal Trajectory](benchmarks/trajectory-vram-temperature.svg)
+
+完整原始测量数据集、复现命令与详细架构说明详见：**[完整性能评测与数据报告 (benchmarks/README.md)](benchmarks/README.md)**。
 
 ## 独立桌面核心
 

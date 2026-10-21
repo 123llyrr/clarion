@@ -1,0 +1,5 @@
+{"case": "single", "iterations": 200000, "before_ns": 45, "after_ns": 34, "before_allocations": 2, "after_allocations": 0, "before_draw_regions": 1, "after_draw_regions": 1, "trials": 3}
+{"case": "eight_adjacent", "iterations": 100000, "before_ns": 252, "after_ns": 213, "before_allocations": 10, "after_allocations": 0, "before_draw_regions": 8, "after_draw_regions": 1, "trials": 3}
+{"case": "eight_disjoint", "iterations": 100000, "before_ns": 259, "after_ns": 200, "before_allocations": 10, "after_allocations": 0, "before_draw_regions": 8, "after_draw_regions": 8, "trials": 3}
+{"case": "overlapping", "iterations": 100000, "before_ns": 179, "after_ns": 215, "before_allocations": 6, "after_allocations": 0, "before_draw_regions": 6, "after_draw_regions": 5, "trials": 3}
+{"case": "fragmented_100", "iterations": 1000, "before_ns": 19669, "after_ns": 7497, "before_allocations": 106, "after_allocations": 4, "before_draw_regions": 100, "after_draw_regions": 100, "trials": 3}
