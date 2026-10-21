@@ -1,0 +1,140 @@
+This is a checklist of things to release a new clarion version.
+
+We'll use `0.2.0` as the example new version.
+When making a patch release, bump the patch number, like `0.2.1`.
+
+## Prepare the release notes
+
+Plan for a few days of work, this usually takes a while.
+
+During this process, also check:
+
+- if anything needs updating in `README.md`.
+
+## Bump version
+
+We use `major.minor.patch` versioning, matching the `version` field in Cargo.toml.
+
+You can use the command from [cargo-edit](https://github.com/killercup/cargo-edit):
+
+```
+cargo set-version 0.2.0
+```
+
+Then, manually update version in:
+
+- `[package.metadata.generate-rpm]` in Cargo.toml
+- Dependency example in `clarion-ipc/README.md`
+- Dependency example in `clarion-ipc/src/lib.rs`
+
+Do a full text search for the old version to make sure there are no other places.
+
+## Build, test, push, and have the CI run
+
+Run all tests:
+
+```
+RUN_SLOW_TESTS=1 cargo test --release --all
+```
+
+- Run `cargo package -p clarion-ipc` and make sure it succeeds.
+- Make sure the CI passes.
+- Make sure the clarion-git COPR build passes.
+
+## Trigger the "Prepare release" workflow on GitHub Actions
+
+Set the "Public version" input to a version like `0.2.0`.
+
+This workflow will:
+
+- do some pre-release checks like grepping the wiki for "next version",
+- make a vendored dependency archive,
+- build and test clarion with that dependency archive,
+- draft a new GitHub release with the archive attached.
+It will NOT override an existing draft release with the same name so the release notes are safe.
+
+Make sure it succeeds and grab the vendored dependency archive that it produces.
+
+## Update the clarion COPR spec, update licenses in .spec.rpkg
+
+You can grab the previous spec from your package repository or the previous release.
+
+- Update version global to `0.2.0`.
+- Update commit global to the commit hash corresponding to the release commit.
+You can use `git rev-parse HEAD`.
+- Reset the `Release:` number to 1 if it was higher.
+
+To run a test build, you can download the vendored dependency archive from the last step.
+Comment/uncomment `Source:` and `%autosetup` lines accordingly.
+
+Download the source files:
+
+```
+spectool -g clarion.spec
+```
+
+Build RPMs:
+
+```
+fedpkg --release 44 mockbuild
+```
+
+During the build, it will print the list of licenses.
+Update it in both the COPR spec and in `clarion.spec.rpkg` accordingly.
+
+If you had to update `clarion.spec.rpkg` and therefore make another commit to the clarion repo, make sure to update the commit hash in the COPR spec again.
+
+Revert any temporary changes that you did to the COPR spec for local testing.
+
+## Create and push the release git tag
+
+The tag starts with a `v`:
+
+```
+git tag -am "v0.2.0 release" v0.2.0
+git push origin v0.2.0
+```
+
+While you can let GitHub create the tag automatically upon creating the release, this is not recommended.
+GitHub creates a *lightweight* tag, but we want an annotated tag that plays better with various tooling.
+
+## Publish the release on GitHub
+
+- Either upload the vendored dependencies file to your draft release with the release notes, or move the release notes to the GitHub-created release (the difference is that it's attributed to github-actions).
+- Set the tag to `v0.2.0`.
+- Set the release title to `v0.2.0`.
+- Check "Create a discussion for this release".
+
+## Publish the clarion-ipc crate
+
+```
+cargo publish -p clarion-ipc
+```
+
+## Kick off the COPR build
+
+Upload on the web or:
+
+```
+copr-cli build clarion clarion.spec
+```
+
+## Announce the release
+
+Chat rooms, social media, etc.
+
+## Update wayland.app protocol data
+
+- Install [wlprobe](https://github.com/PolyMeilex/wlprobe).
+- Clone https://github.com/vially/wayland-explorer.
+- Generate data:
+
+    ```
+    wlprobe > ./src/data/compositors/clarion.json
+    ```
+
+- Manually add `"version": "0.2.0"`, then clean up the diff from unrelated changes, for example:
+    - The number of `wl_output`s will change depending on how many monitors you have connected.
+    - The number of `wp_drm_lease_device_v1` will change depending on your number of GPUs.
+    - `org_kde_kwin_server_decoration_manager` and `zxdg_decoration_manager_v1` will only appear with `prefer-no-csd`.
+- Create a pull request.

@@ -1,0 +1,48 @@
+Clarion 原生应用菜单与旧全局菜单迁移
+
+Clarion 不再把应用菜单导出到顶部栏：不提供 AppMenu Registrar，不发布 KDE
+Wayland appmenu global，也不通过窗口 IPC 转发 GTK/Qt 菜单地址。旧 IPC 的
+optional 字段类型继续兼容，但新会话不发送这些字段。
+
+GTK gtk_shell1 仍保留 v1、capabilities=0。它只保存实际 wl_surface 所属的
+application_id，供桌面的快捷键归属判断使用；忽略其余菜单地址，不根据 GTK
+启动时间戳、菜单数据或 application_id 授予窗口焦点。保留这个身份协议不表示
+支持全局菜单。
+
+新会话启动时的旧环境迁移
+
+仅 clarion --session 调用 disable_legacy_appmenu_environment；CLI、配置校验、
+嵌套运行不修改父会话环境。迁移只从 GTK_MODULES 删除本项目旧 user-local
+模块的绝对路径，并且仅在 GSETTINGS_SCHEMA_DIR 指向本项目旧 schema 目录时
+清理它。其他 GTK 模块、用户显式填写的 appmenu-gtk-module 名称、其他项目的
+模块和自定义 schema 目录均保留。不改 QT_QPA_PLATFORMTHEME、UBUNTU_MENUPROXY、
+StatusNotifierWatcher 或任何托盘服务。
+
+识别范围包括 ~/.local/lib/clarion-appmenu/current，以及其独立或 Clarion
+组合安装的准确 release 路径。不会解析任意链接后扩大移除范围，不删除安装
+文件，不编辑 environment.d、dconf、GTK 设置或系统包。
+
+用户管理器可能比旧合成器存活更久。默认 systemd 构建以限时 D-Bus 查询读取
+管理器自身的 GTK_MODULES / GSETTINGS_SCHEMA_DIR，精确过滤属于 Clarion 的项，
+保留管理器中其他模块和自定义值。对应的新值也更新到 D-Bus 激活环境；D-Bus
+没有读取或删除激活变量的接口，因此只有已确认来源的旧变量才更新，删除用
+空字符串表达。管理器查询不可用时仅迁移当前进程中已经识别的项，并记录失败
+提示；不会猜测或清空未知激活环境。dinit 构建只传播本进程已识别的迁移项。
+
+安装与生效范围
+
+不要在安装时删除旧模块、parser、schema 或原 release：已运行的 GTK 进程可能
+仍依赖它们，旧版回滚也需要这些文件。脚本 install-gtk-appmenu.py 已退役，
+不会继续安装 exporter。libdbusmenu-gtk3、libdbusmenu-glib 和托盘菜单实现仍需
+保留，它们服务 StatusNotifierItem 的右键菜单，与应用全局菜单是独立功能。
+
+安装新二进制后应重新登录，使新核心、Shell 与应用进程继承清理后的环境。
+仍运行的旧核心无法被外部程序改写自身环境，可能继续给快捷键启动的子进程
+传入旧 GTK 模块；已有 Qt 应用也可能缓存“使用全局菜单”的状态。仅热替换
+顶部栏或释放 Registrar 不能保证它们重新显示原生菜单，需重启相应应用。
+
+截图来源标记
+
+真实截图发布到剪贴板时，同时 offer image/png 和
+application/x-clarion-screenshot。后者仅标记选择来源，界面读取 PNG 数据；
+截图预览不会发布这个选择。这样“最近截图”不必通过时间或窗口焦点猜测来源。

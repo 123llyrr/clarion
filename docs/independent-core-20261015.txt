@@ -1,0 +1,202 @@
+Realand r4 调度修复、三场景物理验收与安装记录
+日期：2026-10-15
+
+状态：三项有效物理验收 PASS 后，已原子安装 r4；当前登录会话仍为 r3，未重启/注销/关闭原应用，新版下次登录 Realand 生效。
+版本：realand 0.1.0 (independent-core-20261015-r4)
+SHA256：88ba05d5c87aa9d5c750654eb846c7ea2bd4db427d1c10339f5b0603c0bc080b
+安装：$HOME/.local/lib/realand/releases/independent-core-20261015-185702-936119/realand
+回滚备份：$HOME/.local/lib/realand/backups/independent-core-20261015-185702-936119
+
+改动与验证
+仅修改生产构建输入 realand-core/src/frame_clock.rs。预算下降保留一秒回滚历史；八次准时反馈允许暂时加快下降，但后续重帧会同时恢复预算及探测参数。最长新探测等待从四秒限制为三秒。
+这些是明确的 Realand 策略值，并非从 macOS 镜像证实的参数。
+1,530 项 Rust 回归、59 项 Python 回归、无默认功能检查与 core Clippy 全通过；6,184 个归档构建输入逐字节核验。
+原有 25 项帧时钟测试保留，新增四项行为回归；18 组原反例、30 组扩展、80 组相位及五组长间隔随机均低于 1% 合成漏帧。
+合成转轻恢复：原矩阵最长 3.90 秒，扩展最长 3.17 秒，空闲恢复最长 1.65 秒。并非每个样本都快于旧版；保守安全余量和约三秒首次探测等待仍存在。这些是模拟值，不能当作实机端到端输入延迟。
+
+物理配对测量
+同一 Intel Iris Xe、native Vulkan、DRM/KMS eDP-1、3840x2400@60Hz、scale=2；同一冻结配置和实际 Shell，三个静态窗口分布在两个桌面，拖动另加一个自有窗口。
+未安装候选通过临时 seatd/VT8 接管同一物理显示器；原 tty2 登录会话保留。使用官方 IPC 与 Wayland 虚拟指针/xdg_move，各项采样 30 秒；不代表已验证 libinput 的 Super 快捷键路径。
+门槛：CPU 主线程工作 P95 <= 4.16664ms；有效持续呈现间隔 > 约25ms 的比例严格 <1%。完整序列及长间隔原始样本均保留。
+场景 | r3 长间隔 | r4 长间隔 | r4 CPU P95 | r4 CPU 最大 | r4 长间隔最大
+拖动窗口 | 38/1737 (2.1877%) | 11/1787 (0.6156%) | 2.766009ms | 6.957018ms | 33.336ms
+切换桌面 | 36/1764 (2.0408%) | 14/1785 (0.7843%) | 2.676497ms | 4.316977ms | 33.337ms
+展开概览 | 36/1764 (2.0408%) | 15/1785 (0.8403%) | 2.911947ms | 4.162952ms | 33.336ms
+
+结果边界
+三项均达标，不代表零长帧。拖动 CPU 最大值高于该配对基线，不能宣称所有异常都改善。
+拖动 GPU query 原始序列不完整，whole-run GPU P95 为 null/INCONCLUSIVE；桌面切换、概览的 GPU 序列完整。GPU 时间只覆盖 native_output_command_buffer，不覆盖全部离屏工作。
+原 compositor/Shell PID、InvocationID、所有原应用与窗口布局均保留；临时 unit/broker/socket/VT 已清理，GPU 后端连续性完整日志未见 native 失败或 GLES 回退。
+先前 a/b/c 均是启动工具问题，没有有效性能采样，全部原样保留为 INCOMPLETE。旧版先前实际性能失败数据也继续保留。
+
+证据
+软件回归：$HOME/Documents/Codex/2026-10-11/github-com-morluto-rea/work/independent-core-20261013/checks/scheduler-r4-workspace-receipt.json
+构建归档：$HOME/Documents/Codex/2026-10-11/github-com-morluto-rea/work/independent-core-20261013/checks/scheduler-r4-release-receipt.json
+物理配对与全部长间隔：$HOME/Documents/Codex/2026-10-11/github-com-morluto-rea/work/independent-core-20261013/checks/scheduler-r4-physical-receipt.json
+安装收据：$HOME/Documents/Codex/2026-10-11/github-com-morluto-rea/work/independent-core-20261013/checks/scheduler-r4-install-receipt.json
+独立复核：$HOME/Documents/Codex/2026-10-11/github-com-morluto-rea/work/independent-core-20261013/checks/scheduler-r4-physical-independent-audit.json
+
+以下为 r3 历史验收记录（保留原文，不能当作 r4 当前状态）：
+
+Realand 独立核心与 GPU 主线程改造验收记录
+日期：2026-10-15
+
+当前状态
+
+当前源码已完成统一软件回归和选定双 GPU 回归；发布版构建、六组 Shell 实际画面、
+Xwayland 与用户目录原子安装均已通过。现有用户配置验证通过，旧版已备份。
+版本：realand 0.1.0 (independent-core-20261015-r3)
+SHA256：c4a2995197de627394d791142493c0e35fd6e3cca59c5cf7b4fa5c00e5b43be8
+用户已登录本候选 Realand，进程、IPC peer、二进制 SHA 和版本已核实；流畅度验收尚未完成。
+这里的源码改造和离屏验证不代表已经达到物理帧时间目标。
+
+独立核心与设备边界
+
+realand-core 的生产依赖只有 smallvec，不依赖 Smithay、Wayland 或 GPU。稳定窗口、
+输出与空间身份，焦点、层级、最小化、模式恢复、普通拖动、拖放悬停、桌面切换、
+概览/Spread/Stage、画布惯性和视口目标等语义由纯核心控制。
+浮动、滚动平铺、动态 BSP 使用统一纯布局策略，平台适配器应用实际客户端约束
+和协议 configure，保留各模式的位置记录、真实 Tile/客户端与设备资源。
+
+输出使用不可变场景计划及 renderer-specific SceneSnapshot；设备绘制入口通过
+受限 FramePort/DevicePort 访问场景与反馈。平台协调器负责协议、设备和完成事件。
+没有另选一个生产核心的运行开关。来源、版权与许可证继续保留，独立设计不代表
+抹除历史来源，也不是对全部调用图的形式化证明。
+
+调度和本轮缺陷修复
+
+每个输出使用独立时钟、预计呈现时间与帧预算。动画未来取样与真实状态推进分开；
+打断/反向承接位置和速度，连续移动按帧合并，离散输入边界保持顺序。
+本轮修复画布相机预测与场景位移方向不一致的问题；保留下一次真实推进及手势
+首帧的数值断言。另修复 FIFO 估计帧结束后遗留定时器，覆盖提交、估计 vblank、
+超时和表面销毁，保留其他未到期帧的独立截止时间。
+
+GPU 主线程改造
+
+着色器 CPU 编译与 GPU 管线准备通过有界任务执行；准备线程只持有设备和程序
+资源，不拥有桌面或完整 NativeRenderer。格式扩展、YUV 管线及 RGBA 中间效果
+管线未就绪时仅推迟相应场景，保留已有像素，由实际完成事件唤醒重试。
+驱动编译在缓存锁外执行；旧格式与其他已准备输出可以继续绘制。
+
+帧、上传和完成任务分别限制容量，提交前预留；容量不足返回 Busy，不在主线程
+等待旧 GPU 工作。GPU 推迟保留真实的长呈现间隔，诊断不会将其归为无损伤空闲。
+窗口纹理携带精确的每次 Wayland 缓冲附件租约；旧场景和同存储新附件都保持到
+真实 GPU 完成，空闲时也可释放，不依赖后续鼠标操作或重绘。
+
+GPU 提交后同步 FD 导出失败时，先把提交及全部资源交给预留的完成队列，再返回
+原错误。新增故障注入覆盖 8 次未完成提交、零调用线程 fence 等待、第 9 帧拒绝、
+空闲释放与恢复。DRM 渲染失败会更换缓冲池槽位；独立复核未发现旧目标跨队列
+提前复用的具体路径。
+
+截图/读回、PNG/文件、配置与会话 JSON、光标资源、gamma FD、键盘文件和运行中
+Xwayland 探测使用有界异步任务；核心状态保持主线程所有权，完成时检查代次、
+身份和锁屏/场景 epoch。显式同步、提交时序、FIFO、Vulkan 预热及 damage 修复保留。
+
+双 GPU 验证与视频纹理边界
+
+最终统一源码的软件验证：Rust workspace 1,526 项通过，150 项默认忽略；
+Python 诊断回归 59 项通过。无默认功能编译、realand-core 严格 clippy 及格式检查
+通过。默认忽略的测试不属于这 1,526 项已执行测试。
+Intel Iris Xe、NVIDIA RTX 2050 各执行 42 Native Vulkan + 3 GLES，共 90 次通过。
+另有 NVIDIA 4 KiB 视频缓冲的精确尺寸拒绝测试通过，未把拒绝记作像素互操作成功。
+交互子组：布局 254、协议交互 91、组合概览像素 23、帧调度 24 项通过；这些子组
+包含在软件回归内且有重叠，不相加计数。
+
+有效视频正向参照由独立 Vulkan 设备使用 modifier list 分配，查询真实平面布局，
+上传并验证全部 Y/UV 数据后导出，再交给 NativeRenderer 导入。两卡均验证 9 次
+冷/热真实像素；另验证冷管线门控、旧画面保留、RGB 独立绘制及完成事件。
+NVIDIA 的该 16x16 GPU 图像行距为 128、UV 偏移为 65536；没有套用自行构造的布局。
+
+原 CPU dumb NV12 正向诊断在 NVIDIA 上仍读到零/绿色，失败源码与日志保留；
+没有将其改成通过，也没有据此关闭整个 NVIDIA/YUV 功能。Linux dumb 分配接口只
+保证 CPU/扫描输出用途，不能把 Intel 的实测成功推广为所有设备的 GPU 采样保证。
+独立探针验证同一 FD 的 VkBuffer 读取正确，而特定 VkImage 读取为零；具体驱动
+机制尚未确定。新 GPU producer 测试与原失败诊断分开记录。
+
+GPU 度量与物理验收
+
+本轮 NVIDIA fixture 中，格式准备最大 150.009 ms、YUV 管线准备最大 67.382 ms
+发生在设备工作线程；格式请求、CPU 结果派发、GPU 结果发布的主线程调用最大值
+分别为 0.015、0.056、0.081 ms。它们是不同调用作用域，不是整帧 P95，也没有
+清除驱动持久缓存或证明任何场景都不会被驱动调用阻塞。全部 945 条线程/任务
+样本及分组最大值保存在 checks/candidate3-r4-gpu-owner-work.json/.txt。
+GPU/线程局部 fixture 数值不能代替桌面端到端帧时间。原始 ImportDma 无客户端
+租约时的兼容 finish 仍可能等待；原始 standalone finish_async 的错误清理、缺少
+同步扩展时的兼容回退，以及 YUV 转换/图像创建的主线程驱动调用仍有明确范围。
+驱动 FD 所有权异常使用 64 项进程级保守容量限制；耗尽后拒绝新导入，需重启恢复，
+不能把它称作已修复驱动。来源证明见工作目录对应收据。
+
+实际验收必须登录本候选 Realand，用固定窗口、显示器、分辨率和缩放连续拖动、
+切换桌面、展开概览。60 Hz 目标为主线程 CPU 工作 P95 不超过 4.1667 ms，持续
+活动中大于 25 ms 的呈现间隔比例低于 1%，报告最大值、全部异常、缺样与版本身份。
+GPU 时间范围为 native_output_command_buffer，不能代替全部 GPU/KMS/WSI 工作。
+旧版本缺少同口径原始 CPU 覆盖，不声称数值上的前后提升比例。
+真实会话的混合缩放、热插拔、锁屏、录屏和设备恢复矩阵也仍需实际操作验收。
+
+实际会话首轮记录（2026-10-15）
+
+eDP-1：3840x2400、60 Hz、2x 缩放、VRR 关闭。第一轮请求拖动 30 秒，原始事件
+没有窗口几何变化，末尾只出现概览与桌面切换，活动 nominal 覆盖约 16.72%，
+因此场景验收 INCOMPLETE。主线程 CPU P95 2.683 ms、最大 4.218 ms；整次 redraw
+壁钟 P95 0.842 ms、最大 2.265 ms。285 个 qualified 活动间隔中 16 个超过 1.5 帧，
+比例 5.61%、最大 33.323 ms，数字 FAIL 原样保留，不能记作拖动验收通过。
+输出 GPU 原始样本不完整，仅可报告已观察最大 7.470 ms；不以低 CPU 或局部 GPU
+数据排除阻塞。需要与用户操作同步后重新采集三种目标场景。
+采集器修正官方 CLI 版本 JSON 解码和跨边界长间隔活动覆盖；30 项 mock 通过。
+已保留修正前失败预检、所有原始 IPC、完整异常和脚本 SHA，没有修改生产版来改变结果。
+
+实际会话自动测试（2026-10-15）
+
+结论：三项测试均完成，操作与原始CPU/长间隔序列覆盖完整，三项性能判定均为 FAIL。
+当前版本：0.1.0 (independent-core-20261015-r3)
+eDP-1：3840×2400，60 Hz，2×缩放，VRR关闭。
+目标：CPU工作P95≤4.1667 ms；活动呈现间隔>1.5帧（25 ms）的比例<1%。
+
+场景 / CPU P95 / CPU最大 / 长间隔 / 比例 / 间隔最大
+桌面切换 / 3.949 ms / 10.971 ms / 35/1765 / 1.983% / 33.338 ms
+展开/关闭概览 / 3.866 ms / 7.135 ms / 34/1765 / 1.926% / 33.339 ms
+窗口拖动 / 2.735 ms / 8.857 ms / 50/1744 / 2.867% / 33.340 ms
+
+桌面与概览由官方IPC操作；拖动使用自有900×650逻辑像素、scale2静态wl_shm窗口，
+通过实际button serial发出xdg_toplevel_move，并以120 Hz虚拟指针运动、每秒释放重抓。
+三项各采样30秒，原桌面/概览/焦点均已恢复。拖动客户端退出0，4235次运动、70次按钮、
+35次移动请求；释放收到服务端同步确认，测试窗口已消失。未改用户配置、未重启服务。
+物理libinput、Super快捷键与手势输入延迟不属于本次验收范围。
+
+CPU线程忙时间不含阻塞；输出GPU时间不含此前离屏提交。桌面切换GPU序列完整，
+P95 4.301 ms、最大5.057 ms；概览和拖动GPU覆盖不完整，仅报告已观测最大6.080/6.766 ms。
+全部CPU预算超限与全部长间隔保留在各capture maxima_and_anomalies及独立分析中。
+切换/概览异常多数在操作后约112 ms内；拖动另有待验证的近1Hz相位。
+观察者查询可能消耗帧余量，当前记录不能唯一归因全部异常；没有掩盖或删除FAIL。
+
+已直接复制生产FrameClock并复用原simulate_frame复现周期负载预算探测盲区：
+60 Hz、6重+13轻，预热后漏帧约3.57%。候选均保留在工作目录，未改生产或安装。
+延长确认窗口能降低模拟漏帧，但预算恢复变慢；该取舍尚未满足本轮优化要求。
+这些回放是算法反例，不能冒充新版本真实桌面已经通过。
+
+
+完整报告：$HOME/Documents/Codex/2026-10-11/github-com-morluto-rea/work/independent-core-20261013/checks/candidate3-r4-automated-physical-results.txt
+
+macOS 与来源
+
+保留液态玻璃。4 个静态样本、10 组指令证据及 11 条当前测试链接已经重新校验。
+没有运行中的 Catalina 参照，私有 Dock 曲线与像素完全一致仍属证据缺口；未知参数
+标为 Realand 自身设计。REA 已存在，未因这轮改造重新安装。来源记录见
+resources/licenses/realand-origin.txt；Smithay、DRM/KMS、libinput、Wayland、Vulkan 保留。
+
+安装与记录
+
+发布采用用户目录 release、精确 SHA/版本/现有配置校验及原子 launcher 切换，
+保留旧安装与回滚备份。安装时的 /usr/bin/niri 会话已由用户自行切换为本候选 Realand。
+本次启动 realand.service PID1294，二进制 SHA 与上述 release 一致；未由测试终止或重启会话。
+安装目录：$HOME/.local/lib/realand/releases/independent-core-20261015-154221-396889
+launcher：$HOME/.local/bin/realand
+回滚备份：$HOME/.local/lib/realand/backups/independent-core-20261015-154221-396889
+旧候选 C2 及更早 release 继续保留。安装前后当前会话进程和服务身份保持不变。
+
+工作目录：
+$HOME/Documents/Codex/2026-10-11/github-com-morluto-rea/work/independent-core-20261013
+统一验证前缀：checks/candidate3-r4-*
+最终汇总：candidate3-r4-verification-summary.json/.txt
+历史候选、失败收据、原始日志与选定文件 before 副本均保留。项目开始时已有大量
+未提交改动，未重置或提交；before 不是完整初始源码快照，旧 release 才是安装回滚依据。

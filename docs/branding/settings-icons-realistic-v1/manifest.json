@@ -1,0 +1,38 @@
+{
+  "tool": "built-in image_gen",
+  "style": "Full-color realistic desktop settings icons; silver aluminum, blue glass, natural studio highlights, transparent background.",
+  "icons": [
+    {
+      "file": "general.png",
+      "label": "通用"
+    },
+    {
+      "file": "window-layout.png",
+      "label": "窗口布局"
+    },
+    {
+      "file": "mission-control.png",
+      "label": "调度中心"
+    },
+    {
+      "file": "display.png",
+      "label": "显示器"
+    },
+    {
+      "file": "keyboard.png",
+      "label": "键盘"
+    },
+    {
+      "file": "trackpad.png",
+      "label": "触控板"
+    },
+    {
+      "file": "advanced-settings.png",
+      "label": "更多设置"
+    },
+    {
+      "file": "configuration.png",
+      "label": "配置文件"
+    }
+  ]
+}
