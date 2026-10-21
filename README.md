@@ -184,6 +184,19 @@ clarion msg frame-timings
 
 软件回归、GPU 验证和真实显示器的帧时间验收分别执行。硬件测试需要相应 render node 和验证层；单机测量不能代表所有显卡、显示器或应用负载。
 
+## 致谢与开源溯源 (Acknowledgments & Upstream Lineage)
+
+Clarion 始终严格恪守开源精神。本项目最初基于优秀的 Rust Wayland 合成器 **[Niri](https://github.com/YaLTeR/niri)**（作者 YaLTeR，基于 GPL-3.0-or-later 许可证）进行探索、衍生与下游架构重构。
+
+在此基础上，Clarion 进一步独立研发与扩展了：
+- 基于 `ash` 的原生 Vulkan 1.3 渲染引擎与有界异步回收机制；
+- HDR10 PQ / scRGB 混合色彩管理与 10-bit KMS 原子呈现流水线；
+- 独立于显示协议的纯 Rust 核心模型（`clarion-core`）；
+- 基于 GPUI 的全功能原生桌面 Shell 与应用管理；
+- 二维自由平移画布、动态 BSP / 浮动 / 滚动混合平铺及液态玻璃物理动效。
+
+我们对 **YaLTeR**、Niri 团队以及 **Smithay** 社区全体贡献者为 Rust 图形与合成器生态奠定的坚实基础致以崇高的敬意与感谢！本项目所有代码完全遵从 [GPL-3.0-or-later](LICENSE) 保持 100% 自由开源。
+
 ## 许可证与第三方声明
 
 Clarion 使用 [GPL-3.0-or-later](LICENSE)。依赖、第三方代码与适配部分保留各自的版权及许可证，见 [第三方声明](THIRD_PARTY_NOTICES.md)。
