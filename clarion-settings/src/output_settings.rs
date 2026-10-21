@@ -492,8 +492,9 @@ fn set_optional(source: &str, name: &str, value: Option<f64>) -> Result<String> 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
+
+    use super::*;
 
     fn target() -> OutputName {
         OutputName {

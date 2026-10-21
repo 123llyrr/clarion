@@ -1,13 +1,15 @@
 //! The GPUI test platform draws and dispatches real widget events without any
 //! display server, session bus, clipboard connection or launched application.
-use super::{Host, Panel, ShellView};
-use crate::app::testing;
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use gpui::{
     point, px, Entity, EntityInputHandler, Modifiers, TestAppContext, VisualTestContext,
     WindowHandle,
 };
-use std::collections::HashMap;
-use std::sync::Arc;
+
+use super::{Host, Panel, ShellView};
+use crate::app::testing;
 
 struct Fixture {
     _root: tempfile::TempDir,

@@ -1029,8 +1029,9 @@ fn preserve_close_timing(source: &str, animation: Animation) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
+
+    use super::*;
 
     fn manager(source: &str) -> (tempfile::TempDir, ConfigManager) {
         let dir = tempfile::tempdir().unwrap();

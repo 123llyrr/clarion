@@ -4,7 +4,8 @@
 
 use std::sync::{Arc, OnceLock};
 
-use gpui::{prelude::*, *};
+use gpui::prelude::*;
+use gpui::*;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum DesktopIconKind {

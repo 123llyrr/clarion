@@ -1,24 +1,22 @@
 //! Private-session regression probe for GPUI's portal parent export.
 //! Run with scripts/test-native-portal-parent.py, never a desktop session bus.
+use std::collections::HashMap;
+use std::fs;
+use std::io::Write;
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
 use anyhow::{ensure, Context, Result};
+use gpui::prelude::*;
 use gpui::{
-    div, prelude::*, px, rgb, size, App, AppContext, Application, Bounds, Context as UiContext,
-    IntoElement, LayerShellAnchor, LayerShellKeyboardInteractivity, LayerShellLayer,
-    LayerShellOptions, PathPromptOptions, Render, Window, WindowBounds, WindowKind, WindowOptions,
+    div, px, rgb, size, App, AppContext, Application, Bounds, Context as UiContext, IntoElement,
+    LayerShellAnchor, LayerShellKeyboardInteractivity, LayerShellLayer, LayerShellOptions,
+    PathPromptOptions, Render, Window, WindowBounds, WindowKind, WindowOptions,
 };
-use std::{
-    collections::HashMap,
-    fs,
-    io::Write,
-    os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt},
-    path::PathBuf,
-    time::{Duration, Instant},
-};
-use zbus::{
-    interface,
-    message::Header,
-    zvariant::{OwnedObjectPath, OwnedValue},
-};
+use zbus::interface;
+use zbus::message::Header;
+use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 
 fn guard() -> Result<PathBuf> {
     ensure!(

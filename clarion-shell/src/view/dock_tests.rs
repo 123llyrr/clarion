@@ -1,12 +1,14 @@
 //! Dispatch actual Dock widgets on GPUI's isolated test platform. The recorded
 //! masks are the exact rectangles sent by rendering, since TestWindow itself
 //! does not implement compositor-side input-region routing.
-use super::*;
-use crate::app::testing;
-use ::core::prelude::v1::test;
-use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext, WindowHandle};
 use std::collections::HashMap;
 use std::time::Duration;
+
+use ::core::prelude::v1::test;
+use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext, WindowHandle};
+
+use super::*;
+use crate::app::testing;
 
 const APP_ID: &str = "org.clarion.DockFixture.desktop";
 const APP_SELECTOR: &str = "dock-org.clarion.DockFixture.desktop";

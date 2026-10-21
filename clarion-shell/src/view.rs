@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Clarion's single visual system. No legacy themes or alternate launcher.
-use crate::{
-    app::{Action, Host, Panel, ViewState},
-    backend,
-    input::{QueryChanged, TextInput},
-    preferences::DockPosition,
-    services,
-};
-use gpui::{prelude::*, *};
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use gpui::prelude::*;
+use gpui::*;
+
+use crate::app::{Action, Host, Panel, ViewState};
+use crate::input::{QueryChanged, TextInput};
+use crate::preferences::DockPosition;
+use crate::{backend, services};
 
 mod macos_controls;
 mod macos_dock;

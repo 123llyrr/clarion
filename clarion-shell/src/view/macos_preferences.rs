@@ -740,12 +740,14 @@ impl ShellView {
 
 #[cfg(test)]
 mod tests {
-    use crate::app::{testing, Panel};
+    use std::collections::HashMap;
+
     use gpui::{
         point, px, size, Modifiers, ScrollDelta, ScrollWheelEvent, TestAppContext,
         VisualTestContext,
     };
-    use std::collections::HashMap;
+
+    use crate::app::{testing, Panel};
 
     #[gpui::test]
     fn preferences_controls_apply_real_values_and_close_the_actual_window(cx: &mut TestAppContext) {

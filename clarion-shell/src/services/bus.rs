@@ -5,8 +5,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use async_channel::{Receiver, Sender};
-use futures_lite::future;
-use futures_lite::StreamExt;
+use futures_lite::{future, StreamExt};
 use zbus::message::Header;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 use zbus::{interface, Connection, Proxy};

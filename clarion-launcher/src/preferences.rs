@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Shared configuration namespace. Shell appearance and UI state live in the
 //! native Shell; the application catalog contains no independent launcher UI.
+use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
+
 use anyhow::{Context, Result};
-use std::{collections::HashMap, fs, path::PathBuf};
 pub type Environment = HashMap<String, String>;
 /// Prefer the canonical directory; consult the legacy namespace only when absent.
 pub fn config_directory(environment: &Environment) -> Result<PathBuf> {

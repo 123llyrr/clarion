@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-use crate::{
-    backend,
-    desktop::{DesktopAction, DesktopView},
-    preferences::{DockPosition, Preferences},
-    services,
-    view::{ShellView, Surface},
-    Options,
-};
-use clarion_ipc::{Action as CoreAction, DockEdge, DockTarget, MinimizeEffect};
-use clarion_launcher::catalog::{AppCatalog, AppCategory};
-use gpui::{prelude::*, *};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use clarion_ipc::{Action as CoreAction, DockEdge, DockTarget, MinimizeEffect};
+use clarion_launcher::catalog::{AppCatalog, AppCategory};
+use gpui::prelude::*;
+use gpui::*;
+
+use crate::desktop::{DesktopAction, DesktopView};
+use crate::preferences::{DockPosition, Preferences};
+use crate::view::{ShellView, Surface};
+use crate::{backend, services, Options};
 
 mod panels;
 
@@ -1757,8 +1756,9 @@ mod dock_preferences_tests;
 
 #[cfg(test)]
 mod notification_lifecycle_tests {
-    use super::*;
     use ::core::prelude::v1::test;
+
+    use super::*;
 
     fn notification(id: u32) -> services::Notification {
         services::Notification {

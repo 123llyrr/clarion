@@ -726,11 +726,13 @@ impl RenderOnce for ControlSlider {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::app::testing;
+    use std::collections::HashMap;
+
     use ::core::prelude::v1::test;
     use clarion_launcher::catalog::AppCatalog;
-    use std::collections::HashMap;
+
+    use super::*;
+    use crate::app::testing;
 
     fn private_host(cx: &mut TestAppContext) -> (tempfile::TempDir, Entity<Host>) {
         let root = tempfile::tempdir().unwrap();

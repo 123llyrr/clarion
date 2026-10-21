@@ -16,7 +16,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context as _, Result};
 use async_channel::Sender;
-use gpui::{prelude::*, *};
+use gpui::prelude::*;
+use gpui::*;
 use image::ImageReader;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -2011,8 +2012,9 @@ fn worker(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ::core::prelude::v1::test;
+
+    use super::*;
     fn env(root: &Path) -> HashMap<String, String> {
         [
             ("HOME".into(), root.to_string_lossy().into_owned()),

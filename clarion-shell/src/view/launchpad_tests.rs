@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-use super::*;
-use crate::app::testing;
+use std::collections::HashMap;
+
 use ::core::prelude::v1::test;
 use clarion_launcher::catalog::AppCatalog;
-use std::collections::HashMap;
+
+use super::*;
+use crate::app::testing;
 
 fn fixture(cx: &mut TestAppContext) -> ViewState {
     let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));

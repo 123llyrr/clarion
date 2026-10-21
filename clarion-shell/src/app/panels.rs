@@ -138,9 +138,10 @@ fn menu_height(items: &[services::MenuItem]) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use ::core::prelude::v1::test;
+
     use super::*;
     use crate::app::testing;
-    use ::core::prelude::v1::test;
 
     #[gpui::test]
     fn desktop_components_have_distinct_positions_and_roles(cx: &mut TestAppContext) {

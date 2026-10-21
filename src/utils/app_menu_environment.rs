@@ -2,11 +2,12 @@
 //! menus need no exporter, registrar or global-menu capability. This migration
 //! runs for a real session only; it never loads a GTK module or removes files.
 
+use std::collections::HashMap;
+use std::env;
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::{collections::HashMap, env};
 
 const MODULES: &str = "GTK_MODULES";
 const SCHEMAS: &str = "GSETTINGS_SCHEMA_DIR";

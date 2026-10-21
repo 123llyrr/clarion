@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Notification text wraps naturally; hit regions follow the painted cards.
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use super::*;
-use std::{cell::RefCell, rc::Rc};
 
 pub(super) const DATE_HEIGHT: f32 = 56.;
 const MIN_CARD_HEIGHT: f32 = 132.;
@@ -356,8 +358,9 @@ fn card_regions(viewport: Bounds<Pixels>, cards: &[Bounds<Pixels>]) -> Vec<Bound
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ::core::prelude::v1::test;
+
+    use super::*;
 
     fn contains(regions: &[Bounds<Pixels>], x: f32, y: f32) -> bool {
         regions
@@ -417,8 +420,9 @@ mod tests {
 
     #[gpui::test]
     fn complete_multiline_text_and_all_actions_are_reachable_by_scrolling(cx: &mut TestAppContext) {
-        use crate::app::testing;
         use std::collections::HashMap;
+
+        use crate::app::testing;
         let directory = tempfile::tempdir().unwrap();
         let private = directory.path().to_string_lossy().into_owned();
         let environment: HashMap<String, String> = [

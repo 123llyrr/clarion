@@ -1,10 +1,12 @@
 //! Preference semantics and installed asset lookup without a real desktop.
+use std::collections::HashMap;
+
+use gpui::{px, size, TestAppContext};
+
 use super::{
     append_recent_dock_apps, dock_icon_name, dock_icon_roots, output_dimensions, resolve_dock_icon,
     testing, AppCatalog, AppCategory,
 };
-use gpui::{px, size, TestAppContext};
-use std::collections::HashMap;
 
 struct Fixture {
     _root: tempfile::TempDir,
