@@ -22,6 +22,7 @@ use image::ImageReader;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::input::{QueryChanged, TextInput};
+use crate::preferences::SurfaceAppearance;
 
 const MAX_ENTRIES: usize = 500;
 const MAX_VISITED: usize = 4096;
@@ -314,6 +315,7 @@ pub struct DesktopView {
     alive: Arc<AtomicBool>,
     scroll: ScrollHandle,
     reserved_edges: [f32; 4],
+    appearance: SurfaceAppearance,
 }
 
 impl DesktopView {
@@ -346,6 +348,7 @@ impl DesktopView {
         environment: HashMap<String, String>,
         actions: Sender<DesktopAction>,
         preview: bool,
+        appearance: SurfaceAppearance,
         cx: &mut Context<Self>,
     ) -> Self {
         let input = cx.new(|cx| TextInput::new(cx).with_placeholder("文件名称"));
@@ -442,6 +445,7 @@ impl DesktopView {
             alive,
             scroll: ScrollHandle::new(),
             reserved_edges: [28., 78., 0., 0.],
+            appearance,
         }
     }
 
@@ -464,6 +468,15 @@ impl DesktopView {
         });
         if self.reserved_edges != edges {
             self.reserved_edges = edges;
+            cx.notify();
+        }
+    }
+
+    /// Mirrors the shell's opacity, frost and theme controls into the desktop
+    /// context menu and inspector.
+    pub fn set_appearance(&mut self, appearance: SurfaceAppearance, cx: &mut Context<Self>) {
+        if self.appearance != appearance {
+            self.appearance = appearance;
             cx.notify();
         }
     }
@@ -775,6 +788,58 @@ impl DesktopView {
         cx.notify();
     }
 
+    /// The desktop window has no compositor frost region of its own, so its
+    /// contextual surfaces borrow the same tint and opacity controls and add a
+    /// gentle wash. That keeps them coherent with shell menus without blurring
+    /// the whole output.
+    fn menu_surface(&self) -> Hsla {
+        let appearance = self.appearance;
+        let base: Hsla = if appearance.dark {
+            rgb(0x202631).into()
+        } else {
+            rgb(0xf7f8fc).into()
+        };
+        let alpha = (0.55 + 0.45 * appearance.surface_opacity).clamp(0., 1.);
+        let wash = Hsla::from(rgb(0xffffff)).opacity(
+            if appearance.dark {
+                0.02 + 0.04 * appearance.frost
+            } else {
+                0.03 + 0.06 * appearance.frost
+            },
+        );
+        base.opacity(alpha).blend(wash)
+    }
+
+    fn menu_text(&self) -> Hsla {
+        if self.appearance.dark {
+            rgb(0xf4f5fa).into()
+        } else {
+            rgb(0x23242a).into()
+        }
+    }
+
+    fn menu_line(&self) -> Hsla {
+        Hsla::from(rgb(if self.appearance.dark {
+            0xd9e3ff
+        } else {
+            0x355578
+        }))
+        .opacity(0.12 + 0.06 * self.appearance.frost)
+    }
+
+    fn menu_hover(&self) -> Hsla {
+        Hsla::from(rgb(if self.appearance.dark {
+            0xffffff
+        } else {
+            0x344966
+        }))
+        .opacity(0.07 + 0.04 * self.appearance.frost)
+    }
+
+    fn menu_shadow(&self) -> Hsla {
+        Hsla::from(rgb(0x000000)).opacity(0.20 + 0.12 * self.appearance.frost)
+    }
+
     fn context_button(
         &self,
         id: &'static str,
@@ -782,6 +847,7 @@ impl DesktopView {
         action: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
         cx: &Context<Self>,
     ) -> AnyElement {
+        let hover = self.menu_hover();
         div()
             .id(id)
             .px_3()
@@ -789,7 +855,7 @@ impl DesktopView {
             .rounded(px(6.))
             .text_sm()
             .cursor_pointer()
-            .hover(|style| style.bg(rgba(0xffffff12)))
+            .hover(move |style| style.bg(hover))
             .child(label)
             .on_click(cx.listener(move |this, _, window, cx| action(this, window, cx)))
             .into_any_element()
@@ -1192,6 +1258,10 @@ impl Render for DesktopView {
                     .child(error.clone()),
             );
         }
+        let menu_surface = self.menu_surface();
+        let menu_text = self.menu_text();
+        let menu_line = self.menu_line();
+        let menu_shadow = self.menu_shadow();
         if let Some(position) = menu_position {
             let mut menu = div()
                 .id("desktop-context-menu")
@@ -1202,11 +1272,17 @@ impl Render for DesktopView {
                 .max_h(px((height - top - bottom - 16.).max(80.)))
                 .overflow_y_scroll()
                 .p_1()
-                .rounded(px(10.))
-                .bg(rgba(0x202b38f5))
+                .rounded(px(12.))
+                .bg(menu_surface)
+                .text_color(menu_text)
                 .border_1()
-                .border_color(rgba(0xffffff24))
-                .shadow_lg()
+                .border_color(menu_line)
+                .shadow(vec![BoxShadow {
+                    color: menu_shadow,
+                    offset: point(px(0.), px(8.)),
+                    blur_radius: px(24.),
+                    spread_radius: px(0.),
+                }])
                 .flex()
                 .flex_col()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -1260,7 +1336,7 @@ impl Render for DesktopView {
                         cx,
                     ));
                 }
-                menu = menu.child(div().h(px(1.)).my_1().bg(rgba(0xffffff18)));
+                menu = menu.child(div().h(px(1.)).my_1().bg(menu_line));
             }
             root = root.child(
                 menu.child(self.context_button(
@@ -1367,10 +1443,16 @@ impl Render for DesktopView {
                             .max_h(px(panel_height))
                             .rounded(px(16.))
                             .overflow_hidden()
-                            .bg(rgba(0x202b38f5))
+                            .bg(menu_surface)
+                            .text_color(menu_text)
                             .border_1()
-                            .border_color(rgba(0xffffff32))
-                            .shadow_lg()
+                            .border_color(menu_line)
+                            .shadow(vec![BoxShadow {
+                                color: menu_shadow,
+                                offset: point(px(0.), px(8.)),
+                                blur_radius: px(24.),
+                                spread_radius: px(0.),
+                            }])
                             .flex()
                             .flex_col()
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -1382,7 +1464,7 @@ impl Render for DesktopView {
                                     .px_4()
                                     .py_3()
                                     .border_b_1()
-                                    .border_color(rgba(0xffffff18))
+                                    .border_color(menu_line)
                                     .child(
                                         div()
                                             .id("desktop-inspector-close")
@@ -2261,6 +2343,7 @@ mod tests {
                 alive: Arc::new(AtomicBool::new(true)),
                 scroll: ScrollHandle::new(),
                 reserved_edges: [0.; 4],
+                appearance: Default::default(),
             }
         });
         let (first_bounds, second_bounds) = visual.update(|window, cx| {

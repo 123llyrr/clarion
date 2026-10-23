@@ -16,36 +16,68 @@ pub(super) fn launchpad_insets(host: &ViewState) -> (f32, f32, f32) {
     }
 }
 
-/// Blur the whole backdrop, leaving a hole only for the actual Dock canvas.
-/// A full-width clear strip would leave a conspicuous seam in the wallpaper.
-pub(super) fn backdrop_regions(host: &ViewState, width: f32, height: f32) -> Vec<Bounds<Pixels>> {
+/// The resting tray rectangle in output coordinates, the shape the Launchpad
+/// leaves undimmed. Mirrors the Dock canvas so the cutout matches the tray
+/// instead of the larger layer-shell surface.
+pub(super) fn dock_cutout(host: &ViewState, width: f32, height: f32) -> Option<(f32, f32, f32, f32)> {
     if host.prefs.dock_hidden {
-        return vec![Bounds::new(
-            point(px(0.), px(0.)),
-            size(px(width), px(height)),
-        )];
+        return None;
     }
     let vertical = host.prefs.dock_position != DockPosition::Bottom;
-    let metrics = crate::dock_motion::DockMetrics::new(
+    let metrics = crate::dock_motion::DockMetrics::with_folders(
         host.dock_apps().len(),
         host.prefs.dock_size as f32,
         host.prefs.magnification_scale as f32,
         host.prefs.magnification && !host.prefs.reduce_motion,
         host.prefs.show_launcher,
+        host.dock_folders.len(),
         vertical,
         width,
         height,
     );
-    let (w, h) = (metrics.surface_width, metrics.surface_height);
-    let (x, y) = match host.prefs.dock_position {
-        DockPosition::Bottom => ((width - w) / 2., height - 8. - h),
-        DockPosition::Left => (8., (height - h) / 2.),
-        DockPosition::Right => (width - 8. - w, (height - h) / 2.),
+    let (x, y) = crate::app::panels::dock_surface_origin(host, &metrics, width, height);
+    if vertical {
+        let tray_x = if host.prefs.dock_position == DockPosition::Left {
+            x
+        } else {
+            x + metrics.surface_width - metrics.thickness
+        };
+        Some((
+            tray_x,
+            y + metrics.main_padding,
+            metrics.thickness,
+            metrics.length,
+        ))
+    } else {
+        Some((
+            x + metrics.main_padding,
+            y + metrics.cross_padding,
+            metrics.length,
+            metrics.thickness,
+        ))
+    }
+}
+
+/// Blur the whole backdrop, leaving a hole only for the actual Dock canvas.
+/// A full-width clear strip would leave a conspicuous seam in the wallpaper.
+pub(super) fn backdrop_regions(host: &ViewState, width: f32, height: f32) -> Vec<Bounds<Pixels>> {
+    // Punch the hole around the resting tray, not the whole surface. The
+    // surface reserves a transparent band for the hover tooltip, shadow and
+    // magnification; dimming around that band would show a rectangle.
+    let (tx, ty, tw, th) = match dock_cutout(host, width, height) {
+        Some(cutout) => cutout,
+        None => {
+            return vec![Bounds::new(
+                point(px(0.), px(0.)),
+                size(px(width), px(height)),
+            )];
+        }
     };
-    let left = x.clamp(0., width);
-    let right = (x + w).clamp(left, width);
-    let top = y.clamp(0., height);
-    let bottom = (y + h).clamp(top, height);
+    let margin = 10.;
+    let left = (tx - margin).clamp(0., width);
+    let right = (tx + tw + margin).clamp(left, width);
+    let top = (ty - margin).clamp(0., height);
+    let bottom = (ty + th + margin).clamp(top, height);
     [
         (0., 0., width, top),
         (0., bottom, width, height - bottom),
@@ -301,7 +333,7 @@ impl ShellView {
                     .top(region.origin.y)
                     .w(region.size.width)
                     .h(region.size.height)
-                    .bg(rgba(0x1517224d))
+                    .bg(p.scrim)
                     .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                         h.update(cx, |h, cx| h.handle(Action::Close, cx))
                     }),

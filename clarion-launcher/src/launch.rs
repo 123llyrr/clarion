@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::Read;
 use std::os::fd::AsRawFd;
-use std::path::Path;
+use std::os::unix::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use std::{fs, thread};
@@ -270,13 +271,18 @@ fn probe_scope(
 
 fn launch_with_runner(
     path: &Path,
+    files: &[PathBuf],
     env: &HashMap<String, String>,
     runner: &mut impl CommandRunner,
 ) -> Result<()> {
     // Finish every probe before invoking GIO. Failure after this point must
     // reach the caller unchanged: retrying directly could open the app twice.
     let scope = probe_scope(env, runner)?;
-    let arguments = [OsString::from("launch"), path.as_os_str().to_owned()];
+    let mut arguments = vec![
+        OsString::from("launch"),
+        path.as_os_str().to_owned(),
+    ];
+    arguments.extend(files.iter().map(|file| file.as_os_str().to_owned()));
     match scope {
         Some(scope) => runner.launch("systemd-run", &scope.arguments("gio", &arguments), env),
         None => runner.launch("gio", &arguments, env),
@@ -284,7 +290,23 @@ fn launch_with_runner(
 }
 
 pub fn launch_desktop_file(path: &Path, env: &HashMap<String, String>) -> Result<()> {
-    launch_with_runner(path, env, &mut SystemRunner)
+    launch_with_runner(path, &[], env, &mut SystemRunner)
+}
+
+/// Launch one application from its desktop entry and pass files as arguments.
+/// Every path must be absolute; the caller has already matched MIME support.
+pub fn launch_desktop_file_with_paths(
+    path: &Path,
+    files: &[PathBuf],
+    env: &HashMap<String, String>,
+) -> Result<()> {
+    anyhow::ensure!(
+        files.len() <= 16
+            && files.iter().all(|file| file.is_absolute()
+                && !file.as_os_str().as_bytes().contains(&0)),
+        "Invalid file arguments"
+    );
+    launch_with_runner(path, files, env, &mut SystemRunner)
 }
 
 #[cfg(test)]
@@ -368,7 +390,7 @@ mod tests {
         let (_root, env) = manager_environment();
         let mut runner = FakeRunner::default();
         let path = Path::new(r"/home/应用 名/${HOME} $(touch nope).desktop");
-        launch_with_runner(path, &env, &mut runner).unwrap();
+        launch_with_runner(path, &[], &env, &mut runner).unwrap();
         assert_eq!(runner.probes.len(), 3);
         assert_eq!(
             runner.launches,
@@ -402,13 +424,43 @@ mod tests {
         )]
         .into();
         let mut runner = FakeRunner::default();
-        launch_with_runner(Path::new("literal.desktop"), &env, &mut runner).unwrap();
+        launch_with_runner(Path::new("literal.desktop"), &[], &env, &mut runner).unwrap();
         assert!(runner.probes.is_empty());
         assert_eq!(
             runner.launches,
             vec![(
                 "gio".into(),
                 vec!["launch".into(), "literal.desktop".into()]
+            )]
+        );
+    }
+
+    #[test]
+    fn launch_with_paths_appends_each_file_after_the_desktop_file() {
+        let root = tempfile::tempdir().unwrap();
+        let env = [(
+            "XDG_RUNTIME_DIR".into(),
+            root.path().to_string_lossy().into_owned(),
+        )]
+        .into();
+        let mut runner = FakeRunner::default();
+        launch_with_runner(
+            Path::new("/apps/viewer.desktop"),
+            &[PathBuf::from("/tmp/a.txt"), PathBuf::from("/tmp/b.png")],
+            &env,
+            &mut runner,
+        )
+        .unwrap();
+        assert_eq!(
+            runner.launches,
+            vec![(
+                "gio".into(),
+                vec![
+                    OsString::from("launch"),
+                    OsString::from("/apps/viewer.desktop"),
+                    OsString::from("/tmp/a.txt"),
+                    OsString::from("/tmp/b.png"),
+                ]
             )]
         );
     }
@@ -422,7 +474,9 @@ mod tests {
                 fail_launch: true,
                 ..Default::default()
             };
-            assert!(launch_with_runner(Path::new("bad.desktop"), &env, &mut runner).is_err());
+            assert!(
+                launch_with_runner(Path::new("bad.desktop"), &[], &env, &mut runner).is_err()
+            );
             assert_eq!(runner.launches.len(), usize::from(!fail_before));
             assert!(runner.launches.iter().all(|call| call.0 == "systemd-run"));
         }
@@ -457,7 +511,9 @@ mod tests {
             help: "--scope --user --slice=SLICE --collect",
             ..Default::default()
         };
-        assert!(launch_with_runner(Path::new("fixture.desktop"), &env, &mut runner).is_err());
+        assert!(
+            launch_with_runner(Path::new("fixture.desktop"), &[], &env, &mut runner).is_err()
+        );
         assert!(runner.launches.is_empty());
     }
 

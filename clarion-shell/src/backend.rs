@@ -92,6 +92,7 @@ pub enum Command {
         y: f64,
     },
     LaunchDesktop(PathBuf),
+    LaunchDesktopWithPaths(PathBuf, Vec<PathBuf>),
     OpenPath(PathBuf),
     OpenSettings,
     SetVolume(f64),
@@ -592,6 +593,17 @@ fn perform(
                 "Invalid desktop entry path"
             );
             clarion_launcher::launch::launch_desktop_file(&path, &options.environment)?;
+        }
+        Command::LaunchDesktopWithPaths(path, files) => {
+            anyhow::ensure!(
+                path.is_absolute() && path.extension().is_some_and(|ext| ext == "desktop"),
+                "Invalid desktop entry path"
+            );
+            clarion_launcher::launch::launch_desktop_file_with_paths(
+                &path,
+                &files,
+                &options.environment,
+            )?;
         }
         Command::OpenPath(path) => {
             anyhow::ensure!(

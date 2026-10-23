@@ -466,6 +466,10 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     /// Logical surface rectangles accepting pointer input; None restores the
     /// whole surface, and an empty slice makes a desktop layer pass through.
     fn set_input_region(&self, _rectangles: Option<&[Bounds<Pixels>]>) {}
+    /// Logical surface rectangles the compositor should frost. `None` falls
+    /// back to the input region so callers that only set one shape are
+    /// unaffected.
+    fn set_glass_region(&self, _rectangles: Option<&[Bounds<Pixels>]>) {}
     /// Update a layer surface's reserved edge without destroying its window.
     fn set_layer_exclusive_zone(&self, _zone: i32) {}
     fn scale_factor(&self) -> f32;

@@ -29,36 +29,18 @@ fn text(text: impl Into<String>, size: f32, weight: FontWeight, color: Hsla) -> 
     }
 }
 
-fn card(dark: bool) -> Div {
+fn card(p: Palette) -> Div {
     div()
         .rounded(px(11.))
         .border_1()
-        .border_color(if dark {
-            rgba(0xffffff16)
-        } else {
-            rgba(0xffffff80)
-        })
+        .border_color(p.line.opacity(0.7))
         .bg(linear_gradient(
             180.,
-            linear_color_stop(
-                if dark {
-                    rgba(0xffffff13)
-                } else {
-                    rgba(0xffffff9c)
-                },
-                0.,
-            ),
-            linear_color_stop(
-                if dark {
-                    rgba(0xffffff09)
-                } else {
-                    rgba(0xffffff59)
-                },
-                1.,
-            ),
+            linear_color_stop(p.frost_wash, 0.),
+            linear_color_stop(p.card, 1.),
         ))
         .shadow(vec![BoxShadow {
-            color: rgba(if dark { 0x0000001c } else { 0x0000000b }).into(),
+            color: p.shadow.opacity(0.5),
             offset: point(px(0.), px(1.)),
             blur_radius: px(3.),
             spread_radius: px(0.),
@@ -96,7 +78,7 @@ impl ShellView {
             .and_then(|output| output.hdr_brightness)
             .map(|value| f64::from(value) / 100.)
             .or(host.system.brightness);
-        let mut footer = card(dark).w_full().p(px(4.)).flex().flex_col();
+        let mut footer = card(p).w_full().p(px(4.)).flex().flex_col();
         for (index, (id, label, icon, action)) in [
             (
                 "controls-desktop",
@@ -121,11 +103,7 @@ impl ShellView {
         .enumerate()
         {
             if index != 0 {
-                footer = footer.child(div().ml(px(32.)).mr(px(8.)).h(px(1.)).bg(if dark {
-                    rgba(0xffffff0f)
-                } else {
-                    rgba(0x0000000b)
-                }));
+                footer = footer.child(div().ml(px(32.)).mr(px(8.)).h(px(1.)).bg(p.line.opacity(0.55)));
             }
             footer = footer.child(self.control_entry(id, label, icon, action, p));
         }
@@ -213,7 +191,7 @@ impl ShellView {
         let keyboard_host = self.host.clone();
         let keyboard_action = action.clone();
         let icon_color = if selected { rgb(0xffffff).into() } else { p.fg };
-        card(dark)
+        card(p)
             .id(id)
             .flex_1()
             .min_w_0()
@@ -226,13 +204,7 @@ impl ShellView {
             .key_context("ClarionControlButton")
             .debug_selector(move || id.into())
             .cursor_pointer()
-            .hover(move |style| {
-                style.bg(if dark {
-                    rgba(0xffffff20)
-                } else {
-                    rgba(0xffffffba)
-                })
-            })
+            .hover(move |style| style.bg(p.line))
             .focus(move |style| style.border_color(p.accent))
             .child(
                 div()
@@ -399,7 +371,7 @@ impl ShellView {
                     }),
             );
         }
-        let body = card(dark)
+        let body = card(p)
             .h(px(86.))
             .w_full()
             .px(px(12.))

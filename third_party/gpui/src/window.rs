@@ -835,6 +835,9 @@ pub struct Window {
     pub(crate) root: Option<AnyView>,
     pub(crate) element_id_stack: SmallVec<[ElementId; 32]>,
     pub(crate) text_style_stack: Vec<TextStyleRefinement>,
+    /// When set, glyphs are rotated around this point while an element paints.
+    /// Used by fan labels so text follows the same curve as their icons.
+    text_rotation: Option<(Point<Pixels>, f32)>,
     pub(crate) rendered_entity_stack: Vec<EntityId>,
     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
     pub(crate) element_opacity: f32,
@@ -1219,6 +1222,7 @@ impl Window {
             root: None,
             element_id_stack: SmallVec::default(),
             text_style_stack: Vec::new(),
+            text_rotation: None,
             rendered_entity_stack: Vec::new(),
             element_offset_stack: Vec::new(),
             content_mask_stack: Vec::new(),
@@ -1269,9 +1273,12 @@ impl Window {
     }
 }
 
+/// Outcome of dispatching a platform event to a window.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct DispatchEventResult {
+pub struct DispatchEventResult {
+    /// Whether the event should continue propagating.
     pub propagate: bool,
+    /// Whether a listener prevented the window's default handling.
     pub default_prevented: bool,
 }
 
@@ -1789,6 +1796,12 @@ impl Window {
     /// exclude their transparent margins so windows below remain interactive.
     pub fn set_input_region(&self, rectangles: Option<&[Bounds<Pixels>]>) {
         self.platform_window.set_input_region(rectangles);
+    }
+
+    /// Set the surface-local shape the compositor frosts, independent of the
+    /// input region. `None` restores the input region as the glass shape.
+    pub fn set_glass_region(&self, rectangles: Option<&[Bounds<Pixels>]>) {
+        self.platform_window.set_glass_region(rectangles);
     }
 
     /// Change the reserved edge of a layer-shell surface in logical pixels.
@@ -2338,6 +2351,23 @@ impl Window {
             range.start.scene_index..range.end.scene_index,
             &self.rendered_frame.scene,
         );
+    }
+
+    /// Rotate text painted by `f` around `center` by `angle` radians.
+    ///
+    /// This is used by fan labels, whose glyphs follow the curve while the
+    /// element's hitbox stays axis aligned. This method should only be called
+    /// as part of element drawing.
+    pub fn with_text_rotation<F, R>(&mut self, center: Point<Pixels>, angle: f32, f: F) -> R
+    where
+        F: FnOnce(&mut Self) -> R,
+    {
+        self.invalidator.debug_assert_paint_or_prepaint();
+        let previous = self.text_rotation;
+        self.text_rotation = Some((center, angle));
+        let result = f(self);
+        self.text_rotation = previous;
+        result
     }
 
     /// Push a text style onto the stack, and call a function with that style active.
@@ -2998,6 +3028,18 @@ impl Window {
                 size: tile.bounds.size.map(Into::into),
             };
             let content_mask = self.content_mask().scale(scale_factor);
+            let transformation = if let Some((center, angle)) = self.text_rotation {
+                let center = point(
+                    ScaledPixels(center.x.0 * scale_factor),
+                    ScaledPixels(center.y.0 * scale_factor),
+                );
+                TransformationMatrix::unit()
+                    .translate(center)
+                    .rotate(crate::Radians(angle))
+                    .translate(point(ScaledPixels(-center.x.0), ScaledPixels(-center.y.0)))
+            } else {
+                TransformationMatrix::unit()
+            };
             self.next_frame.scene.insert_primitive(MonochromeSprite {
                 order: 0,
                 pad: 0,
@@ -3005,7 +3047,7 @@ impl Window {
                 content_mask,
                 color: color.opacity(element_opacity),
                 tile,
-                transformation: TransformationMatrix::unit(),
+                transformation,
             });
         }
         Ok(())
@@ -3736,6 +3778,11 @@ impl Window {
                 cx.active_drag = None;
                 self.refresh();
             }
+        } else if event.is::<FileDropEvent>() {
+            // An exited external drag clears the active drag before it reaches
+            // the mouse listeners. Repaint so views can drop their drag-only
+            // decorations instead of leaving a stale placeholder behind.
+            self.refresh();
         }
     }
 
@@ -4719,6 +4766,17 @@ impl<V: 'static + Render> WindowHandle<V> {
 
             Ok(view.update(cx, |view, cx| update(view, window, cx)))
         })?
+    }
+
+    /// Dispatches a platform event to this window without updating its root
+    /// view.
+    ///
+    /// This is useful when the event's listeners themselves need to update the
+    /// root view, which would conflict with an active root-view update.
+    pub fn dispatch_event(&self, event: PlatformInput, cx: &mut App) -> Result<()> {
+        cx.update_window(self.any_handle, |_, window, cx| {
+            window.dispatch_event(event, cx);
+        })
     }
 
     /// Read the root view out of this window.

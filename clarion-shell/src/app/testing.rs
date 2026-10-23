@@ -30,6 +30,8 @@ pub(crate) fn test_host(
         panel: None,
         preview: true,
         dnd: false,
+        folder_drag_layer: false,
+        folder_drop_preview: false,
         revision: 0,
         backend,
         service,
@@ -55,6 +57,10 @@ pub(crate) fn test_host(
         targets_pending: false,
         auto_hidden: false,
         launches: HashMap::new(),
+        dock_folder_cache: HashMap::new(),
+        dock_folder_errors: HashMap::new(),
+        folder_navigation: None,
+        folder_scan_generation: HashMap::new(),
         dock_hover: false,
         dock_edge_hover: false,
         idle_since: Instant::now(),
@@ -68,6 +74,28 @@ pub(crate) fn open_panel(
 ) -> WindowHandle<ShellView> {
     host.update(cx, |host, cx| host.open(panel, cx));
     host.read(cx).popup.expect("test panel was not created")
+}
+
+pub(crate) fn open_folder(
+    host: &Entity<Host>,
+    root: std::path::PathBuf,
+    cx: &mut App,
+) -> WindowHandle<ShellView> {
+    host.update(cx, |host, cx| host.apply(Action::OpenFolder(root), cx));
+    host.read(cx).popup.expect("test folder panel was not created")
+}
+
+pub(crate) fn popup(host: &Entity<Host>, cx: &App) -> WindowHandle<ShellView> {
+    host.read(cx).popup.expect("test panel was not created")
+}
+
+pub(crate) fn output_name(host: &Entity<Host>, cx: &App) -> String {
+    host.read(cx)
+        .outputs
+        .keys()
+        .next()
+        .cloned()
+        .expect("test output was not created")
 }
 
 pub(crate) fn open_dock(host: &Entity<Host>, cx: &mut App) -> WindowHandle<ShellView> {

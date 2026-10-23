@@ -49,10 +49,16 @@ fn dock_cutout_keeps_the_rest_of_the_bottom_or_side_wallpaper_blurred(cx: &mut T
             state.prefs.dock_auto_hide = auto_hide;
             let regions = backdrop_regions(&state, 1440., 900.);
             assert_bounded(&regions, 1440., 900.);
-            let (dock_x, dock_y, wallpaper_x, wallpaper_y) = match position {
-                DockPosition::Bottom => (720., 846., 16., 846.),
-                DockPosition::Left => (54., 450., 54., 64.),
-                DockPosition::Right => (1386., 450., 1386., 64.),
+            // The cutout is the resting tray, sampled at its center.
+            let (tx, ty, tw, th) =
+                dock_cutout(&state, 1440., 900.).expect("visible dock has a cutout");
+            let dock_x = tx + tw / 2.;
+            let dock_y = ty + th / 2.;
+            // A wallpaper point far from the tray stays dimmed.
+            let (wallpaper_x, wallpaper_y) = match position {
+                DockPosition::Bottom => (16., 64.),
+                DockPosition::Left => (54., 64.),
+                DockPosition::Right => (1386., 64.),
             };
             assert!(
                 !covers(&regions, dock_x, dock_y),
@@ -61,6 +67,18 @@ fn dock_cutout_keeps_the_rest_of_the_bottom_or_side_wallpaper_blurred(cx: &mut T
             assert!(
                 covers(&regions, wallpaper_x, wallpaper_y),
                 "Old full-width/height transparent strip returned: {position:?}"
+            );
+            // The transparent band the surface reserves for the tooltip and
+            // magnification is dimmed like the rest of the wallpaper, so no
+            // rectangle shows around the tray.
+            let band = match position {
+                DockPosition::Bottom => (dock_x, ty - 14.),
+                DockPosition::Left => (tx + tw + 14., dock_y),
+                DockPosition::Right => (tx - 14., dock_y),
+            };
+            assert!(
+                covers(&regions, band.0, band.1),
+                "Surface band not dimmed: {position:?}"
             );
         }
     }

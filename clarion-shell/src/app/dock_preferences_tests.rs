@@ -5,7 +5,7 @@ use gpui::{px, size, TestAppContext};
 
 use super::{
     append_recent_dock_apps, dock_icon_name, dock_icon_roots, output_dimensions, resolve_dock_icon,
-    testing, AppCatalog, AppCategory,
+    testing, Action, AppCatalog, AppCategory,
 };
 
 struct Fixture {
@@ -164,6 +164,50 @@ fn window() -> clarion_ipc::Window {
     }
 }
 
+#[test]
+fn window_app_ids_match_desktop_file_shapes_across_compositors() {
+    let mut window = window();
+    // A compositor may report a reversed-DNS id, a bare name, or something the
+    // desktop file encodes in a nested directory.
+    for (app_id, desktop_id) in [
+        ("org.gnome.Nautilus", "org.gnome.Nautilus.desktop"),
+        ("nautilus", "org.gnome.Nautilus.desktop"),
+        ("org.gnome.Nautilus", "nautilus.desktop"),
+        ("dolphin", "kde4-dolphin.desktop"),
+        ("org.kde.dolphin", "kde4-dolphin.desktop"),
+    ] {
+        window.app_id = Some(app_id.into());
+        assert!(
+            super::window_matches_app_id(&window, desktop_id),
+            "{app_id} should resolve to {desktop_id}"
+        );
+    }
+    // Distinct applications never collapse into one another.
+    window.app_id = Some("org.gnome.Nautilus".into());
+    assert!(!super::window_matches_app_id(&window, "org.gnome.Calculator.desktop"));
+    assert!(!super::window_matches_app_id(&window, "dolphin.desktop"));
+}
+
+#[test]
+fn unresolved_windows_group_by_application_rather_than_window_id() {
+    let mut first = window();
+    first.id = 1;
+    first.app_id = Some("com.example.Gadget".into());
+    let mut second = window();
+    second.id = 2;
+    second.app_id = Some("com.example.Gadget".into());
+    let unrelated = window();
+    // Two windows from the same unknown application share one Dock tile...
+    assert_eq!(super::synthetic_dock_id(&first), super::synthetic_dock_id(&second));
+    // ...and an unrelated application keeps its own.
+    assert_ne!(super::synthetic_dock_id(&first), super::synthetic_dock_id(&unrelated));
+    // A window with no app id falls back to its own id.
+    let mut anonymous = window();
+    anonymous.app_id = None;
+    anonymous.id = 9;
+    assert_eq!(super::synthetic_dock_id(&anonymous), "window:9");
+}
+
 #[gpui::test]
 fn dock_preferences_preserve_running_windows_and_choose_the_requested_icon_source(
     cx: &mut TestAppContext,
@@ -282,7 +326,7 @@ fn next_target(
 }
 
 #[gpui::test]
-fn dock_activation_keeps_the_focused_window_and_otherwise_uses_mru(cx: &mut TestAppContext) {
+fn dock_activation_launches_focuses_and_minimizes(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     let host = cx
         .update(|cx| testing::test_host(cx, fixture.catalog.clone(), fixture.environment.clone()));
@@ -297,15 +341,35 @@ fn dock_activation_keeps_the_focused_window_and_otherwise_uses_mru(cx: &mut Test
             timestamp.map(|(secs, nanos)| clarion_ipc::Timestamp { secs, nanos });
         window
     };
+    // A focused application minimizes its focused window when clicked again.
     let focused = vec![
         make_window(1, false, false, Some((12, 0))),
         make_window(42, true, false, Some((1, 0))),
     ];
+    for windows in [focused.clone(), focused] {
+        let app = super::DockApp {
+            id: "beta.desktop".into(),
+            name: "Private test application".into(),
+            icon: None,
+            windows,
+            pinned: true,
+        };
+        host.update(cx, |host, cx| host.activate_app(&app, cx));
+        cx.run_until_parked();
+        match received.try_recv().unwrap() {
+            super::backend::Command::Action(super::CoreAction::MinimizeWindow { id }) => {
+                assert_eq!(id, Some(42));
+            }
+            command => panic!("Clicking a focused Dock app did not minimize it: {command:?}"),
+        }
+        assert!(matches!(
+            received.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+    }
     for (windows, expected) in [
-        (focused.clone(), 42),
-        // Clicking the active application again must not cycle to its old window.
-        (focused, 42),
         (
+            // No focused window: the most recently used one regains focus.
             vec![
                 make_window(1, false, false, None),
                 make_window(2, false, false, Some((5, 999_999_999))),
@@ -315,6 +379,7 @@ fn dock_activation_keeps_the_focused_window_and_otherwise_uses_mru(cx: &mut Test
             4,
         ),
         (
+            // A minimized window still counts as open and is preferred when restored.
             vec![
                 make_window(1, false, true, Some((3, 0))),
                 make_window(2, false, true, Some((8, 0))),
@@ -357,6 +422,47 @@ fn dock_activation_keeps_the_focused_window_and_otherwise_uses_mru(cx: &mut Test
             received.try_recv(),
             Err(std::sync::mpsc::TryRecvError::Empty)
         ));
+    }
+    // With no windows at all, the click launches the application.
+    let empty = super::DockApp {
+        id: "beta.desktop".into(),
+        name: "Private test application".into(),
+        icon: None,
+        windows: Vec::new(),
+        pinned: true,
+    };
+    host.update(cx, |host, cx| host.activate_app(&empty, cx));
+    cx.run_until_parked();
+    assert!(matches!(
+        received.try_recv().unwrap(),
+        super::backend::Command::LaunchDesktop(_)
+    ));
+}
+
+#[gpui::test]
+fn clicking_a_focused_dock_app_minimizes_its_window(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let host = cx
+        .update(|cx| testing::test_host(cx, fixture.catalog.clone(), fixture.environment.clone()));
+    let (backend, received) = super::backend::Backend::test_channel(8);
+    host.update(cx, |host, _| host.backend = backend);
+    let mut window = window();
+    window.id = 9;
+    window.is_focused = true;
+    let app = super::DockApp {
+        id: "beta.desktop".into(),
+        name: "Private test application".into(),
+        icon: None,
+        windows: vec![window],
+        pinned: true,
+    };
+    host.update(cx, |host, cx| host.activate_app(&app, cx));
+    cx.run_until_parked();
+    match received.try_recv().unwrap() {
+        super::backend::Command::Action(super::CoreAction::MinimizeWindow { id }) => {
+            assert_eq!(id, Some(9));
+        }
+        command => panic!("Clicking a focused Dock app did not minimize it: {command:?}"),
     }
 }
 
@@ -573,4 +679,158 @@ fn compositor_logical_size_supersedes_a_stale_toolkit_display_cache_without_doub
         ),
         (947., 1056.)
     );
+}
+
+#[gpui::test]
+fn the_saved_order_applies_to_the_pinned_group_only(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let host = cx
+        .update(|cx| testing::test_host(cx, fixture.catalog.clone(), fixture.environment.clone()));
+    host.update(cx, |host, _| {
+        host.prefs.pinned_app_ids = Some(vec![
+            "alpha.desktop".into(),
+            "beta.desktop".into(),
+            "gamma.desktop".into(),
+        ]);
+        // Unknown and duplicate entries in the saved order are ignored; pins
+        // missing from it keep their relative order at the end.
+        host.prefs.dock_order = Some(vec![
+            "gamma.desktop".into(),
+            "ghost.desktop".into(),
+            "alpha.desktop".into(),
+        ]);
+        assert_eq!(
+            host.pinned(),
+            ["gamma.desktop", "alpha.desktop", "beta.desktop"]
+        );
+        // A running unpinned application stays behind the pinned group.
+        let mut running = window();
+        running.app_id = Some("delta".into());
+        host.desktop.windows = vec![running];
+        let apps = host.dock_apps();
+        assert_eq!(
+            apps.iter().map(|app| app.id.as_str()).collect::<Vec<_>>(),
+            [
+                "gamma.desktop",
+                "alpha.desktop",
+                "beta.desktop",
+                "delta.desktop"
+            ]
+        );
+        assert!(apps[0].pinned && apps[1].pinned && apps[2].pinned);
+        assert!(!apps[3].pinned);
+        assert_eq!(apps[3].windows[0].id, 42);
+    });
+}
+
+#[gpui::test]
+fn a_drawer_reorder_rewrites_only_the_overflow_positions(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let host = cx
+        .update(|cx| testing::test_host(cx, fixture.catalog.clone(), fixture.environment.clone()));
+    host.update(cx, |host, _| {
+        host.prefs.pinned_app_ids = Some(vec![
+            "alpha.desktop".into(),
+            "beta.desktop".into(),
+            "gamma.desktop".into(),
+            "delta.desktop".into(),
+            "epsilon.desktop".into(),
+            "zeta.desktop".into(),
+        ]);
+    });
+    host.read_with(cx, |host, _| {
+        // The pinned group is alpha..zeta; a drawer showing the tail (delta,
+        // epsilon, zeta) rewrites only those three positions. alpha..gamma keep
+        // their place, and unknown ids never enter the order.
+        assert_eq!(
+            host.pinned(),
+            [
+                "alpha.desktop",
+                "beta.desktop",
+                "gamma.desktop",
+                "delta.desktop",
+                "epsilon.desktop",
+                "zeta.desktop"
+            ]
+        );
+        let order = host.reorder_pinned_subset(&[
+            "zeta.desktop".into(),
+            "ghost.desktop".into(),
+            "delta.desktop".into(),
+            "epsilon.desktop".into(),
+        ]);
+        assert_eq!(
+            order,
+            [
+                "alpha.desktop",
+                "beta.desktop",
+                "gamma.desktop",
+                "zeta.desktop",
+                "delta.desktop",
+                "epsilon.desktop"
+            ]
+        );
+    });
+}
+
+#[gpui::test]
+fn dock_order_drops_unknown_ids_and_unpinning_prunes_the_saved_arrangement(
+    cx: &mut TestAppContext,
+) {
+    let fixture = Fixture::new();
+    let host = cx
+        .update(|cx| testing::test_host(cx, fixture.catalog.clone(), fixture.environment.clone()));
+    host.update(cx, |host, cx| {
+        host.prefs.pinned_app_ids =
+            Some(vec!["alpha.desktop".into(), "beta.desktop".into()]);
+        host.handle(
+            Action::DockOrder(vec![
+                "beta.desktop".into(),
+                "ghost.desktop".into(),
+                "beta.desktop".into(),
+                "alpha.desktop".into(),
+            ]),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    host.read_with(cx, |host, _| {
+        assert_eq!(
+            host.prefs.dock_order,
+            Some(vec!["beta.desktop".to_owned(), "alpha.desktop".to_owned()]),
+            "unknown and duplicate ids never reach the saved order"
+        );
+        assert_eq!(host.pinned(), ["beta.desktop", "alpha.desktop"]);
+    });
+    host.update(cx, |host, cx| host.handle(Action::PinApp("beta.desktop".into()), cx));
+    cx.run_until_parked();
+    host.read_with(cx, |host, _| {
+        assert_eq!(
+            host.prefs.dock_order,
+            Some(vec!["alpha.desktop".to_owned()]),
+            "an unpinned application leaves the saved arrangement"
+        );
+        assert_eq!(host.pinned(), ["alpha.desktop"]);
+    });
+}
+
+#[gpui::test]
+fn acting_on_a_dock_menu_item_dismisses_the_menu(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let host = cx
+        .update(|cx| testing::test_host(cx, fixture.catalog.clone(), fixture.environment.clone()));
+    // One-shot menu actions close the popup so it never lingers after a choice.
+    for action in [
+        Action::PinApp("beta.desktop".into()),
+        Action::Launch("beta.desktop".into()),
+    ] {
+        host.update(cx, |host, cx| {
+            host.panel = Some(super::Panel::Dock("beta.desktop".into()));
+            host.handle(action.clone(), cx);
+        });
+        cx.run_until_parked();
+        host.read_with(cx, |host, _| {
+            assert!(host.panel.is_none(), "a Dock menu item left the menu open");
+        });
+    }
 }

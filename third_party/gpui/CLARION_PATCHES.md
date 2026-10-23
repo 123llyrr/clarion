@@ -11,7 +11,14 @@ Production shaders and build resources are retained.
 
 Clarion additions:
 
+- `interactive.rs`: public `ExternalPaths::new` so embedders and tests can
+  construct file-drop payloads without exposing GPUI internals.
 - `platform.rs`: public `WindowKind::LayerShell` and copyable role options.
+- `platform.rs` / `window.rs` / `platform/linux/wayland/window.rs`:
+  `set_glass_region`, a frosted shape independent of the input region. `None`
+  falls back to the input region, so callers that only set one shape are
+  unchanged. The Dock frosts only its resting tray while lifted icons stay
+  clickable outside it.
 - `platform/linux/wayland/client.rs`: optional layer-shell global, role event
   dispatch, output resolution, optional xdg parent selection, and an opt-in
   keep-alive policy for applications reopening windows after IPC commands.

@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Clarion's single visual system. No legacy themes or alternate launcher.
-use std::path::PathBuf;
-use std::sync::Arc;
+use crate::{
+    app::{Action, DockApp, Host, Panel, ViewState},
+    backend,
+    input::{QueryChanged, TextInput},
+    preferences::{DockPosition, MAX_SURFACE_OPACITY, MIN_SURFACE_OPACITY},
+    services,
+};
+use gpui::{prelude::*, *};
+use std::{path::PathBuf, sync::Arc};
 
-use gpui::prelude::*;
-use gpui::*;
-
-use crate::app::{Action, Host, Panel, ViewState};
-use crate::input::{QueryChanged, TextInput};
-use crate::preferences::DockPosition;
-use crate::{backend, services};
-
+mod dock_folder;
 mod macos_controls;
-mod macos_dock;
+pub(crate) mod macos_dock;
 mod macos_launchpad;
 mod macos_notifications;
 mod macos_preferences;
@@ -39,12 +39,28 @@ pub struct ShellView {
     pub state: Arc<ViewState>,
     kind: Surface,
     dock_motion: macos_dock::DockViewMotion,
+    drawer: macos_dock::DockDrawerMotion,
     output: String,
     input: Entity<TextInput>,
     query: String,
     filter: u8,
     selection: usize,
     scroll: ScrollHandle,
+    folder_fan_offset: usize,
+    folder_fan_root: Option<PathBuf>,
+    folder_fan_started: Option<std::time::Instant>,
+    /// Set when the fan retracts; `None` while it is open or opening.
+    folder_fan_closing: Option<std::time::Instant>,
+    /// Keeps the fan collapsed until the window is actually removed.
+    folder_fan_closed: bool,
+    /// Whether the last `panel()` render used the fan layout.
+    folder_fan_active: bool,
+    /// Keeps the folder surface mapped but empty while a file drag is in
+    /// flight. The layer still owns the pointer grab, which is what lets the
+    /// drag preview follow the cursor across the whole output.
+    folder_drag_layer: bool,
+    /// Whether this Dock window itself received the current drag events.
+    pub(crate) dock_drag_seen: bool,
     #[cfg(test)]
     notification_regions: std::rc::Rc<std::cell::RefCell<Vec<Bounds<Pixels>>>>,
     focus: FocusHandle,
@@ -55,37 +71,114 @@ pub struct ShellView {
 }
 #[derive(Clone, Copy)]
 struct Palette {
+    /// Menus, popups and notification cards share one calm slate surface.
     panel: Hsla,
+    /// The Dock tray is a touch deeper so icons stay the brightest element.
+    dock: Hsla,
     card: Hsla,
     fg: Hsla,
     muted: Hsla,
     line: Hsla,
+    dock_line: Hsla,
     accent: Hsla,
+    /// A barely-there accent wash layered over panel outlines.
+    accent_wash: Hsla,
+    /// The compositor blur needs a small in-app lift to read as frost rather
+    /// than plain transparency, especially over busy wallpaper.
+    frost_wash: Hsla,
+    scrim: Hsla,
+    shadow: Hsla,
+    frost: f32,
 }
 impl Palette {
     fn new(host: &ViewState) -> Self {
-        let dark = host.dark();
-        let accent =
-            u32::from_str_radix(host.prefs.accent.trim_start_matches('#'), 16).unwrap_or(0x0a84ff);
+        let accent: Hsla = rgb(
+            u32::from_str_radix(host.prefs.accent.trim_start_matches('#'), 16).unwrap_or(0x0a84ff),
+        )
+        .into();
+        Self::styled(
+            host.dark(),
+            accent,
+            host.prefs.dock_opacity as f32,
+            host.prefs.surface_opacity as f32,
+            host.prefs.frost_strength as f32,
+        )
+    }
+    /// Build the palette from the resolved appearance values. Only the two
+    /// surface colours receive the opacity sliders; foreground colours stay
+    /// fully opaque so text never fades with the menu background.
+    fn styled(
+        dark: bool,
+        accent: Hsla,
+        dock_alpha: f32,
+        surface_alpha: f32,
+        frost: f32,
+    ) -> Self {
+        let dock_alpha = dock_alpha.clamp(0.3, 1.);
+        let surface_alpha = surface_alpha.clamp(0.3, 1.);
+        let frost = frost.clamp(0., 1.);
+        let tint = |hex: u32, alpha: f32| Hsla::from(rgb(hex)).opacity(alpha);
         if dark {
+            // Indigo-leaning neutrals let a coloured wallpaper glow through
+            // without turning text grey. The accent wash supplies the only
+            // saturated colour, so any chosen accent stays coherent.
+            let panel: Hsla = rgb(0x222431).into();
+            let dock: Hsla = rgb(0x191b26).into();
+            let accent_wash = accent.opacity(0.035 + 0.045 * frost);
+            let frost_wash = tint(0xffffff, 0.012 + 0.04 * frost);
             Self {
-                panel: rgba(0x24242bb8).into(),
-                card: rgba(0xffffff0d).into(),
-                fg: rgb(0xf3f3f5).into(),
-                muted: rgb(0xaaaab0).into(),
-                line: rgba(0xffffff26).into(),
-                accent: rgb(accent).into(),
+                panel: panel
+                    .opacity(surface_alpha)
+                    .blend(accent_wash)
+                    .blend(frost_wash),
+                dock: dock
+                    .opacity(dock_alpha)
+                    .blend(accent_wash.opacity(0.6))
+                    .blend(frost_wash),
+                card: tint(0xffffff, 0.055 + 0.03 * frost),
+                fg: rgb(0xf4f5fa).into(),
+                muted: rgb(0xb0b4c4).into(),
+                line: tint(0xd9e3ff, 0.12 + 0.08 * frost),
+                dock_line: tint(0xe7edff, 0.16 + 0.10 * frost),
+                accent,
+                accent_wash,
+                frost_wash,
+                scrim: tint(0x10121b, 0.16 + 0.16 * frost),
+                shadow: tint(0x000000, 0.18 + 0.14 * frost),
+                frost,
             }
         } else {
+            let panel: Hsla = rgb(0xf8f8fd).into();
+            let dock: Hsla = rgb(0xf3f4fa).into();
+            let accent_wash = accent.opacity(0.025 + 0.035 * frost);
+            let frost_wash = tint(0xffffff, 0.03 + 0.06 * frost);
             Self {
-                panel: rgba(0xf4f4f7bd).into(),
-                card: rgba(0x3449660d).into(),
-                fg: rgb(0x242426).into(),
-                muted: rgb(0x7a7a80).into(),
-                line: rgba(0x263f5e20).into(),
-                accent: rgb(accent).into(),
+                panel: panel
+                    .opacity(surface_alpha)
+                    .blend(accent_wash)
+                    .blend(frost_wash),
+                dock: dock
+                    .opacity(dock_alpha)
+                    .blend(accent_wash.opacity(0.5))
+                    .blend(frost_wash),
+                card: tint(0x344966, 0.04 + 0.025 * frost),
+                fg: rgb(0x23242a).into(),
+                muted: rgb(0x6d707b).into(),
+                line: tint(0x355578, 0.10 + 0.08 * frost),
+                dock_line: tint(0xffffff, 0.22 + 0.10 * frost),
+                accent,
+                accent_wash,
+                frost_wash,
+                scrim: tint(0x111523, 0.14 + 0.14 * frost),
+                shadow: tint(0x1c2740, 0.12 + 0.12 * frost),
+                frost,
             }
         }
+    }
+    /// Zero frost turns the compositor effect off rather than asking it for a
+    /// zero-opacity blur that some compositors still apply to the whole output.
+    fn frosted(&self) -> bool {
+        self.frost > 0.01
     }
 }
 #[derive(Default)]
@@ -156,10 +249,12 @@ impl ShellView {
         })
         .detach();
         let dock_motion = macos_dock::DockViewMotion::new(state.dock_revealed);
+        let drawer = macos_dock::DockDrawerMotion::new();
         Self {
             host,
             state,
             dock_motion,
+            drawer,
             kind,
             output,
             input,
@@ -167,6 +262,14 @@ impl ShellView {
             filter: 0,
             selection: 0,
             scroll: ScrollHandle::new(),
+            folder_fan_offset: 0,
+            folder_fan_root: None,
+            folder_fan_started: None,
+            folder_fan_closing: None,
+            folder_fan_closed: false,
+            folder_fan_active: false,
+            folder_drag_layer: false,
+            dock_drag_seen: false,
             #[cfg(test)]
             notification_regions: Default::default(),
             focus: cx.focus_handle(),
@@ -186,13 +289,16 @@ impl ShellView {
             {
                 this.activated = false;
                 let host = this.host.clone();
+                let view = cx.entity();
                 let panel = this.state.panel.clone();
                 cx.defer(move |cx| {
-                    host.update(cx, |host, cx| {
-                        if host.panel == panel {
-                            host.handle(Action::Close, cx);
-                        }
-                    });
+                    if host.read(cx).panel == panel {
+                        view.update(cx, |this, cx| {
+                            if this.state.panel == panel {
+                                this.dismiss_folder_fan(cx);
+                            }
+                        });
+                    }
                 });
             }
         })
@@ -251,11 +357,19 @@ impl ShellView {
         p: Palette,
     ) -> AnyElement {
         let host = self.host.clone();
+        let id = id.into();
+        let selector = id.to_string();
         div()
-            .id(id.into())
+            .id(id)
+            .debug_selector(move || selector.clone())
+            .min_w_0()
+            .max_w_full()
             .px(px(8.))
             .py(px(5.))
             .rounded(px(5.))
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .text_ellipsis()
             .text_color(p.fg)
             .text_size(px(13.))
             .cursor_pointer()
@@ -777,6 +891,265 @@ impl ShellView {
         }
         row.into_any_element()
     }
+    /// The applications folded into the Dock's overflow tile, as a fixed 3x3
+    /// grid. A click activates the application; a right click opens its Dock
+    /// menu; a pinned application can be dragged to reorder the group.
+    fn dock_overflow(
+        &mut self,
+        host: &ViewState,
+        ids: &[String],
+        icon_size: f32,
+        p: Palette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use crate::view::macos_dock::{
+            drawer_radius, drawer_rows, drawer_size, DrawerGeometry, DRAWER_COLUMNS, DRAWER_GAP,
+            DRAWER_PAD,
+        };
+        let apps = host.dock_apps();
+        // The fitted size the Dock row is drawing, so the drawer tiles match it.
+        let icon = icon_size;
+        let cell = icon + DRAWER_GAP;
+        let radius = drawer_radius(icon);
+        // The live arrangement: the dragged order when a reorder is in flight,
+        // otherwise the overflow order the Dock handed us.
+        let order: Vec<String> = self
+            .drawer
+            .drag
+            .as_ref()
+            .map(|drag| drag.order.clone())
+            .unwrap_or_else(|| ids.to_vec());
+        // The container is always three columns; the rows grow with the overflow.
+        let rows = drawer_rows(order.len());
+        let (container_w, container_h) = drawer_size(icon, order.len());
+        // The grid is centered horizontally and starts from the top padding.
+        let grid_x = (container_w - (DRAWER_COLUMNS as f32 * cell - DRAWER_GAP)) / 2.;
+        let grid_y = DRAWER_PAD;
+        let geometry = DrawerGeometry {
+            x: grid_x,
+            y: grid_y,
+            cell,
+            rows,
+        };
+        self.drawer.geometry = geometry;
+        // While a reorder is in flight each untouched cell slides towards its new
+        // grid position instead of jumping. Without a drag the motions collapse
+        // back onto the resting cells, so the maps drain.
+        let now = self.drawer.epoch.elapsed();
+        let mut drawer_active = false;
+        if self.drawer.drag.is_some() {
+            let dragged = self.drawer.drag.as_ref().map(|drag| drag.id.clone());
+            for (index, id) in order.iter().enumerate() {
+                if dragged.as_deref() == Some(id.as_str()) {
+                    continue;
+                }
+                let (tx, ty) = geometry.cell_origin(index);
+                let mx = self
+                    .drawer
+                    .reorder_x
+                    .entry(id.clone())
+                    .or_insert_with(|| crate::dock_motion::Motion::with_frequency(tx, 30.));
+                if mx.target() != tx {
+                    mx.retarget(tx, now);
+                }
+                drawer_active |= mx.sample(now).active;
+                let my = self
+                    .drawer
+                    .reorder_y
+                    .entry(id.clone())
+                    .or_insert_with(|| crate::dock_motion::Motion::with_frequency(ty, 30.));
+                if my.target() != ty {
+                    my.retarget(ty, now);
+                }
+                drawer_active |= my.sample(now).active;
+            }
+        } else {
+            for motion in self.drawer.reorder_x.values_mut() {
+                motion.snap(motion.target());
+            }
+            for motion in self.drawer.reorder_y.values_mut() {
+                motion.snap(motion.target());
+            }
+            self.drawer.reorder_x.clear();
+            self.drawer.reorder_y.clear();
+        }
+        let mut surface = div()
+            .id("dock-drawer")
+            .debug_selector(|| "dock-drawer".into())
+            .relative()
+            .w(px(container_w))
+            .h(px(container_h))
+            .rounded(px(radius))
+            .on_mouse_move(cx.listener({
+                let order = order.clone();
+                move |this, event: &MouseMoveEvent, _, cx| {
+                    let x = f32::from(event.position.x);
+                    let y = f32::from(event.position.y);
+                    if this.drawer.drag.is_some() {
+                        this.drawer.track_drag(x, y);
+                        cx.notify();
+                    } else if this
+                        .drawer
+                        .press
+                        .as_ref()
+                        .is_some_and(|press| press.pinned)
+                        && {
+                            let press = this.drawer.press.as_ref().unwrap();
+                            (x - press.pointer).abs() >= crate::dock_motion::DRAG_THRESHOLD
+                                || (y - press.pointer_y).abs() >= crate::dock_motion::DRAG_THRESHOLD
+                        }
+                        && this.drawer.begin_drag(x, y, &order)
+                    {
+                        cx.notify();
+                    }
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    let Some(new_order) = this.drawer.end_drag() else {
+                        return;
+                    };
+                    let h = this.host.clone();
+                    cx.defer(move |cx| {
+                        h.update(cx, |h, cx| {
+                            let order = h.reorder_pinned_subset(&new_order);
+                            h.handle(Action::DockOrder(order), cx)
+                        })
+                    });
+                    cx.notify();
+                }),
+            )
+            .on_hover(cx.listener(|this, hovered, _, _| {
+                this.drawer.hovered = *hovered;
+                if !*hovered {
+                    this.drawer.abort_drag();
+                }
+            }));
+        for (index, id) in order.iter().enumerate() {
+            let dragging = self
+                .drawer
+                .drag
+                .as_ref()
+                .is_some_and(|drag| &drag.id == id);
+            if dragging {
+                // The dragged tile floats above the grid; the grid keeps its
+                // shape and the vacated cell stays empty.
+                continue;
+            }
+            let app = apps.iter().find(|app| &app.id == id).cloned();
+            let icon_path = app.as_ref().and_then(|app| app.icon.clone());
+            // A sliding cell uses its animated origin; a resting cell uses the
+            // grid origin directly.
+            let (ox, oy) = match (self.drawer.reorder_x.get(id), self.drawer.reorder_y.get(id)) {
+                (Some(mx), Some(my)) if self.drawer.drag.is_some() => {
+                    (mx.sample(now).value, my.sample(now).value)
+                }
+                _ => geometry.cell_origin(index),
+            };
+            let activate = app.clone();
+            let context = id.to_owned();
+            let pressed_id = id.to_owned();
+            let released_id = id.to_owned();
+            let pinned = app.as_ref().is_some_and(|app| app.pinned);
+            surface = surface.child(
+                div()
+                    .id(SharedString::from(format!("overflow-{id}")))
+                    .debug_selector({
+                        let context = id.to_owned();
+                        move || format!("overflow-{context}")
+                    })
+                    .absolute()
+                    .left(px(ox))
+                    .top(px(oy))
+                    .w(px(icon))
+                    .h(px(icon))
+                    .rounded(px(icon * 0.24))
+                    .cursor_pointer()
+                    .active(|style| style.opacity(0.65))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, event: &MouseDownEvent, _, _| {
+                            this.drawer.press(
+                                pressed_id.clone(),
+                                pinned,
+                                f32::from(event.position.x),
+                                f32::from(event.position.y),
+                            );
+                        }),
+                    )
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            // A reorder never launches the application.
+                            if this.drawer.drag.is_some() {
+                                return;
+                            }
+                            let held = this
+                                .drawer
+                                .press
+                                .as_ref()
+                                .is_some_and(|press| press.id == released_id);
+                            if !held {
+                                return;
+                            }
+                            if let Some(app) = &activate {
+                                let h = this.host.clone();
+                                let app = app.clone();
+                                h.update(cx, |h, cx| {
+                                    h.activate_app(&app, cx);
+                                    // Activating from the drawer dismisses it, as
+                                    // a Dock menu row does.
+                                    h.handle(Action::Close, cx);
+                                });
+                            }
+                        }),
+                    )
+                    .on_mouse_down(MouseButton::Right, {
+                        let h = self.host.clone();
+                        move |_, _, cx| {
+                            h.update(cx, |h, cx| {
+                                h.handle(Action::Panel(Panel::Dock(context.clone())), cx)
+                            })
+                        }
+                    })
+                    .child(self.icon(icon_path, icon, p)),
+            );
+        }
+        // The dragged application follows the pointer.
+        if let Some(drag) = self.drawer.drag.clone() {
+            if let Some(app) = apps.iter().find(|app| app.id == drag.id).cloned() {
+                let x = f32::from(drag.pointer.x) - drag.grab.0;
+                let y = f32::from(drag.pointer.y) - drag.grab.1;
+                surface = surface.child(
+                    div()
+                        .id(SharedString::from(format!("drawer-drag-{}", app.id)))
+                        .debug_selector({
+                            let id = app.id.clone();
+                            move || format!("drawer-drag-{id}")
+                        })
+                        .absolute()
+                        .left(px(x))
+                        .top(px(y))
+                        .w(px(icon))
+                        .h(px(icon))
+                        .rounded(px(icon * 0.24))
+                        .shadow(vec![BoxShadow {
+                            color: rgba(0x00000052).into(),
+                            offset: point(px(0.), px(6.)),
+                            blur_radius: px(14.),
+                            spread_radius: px(0.),
+                        }])
+                        .child(self.icon(app.icon.clone(), icon, p)),
+                );
+            }
+        }
+        if drawer_active {
+            window.request_animation_frame();
+        }
+        surface.into_any_element()
+    }
     fn dock_menu(&self, host: &ViewState, id: &str, p: Palette) -> AnyElement {
         let apps = host.dock_apps();
         let app = apps.iter().find(|a| a.id == id);
@@ -834,27 +1207,72 @@ impl ShellView {
         row.into_any_element()
     }
     fn panel(
-        &self,
+        &mut self,
         host: &ViewState,
         p: Palette,
-        window: &Window,
-        cx: &Context<Self>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
+        self.folder_fan_active = false;
         let panel = host.panel.clone().unwrap_or(Panel::Apps);
+        if self.folder_drag_layer && matches!(&panel, Panel::DockFolder { .. }) {
+            return div()
+                .size_full()
+                .debug_selector(|| "folder-drag-layer".into())
+                .into_any_element();
+        }
         match &panel {
             Panel::Apps => return self.macos_launchpad(host, p, window, cx),
             Panel::Preferences => return self.macos_preferences(host, p),
             Panel::Notifications => return self.macos_notifications(host, p, window, cx),
             _ => {}
         }
+        let viewport = window.viewport_size();
+        let (width, height) = (f32::from(viewport.width), f32::from(viewport.height));
+        // Menus read tighter than dashboards, so they use a smaller radius.
+        let menu = matches!(
+            &panel,
+            Panel::Dock(_)
+                | Panel::Tray(_)
+                | Panel::DockFolder { .. }
+                | Panel::DockFolderMenu { .. }
+        );
+        // A Dock menu and its overflow drawer are modal: the window covers the
+        // whole output so a click outside the visible popup can dismiss it, and
+        // the placement reports where the visible popup sits inside that window.
+        let modal = matches!(
+            &panel,
+            Panel::Dock(_)
+                | Panel::DockOverflow { .. }
+                | Panel::DockFolder { .. }
+                | Panel::DockFolderMenu { .. }
+        );
+        let placement = if modal {
+            Some(crate::app::panels::placement(host, &panel, width, height))
+        } else {
+            None
+        };
+        let arrow = placement.as_ref().and_then(|placement| placement.arrow);
+        if let Panel::DockFolder { root } = &panel {
+            if placement
+                .as_ref()
+                .is_some_and(|placement| placement.popup.is_none())
+            {
+                // The fan layout is a transparent full-output overlay. It is
+                // rendered separately from the rectangular list/grid popup.
+                return self.dock_folder_fan(host, root, width, height, p, window, cx);
+            }
+        }
         let mut body = div()
             .size_full()
-            .rounded(px(16.))
-            .bg(p.panel)
-            .border_1()
-            .border_color(p.line)
+            .rounded(px(if menu { 12. } else { 16. }))
             .text_color(p.fg)
             .text_size(px(13.));
+        if arrow.is_none() {
+            // A modal popup draws its own outline so the body and the pointer
+            // share one fill and one border.
+            body = body.bg(p.panel).border_1().border_color(p.line);
+        }
         if panel == Panel::Controls {
             return body
                 .p(px(12.))
@@ -908,6 +1326,15 @@ impl ShellView {
             Panel::Recent => self.recent(host, p, cx),
             Panel::Tray(_) => self.tray_menu(host, p),
             Panel::Dock(id) => self.dock_menu(host, id, p),
+            Panel::DockFolder { .. } => {
+                self.dock_folder_content(host, width, height, p, cx)
+            }
+            Panel::DockFolderMenu { path } => {
+                self.dock_folder_menu_content(host, path, p)
+            }
+            Panel::DockOverflow { ids, icon_size } => {
+                self.dock_overflow(host, ids, f32::from(*icon_size), p, window, cx)
+            }
             _ => unreachable!(),
         };
         body = body.p(px(10.)).flex().flex_col().gap(px(8.));
@@ -937,6 +1364,77 @@ impl ShellView {
                     .text_color(rgb(0xe5a87f))
                     .child(error.clone()),
             );
+        }
+        if let Some(arrow) = arrow {
+            use crate::app::panels::{ArrowEdge, DOCK_ARROW};
+            let popup = placement
+                .as_ref()
+                .and_then(|placement| placement.popup)
+                .expect("a modal popup carries its visible rectangle");
+            let pw = f32::from(popup.size.width);
+            let ph = f32::from(popup.size.height);
+            // The content is laid out inside the visible popup, leaving the
+            // strip the pointer occupies empty.
+            let mut inner = body.child(content);
+            inner = match arrow.edge {
+                ArrowEdge::Bottom => inner
+                    .w(px(pw))
+                    .h(px((ph - DOCK_ARROW).max(0.)))
+                    .absolute()
+                    .left(px(0.))
+                    .top(px(0.)),
+                ArrowEdge::Left => inner
+                    .w(px((pw - DOCK_ARROW).max(0.)))
+                    .h(px(ph))
+                    .absolute()
+                    .left(px(DOCK_ARROW))
+                    .top(px(0.)),
+                ArrowEdge::Right => inner
+                    .w(px((pw - DOCK_ARROW).max(0.)))
+                    .h(px(ph))
+                    .absolute()
+                    .left(px(0.))
+                    .top(px(0.)),
+            };
+            // A fullscreen invisible catcher dismisses the menu on a click
+            // outside the visible popup. It is an earlier sibling, so the popup
+            // wins the hit test and clicks inside the menu never reach it.
+            let h = self.host.clone();
+            let backdrop = div()
+                .id("dock-menu-backdrop")
+                .absolute()
+                .left(px(0.))
+                .top(px(0.))
+                .w(px(width))
+                .h(px(height))
+                .bg(rgba(0x00000001))
+                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                    h.update(cx, |h, cx| h.handle(Action::Close, cx))
+                });
+            let h = self.host.clone();
+            let backdrop = backdrop.on_mouse_down(MouseButton::Right, move |_, _, cx| {
+                h.update(cx, |h, cx| h.handle(Action::Close, cx))
+            });
+            let overlay = div().relative().size_full().child(backdrop);
+            return overlay
+                .child(
+                    div()
+                        .absolute()
+                        .left(popup.origin.x)
+                        .top(popup.origin.y)
+                        .w(px(pw))
+                        .h(px(ph))
+                        .relative()
+                        // The catcher covers the whole output, so a click inside
+                        // the visible popup must not also reach it.
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+                        .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_mouse_up(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+                        .child(popup_shape(arrow, pw, ph, p))
+                        .child(inner),
+                )
+                .into_any_element();
         }
         body.child(
             div()
@@ -989,22 +1487,81 @@ impl Render for ShellView {
         };
         // Notifications set their regions after layout, when wrapped card
         // heights and the clamped scroll offset are available.
-        if matches!(self.kind, Surface::Panel) && host.panel != Some(Panel::Notifications) {
-            let (x, y, w, h, radius) =
-                if matches!(self.kind, Surface::Panel) && host.panel == Some(Panel::Apps) {
-                    (0., 0., width, height, 0.)
+        let modal = matches!(
+            host.panel,
+            Some(
+                Panel::Dock(_)
+                    | Panel::DockOverflow { .. }
+                    | Panel::DockFolder { .. }
+                    | Panel::DockFolderMenu { .. }
+            )
+        );
+        if matches!(self.kind, Surface::Panel)
+            && host.panel != Some(Panel::Notifications)
+            && modal
+        {
+            // A modal Dock popup covers the whole output so it can catch a click
+            // anywhere outside the visible popup. Frost only the popup itself,
+            // never the transparent catcher, so the rest of the screen stays
+            // untouched.
+            let full = vec![Bounds::new(
+                point(px(0.), px(0.)),
+                size(px(width), px(height)),
+            )];
+            // Set the frost region first so the background effect never falls
+            // back to blurring the whole fullscreen window for a frame.
+            if !p.frosted() {
+                window.set_glass_region(Some(&[]));
+            } else if let Some(panel) = host.panel.as_ref() {
+                let placement =
+                    crate::app::panels::placement(host, panel, width, height);
+                if let Some(popup) = placement.popup {
+                    if self.folder_drag_layer {
+                        // The popup is now an invisible drag layer; never leave
+                        // its old frost rectangle over the desktop.
+                        window.set_glass_region(Some(&[]));
+                    } else {
+                        // Frost the popup's actual outline. A plain rectangle would
+                        // blur the transparent corners and the strip beside the
+                        // pointer wedge, leaving a rectangular halo around it.
+                        window.set_glass_region(Some(&popup_region(placement.arrow, popup)));
+                    }
                 } else {
-                    (0., 0., width, height, 16.)
-                };
-            let mut regions =
-                if matches!(self.kind, Surface::Panel) && host.panel == Some(Panel::Apps) {
-                    macos_launchpad::backdrop_regions(host, width, height)
-                } else {
-                    rounded_region(w, h, radius)
-                };
+                    // `None` falls back to the full input region in the
+                    // compositor, which would blur the whole output. The fan
+                    // must explicitly advertise an empty frost region.
+                    window.set_glass_region(Some(&[]));
+                }
+            }
+            window.set_input_region(Some(&full));
+        } else if matches!(self.kind, Surface::Panel)
+            && host.panel != Some(Panel::Notifications)
+        {
+            let is_apps = host.panel == Some(Panel::Apps);
+            let (x, y, w, h, radius) = if is_apps {
+                (0., 0., width, height, 0.)
+            } else if matches!(host.panel, Some(Panel::Tray(_))) {
+                (0., 0., width, height, 12.)
+            } else {
+                (0., 0., width, height, 16.)
+            };
+            let mut regions = if is_apps {
+                macos_launchpad::backdrop_regions(host, width, height)
+            } else {
+                rounded_region(w, h, radius)
+            };
             for region in &mut regions {
                 region.origin.x += px(x);
                 region.origin.y += px(y);
+            }
+            // For non-modal panels the input shape already follows the visible
+            // container. Mirror it explicitly so the frost preference can also
+            // switch the compositor effect off without falling back to a
+            // full-window blur.
+            if p.frosted() {
+                window.set_glass_region(Some(&regions));
+            } else {
+                window.set_glass_region(Some(&[]));
             }
             window.set_input_region(Some(&regions));
         }
@@ -1015,8 +1572,27 @@ impl Render for ShellView {
             .text_color(p.fg)
             .key_context("ClarionPanel")
             .track_focus(&self.focus)
-            .on_action(cx.listener(|this, _: &Dismiss, _, cx| {
-                if !this.input.read(cx).has_preedit() {
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                if this.folder_drag_layer {
+                    this.forward_drag_move(event.position, event.modifiers, window, cx);
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                    this.finish_folder_drag_layer(event.position, event.modifiers, window, cx);
+                }),
+            )
+            .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
+                if this.input.read(cx).has_preedit() {
+                    return;
+                }
+                if this.folder_drag_layer {
+                    cx.stop_active_drag(window);
+                    this.close_folder_now(cx);
+                } else if this.folder_fan_active {
+                    this.dismiss_folder_fan(cx)
+                } else {
                     this.invoke(Action::Close, cx)
                 }
             }))
@@ -1100,11 +1676,35 @@ fn menu_text(text: String, weight: FontWeight, color: Hsla, cx: &App) -> StyledT
     StyledText::new(text).with_runs(runs)
 }
 
+/// Width of a single-line label in the Shell UI font, for sizing containers
+/// that must grow with their text (the Dock hover tooltip).
+pub(crate) fn measure_label(text: &str, size: f32, window: &Window) -> f32 {
+    let mut label_font = font(shell_font_for(&window.text_system().all_font_names()));
+    label_font.weight = FontWeight::MEDIUM;
+    let run = TextRun {
+        len: text.len(),
+        font: label_font,
+        color: rgb(0xffffff).into(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    f32::from(
+        window
+            .text_system()
+            .shape_line(text.to_owned().into(), px(size), &[run], None)
+            .width,
+    )
+}
+
 fn shell_font(cx: &App) -> SharedString {
+    shell_font_for(&cx.text_system().all_font_names())
+}
+
+fn shell_font_for(available: &[String]) -> SharedString {
     static FAMILY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     FAMILY
         .get_or_init(|| {
-            let available = cx.text_system().all_font_names();
             let family = [
                 "Clarion Big Sur Text",
                 "SF Pro Text",
@@ -1125,6 +1725,202 @@ fn shell_font(cx: &App) -> SharedString {
         .clone()
         .into()
 }
+/// Draw the whole popup — the rounded body plus the pointer wedge — as one
+/// filled outline with one border. Painting a single shape keeps the arrow and
+/// the panel exactly the same colour and removes the seam at the join, which
+/// separate elements cannot achieve for an irregular outline.
+fn popup_shape(
+    arrow: crate::app::panels::Arrow,
+    width: f32,
+    height: f32,
+    p: Palette,
+) -> AnyElement {
+    canvas(
+        |_, _, _| (),
+        move |bounds, _, window, _| {
+            let origin = bounds.origin;
+            let mut fill = PathBuilder::fill();
+            append_popup_path(&mut fill, arrow, origin, width, height);
+            if let Ok(path) = fill.build() {
+                window.paint_path(path, p.panel);
+            }
+            // A one-point stroke on the same inset outline sits fully inside the
+            // window, so the popup has a crisp border all the way round.
+            let mut stroke = PathBuilder::stroke(px(1.));
+            append_popup_path(&mut stroke, arrow, origin, width, height);
+            if let Ok(path) = stroke.build() {
+                window.paint_path(path, p.line);
+            }
+        },
+    )
+    .size_full()
+    .absolute()
+    .into_any_element()
+}
+
+/// Corner radius and inset of a Dock popup outline, shared by the painted path
+/// and the frosted region so the two shapes cannot drift apart.
+const POPUP_RADIUS: f32 = 12.;
+const POPUP_INSET: f32 = 0.5;
+
+/// Geometry shared by the painted outline and the frosted region: the body
+/// rectangle, excluding the strip the pointer wedge lives in, as
+/// `(x, y, width, height)` in popup-local coordinates.
+fn popup_body(
+    edge: crate::app::panels::ArrowEdge,
+    width: f32,
+    height: f32,
+) -> (f32, f32, f32, f32) {
+    use crate::app::panels::{ArrowEdge, DOCK_ARROW};
+    match edge {
+        ArrowEdge::Bottom => (
+            POPUP_INSET,
+            POPUP_INSET,
+            width - 2. * POPUP_INSET,
+            height - DOCK_ARROW - POPUP_INSET,
+        ),
+        ArrowEdge::Left => (
+            DOCK_ARROW,
+            POPUP_INSET,
+            width - DOCK_ARROW - POPUP_INSET,
+            height - 2. * POPUP_INSET,
+        ),
+        ArrowEdge::Right => (
+            POPUP_INSET,
+            POPUP_INSET,
+            width - DOCK_ARROW - POPUP_INSET,
+            height - 2. * POPUP_INSET,
+        ),
+    }
+}
+
+/// Keep the pointer clear of the rounded corners so the wedge base never
+/// crosses a corner arc and folds the outline over itself.
+fn clamp_pointer(value: f32, min: f32, max: f32) -> f32 {
+    if min >= max {
+        (min + max) * 0.5
+    } else {
+        value.clamp(min, max)
+    }
+}
+
+fn translate_regions(regions: &mut [Bounds<Pixels>], x: f32, y: f32) {
+    for region in regions {
+        region.origin.x += px(x);
+        region.origin.y += px(y);
+    }
+}
+
+fn push_region(regions: &mut Vec<Bounds<Pixels>>, x: f32, y: f32, width: f32, height: f32) {
+    if width > 0. && height > 0. {
+        regions.push(Bounds::new(
+            point(px(x), px(y)),
+            size(px(width), px(height)),
+        ));
+    }
+}
+
+/// Append the closed outline of a popup with a pointer wedge on `arrow.edge`.
+/// The outline is inset half a point so a one-point border stays on-screen.
+fn append_popup_path(
+    path: &mut PathBuilder,
+    arrow: crate::app::panels::Arrow,
+    origin: Point<Pixels>,
+    width: f32,
+    height: f32,
+) {
+    use crate::app::panels::{ArrowEdge, DOCK_ARROW};
+    let k = 0.552_284_8;
+    let at = |x: f32, y: f32| origin + point(px(x), px(y));
+    // Body rectangle, excluding the strip the wedge lives in.
+    let (bx, by, bw, bh) = popup_body(arrow.edge, width, height);
+    let left = bx;
+    let right = bx + bw;
+    let top = by;
+    let bottom = by + bh;
+    let r = POPUP_RADIUS.min(bw / 2.).min(bh / 2.);
+    let base = DOCK_ARROW;
+    let corner = |path: &mut PathBuilder, a: (f32, f32), c: (f32, f32), b: (f32, f32)| {
+        let c1 = (a.0 + (c.0 - a.0) * k, a.1 + (c.1 - a.1) * k);
+        let c2 = (b.0 + (c.0 - b.0) * k, b.1 + (c.1 - b.1) * k);
+        path.cubic_bezier_to(at(b.0, b.1), at(c1.0, c1.1), at(c2.0, c2.1));
+    };
+    match arrow.edge {
+        ArrowEdge::Bottom => {
+            let tip = clamp_pointer(
+                arrow.offset,
+                left + r + base,
+                right - r - base,
+            );
+            path.move_to(at(left + r, top));
+            path.line_to(at(right - r, top));
+            corner(path, (right - r, top), (right, top), (right, top + r));
+            // Round the bottom corners as well: without this the body ends in
+            // a straight edge above the wedge and looks clipped.
+            path.line_to(at(right, bottom - r));
+            corner(
+                path,
+                (right, bottom - r),
+                (right, bottom),
+                (right - r, bottom),
+            );
+            path.line_to(at(tip + base, bottom));
+            path.line_to(at(tip, height - POPUP_INSET));
+            path.line_to(at(tip - base, bottom));
+            path.line_to(at(left + r, bottom));
+            corner(
+                path,
+                (left + r, bottom),
+                (left, bottom),
+                (left, bottom - r),
+            );
+            path.line_to(at(left, top + r));
+            corner(path, (left, top + r), (left, top), (left + r, top));
+            path.close();
+        }
+        ArrowEdge::Left => {
+            let tip = clamp_pointer(
+                arrow.offset,
+                top + r + base,
+                bottom - r - base,
+            );
+            path.move_to(at(left + r, top));
+            path.line_to(at(right - r, top));
+            corner(path, (right - r, top), (right, top), (right, top + r));
+            path.line_to(at(right, bottom - r));
+            corner(path, (right, bottom - r), (right, bottom), (right - r, bottom));
+            path.line_to(at(left + r, bottom));
+            corner(path, (left + r, bottom), (left, bottom), (left, bottom - r));
+            path.line_to(at(left, tip + base));
+            path.line_to(at(POPUP_INSET, tip));
+            path.line_to(at(left, tip - base));
+            path.line_to(at(left, top + r));
+            corner(path, (left, top + r), (left, top), (left + r, top));
+            path.close();
+        }
+        ArrowEdge::Right => {
+            let tip = clamp_pointer(
+                arrow.offset,
+                top + r + base,
+                bottom - r - base,
+            );
+            path.move_to(at(left + r, top));
+            path.line_to(at(right - r, top));
+            corner(path, (right - r, top), (right, top), (right, top + r));
+            path.line_to(at(right, tip - base));
+            path.line_to(at(width - POPUP_INSET, tip));
+            path.line_to(at(right, tip + base));
+            path.line_to(at(right, bottom - r));
+            corner(path, (right, bottom - r), (right, bottom), (right - r, bottom));
+            path.line_to(at(left + r, bottom));
+            corner(path, (left + r, bottom), (left, bottom), (left, bottom - r));
+            path.line_to(at(left, top + r));
+            corner(path, (left, top + r), (left, top), (left + r, top));
+            path.close();
+        }
+    }
+}
+
 pub fn rounded_region(width: f32, height: f32, radius: f32) -> Vec<Bounds<Pixels>> {
     if width <= 0. || height <= 0. {
         return vec![];
@@ -1140,6 +1936,93 @@ pub fn rounded_region(width: f32, height: f32, radius: f32) -> Vec<Bounds<Pixels
         let w = (width - 2. * inset).max(0.);
         for top in [y as f32, height - y as f32 - 1.] {
             regions.push(Bounds::new(point(px(inset), px(top)), size(px(w), px(1.))));
+        }
+    }
+    regions
+}
+
+/// Rectangles covering a Dock popup's visible outline: its rounded body plus
+/// the pointer wedge. Wayland background-effect regions are rectangle lists,
+/// so the wedge is approximated with one-point bands, the same way
+/// [`rounded_region`] approximates the corner arcs.
+pub fn popup_region(
+    arrow: Option<crate::app::panels::Arrow>,
+    popup: Bounds<Pixels>,
+) -> Vec<Bounds<Pixels>> {
+    use crate::app::panels::{ArrowEdge, DOCK_ARROW};
+    let x = f32::from(popup.origin.x);
+    let y = f32::from(popup.origin.y);
+    let width = f32::from(popup.size.width);
+    let height = f32::from(popup.size.height);
+    if width <= 0. || height <= 0. {
+        return Vec::new();
+    }
+    let Some(arrow) = arrow else {
+        let mut regions = rounded_region(width, height, POPUP_RADIUS);
+        translate_regions(&mut regions, x, y);
+        return regions;
+    };
+    let (bx, by, bw, bh) = popup_body(arrow.edge, width, height);
+    let radius = POPUP_RADIUS.min(bw / 2.).min(bh / 2.);
+    let mut regions = rounded_region(bw.max(0.), bh.max(0.), radius);
+    translate_regions(&mut regions, x + bx, y + by);
+    let base = DOCK_ARROW;
+    match arrow.edge {
+        ArrowEdge::Bottom => {
+            let body_bottom = by + bh;
+            let tip_y = height - POPUP_INSET;
+            let tip_x = clamp_pointer(
+                arrow.offset,
+                bx + radius + base,
+                bx + bw - radius - base,
+            );
+            // One-point rows narrowing from the base to the tip.
+            let rows = (tip_y - body_bottom).ceil().max(0.) as u32;
+            for row in 0..rows {
+                let top = body_bottom + row as f32;
+                let progress =
+                    ((top + 0.5 - body_bottom) / (tip_y - body_bottom)).clamp(0., 1.);
+                let half = base * (1. - progress);
+                let left = (tip_x - half).max(bx);
+                let right = (tip_x + half).min(bx + bw);
+                push_region(&mut regions, x + left, y + top, right - left, 1.);
+            }
+        }
+        ArrowEdge::Left => {
+            let tip_x = POPUP_INSET;
+            let tip_y = clamp_pointer(
+                arrow.offset,
+                by + radius + base,
+                by + bh - radius - base,
+            );
+            let columns = (bx - tip_x).ceil().max(0.) as u32;
+            for column in 0..columns {
+                let left = tip_x + column as f32;
+                let progress = ((left + 0.5 - tip_x) / (bx - tip_x)).clamp(0., 1.);
+                let half = base * progress;
+                let top = (tip_y - half).max(by);
+                let bottom = (tip_y + half).min(by + bh);
+                push_region(&mut regions, x + left, y + top, 1., bottom - top);
+            }
+        }
+        ArrowEdge::Right => {
+            let body_right = bx + bw;
+            let tip_x = width - POPUP_INSET;
+            let tip_y = clamp_pointer(
+                arrow.offset,
+                by + radius + base,
+                by + bh - radius - base,
+            );
+            let columns = (tip_x - body_right).ceil().max(0.) as u32;
+            for column in 0..columns {
+                let left = body_right + column as f32;
+                let progress =
+                    ((left + 0.5 - body_right) / (tip_x - body_right)).clamp(0., 1.);
+                let half = base * (1. - progress);
+                let top = (tip_y - half).max(by);
+                let bottom = (tip_y + half).min(by + bh);
+                push_region(&mut regions, x + left, y + top, 1., bottom - top);
+            }
         }
     }
     regions
@@ -1193,11 +2076,100 @@ mod tests {
                 .all(|r| f32::from(r.size.width) >= 0. && f32::from(r.size.height) >= 0.));
         }
     }
+
+    #[::core::prelude::v1::test]
+    fn surface_opacity_only_fades_backgrounds_not_foreground_text() {
+        for dark in [true, false] {
+            for opacity in [0.3, 0.68, 1.0] {
+                let palette = Palette::styled(
+                    dark,
+                    rgb(0x0a84ff).into(),
+                    opacity,
+                    opacity,
+                    0.82,
+                );
+                assert!((palette.panel.a - opacity).abs() < 0.0001);
+                assert!((palette.dock.a - opacity).abs() < 0.0001);
+                assert_eq!(palette.fg.a, 1.0);
+                assert_eq!(palette.muted.a, 1.0);
+            }
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn the_popup_frost_region_follows_the_rounded_outline_and_wedge() {
+        use crate::app::panels::{Arrow, ArrowEdge};
+        let popup = Bounds::new(point(px(50.), px(100.)), size(px(250.), px(200.)));
+        let contains = |regions: &[Bounds<Pixels>], x: f32, y: f32| {
+            regions.iter().any(|region| {
+                x >= f32::from(region.origin.x)
+                    && y >= f32::from(region.origin.y)
+                    && x < f32::from(region.right())
+                    && y < f32::from(region.bottom())
+            })
+        };
+        for edge in [ArrowEdge::Bottom, ArrowEdge::Left, ArrowEdge::Right] {
+            let regions = popup_region(Some(Arrow { edge, offset: 100. }), popup);
+            assert!(!regions.is_empty());
+            assert!(regions.len() <= 256);
+            for region in &regions {
+                assert!(region.origin.x >= popup.origin.x && region.origin.y >= popup.origin.y);
+                assert!(region.right() <= popup.right() && region.bottom() <= popup.bottom());
+            }
+            // The body still frosts its center, but not the transparent space
+            // outside its rounded corners.
+            assert!(contains(&regions, 175., 200.));
+            assert!(!contains(&regions, 50.2, 100.2));
+            assert!(!contains(&regions, 299.8, 100.2));
+        }
+        let regions = popup_region(Some(Arrow {
+            edge: ArrowEdge::Bottom,
+            offset: 125.,
+        }), popup);
+        // The wedge is frosted all the way to its tip, while the empty strip
+        // on either side of it stays clear.
+        assert!(contains(&regions, 175., 298.5));
+        assert!(!contains(&regions, 190., 298.5));
+        // The two bottom corners are rounded, not a square clipped edge.
+        assert!(!contains(&regions, 51., 290.2));
+        assert!(!contains(&regions, 298., 290.2));
+
+        let regions = popup_region(None, popup);
+        assert!(contains(&regions, 175., 200.));
+        assert!(!contains(&regions, 50.2, 100.2));
+        assert!(!contains(&regions, 50.5, 290.2));
+    }
+
+    #[::core::prelude::v1::test]
+    fn the_popup_outline_stays_inside_its_window() {
+        use crate::app::panels::{Arrow, ArrowEdge};
+        let (width, height) = (250., 200.);
+        for (edge, offset) in [
+            (ArrowEdge::Bottom, 125.),
+            (ArrowEdge::Left, 100.),
+            (ArrowEdge::Right, 100.),
+        ] {
+            let arrow = Arrow { edge, offset };
+            // The single-shape outline must build for every edge; a failure here
+            // would leave the popup unpainted.
+            for stroke in [false, true] {
+                let mut path = if stroke {
+                    PathBuilder::stroke(px(1.))
+                } else {
+                    PathBuilder::fill()
+                };
+                append_popup_path(&mut path, arrow, point(px(0.), px(0.)), width, height);
+                assert!(path.build().is_ok(), "the popup outline builds for {edge:?}");
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 #[path = "ui_tests.rs"]
 mod ui_tests;
 
+#[cfg(test)]
+mod dock_folder_tests;
 #[cfg(test)]
 mod dock_tests;

@@ -1,19 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-use std::collections::{BTreeMap, HashMap};
+use crate::{
+    backend,
+    desktop::{DesktopAction, DesktopView},
+    preferences::{
+        DockFolderPreference, DockPosition, FolderDisplay, FolderLayout, FolderSort, Preferences,
+    },
+    services,
+    view::{ShellView, Surface},
+    Options,
+};
+use clarion_ipc::{Action as CoreAction, DockEdge, DockTarget, MinimizeEffect};
+use clarion_launcher::catalog::{AppCatalog, AppCategory, DesktopApp};
+use gpui::{prelude::*, *};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use clarion_ipc::{Action as CoreAction, DockEdge, DockTarget, MinimizeEffect};
-use clarion_launcher::catalog::{AppCatalog, AppCategory};
-use gpui::prelude::*;
-use gpui::*;
-
-use crate::desktop::{DesktopAction, DesktopView};
-use crate::preferences::{DockPosition, Preferences};
-use crate::view::{ShellView, Surface};
-use crate::{backend, services, Options};
-
-mod panels;
+mod dock_folders;
+pub(crate) mod panels;
+#[cfg(test)]
+mod dock_folder_tests;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Panel {
@@ -25,6 +32,15 @@ pub enum Panel {
     Screenshot,
     Tray(String),
     Dock(String),
+    /// A pinned folder's contents. The root identifies the Dock tile the popup
+    /// points at; navigation state lives in `ViewState::folder_navigation`.
+    DockFolder { root: PathBuf },
+    /// Configuration for one pinned folder.
+    DockFolderMenu { path: PathBuf },
+    /// The applications folded into the Dock's overflow tile, plus the fitted
+    /// icon size (a discrete ladder step) the Dock row is drawing so the drawer
+    /// tiles match it.
+    DockOverflow { ids: Vec<String>, icon_size: u16 },
 }
 #[derive(Clone)]
 pub enum Action {
@@ -35,16 +51,37 @@ pub enum Action {
     Minimize(u64),
     CloseWindow(u64),
     PinApp(String),
+    /// The new order of the pinned Dock applications.
+    DockOrder(Vec<String>),
+    PinFolder(PathBuf),
+    UnpinFolder(PathBuf),
+    FolderOrder(Vec<String>),
+    OpenFolder(PathBuf),
+    NavigateFolder(PathBuf),
+    FolderBack,
+    RevealFolder(PathBuf),
+    RefreshFolder(PathBuf),
+    SetFolderDisplay(PathBuf, FolderDisplay),
+    SetFolderLayout(PathBuf, FolderLayout),
+    SetFolderSort(PathBuf, FolderSort),
+    SetFolderDescending(PathBuf, bool),
+    /// Hold open (or release) one extra folder slot for an external drop.
+    FolderDropPreview(bool),
+    OpenPathsWithApp { app_id: String, paths: Vec<PathBuf> },
     Core(CoreAction),
     Service(services::Command),
     Backend(backend::Command),
     Theme(String),
     Accent(String),
     DockSize(f64),
+    DockOpacity(f64),
+    SurfaceOpacity(f64),
+    FrostStrength(f64),
     BarHeight(f64),
     DockPosition(DockPosition),
     AutoHide(bool),
     Magnification(bool),
+    ShowRecentApplications(bool),
     MagnificationScale(f64),
     AnimateOpeningApplications(bool),
     ReduceMotion(bool),
@@ -63,6 +100,24 @@ pub struct DockApp {
     pub windows: Vec<clarion_ipc::Window>,
     pub pinned: bool,
 }
+
+#[derive(Clone)]
+pub struct DockFolderView {
+    pub path: PathBuf,
+    pub name: String,
+    pub display: FolderDisplay,
+    pub layout: FolderLayout,
+    pub sort: FolderSort,
+    pub descending: bool,
+    pub snapshot: Option<Arc<crate::dock_folder::FolderSnapshot>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FolderNavigation {
+    pub root: PathBuf,
+    pub current: PathBuf,
+    pub history: Vec<PathBuf>,
+}
 #[derive(Clone)]
 pub struct ViewState {
     pub prefs: Preferences,
@@ -80,6 +135,13 @@ pub struct ViewState {
     pub dnd: bool,
     pub dock_revealed: bool,
     pub launches: HashMap<String, Instant>,
+    pub dock_folders: Vec<DockFolderView>,
+    /// A folder is being dragged over the tray, so the Dock reserves one more
+    /// folder slot before the trash instead of covering an existing tile.
+    pub folder_drop_preview: bool,
+    pub folder_navigation: Option<FolderNavigation>,
+    pub folder_snapshots: HashMap<PathBuf, Arc<crate::dock_folder::FolderSnapshot>>,
+    pub folder_errors: HashMap<PathBuf, String>,
     dock_apps: Vec<DockApp>,
 }
 impl ViewState {
@@ -115,6 +177,10 @@ pub struct Host {
     pub panel: Option<Panel>,
     pub preview: bool,
     pub dnd: bool,
+    /// Whether a folder surface is currently kept alive as an invisible drag layer.
+    pub folder_drag_layer: bool,
+    /// Whether an external folder drag is holding open an extra Dock slot.
+    pub folder_drop_preview: bool,
     pub revision: u64,
     backend: backend::Backend,
     service: services::ServiceHandle,
@@ -133,6 +199,10 @@ pub struct Host {
     targets_pending: bool,
     auto_hidden: bool,
     launches: HashMap<String, Instant>,
+    dock_folder_cache: HashMap<PathBuf, Arc<crate::dock_folder::FolderSnapshot>>,
+    dock_folder_errors: HashMap<PathBuf, String>,
+    folder_navigation: Option<FolderNavigation>,
+    folder_scan_generation: HashMap<PathBuf, u64>,
     dock_hover: bool,
     dock_edge_hover: bool,
     idle_since: Instant,
@@ -172,6 +242,8 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 panel: None,
                 preview,
                 dnd: false,
+                folder_drag_layer: false,
+                folder_drop_preview: false,
                 revision: 0,
                 backend,
                 service,
@@ -189,6 +261,10 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 targets_pending: false,
                 auto_hidden,
                 launches: HashMap::new(),
+                dock_folder_cache: HashMap::new(),
+                dock_folder_errors: HashMap::new(),
+                folder_navigation: None,
+                folder_scan_generation: HashMap::new(),
                 dock_hover: false,
                 dock_edge_hover: false,
                 idle_since: Instant::now(),
@@ -266,6 +342,11 @@ impl Host {
             dnd: self.dnd,
             dock_revealed: !self.auto_hidden,
             launches: self.launches.clone(),
+            dock_folders: self.dock_folder_views(),
+            folder_drop_preview: self.folder_drop_preview,
+            folder_navigation: self.folder_navigation.clone(),
+            folder_snapshots: self.dock_folder_cache.clone(),
+            folder_errors: self.dock_folder_errors.clone(),
             dock_apps: self.dock_apps(),
         }
     }
@@ -464,6 +545,7 @@ impl Host {
                     thickness + 8.
                 };
                 let _ = desktop.update(cx, |desktop, _, cx| {
+                    desktop.set_appearance(self.prefs.surface_appearance(), cx);
                     desktop.set_reserved_edges(
                         self.prefs.bar_height as f32,
                         if self.prefs.dock_position == DockPosition::Bottom {
@@ -504,7 +586,15 @@ impl Host {
             let dynamic_size = self
                 .panel
                 .as_ref()
-                .filter(|panel| matches!(panel, Panel::Tray(_) | Panel::Dock(_)))
+                .filter(|panel| {
+                    matches!(
+                        panel,
+                        Panel::Tray(_)
+                            | Panel::Dock(_)
+                            | Panel::DockFolder { .. }
+                            | Panel::DockFolderMenu { .. }
+                    )
+                })
                 .map(|panel| {
                     let output = self.active_output();
                     let (w, h) = self
@@ -606,14 +696,88 @@ impl Host {
                 self.close(cx);
             }
             Action::PinApp(id) => {
-                let mut pins = self.pinned();
+                let mut pins = self.pinned_raw();
                 if pins.contains(&id) {
                     pins.retain(|item| item != &id);
                 } else {
-                    pins.push(id);
+                    pins.push(id.clone());
+                }
+                // An unpinned application leaves the saved arrangement.
+                if let Some(order) = &mut self.prefs.dock_order {
+                    order.retain(|item| item != &id);
                 }
                 self.prefs.pinned_app_ids = Some(pins);
                 self.save(cx);
+                // The menu has served its purpose; dismiss it like the other
+                // one-shot items.
+                self.close(cx);
+            }
+            Action::DockOrder(order) => {
+                let pins = self.pinned_raw();
+                let mut seen = HashSet::new();
+                let order: Vec<String> = order
+                    .into_iter()
+                    .filter(|id| pins.contains(id) && seen.insert(id.clone()))
+                    .collect();
+                self.prefs.dock_order = Some(order);
+                self.save(cx);
+            }
+            Action::PinFolder(path) => self.pin_folder(path, cx),
+            Action::UnpinFolder(path) => self.unpin_folder(&path, cx),
+            Action::FolderOrder(order) => self.reorder_folders(order, cx),
+            Action::OpenFolder(path) => {
+                self.folder_navigation = Some(FolderNavigation {
+                    root: path.clone(),
+                    current: path.clone(),
+                    history: Vec::new(),
+                });
+                self.request_folder_scan(path.clone(), cx);
+                self.open(Panel::DockFolder { root: path }, cx);
+            }
+            Action::NavigateFolder(path) => self.navigate_folder(path, cx),
+            Action::FolderBack => self.folder_back(cx),
+            Action::RevealFolder(path) => {
+                let _ = self.backend.send(backend::Command::OpenPath(path));
+                self.close(cx);
+            }
+            Action::RefreshFolder(path) => self.request_folder_scan(path, cx),
+            Action::SetFolderDisplay(path, display) => {
+                self.configure_folder(&path, |folder| folder.display = display, cx)
+            }
+            Action::SetFolderLayout(path, layout) => {
+                self.configure_folder(&path, |folder| folder.layout = layout, cx)
+            }
+            Action::SetFolderSort(path, sort) => {
+                self.configure_folder(&path, |folder| folder.sort = sort, cx)
+            }
+            Action::SetFolderDescending(path, descending) => {
+                self.configure_folder(&path, |folder| folder.descending = descending, cx)
+            }
+            Action::FolderDropPreview(active) => {
+                let active = active
+                    && self.prefs.dock_folders.len() < crate::preferences::MAX_DOCK_FOLDERS;
+                if self.folder_drop_preview != active {
+                    self.folder_drop_preview = active;
+                    self.changed(cx);
+                }
+            }
+            Action::OpenPathsWithApp { app_id, paths } => {
+                let Some(app) = self.catalog.get(&app_id) else {
+                    return;
+                };
+                if !crate::mime::app_accepts_paths(app, &paths) {
+                    return;
+                }
+                self.auto_hidden = false;
+                let _ = self.backend.send(backend::Command::LaunchDesktopWithPaths(
+                    app.desktop_file.clone(),
+                    paths,
+                ));
+                self.prefs.recent_app_ids.retain(|other| other != &app_id);
+                self.prefs.recent_app_ids.insert(0, app_id);
+                self.prefs.recent_app_ids.truncate(24);
+                self.save(cx);
+                self.close(cx);
             }
             Action::Core(action) => self.core(action),
             Action::Service(command) => {
@@ -631,8 +795,35 @@ impl Host {
                 self.save(cx);
             }
             Action::DockSize(value) => {
-                self.prefs.dock_size = value.clamp(32., 64.).round();
+                // The Dock draws native icon assets only, so the preference
+                // snaps to the 64 -> 48 -> 32 ladder instead of any size.
+                self.prefs.dock_size =
+                    crate::dock_motion::snap_icon_step(value.clamp(32., 64.) as f32) as f64;
                 self.save(cx);
+            }
+            Action::DockOpacity(value) => {
+                if value.is_finite() {
+                    self.prefs.dock_opacity = value.clamp(
+                        crate::preferences::MIN_SURFACE_OPACITY,
+                        crate::preferences::MAX_SURFACE_OPACITY,
+                    );
+                    self.save(cx);
+                }
+            }
+            Action::SurfaceOpacity(value) => {
+                if value.is_finite() {
+                    self.prefs.surface_opacity = value.clamp(
+                        crate::preferences::MIN_SURFACE_OPACITY,
+                        crate::preferences::MAX_SURFACE_OPACITY,
+                    );
+                    self.save(cx);
+                }
+            }
+            Action::FrostStrength(value) => {
+                if value.is_finite() {
+                    self.prefs.frost_strength = value.clamp(0., 1.);
+                    self.save(cx);
+                }
             }
             Action::BarHeight(value) => {
                 self.prefs.bar_height = value.clamp(22., 48.);
@@ -652,6 +843,11 @@ impl Host {
             Action::Magnification(value) => {
                 self.prefs.magnification = value;
                 self.save(cx);
+            }
+            Action::ShowRecentApplications(value) => {
+                self.prefs.show_recent_applications = value;
+                self.save(cx);
+                self.changed(cx);
             }
             Action::MagnificationScale(value) => {
                 if value.is_finite() {
@@ -750,7 +946,7 @@ impl Host {
                         && !self.prefs.dock_hidden
                         && !self.prefs.dock_auto_hide
                     {
-                        self.prefs.dock_size + 40.
+                        f64::from(self.dock_metrics(w, h).thickness) + 8.
                     } else {
                         0.
                     },
@@ -764,6 +960,7 @@ impl Host {
     fn close(&mut self, cx: &mut Context<Self>) {
         self.preferences_placed = None;
         self.panel = None;
+        self.folder_drag_layer = false;
         self.tray_menu.clear();
         if let Some(window) = self.popup.take() {
             let _ = window.update(cx, |_, window, _| window.remove_window());
@@ -845,6 +1042,13 @@ impl Host {
             let view = cx.new(|cx| ShellView::new(host, kind, output, state, cx));
             view.update(cx, |view, cx| view.observe_activation(window, cx));
             view.read(cx).focus(window, cx);
+            // Grab keyboard focus at the platform level so a later click
+            // elsewhere reports a deactivation and dismisses the popup. Without
+            // this a Dock menu opened by a right-click can keep its grab and
+            // never observe the focus change.
+            if !placement.normal {
+                view.update(cx, |_, _| window.activate_window());
+            }
             view
         }) {
             Ok(window) => self.popup = Some(window),
@@ -916,7 +1120,34 @@ impl Host {
             .or_else(|| self.outputs.keys().next().cloned())
             .unwrap_or_default()
     }
+    /// Dock window for an output, used to forward drag events received by a
+    /// fullscreen folder overlay.
+    pub(crate) fn dock_window(&self, output: &str) -> Option<WindowHandle<ShellView>> {
+        self.outputs.get(output).and_then(|view| view.dock)
+    }
+    /// The pinned applications in the order the user arranged them. Only the
+    /// pinned group carries an order; the running and recent sections keep the
+    /// order the desktop reports so the separator never moves.
     pub fn pinned(&self) -> Vec<String> {
+        let mut result = self.pinned_raw();
+        if let Some(order) = &self.prefs.dock_order {
+            let mut ordered: Vec<String> = Vec::with_capacity(result.len());
+            for id in order {
+                if result.contains(id) && !ordered.contains(id) {
+                    ordered.push(id.clone());
+                }
+            }
+            for id in result {
+                if !ordered.contains(&id) {
+                    ordered.push(id);
+                }
+            }
+            result = ordered;
+        }
+        result
+    }
+    /// The pinned applications without the saved arrangement.
+    pub fn pinned_raw(&self) -> Vec<String> {
         self.prefs.pinned_app_ids.clone().unwrap_or_else(|| {
             let mut result = vec![];
             for terms in [
@@ -944,12 +1175,13 @@ impl Host {
                 .catalog
                 .apps()
                 .iter()
-                .find(|a| {
-                    a.id.trim_end_matches(".desktop")
-                        .eq_ignore_ascii_case(window.app_id.as_deref().unwrap_or_default())
-                })
+                .find(|a| window_matches_app(window, a))
                 .map(|a| a.id.clone())
-                .unwrap_or_else(|| format!("window:{}", window.id));
+                // An unmatched window keeps a stable identity across its own
+                // windows: grouping by application id rather than by window id
+                // keeps one tile per application even when the compositor
+                // reports an app id the catalog cannot resolve.
+                .unwrap_or_else(|| synthetic_dock_id(window));
             if !ids.contains(&id) {
                 ids.push(id);
             }
@@ -969,12 +1201,10 @@ impl Host {
                     .windows
                     .iter()
                     .filter(|w| {
-                        if let Some(raw) = id.strip_prefix("window:") {
-                            raw.parse::<u64>().ok() == Some(w.id)
+                        if id.starts_with("window:") {
+                            synthetic_dock_id(w) == id
                         } else {
-                            w.app_id.as_deref().is_some_and(|wid| {
-                                wid.eq_ignore_ascii_case(id.trim_end_matches(".desktop"))
-                            })
+                            window_matches_app_id(w, &id)
                         }
                     })
                     .cloned()
@@ -1014,17 +1244,46 @@ impl Host {
             .collect()
     }
     pub fn activate_app(&mut self, app: &DockApp, cx: &mut Context<Self>) {
-        if let Some(window) = app.windows.iter().max_by_key(|window| {
+        // Clicking a Dock icon: launch when the application is closed, focus it
+        // when a window is open but unfocused, and minimize when it is already
+        // the focused application.
+        if let Some(focused) = app.windows.iter().find(|window| window.is_focused) {
+            self.handle(Action::Minimize(focused.id), cx);
+        } else if let Some(window) = app.windows.iter().max_by_key(|window| {
             (
-                window.is_focused,
+                !window.is_minimized,
                 window.focus_timestamp.map(|time| (time.secs, time.nanos)),
                 std::cmp::Reverse(window.id),
             )
         }) {
-            self.handle(Action::Focus(window.id), cx)
+            self.handle(Action::Focus(window.id), cx);
         } else {
-            self.handle(Action::Launch(app.id.clone()), cx)
+            self.handle(Action::Launch(app.id.clone()), cx);
         }
+    }
+    /// Fold a drawer reorder back into the full pinned arrangement. The overflow
+    /// drawer shows only a subset of the pinned group, so a new drawer order is
+    /// written into the positions those applications already occupy while every
+    /// other pinned application keeps its place. Non-pinned drawer applications
+    /// never reorder. Returns the new full order, or the unchanged one.
+    pub fn reorder_pinned_subset(&self, drawer_order: &[String]) -> Vec<String> {
+        let mut order = self.pinned();
+        let positions: Vec<usize> = order
+            .iter()
+            .enumerate()
+            .filter(|(_, id)| drawer_order.contains(id))
+            .map(|(index, _)| index)
+            .collect();
+        let mut subset: Vec<String> = drawer_order
+            .iter()
+            .filter(|id| order.contains(id))
+            .cloned()
+            .collect();
+        subset.truncate(positions.len());
+        for (slot, id) in positions.into_iter().zip(subset) {
+            order[slot] = id;
+        }
+        order
     }
     fn rebuild(&mut self, cx: &mut Context<Self>) {
         self.dock_hover = false;
@@ -1112,11 +1371,12 @@ impl Host {
                 self.create_dock(&name, display.id(), width, height, cx)
             };
             let reserved_top = bh;
+            let reserved_dock = self.dock_metrics(width, height).thickness + 8.;
             let reserved_bottom = if self.prefs.dock_position == DockPosition::Bottom
                 && !self.prefs.dock_auto_hide
                 && !self.prefs.dock_hidden
             {
-                self.prefs.dock_size as f32 + 40.
+                reserved_dock
             } else {
                 0.
             };
@@ -1124,7 +1384,7 @@ impl Host {
                 && !self.prefs.dock_auto_hide
                 && !self.prefs.dock_hidden
             {
-                self.prefs.dock_size as f32 + 40.
+                reserved_dock
             } else {
                 0.
             };
@@ -1132,7 +1392,7 @@ impl Host {
                 && !self.prefs.dock_auto_hide
                 && !self.prefs.dock_hidden
             {
-                self.prefs.dock_size as f32 + 40.
+                reserved_dock
             } else {
                 0.
             };
@@ -1142,6 +1402,7 @@ impl Host {
                 let environment = self.environment.clone();
                 let actions = self.desktop_actions.clone();
                 let output = name.clone();
+                let appearance = self.prefs.surface_appearance();
                 cx.open_window(
                     window_options(
                         "clarion-desktop",
@@ -1156,8 +1417,14 @@ impl Host {
                     ),
                     move |_, cx| {
                         cx.new(|cx| {
-                            let mut view =
-                                DesktopView::new(output, environment, actions, false, cx);
+                            let mut view = DesktopView::new(
+                                output,
+                                environment,
+                                actions,
+                                false,
+                                appearance,
+                                cx,
+                            );
                             view.set_reserved_edges(
                                 reserved_top,
                                 reserved_bottom,
@@ -1248,16 +1515,21 @@ impl Host {
         }
     }
     fn dock_metrics(&self, width: f32, height: f32) -> crate::dock_motion::DockMetrics {
-        crate::dock_motion::DockMetrics::new(
-            self.dock_apps().len(),
+        let apps = self.dock_apps();
+        let mut metrics = crate::dock_motion::DockMetrics::with_folders(
+            apps.len(),
             self.prefs.dock_size as f32,
             self.prefs.magnification_scale as f32,
             self.prefs.magnification && !self.prefs.reduce_motion,
             self.prefs.show_launcher,
+            self.prefs.dock_folders.len() + usize::from(self.folder_drop_preview),
             self.prefs.dock_position != DockPosition::Bottom,
             width,
             height,
-        )
+        );
+        let (pinned, running, recent) = dock_app_counts(&apps);
+        metrics.restrict_overflow(pinned, running, recent);
+        metrics
     }
     fn create_dock(
         &self,
@@ -1336,6 +1608,9 @@ impl Host {
             .retain(|_, started| started.elapsed() < Duration::from_secs(1));
         if !self.ready && !self.outputs.is_empty() {
             self.ready = true;
+            for folder in self.prefs.dock_folders.clone() {
+                self.request_folder_scan(PathBuf::from(folder.path), cx);
+            }
             let preview = self.preview;
             let host = cx.entity().downgrade();
             let window = self.outputs.values().next().unwrap().bar;
@@ -1382,33 +1657,50 @@ impl Host {
     }
     fn targets(&mut self) {
         self.targets_pending = false;
-        let apps = self.dock_apps();
+        let state = self.snapshot();
+        let apps = state.dock_apps();
+        let launcher = usize::from(self.prefs.show_launcher);
         let mut next = HashMap::new();
         if self.prefs.minimize_into_app && !self.prefs.dock_hidden {
             for (name, output) in &self.outputs {
                 let metrics = self.dock_metrics(output.width, output.height);
-                let item = f64::from(metrics.item);
-                let thickness = f64::from(metrics.thickness);
-                let length = f64::from(metrics.length);
-                let visible = metrics.visible_apps;
-                for (index, app) in apps.iter().take(visible).enumerate() {
-                    let offset = 10.
-                        + (index as f64 + u8::from(self.prefs.show_launcher) as f64) * item
-                        + 6.;
+                let (surface_x, surface_y) = panels::dock_surface_origin(
+                    &state,
+                    &metrics,
+                    output.width,
+                    output.height,
+                );
+                let slots = metrics.samples(None, 0.);
+                let icon = f64::from(metrics.icon_size);
+                let inset = f64::from(metrics.inset);
+                let visible = dock_display_apps(&apps, &metrics);
+                for (index, app) in visible.iter().enumerate() {
+                    let main = slots
+                        .get(index + launcher)
+                        .map(|slot| f64::from(slot.origin_main))
+                        .unwrap_or_else(|| {
+                            f64::from(metrics.main_padding + metrics.end_gap)
+                                + (index + launcher) as f64 * f64::from(metrics.item)
+                        });
                     let (x, y) = match self.prefs.dock_position {
                         DockPosition::Bottom => (
-                            (output.width as f64 - length) / 2. + offset,
-                            output.height as f64 - 8. - thickness + 13.5,
+                            surface_x as f64 + main,
+                            surface_y as f64 + f64::from(metrics.cross_padding) + inset,
                         ),
-                        DockPosition::Left => {
-                            (24., (output.height as f64 - length) / 2. + offset - 2.5)
-                        }
+                        DockPosition::Left => (
+                            surface_x as f64 + inset,
+                            surface_y as f64 + main,
+                        ),
                         DockPosition::Right => (
-                            output.width as f64 - 8. - thickness + 16.,
-                            (output.height as f64 - length) / 2. + offset - 2.5,
+                            surface_x as f64
+                                + f64::from(metrics.surface_width - metrics.thickness)
+                                + inset,
+                            surface_y as f64 + main,
                         ),
                     };
-                    if offset + f64::from(metrics.icon_size) > length {
+                    if main + icon
+                        > f64::from(metrics.main_padding + metrics.length) + 0.001
+                    {
                         continue;
                     }
                     for window in &app.windows {
@@ -1615,6 +1907,45 @@ impl AssetSource for ShellAssets {
 #[cfg(test)]
 pub(crate) mod testing;
 
+/// Split the Dock composition into its three groups. Recent applications are
+/// the unpinned, non-running entries appended from launch history.
+pub(crate) fn dock_app_counts(apps: &[DockApp]) -> (usize, usize, usize) {
+    let pinned = apps.iter().filter(|app| app.pinned).count();
+    let running = apps
+        .iter()
+        .filter(|app| !app.pinned && !app.windows.is_empty())
+        .count();
+    let recent = apps
+        .iter()
+        .filter(|app| !app.pinned && app.windows.is_empty())
+        .count();
+    (pinned, running, recent)
+}
+
+/// The tiles the Dock actually paints, in row order. Pinned applications use
+/// the visible prefix, then running applications, then recent applications.
+/// The folded pinned tail is excluded so a recent or running tile is never
+/// displaced by an application waiting in the overflow drawer.
+pub(crate) fn dock_display_apps<'a>(
+    apps: &'a [DockApp],
+    metrics: &crate::dock_motion::DockMetrics,
+) -> Vec<&'a DockApp> {
+    apps.iter()
+        .filter(|app| app.pinned)
+        .take(metrics.visible_pinned)
+        .chain(
+            apps.iter()
+                .filter(|app| !app.pinned && !app.windows.is_empty())
+                .take(metrics.visible_running),
+        )
+        .chain(
+            apps.iter()
+                .filter(|app| !app.pinned && app.windows.is_empty())
+                .take(metrics.visible_recent),
+        )
+        .collect()
+}
+
 fn append_recent_dock_apps(
     ids: &mut Vec<String>,
     recent: &[String],
@@ -1634,6 +1965,68 @@ fn append_recent_dock_apps(
             }
         }
     }
+}
+
+/// Stable identity for a running window the catalog could not resolve to a
+/// desktop entry. Grouping by `app_id` (rather than the window id) keeps one
+/// Dock tile per application, so several windows of an unknown application do
+/// not appear as duplicates.
+fn synthetic_dock_id(window: &clarion_ipc::Window) -> String {
+    match window.app_id.as_deref().filter(|id| !id.is_empty()) {
+        Some(app_id) => format!("window:{}", app_id.to_ascii_lowercase()),
+        None => format!("window:{}", window.id),
+    }
+}
+
+/// Candidate identifiers a compositor may report for one application. Wayland
+/// app ids differ between machines and come in several shapes for the same
+/// desktop file: `org.gnome.Nautilus`, `nautilus`, or `org.gnome.Nautilus`
+/// for `org.gnome.Nautilus.desktop`. Comparing only the desktop file stem
+/// leaves unmatched windows behind, which previously showed as a row of
+/// duplicate generic icons.
+fn window_identifiers(window: &clarion_ipc::Window) -> Vec<String> {
+    let mut identifiers = Vec::new();
+    let Some(raw) = window.app_id.as_deref().filter(|id| !id.is_empty()) else {
+        return identifiers;
+    };
+    let raw = raw.to_ascii_lowercase();
+    identifiers.push(raw.clone());
+    // The trailing dotted component: `org.gnome.Nautilus` -> `nautilus`.
+    if let Some(last) = raw.rsplit('.').next() {
+        if last != raw && !last.is_empty() {
+            identifiers.push(last.to_owned());
+        }
+    }
+    identifiers
+}
+
+fn app_identifiers(id: &str) -> Vec<String> {
+    let stem = id.trim_end_matches(".desktop").to_ascii_lowercase();
+    let mut identifiers = vec![stem.clone()];
+    // Nested directories arrive as `subdir-name.desktop`.
+    if let Some(last) = stem.rsplit('-').next() {
+        if last != stem && !last.is_empty() {
+            identifiers.push(last.to_owned());
+        }
+    }
+    if let Some(last) = stem.rsplit('.').next() {
+        if last != stem && !last.is_empty() {
+            identifiers.push(last.to_owned());
+        }
+    }
+    identifiers
+}
+
+fn window_matches_app(window: &clarion_ipc::Window, app: &DesktopApp) -> bool {
+    window_matches_app_id(window, &app.id)
+}
+
+fn window_matches_app_id(window: &clarion_ipc::Window, id: &str) -> bool {
+    let window_ids = window_identifiers(window);
+    let app_ids = app_identifiers(id);
+    window_ids
+        .iter()
+        .any(|window_id| app_ids.iter().any(|app_id| app_id == window_id))
 }
 
 fn dock_icon_name(id: &str, category: Option<AppCategory>) -> &'static str {
