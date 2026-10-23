@@ -261,6 +261,11 @@ impl ShellView {
                         let regions = card_regions(viewport, &bounds.borrow());
                         #[cfg(test)]
                         recorded_regions.replace(regions.clone());
+                        if p.frosted() {
+                            window.set_glass_region(Some(&regions));
+                        } else {
+                            window.set_glass_region(Some(&[]));
+                        }
                         window.set_input_region(Some(&regions));
                     },
                 )
@@ -294,16 +299,22 @@ impl ShellView {
             .child(
                 canvas(
                     |bounds, _, _| bounds,
-                    |_, bounds, window, _| {
+                    move |_, bounds, window, _| {
                         let size = size(bounds.size.width, bounds.size.height.ceil());
                         if window.viewport_size() != size {
                             window.resize(size);
                         }
-                        window.set_input_region(Some(&rounded_region(
+                        let regions = rounded_region(
                             f32::from(size.width),
                             f32::from(size.height),
                             CARD_RADIUS,
-                        )));
+                        );
+                        if p.frosted() {
+                            window.set_glass_region(Some(&regions));
+                        } else {
+                            window.set_glass_region(Some(&[]));
+                        }
+                        window.set_input_region(Some(&regions));
                     },
                 )
                 .absolute()

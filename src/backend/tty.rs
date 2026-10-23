@@ -1737,8 +1737,15 @@ impl Tty {
                     return true;
                 }
                 Err(err) => {
-                    debug!("error importing dmabuf in Vulkan: {err:?}");
-                    return false;
+                    // Vulkan could not import this buffer. The dmabuf feedback sent to
+                    // clients is built from `use_native_renderer`, which is per-output
+                    // and can be false while `native_renderer` is still Some (e.g. after
+                    // the cross-GPU Vulkan swapchain probe fails and the output falls
+                    // back to GLES). In that case the client was advertised the GLES
+                    // modifier set, so fall through to the GLES importer below instead of
+                    // failing the whole import and killing the client with a protocol
+                    // error.
+                    debug!("error importing dmabuf in Vulkan: {err:?}; falling back to GLES");
                 }
             }
         }

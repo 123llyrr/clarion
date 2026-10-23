@@ -22,6 +22,7 @@ futures-lite = "2.6"
 wayland-client = "0.31.15"
 wayland-protocols = { version = "0.32.13", features = ["client", "staging"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+mime_guess = "2.0.5"
 sha2 = "0.10"
 chrono = "0.4"
 unicode-segmentation = "1"

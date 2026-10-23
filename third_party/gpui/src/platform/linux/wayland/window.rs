@@ -105,6 +105,10 @@ pub struct WaylandWindowState {
     toplevel: Option<xdg_toplevel::XdgToplevel>,
     layer_surface: Option<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1>,
     input_region: Option<Vec<Bounds<Pixels>>>,
+    /// Surface-local rectangles the compositor should blur. `None` falls back
+    /// to the input region; this lets a client frost a panel while keeping
+    /// lifted/detached controls clickable without smearing the backdrop.
+    glass_region: Option<Vec<Bounds<Pixels>>>,
     exclusive_zone_override: Option<i32>,
     viewport: Option<wp_viewport::WpViewport>,
     outputs: HashMap<ObjectId, Output>,
@@ -186,6 +190,7 @@ impl WaylandWindowState {
             toplevel,
             layer_surface,
             input_region: None,
+            glass_region: None,
             exclusive_zone_override: None,
             viewport,
             globals,
@@ -1086,6 +1091,20 @@ impl PlatformWindow for WaylandWindow {
         state.surface.commit();
     }
 
+    fn set_glass_region(&self, rectangles: Option<&[Bounds<Pixels>]>) {
+        let mut state = self.borrow_mut();
+        let requested =
+            rectangles.map(|rectangles| rectangles.iter().take(256).copied().collect::<Vec<_>>());
+        if state.closed || state.glass_region == requested {
+            return;
+        }
+        state.glass_region = requested;
+        // The frosted shape is split from the hit shape: a panel may frost only
+        // its resting surface while lifted controls stay clickable outside it.
+        sync_background_effect(&mut state);
+        state.surface.commit();
+    }
+
     fn scale_factor(&self) -> f32 {
         self.borrow().scale
     }
@@ -1414,7 +1433,8 @@ fn sync_background_effect(state: &mut WaylandWindowState) {
         .globals
         .compositor
         .create_region(&state.globals.qh, ());
-    if let Some(rectangles) = &state.input_region {
+    let rectangles = state.glass_region.as_ref().or(state.input_region.as_ref());
+    if let Some(rectangles) = rectangles {
         for [x, y, width, height] in background_effect::rectangles(rectangles) {
             region.add(x, y, width, height);
         }

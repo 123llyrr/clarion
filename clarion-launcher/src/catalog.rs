@@ -146,6 +146,8 @@ pub struct DesktopApp {
     pub category: AppCategory,
     pub icon_path: Option<PathBuf>,
     pub icon_name: Option<String>,
+    /// Lowercase MIME types this application claims in its desktop entry.
+    pub mime_types: Vec<String>,
 }
 
 /// An immutable snapshot; reload off the UI thread and replace the whole catalog.
@@ -254,6 +256,24 @@ impl AppCatalog {
                 let icon_path = icon_name
                     .as_deref()
                     .and_then(|name| icons.resolve(name, CATALOG_ICON_PIXELS));
+                let mut seen_mimes = HashSet::new();
+                let mime_types = string_list(
+                    values
+                        .get("MimeType")
+                        .map(String::as_str)
+                        .unwrap_or_default(),
+                )
+                .into_iter()
+                .map(|mime| mime.trim().to_ascii_lowercase())
+                .filter(|mime| {
+                    !mime.is_empty()
+                        && mime.len() <= 256
+                        && mime.contains('/')
+                        && !mime.chars().any(char::is_whitespace)
+                })
+                .filter(|mime| seen_mimes.insert(mime.clone()))
+                .take(128)
+                .collect();
                 apps.push(DesktopApp {
                     id,
                     name,
@@ -265,6 +285,7 @@ impl AppCatalog {
                     categories,
                     icon_path,
                     icon_name,
+                    mime_types,
                 });
             }
         }
@@ -988,6 +1009,25 @@ mod tests {
         let app = catalog.get("app.desktop").unwrap();
         assert_eq!(app.icon_path.as_ref(), Some(&icon));
         assert_eq!(app.icon_name.as_deref(), Some("catalog"));
+    }
+
+    #[test]
+    fn desktop_entries_parse_deduplicate_and_normalize_mime_types() {
+        let fixture = Fixture::new();
+        fixture.entry(
+            "user",
+            "viewer.desktop",
+            "DBusActivatable=true\nMimeType=text/plain; image/png;TEXT/PLAIN;;\n",
+        );
+        fixture.entry("user", "plain.desktop", "DBusActivatable=true\n");
+        let catalog = fixture.load();
+        let viewer = catalog.get("viewer.desktop").unwrap();
+        assert_eq!(viewer.mime_types, ["text/plain", "image/png"]);
+        assert!(catalog
+            .get("plain.desktop")
+            .unwrap()
+            .mime_types
+            .is_empty());
     }
 
     #[test]

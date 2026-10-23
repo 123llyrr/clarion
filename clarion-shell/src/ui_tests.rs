@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use gpui::{
-    point, px, Entity, EntityInputHandler, Modifiers, TestAppContext, VisualTestContext,
-    WindowHandle,
+    point, px, Entity, EntityInputHandler, Modifiers, MouseButton, TestAppContext,
+    VisualTestContext, WindowHandle,
 };
 
 use super::{Host, Panel, ShellView};
@@ -405,4 +405,142 @@ fn wallpaper_chooser_releases_the_exclusive_panel_before_requesting_a_dialog(
             .any(|handle| handle.window_id() == window.window_id())),
         "file chooser must not leave an exclusive layer above its dialog"
     );
+}
+
+fn dock_window(id: u64, app_id: &str, title: &str) -> clarion_ipc::Window {
+    clarion_ipc::Window {
+        id,
+        title: Some(title.to_owned()),
+        app_id: Some(app_id.into()),
+        pid: None,
+        gtk_app_menu: None,
+        app_menu: None,
+        workspace_id: Some(1),
+        is_focused: false,
+        is_minimized: false,
+        is_floating: false,
+        is_urgent: false,
+        focus_timestamp: None,
+        layout: clarion_ipc::WindowLayout {
+            pos_in_scrolling_layout: None,
+            tile_size: (600., 400.),
+            window_size: (600, 400),
+            tile_pos_in_workspace_view: None,
+            window_offset_in_tile: (0., 0.),
+        },
+    }
+}
+
+#[gpui::test]
+fn a_long_window_title_stays_on_one_truncated_dock_menu_row(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    cx.update(|cx| {
+        crate::input::TextInput::bind_keys(cx);
+        super::bind_keys(cx);
+    });
+    let host = cx
+        .update(|cx| testing::test_host(cx, fixture.catalog.clone(), fixture.environment.clone()));
+    host.update(cx, |host, _| {
+        host.desktop.windows = vec![dock_window(
+            1,
+            "alpha",
+            "A very long window title that must not wrap or push the dock menu rows apart",
+        )];
+    });
+    let window = cx.update(|cx| testing::open_panel(&host, Panel::Dock("alpha.desktop".into()), cx));
+    let view = window.root(cx).unwrap();
+    let mut visual = VisualTestContext::from_window(*window, cx);
+    visual.update(|window, cx| {
+        view.read(cx).focus(window, cx);
+        window.refresh();
+    });
+    visual.run_until_parked();
+    let focus = visual
+        .debug_bounds("focus-1")
+        .expect("the window title row is painted");
+    let pin = visual
+        .debug_bounds("pin-app")
+        .expect("the pin row is painted");
+    let (w, h) = visual.update(|window, _| {
+        let size = window.viewport_size();
+        (f32::from(size.width), f32::from(size.height))
+    });
+    let popup = view
+        .read_with(&visual, |view, _| {
+            crate::app::panels::placement(
+                view.state.as_ref(),
+                &Panel::Dock("alpha.desktop".into()),
+                w,
+                h,
+            )
+            .popup
+        })
+        .expect("the Dock menu reports its visible popup");
+    assert!(
+        focus.size.height <= px(crate::app::panels::DOCK_MENU_ROW + 0.01),
+        "a long title must stay on one {}-point row, got {:?}",
+        crate::app::panels::DOCK_MENU_ROW,
+        focus.size.height,
+    );
+    assert!(
+        focus.right() <= popup.right() + px(0.01),
+        "the truncated title must stay inside the popup: {focus:?} vs {popup:?}",
+    );
+    assert!(
+        pin.bottom() <= popup.bottom() + px(0.01),
+        "the rows after a long title must still fit the popup: {pin:?} vs {popup:?}",
+    );
+}
+
+#[gpui::test]
+fn clicking_outside_a_dock_menu_dismisses_it(cx: &mut TestAppContext) {
+    let (_fixture, host, view, mut visual, _window) =
+        panel(cx, Panel::Dock("alpha.desktop".into()));
+    let (w, h) = visual.update(|window, _| {
+        let size = window.viewport_size();
+        (f32::from(size.width), f32::from(size.height))
+    });
+    let popup = view
+        .read_with(&visual, |view, _| {
+            crate::app::panels::placement(
+                view.state.as_ref(),
+                &Panel::Dock("alpha.desktop".into()),
+                w,
+                h,
+            )
+            .popup
+        })
+        .expect("a Dock menu reports its visible popup");
+    // A Dock menu is modal: the window covers the whole output and a press
+    // outside the visible popup dismisses it.
+    let outside = if popup.origin.y > px(60.) || popup.origin.x > px(60.) {
+        point(px(4.), px(4.))
+    } else {
+        point(popup.origin.x + popup.size.width + px(40.), popup.origin.y)
+    };
+    assert!(
+        !popup.contains(&outside),
+        "the dismissal point must be outside the popup: {popup:?} {outside:?}"
+    );
+    // A press on the visible popup's own padding must not dismiss it.
+    let inside = point(
+        popup.origin.x + popup.size.width * 0.5,
+        popup.origin.y + px(4.),
+    );
+    visual.simulate_mouse_down(inside, MouseButton::Left, Modifiers::default());
+    visual.run_until_parked();
+    host.read_with(cx, |host, _| {
+        assert!(
+            host.panel.is_some(),
+            "a press inside the Dock menu must keep it open"
+        );
+    });
+    visual.simulate_mouse_down(outside, MouseButton::Left, Modifiers::default());
+    visual.run_until_parked();
+    host.read_with(cx, |host, _| {
+        assert!(
+            host.panel.is_none(),
+            "a press outside the Dock menu must dismiss it"
+        );
+    });
 }

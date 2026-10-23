@@ -576,6 +576,82 @@ impl ShellView {
                     .text_color(p.muted)
                     .child(pref_text(format!("{:.0} pt", host.prefs.bar_height))),
             );
+        let dock_opacity_slider = div()
+            .w(px(304.))
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .child(div().flex_1().child(self.preference_slider(
+                "dock-opacity",
+                (MAX_SURFACE_OPACITY - host.prefs.dock_opacity)
+                    / (MAX_SURFACE_OPACITY - MIN_SURFACE_OPACITY),
+                |v| {
+                    Action::DockOpacity(
+                        MAX_SURFACE_OPACITY - (MAX_SURFACE_OPACITY - MIN_SURFACE_OPACITY) * v,
+                    )
+                },
+                p,
+            )))
+            .child(
+                div()
+                    .w(px(35.))
+                    .text_right()
+                    .text_size(px(11.))
+                    .text_color(p.muted)
+                    .child(pref_text(format!(
+                        "{:.0}%",
+                        (1. - host.prefs.dock_opacity) * 100.
+                    ))),
+            );
+        let surface_opacity_slider = div()
+            .w(px(304.))
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .child(div().flex_1().child(self.preference_slider(
+                "surface-opacity",
+                (MAX_SURFACE_OPACITY - host.prefs.surface_opacity)
+                    / (MAX_SURFACE_OPACITY - MIN_SURFACE_OPACITY),
+                |v| {
+                    Action::SurfaceOpacity(
+                        MAX_SURFACE_OPACITY - (MAX_SURFACE_OPACITY - MIN_SURFACE_OPACITY) * v,
+                    )
+                },
+                p,
+            )))
+            .child(
+                div()
+                    .w(px(35.))
+                    .text_right()
+                    .text_size(px(11.))
+                    .text_color(p.muted)
+                    .child(pref_text(format!(
+                        "{:.0}%",
+                        (1. - host.prefs.surface_opacity) * 100.
+                    ))),
+            );
+        let frost_slider = div()
+            .w(px(304.))
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .child(div().flex_1().child(self.preference_slider(
+                "frost-strength",
+                host.prefs.frost_strength,
+                Action::FrostStrength,
+                p,
+            )))
+            .child(
+                div()
+                    .w(px(35.))
+                    .text_right()
+                    .text_size(px(11.))
+                    .text_color(p.muted)
+                    .child(pref_text(format!(
+                        "{:.0}%",
+                        host.prefs.frost_strength * 100.
+                    ))),
+            );
         let body = div()
             .id("macos-preferences-form")
             .flex_1()
@@ -589,6 +665,9 @@ impl ShellView {
             .flex_col()
             .child(form_row("外观：", appearance).min_h(px(97.)))
             .child(form_row("强调色：", accents).min_h(px(32.)))
+            .child(form_row("程序坞透明度：", dock_opacity_slider).min_h(px(32.)))
+            .child(form_row("菜单弹窗透明度：", surface_opacity_slider).min_h(px(32.)))
+            .child(form_row("磨砂强度：", frost_slider).min_h(px(32.)))
             .child(form_separator(separator))
             .child(form_row("程序坞大小：", size_slider).min_h(px(32.)))
             .child(
@@ -614,6 +693,19 @@ impl ShellView {
                         "自动隐藏和显示程序坞",
                         host.prefs.dock_auto_hide,
                         Action::AutoHide(!host.prefs.dock_auto_hide),
+                        p,
+                    ),
+                )
+                .min_h(px(30.)),
+            )
+            .child(
+                form_row(
+                    "最近使用：",
+                    self.preference_check(
+                        "prefs-recent-apps",
+                        "显示最近使用的应用",
+                        host.prefs.show_recent_applications,
+                        Action::ShowRecentApplications(!host.prefs.show_recent_applications),
                         p,
                     ),
                 )
@@ -786,10 +878,52 @@ mod tests {
         host.read_with(&visual, |host, _| {
             assert!((host.prefs.magnification_scale - 1.75).abs() < 0.001)
         });
+        for (id, value, expected) in [
+            (
+                "slider-dock-opacity",
+                0.25,
+                crate::preferences::MAX_SURFACE_OPACITY
+                    - 0.25
+                        * (crate::preferences::MAX_SURFACE_OPACITY
+                            - crate::preferences::MIN_SURFACE_OPACITY),
+            ),
+            (
+                "slider-surface-opacity",
+                0.75,
+                crate::preferences::MAX_SURFACE_OPACITY
+                    - 0.75
+                        * (crate::preferences::MAX_SURFACE_OPACITY
+                            - crate::preferences::MIN_SURFACE_OPACITY),
+            ),
+            ("slider-frost-strength", 0.25, 0.25),
+        ] {
+            let bounds = visual
+                .debug_bounds(id)
+                .unwrap_or_else(|| panic!("missing actual effect slider: {id}"));
+            visual.simulate_click(
+                point(
+                    bounds.left() + px(8.) + (bounds.size.width - px(16.)) * value,
+                    bounds.center().y,
+                ),
+                Modifiers::default(),
+            );
+            visual.run_until_parked();
+            host.read_with(&visual, |host, _| match id {
+                "slider-dock-opacity" => assert!((host.prefs.dock_opacity - expected).abs() < 0.001),
+                "slider-surface-opacity" => {
+                    assert!((host.prefs.surface_opacity - expected).abs() < 0.001)
+                }
+                "slider-frost-strength" => {
+                    assert!((host.prefs.frost_strength - expected).abs() < 0.001)
+                }
+                _ => unreachable!(),
+            });
+        }
         for id in [
             "prefs-appearance-light",
             "prefs-accent-bf5af2",
             "prefs-magnification",
+            "prefs-recent-apps",
             "prefs-launch-animation",
             "prefs-reduce-motion",
             "prefs-position-right",
@@ -814,6 +948,7 @@ mod tests {
                 "prefs-appearance-light" => assert_eq!(host.prefs.theme, "light"),
                 "prefs-accent-bf5af2" => assert_eq!(host.prefs.accent, "#bf5af2"),
                 "prefs-magnification" => assert!(!host.prefs.magnification),
+                "prefs-recent-apps" => assert!(!host.prefs.show_recent_applications),
                 "prefs-launch-animation" => assert!(!host.prefs.animate_opening_applications),
                 "prefs-reduce-motion" => assert!(host.prefs.reduce_motion),
                 "prefs-position-right" => assert_eq!(

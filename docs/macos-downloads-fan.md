@@ -19,3 +19,5 @@ Catalina 镜像内的 `Dock.app/Contents/Resources/DockMenus.plist` 将 `FAN`（
 [Catalina 对应 Dock 帮助](https://support.apple.com/en-gb/guide/mac-help/mh35859/10.15/mac/10.15) 说明 Downloads 作为目录叠放，点击内容打开文件。[Apple 的目录使用帮助](https://support.apple.com/en-mz/guide/mac-help/mchl231f08fb/mac) 进一步列出独立的 Folder/Stack、排序及 Fan/Grid/List 选择；此后者是当前帮助，不用它冒充 Catalina 运行测量。Catalina 专用目录帮助地址本轮无法取得，因此明确不声称已经观测或还原苹果的大量文件精确截断数量。
 
 回归覆盖显式 Fan 的 9/24/128/256 项请求、自动回退、可见文件上限、更多入口、键盘方向、反向收起、减少动态及迟到启动回调。原生像素与边缘命中检查由本轮私有 Wayland 测试进一步验证。
+
+原生 GPUI Shell 已将同一套“显式选择与自动选择分离”的语义用于用户固定的 Dock 文件夹：目录快照上限 256、隐藏项跳过、列表/网格/扇形/自动四种布局，自动布局参考数量与可用空间。扇形沿贴靠边反方向按抛物线展开，只绘制图标、文件名胶囊和操作按钮，不增加全屏遮罩或模糊，Dock 保持完整可见。该实现是用户固定文件夹，不是 Downloads 系统叠放；`show_downloads` 仍未接线。
