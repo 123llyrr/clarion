@@ -2076,3 +2076,123 @@ fn clicking_a_drawer_tile_activates_the_app_and_dismisses_the_drawer(cx: &mut Te
         );
     });
 }
+
+
+#[gpui::test]
+fn pinning_and_unpinning_a_folder_grows_the_icon_in_and_rides_it_out(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let folder_path = directory.path().join("Projects");
+    std::fs::create_dir(&folder_path).unwrap();
+    let mut fixture = Fixture::with_apps(cx, false, &[APP_A]);
+    let host = fixture.host.clone();
+    let path = folder_path.to_string_lossy().into_owned();
+    let pin = |host: &Entity<crate::app::Host>,
+               folders: Vec<crate::preferences::DockFolderPreference>,
+               fixture: &mut Fixture| {
+        fixture.visual.cx.update(|cx| {
+            host.update(cx, |host, cx| {
+                host.prefs.dock_folders = folders;
+                host.changed(cx);
+            });
+        });
+        fixture.visual.update(|window, _| window.refresh());
+    };
+    let folder_prefs = vec![crate::preferences::DockFolderPreference {
+        path: path.clone(),
+        display: crate::preferences::FolderDisplay::Folder,
+        layout: crate::preferences::FolderLayout::Auto,
+        sort: crate::preferences::FolderSort::Name,
+        descending: false,
+    }];
+
+    // The row before any folder is pinned.
+    let rest_trash = fixture.visual.debug_bounds("dock-trash").unwrap();
+
+    // Pin: the arrival slide keys straight to the folder path, the tile
+    // paints on its slot, and the resting layout still grows to make room.
+    pin(&host, folder_prefs.clone(), &mut fixture);
+    fixture.view.read_with(&fixture.visual, |view, _| {
+        assert!(
+            view.dock_motion.folders_seeded,
+            "the pin diff seeds itself on the first render"
+        );
+        assert!(
+            view.dock_motion
+                .folder_appear
+                .get(&path)
+                .is_some_and(|slide| slide.target() == 1.),
+            "the pin keys a grow-in slide for the new folder"
+        );
+        assert!(
+            view.dock_motion.folder_exiting.is_empty(),
+            "pinning must not seed an exit ride"
+        );
+    });
+    let pinned_trash = fixture.visual.debug_bounds("dock-trash").unwrap();
+    assert!(
+        pinned_trash.right() > rest_trash.right(),
+        "the pinned slot reserves room for the incoming folder"
+    );
+    assert!(
+        fixture.visual.debug_bounds("dock-folder-0").is_some(),
+        "the pinned folder tile paints during the grow-in"
+    );
+
+    // Finish the grow-in deterministically (the slide clock is real time in
+    // tests, not the mocked test clock) so the fade below starts from full
+    // size, the way a folder pinned since an earlier frame would.
+    fixture.view.update(&mut fixture.visual, |view, cx| {
+        if let Some(slide) = view.dock_motion.folder_appear.get_mut(&path) {
+            slide.snap(1.);
+        }
+        cx.notify();
+    });
+    fixture.visual.update(|window, _| window.refresh());
+
+    // Unpin: on the first frame the tile rides out on a reserved slot and
+    // the row must NOT reflow yet.
+    pin(&host, Vec::new(), &mut fixture);
+    fixture.view.read_with(&fixture.visual, |view, _| {
+        assert_eq!(
+            view.dock_motion.folder_exiting.len(),
+            1,
+            "the unpinned folder rides an exit slide on a reserved slot"
+        );
+        assert_eq!(
+            view.dock_motion.folder_exiting[0]
+                .0
+                .path
+                .to_string_lossy(),
+            path.as_str()
+        );
+    });
+    let riding_trash = fixture.visual.debug_bounds("dock-trash").unwrap();
+    assert_eq!(
+        riding_trash, pinned_trash,
+        "the row keeps the slot reserved while the fade runs"
+    );
+    assert!(
+        fixture.visual.debug_bounds("dock-folder-exit").is_some(),
+        "the fading folder tile paints during the exit ride"
+    );
+
+    // Settle the ride directly; the next render retires it and reflows.
+    fixture.view.update(&mut fixture.visual, |view, cx| {
+        if let Some((_, slide)) = view.dock_motion.folder_exiting.first_mut() {
+            slide.snap(0.);
+        }
+        cx.notify();
+    });
+    fixture.visual.update(|window, _| window.refresh());
+    fixture.visual.run_until_parked();
+    fixture.view.read_with(&fixture.visual, |view, _| {
+        assert!(
+            view.dock_motion.folder_exiting.is_empty(),
+            "a finished ride retires on the next render"
+        );
+    });
+    // The test platform's debug_bounds accumulate across frames, so the row
+    // reflow is asserted on geometry rather than on element absence.
+    let settled_trash = fixture.visual.debug_bounds("dock-trash").unwrap();
+    assert_eq!(settled_trash, rest_trash, "the row reflows after the fade");
+}

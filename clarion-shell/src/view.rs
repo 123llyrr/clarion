@@ -940,39 +940,30 @@ impl ShellView {
         let mut drawer_active = false;
         if self.drawer.drag.is_some() {
             let dragged = self.drawer.drag.as_ref().map(|drag| drag.id.clone());
-            for (index, id) in order.iter().enumerate() {
-                if dragged.as_deref() == Some(id.as_str()) {
-                    continue;
-                }
-                let (tx, ty) = geometry.cell_origin(index);
-                let mx = self
-                    .drawer
-                    .reorder_x
-                    .entry(id.clone())
-                    .or_insert_with(|| crate::dock_motion::Motion::with_frequency(tx, 30.));
-                if mx.target() != tx {
-                    mx.retarget(tx, now);
-                }
-                drawer_active |= mx.sample(now).active;
-                let my = self
-                    .drawer
-                    .reorder_y
-                    .entry(id.clone())
-                    .or_insert_with(|| crate::dock_motion::Motion::with_frequency(ty, 30.));
-                if my.target() != ty {
-                    my.retarget(ty, now);
-                }
-                drawer_active |= my.sample(now).active;
-            }
+            let positions: Vec<(String, f32, f32)> = order
+                .iter()
+                .enumerate()
+                .filter(|(_, id)| dragged.as_deref() != Some(id.as_str()))
+                .map(|(index, id)| {
+                    let (tx, ty) = geometry.cell_origin(index);
+                    (id.clone(), tx, ty)
+                })
+                .collect();
+            drawer_active |= crate::dock_motion::track_reorder(
+                &mut self.drawer.reorder_x,
+                30.,
+                positions.iter().map(|(id, tx, _)| (id.clone(), *tx)),
+                now,
+            );
+            drawer_active |= crate::dock_motion::track_reorder(
+                &mut self.drawer.reorder_y,
+                30.,
+                positions.iter().map(|(id, _, ty)| (id.clone(), *ty)),
+                now,
+            );
         } else {
-            for motion in self.drawer.reorder_x.values_mut() {
-                motion.snap(motion.target());
-            }
-            for motion in self.drawer.reorder_y.values_mut() {
-                motion.snap(motion.target());
-            }
-            self.drawer.reorder_x.clear();
-            self.drawer.reorder_y.clear();
+            crate::dock_motion::drain_reorder(&mut self.drawer.reorder_x);
+            crate::dock_motion::drain_reorder(&mut self.drawer.reorder_y);
         }
         let mut surface = div()
             .id("dock-drawer")

@@ -168,7 +168,7 @@ fn separator_slots(
 }
 
 /// A stable surface budget; hover and bounce do not resize the Wayland surface.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DockMetrics {
     /// Idle tray extent along the row/column.
     pub length: f32,
@@ -503,51 +503,50 @@ impl DockMetrics {
         let strength = finite(strength, 0.).clamp(0., 1.);
         let pointer = pointer_main.filter(|position| position.is_finite());
         let idle_start = self.main_padding + self.end_gap;
-        let mut centers = Vec::with_capacity(self.slot_count);
+        // First pass: the magnification influence per slot, written straight
+        // into the returned buffer's `lift` field. No scratch vectors — this
+        // runs on every animation frame.
+        let mut slots = Vec::with_capacity(self.slot_count);
         let mut center_cursor = idle_start;
         for index in 0..self.slot_count {
             if self.separator_before.binary_search(&index).is_ok() {
                 center_cursor += self.separator_extra;
             }
-            centers.push(center_cursor + self.icon_size / 2.);
+            let center = center_cursor + self.icon_size / 2.;
             center_cursor += self.item;
+            let influence = pointer
+                .map(|pointer| {
+                    let normalized =
+                        (center - pointer).abs() / (MAGNIFICATION_SUPPORT * self.item);
+                    if normalized >= 1. {
+                        0.
+                    } else {
+                        (1. + (PI * normalized).cos()) / 2.
+                    }
+                })
+                .unwrap_or(0.);
+            slots.push(Slot {
+                origin_main: 0.,
+                size: self.icon_size,
+                lift: self.growth * influence * strength,
+                extent: 0.,
+            });
         }
-        let growth = centers
-            .into_iter()
-            .map(|center| {
-                let influence = pointer
-                    .map(|pointer| {
-                        let normalized =
-                            (center - pointer).abs() / (MAGNIFICATION_SUPPORT * self.item);
-                        if normalized >= 1. {
-                            0.
-                        } else {
-                            (1. + (PI * normalized).cos()) / 2.
-                        }
-                    })
-                    .unwrap_or(0.);
-                self.growth * influence * strength
-            })
-            .collect::<Vec<_>>();
-        let total_growth: f32 = growth.iter().sum();
+        // Second pass: folding the untouched slots equally towards the
+        // magnified centre keeps the tray centred; the separator steps replay
+        // in the same order as the first pass so centers match.
+        let total_growth: f32 = slots.iter().map(|slot| slot.lift).sum();
         let mut cursor = idle_start - total_growth / 2.;
-        growth
-            .into_iter()
-            .enumerate()
-            .map(|(index, growth)| {
-                if self.separator_before.binary_search(&index).is_ok() {
-                    cursor += self.separator_extra;
-                }
-                let slot = Slot {
-                    origin_main: cursor,
-                    size: self.icon_size + growth,
-                    lift: growth,
-                    extent: self.item + growth,
-                };
-                cursor += slot.extent;
-                slot
-            })
-            .collect()
+        for (index, slot) in slots.iter_mut().enumerate() {
+            if self.separator_before.binary_search(&index).is_ok() {
+                cursor += self.separator_extra;
+            }
+            slot.origin_main = cursor;
+            slot.size = self.icon_size + slot.lift;
+            slot.extent = self.item + slot.lift;
+            cursor += slot.extent;
+        }
+        slots
     }
 }
 
@@ -639,6 +638,36 @@ pub struct BounceSample {
     /// Positive displacement away from the output edge, in logical points.
     pub offset: f32,
     pub active: bool,
+}
+
+/// Advance a reorder animation map: every untouched tile slides towards the
+/// slot it would occupy. `entries` are `(identity, main-axis target)` pairs
+/// minus the tile under the pointer. The Dock row, the folder strip and the
+/// overflow drawer share this pattern; only the frequency and the entry
+/// shapes differ. Returns whether any motion is still animating.
+pub fn track_reorder(
+    motions: &mut std::collections::HashMap<String, Motion>,
+    frequency: f64,
+    entries: impl IntoIterator<Item = (String, f32)>,
+    now: Duration,
+) -> bool {
+    let mut active = false;
+    for (id, target) in entries {
+        let motion = motions
+            .entry(id)
+            .or_insert_with(|| Motion::with_frequency(target, frequency));
+        if motion.target() != target {
+            motion.retarget(target, now);
+        }
+        active |= motion.sample(now).active;
+    }
+    active
+}
+
+/// Collapse a reorder map back onto its resting layout and clear it, so a
+/// later drag re-seeds from the live slot targets.
+pub fn drain_reorder(motions: &mut std::collections::HashMap<String, Motion>) {
+    motions.clear();
 }
 
 /// Three finite, diminishing hops. The caller starts this only for a new launch,
