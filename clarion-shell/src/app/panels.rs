@@ -401,6 +401,19 @@ fn dock_popup_geometry(
     }
 }
 
+/// A bar popup window covers the whole output so clicks anywhere outside its
+/// visible rectangle dismiss the panel; the popup's rect is reported inside.
+fn modal_popup(w: f32, h: f32, x: f32, y: f32, width: f32, height: f32) -> Placement {
+    Placement {
+        bounds: Bounds::new(point(px(0.), px(0.)), size(px(w), px(h))),
+        anchor: LayerShellAnchor::ALL,
+        margins: LayerShellMargins::default(),
+        normal: false,
+        arrow: None,
+        popup: Some(Bounds::new(point(px(x), px(y)), size(px(width), px(height)))),
+    }
+}
+
 pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Placement {
     let bar = state.prefs.bar_height as f32;
     let top = bar + 8.;
@@ -638,23 +651,45 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
                 popup: Some(Bounds::new(point(px(x), px(y)), size(px(width), px(height)))),
             };
         }
-        _ => {
-            let (width, height) = match panel {
-                Panel::Controls => (320f32, 424f32.min(available)),
-                Panel::Notifications => (368., available.min(1800.)),
-                Panel::Recent => (400., 600f32.min(available)),
-                Panel::Tray(_) => (
-                    260.,
-                    (menu_height(&state.tray_menu) + 20.).clamp(48., available),
-                ),
-                _ => unreachable!(),
-            };
-            let width = width.min(w - 24.);
+        Panel::Controls => {
+            // Every bar popup below the status row is a modal window too: a
+            // click anywhere outside the visible rectangle dismisses it, and
+            // only the popup itself is frosted. The control center is centred
+            // on the button that opened it; the clamp pulls the rectangle
+            // back inside the output when the click sits near an edge.
+            let ceiling = available.min(h * BAR_POPUP_MAX_HEIGHT_SHARE);
+            let (width, height) = (320f32.min(w - 24.), 424f32.min(ceiling));
+            let x = state.anchored.map_or(w - width - 12., |x| {
+                (x - width / 2.).clamp(8., (w - width - 8.).max(8.))
+            });
+            return modal_popup(w, h, x, top, width, height);
+        }
+        Panel::Recent => {
+            let ceiling = available.min(h * BAR_POPUP_MAX_HEIGHT_SHARE);
+            let (width, height) = (400f32.min(w - 24.), 600f32.min(ceiling));
+            return modal_popup(w, h, w - width - 12., top, width, height);
+        }
+        Panel::Tray(_) => {
+            // The window fits its menu rows exactly (rows, nested children,
+            // the gaps between them, the two borders and the body padding),
+            // but never grows past a share of the output: a long menu rides
+            // the inner scroll instead of the window growing with the screen.
+            let ceiling = available.min(h * BAR_POPUP_MAX_HEIGHT_SHARE);
+            let height = (tray_menu_height(&state.tray_menu, &state.expanded_menus)
+                + TRAY_MENU_PAD)
+                .clamp(48., ceiling);
+            let width = 260f32.min(w - 24.);
+            let x = state.anchored.map_or(w - width - 12., |x| {
+                (x - width / 2.).clamp(8., (w - width - 8.).max(8.))
+            });
+            return modal_popup(w, h, x, top, width, height);
+        }
+        Panel::Notifications => {
             anchor.top = true;
             anchor.right = true;
             margins.top = top.round() as i32;
             margins.right = 12;
-            (width, height, w - width - 12., top)
+            (368., available.min(1800.), w - 368. - 12., top)
         }
     };
     Placement {
@@ -667,19 +702,74 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
     }
 }
 
-fn menu_height(items: &[services::MenuItem]) -> f32 {
-    items
-        .iter()
-        .filter(|item| item.visible)
-        .map(|item| {
-            if item.separator {
-                17.
-            } else {
-                40. + menu_height(&item.children)
-            }
-        })
-        .sum::<f32>()
-        .max(28.)
+/// Bar popups never take more than this share of the output's height; longer
+/// menus ride the inner scroll instead of growing with the screen.
+const BAR_POPUP_MAX_HEIGHT_SHARE: f32 = 0.8;
+
+/// One menu row: the 4pt button paddings plus its fixed 18pt text line, as the
+/// Dock menu measures its own `button` rows.
+const TRAY_MENU_ROW: f32 = 26.;
+/// A separator with its `my_2` margins around a 1pt line.
+const TRAY_MENU_SEPARATOR: f32 = 17.;
+/// Body padding (2 * 12, shared with the control center surface), a 1pt
+/// border on both edges and rounding tolerance.
+const TRAY_MENU_PAD: f32 = 28.;
+const NESTED_GAP: f32 = 3.;
+/// A nested child list sits inside its own rounded panel: the 3pt top and
+/// bottom paddings plus rounding slack for the stroke.
+const NESTED_CONTAINER: f32 = 8.;
+/// The 6pt rhythm between the popup's top-level entries.
+const TOP_GAP: f32 = 6.;
+
+/// The exact height the view paints for the tray menu rows. Every `visible`
+/// entry renders (nested child lists ride their own rounded panels and stay
+/// collapsed unless their id is in `expanded`), so the estimate walks the same
+/// tree the renderer walks and never leaves a tall empty band below the last
+/// row or clips one.
+fn tray_menu_height(items: &[services::MenuItem], expanded: &[i32]) -> f32 {
+    entry_list_height(items, 0, TOP_GAP, expanded).max(20.)
+}
+
+fn entry_list_height(
+    items: &[services::MenuItem],
+    depth: usize,
+    gap: f32,
+    expanded: &[i32],
+) -> f32 {
+    let mut total = 0.;
+    for (index, item) in items.iter().filter(|item| item.visible).enumerate() {
+        if index > 0 {
+            total += gap;
+        }
+        total += entry_height(item, depth, expanded);
+    }
+    total
+}
+
+fn entry_height(item: &services::MenuItem, depth: usize, expanded: &[i32]) -> f32 {
+    if item.separator {
+        return TRAY_MENU_SEPARATOR;
+    }
+    // Submenus sit collapsed behind their chevron row until the user opens
+    // them; a collapsed parent paints exactly one row.
+    if depth >= 5
+        || item.children.iter().filter(|child| child.visible).count() == 0
+        || !expanded.contains(&item.id)
+    {
+        return TRAY_MENU_ROW;
+    }
+    // The expanded row folds into its own rounded card as the title, so the
+    // card's height is the row plus the children plus the card paddings.
+    TRAY_MENU_ROW
+        + entry_list_height(&item.children, depth + 1, NESTED_GAP, expanded)
+        + NESTED_CONTAINER
+}
+
+/// Panels whose dismissal keeps the surface briefly alive for a closing fade.
+/// The fullscreen dashboards never fade; a Dock folder has its own exit
+/// choreography when its fan retracts.
+pub(crate) fn popup_exit_panel(panel: &Panel) -> bool {
+    matches!(panel, Panel::Tray(_) | Panel::Controls | Panel::Recent)
 }
 
 #[cfg(test)]
@@ -701,8 +791,15 @@ mod tests {
         assert_eq!(apps.anchor, LayerShellAnchor::ALL);
         assert!(!apps.normal);
         let controls = placement(&state, &Panel::Controls, 1440., 900.);
-        assert_eq!(controls.bounds.origin.x, px(1108.));
-        assert_eq!(controls.margins.top, state.prefs.bar_height as i32 + 8);
+        // The control center became a modal: the window covers the output so a
+        // click outside the visible popup can dismiss it.
+        assert_eq!(
+            controls.bounds,
+            Bounds::new(point(px(0.), px(0.)), size(px(1440.), px(900.)))
+        );
+        let popup = controls.popup.expect("the control center reports its popup");
+        assert_eq!(f32::from(popup.origin.x), 1440. - 320. - 12.);
+        assert_eq!(f32::from(popup.origin.y), state.prefs.bar_height as f32 + 8.);
         assert!(controls.anchor.top && controls.anchor.right);
         let capture = placement(&state, &Panel::Screenshot, 1440., 900.);
         assert!(capture.anchor.bottom);
@@ -724,6 +821,10 @@ mod tests {
             let geometry = placement(&state, &panel, 800., 600.);
             assert!(geometry.bounds.left() >= px(0.) && geometry.bounds.top() >= px(0.));
             assert!(geometry.bounds.right() <= px(800.) && geometry.bounds.bottom() <= px(600.));
+            if let Some(popup) = geometry.popup {
+                assert!(popup.left() >= px(0.) && popup.top() >= px(0.));
+                assert!(popup.right() <= px(800.) && popup.bottom() <= px(600.));
+            }
         }
     }
 
@@ -1125,5 +1226,120 @@ mod tests {
             };
             assert!(arrow.offset >= DOCK_ARROW && arrow.offset <= span - DOCK_ARROW);
         }
+    }
+
+    fn menu(label: &str) -> services::MenuItem {
+        services::MenuItem {
+            id: 1,
+            label: label.into(),
+            enabled: true,
+            visible: true,
+            separator: false,
+            toggle: None,
+            icon_name: None,
+            icon_png: None,
+            children: vec![],
+        }
+    }
+
+    fn separator() -> services::MenuItem {
+        services::MenuItem {
+            separator: true,
+            visible: true,
+            ..menu("")
+        }
+    }
+
+    #[gpui::test]
+    fn the_tray_popup_drops_from_the_anchor_with_exact_row_heights(cx: &mut TestAppContext) {
+        let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
+        cx.update(|cx| {
+            host.update(cx, |host, _| {
+                // One visible child on the last row; an invisible one must not
+                // widen the gap the estimate walks, or a band is left below.
+                let mut parent = menu("父");
+                let mut child = menu("子");
+                child.visible = false;
+                parent.children = vec![menu("显示的子项"), child];
+                host.tray_menu = vec![menu("菜单一"), separator(), parent];
+                host.anchored = Some(400.);
+            });
+        });
+        let state = host.read_with(cx, |host, _| host.snapshot());
+        // Submenus sit collapsed by default: 26pt rows, the 17pt separator and
+        // the 6pt gaps between the three top-level entries, plus the pad.
+        let rows = 2. * TRAY_MENU_ROW + 2. * TOP_GAP + TRAY_MENU_SEPARATOR;
+        assert_eq!(tray_menu_height(&state.tray_menu, &[]), rows);
+        let anchored = placement(&state, &Panel::Tray("tray".into()), 1440., 900.);
+        let popup = anchored.popup.expect("the tray reports its visible rect");
+        assert_eq!(f32::from(popup.size.height), rows + TRAY_MENU_PAD);
+        // The popup is centred on the click position; the clamp only pulls it
+        // back when the centre would leave the popup clipped by an edge.
+        assert_eq!(f32::from(popup.origin.x), 400. - 260. / 2.);
+        assert_eq!(f32::from(popup.origin.y), 24. + 8.);
+
+        // Expanding the parent adds its rounded panel to the exact height.
+        let opened = {
+            let mut state = state.clone();
+            state.expanded_menus = vec![1];
+            placement(&state, &Panel::Tray("tray".into()), 1440., 900.)
+        };
+        let opened_popup = opened.popup.expect("visible rect");
+        assert_eq!(
+            f32::from(opened_popup.size.height),
+            rows + TRAY_MENU_ROW + NESTED_CONTAINER + TRAY_MENU_PAD
+        );
+
+        // No anchor restores the resting right edge.
+        let resting = {
+            let mut state = state.clone();
+            state.anchored = None;
+            placement(&state, &Panel::Tray("tray".into()), 1440., 900.)
+        };
+        assert_eq!(
+            f32::from(resting.popup.expect("visible rect").origin.x),
+            1440. - 260. - 12.
+        );
+
+        // An anchor that would centre the popup past the right edge is pulled
+        // back inside, and an anchor near the left edge pushes the popup to
+        // stay on screen.
+        for (anchored, want_x) in [(1440., 1440. - 8. - 260.), (2., 8.)] {
+            let mut state = state.clone();
+            state.anchored = Some(anchored);
+            let clamp = placement(&state, &Panel::Tray("tray".into()), 1440., 900.);
+            assert_eq!(
+                f32::from(clamp.popup.expect("visible rect").origin.x),
+                want_x
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn a_long_tray_menu_caps_at_the_screen_height_share(cx: &mut TestAppContext) {
+        let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
+        cx.update(|cx| {
+            host.update(cx, |host, _| {
+                // 40 rows need far more than the cap; the menu must ride the
+                // inner scroll instead of growing with the screen.
+                host.tray_menu = (0..40).map(|i| menu(&format!("菜单 {i}"))).collect();
+                host.anchored = Some(400.);
+            });
+        });
+        let state = host.read_with(cx, |host, _| host.snapshot());
+        let popup = placement(&state, &Panel::Tray("tray".into()), 1440., 900.)
+            .popup
+            .expect("the tray reports its visible rect");
+        let ceiling = 900. * BAR_POPUP_MAX_HEIGHT_SHARE;
+        assert_eq!(f32::from(popup.size.height), ceiling);
+        // A short menu still fits its rows exactly instead of stretching.
+        let short = {
+            let mut state = state.clone();
+            state.tray_menu = vec![menu("菜单一")];
+            placement(&state, &Panel::Tray("tray".into()), 1440., 900.)
+                .popup
+                .expect("visible rect")
+        };
+        assert_eq!(f32::from(short.size.height), TRAY_MENU_ROW + TRAY_MENU_PAD);
     }
 }

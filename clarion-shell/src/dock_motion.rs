@@ -557,6 +557,95 @@ pub struct MotionSample {
     pub active: bool,
 }
 
+/// How fast the elastic spring oscillates, in rad/s: about a 0.45s settle
+/// with two visible swings at the shared damping.
+pub const ELASTIC_FREQUENCY: f64 = 15.;
+/// Underdamped on purpose: the fold overshoots its resting spot and swings
+/// back, which is the elasticity the card and popup height rides read from.
+pub const ELASTIC_DAMPING: f64 = 0.55;
+
+/// Analytic underdamped scalar spring with velocity-preserving retargets.
+/// `Motion` settles without overshoot; this one bounces.
+#[derive(Clone, Debug)]
+pub struct Elastic {
+    from: f64,
+    target: f64,
+    velocity: f64,
+    started: Duration,
+    frequency: f64,
+    damping: f64,
+}
+
+impl Elastic {
+    pub fn new(value: f32) -> Self {
+        Self::tuned(value, ELASTIC_FREQUENCY, ELASTIC_DAMPING)
+    }
+    pub fn tuned(value: f32, frequency: f64, damping: f64) -> Self {
+        let value = finite(value, 0.) as f64;
+        Self {
+            from: value,
+            target: value,
+            velocity: 0.,
+            started: Duration::ZERO,
+            frequency: if frequency.is_finite() {
+                frequency.clamp(1., 1000.)
+            } else {
+                ELASTIC_FREQUENCY
+            },
+            damping: if damping.is_finite() {
+                damping.clamp(0.1, 0.99)
+            } else {
+                ELASTIC_DAMPING
+            },
+        }
+    }
+    pub fn target(&self) -> f32 {
+        self.target as f32
+    }
+    /// Set an immediate endpoint, for reduced motion or a fresh surface.
+    pub fn snap(&mut self, value: f32) {
+        self.target = finite(value, 0.) as f64;
+        self.from = self.target;
+        self.velocity = 0.;
+    }
+    pub fn retarget(&mut self, target: f32, now: Duration) {
+        let target = finite(target, self.target as f32) as f64;
+        if self.target == target {
+            return;
+        }
+        let current = self.sample(now);
+        self.from = current.value as f64;
+        self.velocity = current.velocity as f64;
+        self.target = target;
+        self.started = now;
+    }
+    pub fn sample(&self, now: Duration) -> MotionSample {
+        let elapsed = now.saturating_sub(self.started).as_secs_f64();
+        let omega = self.frequency;
+        let damped = omega * (1. - self.damping * self.damping).sqrt();
+        let offset = self.from - self.target;
+        let carry = (self.velocity + self.damping * omega * offset) / damped;
+        let decay = (-self.damping * omega * elapsed).exp();
+        let angle = damped * elapsed;
+        let displacement = (offset * angle.cos() + carry * angle.sin()) * decay;
+        let velocity = ((carry * damped - self.damping * omega * offset) * angle.cos()
+            + (-offset * damped - self.damping * omega * carry)
+                * angle.sin())
+            * decay;
+        let active = displacement.abs() > POSITION_EPSILON
+            || velocity.abs() > POSITION_EPSILON * self.frequency;
+        MotionSample {
+            value: if active {
+                (self.target + displacement) as f32
+            } else {
+                self.target as f32
+            },
+            velocity: if active { velocity as f32 } else { 0. },
+            active,
+        }
+    }
+}
+
 /// Analytic critically damped scalar response with velocity-preserving retargets.
 #[derive(Clone, Debug)]
 pub struct Motion {

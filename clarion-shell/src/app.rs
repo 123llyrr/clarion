@@ -45,6 +45,10 @@ pub enum Panel {
 #[derive(Clone)]
 pub enum Action {
     Panel(Panel),
+    /// A bar-anchored opener: the panel plus the pointer x inside the bar's
+    /// own coordinate space, so its popup drops from the clicked icon instead
+    /// of the resting screen edge.
+    AnchoredPanel(Panel, f32),
     Close,
     Launch(String),
     Focus(u64),
@@ -71,6 +75,9 @@ pub enum Action {
     Core(CoreAction),
     Service(services::Command),
     Backend(backend::Command),
+    /// Toggle one tray submenu's expansion. The rows live in the shell, so a
+    /// parent row expands locally instead of asking the application.
+    MenuExpand(i32),
     Theme(String),
     Accent(String),
     DockSize(f64),
@@ -130,6 +137,12 @@ pub struct ViewState {
     pub clipboard_available: bool,
     pub clipboard_paused: bool,
     pub tray_menu: Vec<services::MenuItem>,
+    /// The tray submenu ids the user expanded in the current popup. Submenus
+    /// open collapsed; the state dies with the popup.
+    pub expanded_menus: Vec<i32>,
+    /// Submenu ids currently fading out; they stay in `expanded_menus` until
+    /// their card animation has run so the popup keeps its size while fading.
+    pub collapsing_menus: Vec<i32>,
     pub error: Option<String>,
     pub panel: Option<Panel>,
     pub dnd: bool,
@@ -142,6 +155,11 @@ pub struct ViewState {
     pub folder_navigation: Option<FolderNavigation>,
     pub folder_snapshots: HashMap<PathBuf, Arc<crate::dock_folder::FolderSnapshot>>,
     pub folder_errors: HashMap<PathBuf, String>,
+    /// Bar-space x of the last anchored bar click (a tray icon or the control
+    /// center button); `None` drops its popup at the resting right edge.
+    pub anchored: Option<f32>,
+    /// The popup surface is being kept alive for its closing fade.
+    pub panel_exit: bool,
     dock_apps: Vec<DockApp>,
 }
 impl ViewState {
@@ -173,8 +191,23 @@ pub struct Host {
     pub clipboard_available: bool,
     pub clipboard_paused: bool,
     pub tray_menu: Vec<services::MenuItem>,
+    /// The tray submenu ids the user expanded in the current popup. Submenus
+    /// open collapsed; the state dies with the popup.
+    pub expanded_menus: Vec<i32>,
+    /// Submenu ids currently fading out; they stay in `expanded_menus` until
+    /// their card animation has run so the popup keeps its size while fading.
+    pub collapsing_menus: Vec<i32>,
     pub error: Option<String>,
+    /// Lifetime generation of the error banner; each failure restarts its own
+    /// release timer, and an older timer never erases a newer banner.
+    pub error_generation: u64,
     pub panel: Option<Panel>,
+    /// Bar-space x of the last anchored bar click; mirrored into snapshots so
+    /// `placement` can drop its popup from the clicked icon.
+    pub(crate) anchored: Option<f32>,
+    /// A popup is riding its closing fade: `panel` stays visible to the view
+    /// while the animation runs, then the release clears it.
+    pub(crate) panel_exit: bool,
     pub preview: bool,
     pub dnd: bool,
     /// Whether a folder surface is currently kept alive as an invisible drag layer.
@@ -189,6 +222,10 @@ pub struct Host {
     environment: HashMap<String, String>,
     outputs: BTreeMap<String, OutputViews>,
     popup: Option<WindowHandle<ShellView>>,
+    /// The platform window kept alive while a closing popup rides its fade
+    /// out; superseded fades are cut short.
+    exiting: Option<WindowHandle<ShellView>>,
+    exit_generation: u64,
     toast: Option<WindowHandle<ShellView>>,
     toast_id: Option<u32>,
     options: Options,
@@ -238,8 +275,13 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 clipboard_available: false,
                 clipboard_paused: false,
                 tray_menu: vec![],
+                expanded_menus: vec![],
+                collapsing_menus: vec![],
                 error: None,
+                error_generation: 0,
                 panel: None,
+                anchored: None,
+                panel_exit: false,
                 preview,
                 dnd: false,
                 folder_drag_layer: false,
@@ -252,6 +294,8 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 environment,
                 outputs: BTreeMap::new(),
                 popup: None,
+                exiting: None,
+                exit_generation: 0,
                 toast: None,
                 toast_id: None,
                 options,
@@ -324,6 +368,46 @@ pub fn run(options: Options) -> anyhow::Result<()> {
 struct ShellLifetime(#[allow(dead_code)] Entity<Host>);
 impl Global for ShellLifetime {}
 
+/// Record the labels of the expanded submenu parents whose id is listed.
+fn collect_expanded_labels(
+    items: &[services::MenuItem],
+    expanded: &[i32],
+    out: &mut Vec<String>,
+) {
+    for item in items {
+        if item.visible
+            && !item.children.is_empty()
+            && expanded.contains(&item.id)
+            && !out.contains(&item.label)
+        {
+            out.push(item.label.clone());
+        }
+        collect_expanded_labels(&item.children, expanded, out);
+    }
+}
+
+/// Whether a refreshed tree still carries a parent with this id.
+fn tree_has_parent(items: &[services::MenuItem], id: i32) -> bool {
+    items.iter().any(|item| {
+        (item.visible && !item.children.is_empty() && item.id == id)
+            || tree_has_parent(&item.children, id)
+    })
+}
+
+/// Expand refreshed parents that inherited an expanded label.
+fn collect_label_parents(items: &[services::MenuItem], labels: &[String], out: &mut Vec<i32>) {
+    for item in items {
+        if item.visible
+            && !item.children.is_empty()
+            && labels.contains(&item.label)
+            && !out.contains(&item.id)
+        {
+            out.push(item.id);
+        }
+        collect_label_parents(&item.children, labels, out);
+    }
+}
+
 impl Host {
     fn snapshot(&self) -> ViewState {
         ViewState {
@@ -337,6 +421,8 @@ impl Host {
             clipboard_available: self.clipboard_available,
             clipboard_paused: self.clipboard_paused,
             tray_menu: self.tray_menu.clone(),
+            expanded_menus: self.expanded_menus.clone(),
+            collapsing_menus: self.collapsing_menus.clone(),
             error: self.error.clone(),
             panel: self.panel.clone(),
             dnd: self.dnd,
@@ -347,6 +433,8 @@ impl Host {
             folder_navigation: self.folder_navigation.clone(),
             folder_snapshots: self.dock_folder_cache.clone(),
             folder_errors: self.dock_folder_errors.clone(),
+            anchored: self.anchored,
+            panel_exit: self.panel_exit,
             dock_apps: self.dock_apps(),
         }
     }
@@ -473,7 +561,7 @@ impl Host {
                     }
                 }
             }
-            backend::Event::Error(error) => self.error = Some(error),
+            backend::Event::Error(error) => self.show_error(error, cx),
         }
         self.changed(cx);
     }
@@ -514,10 +602,10 @@ impl Host {
             }
             services::Event::TrayMenu { id, items } => {
                 if self.panel == Some(Panel::Tray(id)) {
-                    self.tray_menu = items;
+                    self.tray_menu = self.remap_expanded(items);
                 }
             }
-            services::Event::Error(error) => self.error = Some(error),
+            services::Event::Error(error) => self.show_error(error, cx),
         }
         self.changed(cx);
     }
@@ -657,6 +745,16 @@ impl Host {
             Action::PickWallpaper => self.desktop_action(DesktopAction::Wallpaper(None), cx),
             Action::Close => self.close(cx),
             Action::Panel(panel) => {
+                // A non-anchored opener drops its popup at the resting edge.
+                self.anchored = None;
+                if self.panel.as_ref() == Some(&panel) {
+                    self.close(cx);
+                } else {
+                    self.open(panel, cx);
+                }
+            }
+            Action::AnchoredPanel(panel, x) => {
+                self.anchored = Some(x);
                 if self.panel.as_ref() == Some(&panel) {
                     self.close(cx);
                 } else {
@@ -782,6 +880,32 @@ impl Host {
             Action::Core(action) => self.core(action),
             Action::Service(command) => {
                 self.service.send(command);
+            }
+            Action::MenuExpand(id) => {
+                // A collapsed submenu expands and an expanded one folds back;
+                // nothing reaches the application until a leaf is clicked. A
+                // collapse rides its card fade out: the id leaves the expanded
+                // set only when the release timer runs, so the popup keeps its
+                // size while the card animates away.
+                if self.expanded_menus.contains(&id) {
+                    if !self.collapsing_menus.contains(&id) {
+                        self.collapsing_menus.push(id);
+                        let target = id;
+                        cx.spawn(async move |host, cx| {
+                            cx.background_executor()
+                                .timer(Self::SUBMENU_FADE)
+                                .await;
+                            let _ = host.update(cx, |host, cx| {
+                                host.finish_submenu_collapse(target, cx)
+                            });
+                        })
+                        .detach();
+                    }
+                } else {
+                    self.collapsing_menus.retain(|other| *other != id);
+                    self.expanded_menus.push(id);
+                    self.changed(cx);
+                }
             }
             Action::Backend(command) => {
                 let _ = self.backend.send(command);
@@ -957,17 +1081,159 @@ impl Host {
             self.preferences_placed = Some(id);
         }
     }
+    /// A closing fade keeps the surface alive this long; the fade itself is
+    /// an analytic Motion the view samples at its own frame clock. The motion
+    /// settles in about 150ms at the shared response frequency, so the release
+    /// timer adds slack rather than a second animation driver.
+    const POPUP_EXIT: Duration = Duration::from_millis(170);
     fn close(&mut self, cx: &mut Context<Self>) {
         self.preferences_placed = None;
+        // A fading bar popup repaints and rides out before its surface is
+        // released; anything else dismisses as before, right away.
+        let animate = self
+            .panel
+            .as_ref()
+            .is_some_and(|panel| panels::popup_exit_panel(panel) && !self.prefs.reduce_motion);
+        if !animate {
+            self.discard(cx);
+            return;
+        }
+        self.cancel_popup_exit(cx);
+        let Some(window) = self.popup.take() else {
+            self.panel = None;
+            self.folder_drag_layer = false;
+            self.tray_menu.clear();
+            self.expanded_menus.clear();
+            self.collapsing_menus.clear();
+            return;
+        };
+        self.exit_generation = self.exit_generation.wrapping_add(1);
+        self.panel_exit = true;
+        // `panel` stays visible so the fading view keeps painting a real popup;
+        // the release clears it once the surface is gone.
+        let state = Arc::new(self.snapshot());
+        let generation = self.exit_generation;
+        let _ = window.update(cx, |view, _, cx| {
+            view.state = state;
+            cx.notify()
+        });
+        self.exiting = Some(window);
+        cx.notify();
+        cx.spawn(async move |host, cx| {
+            cx.background_executor()
+                .timer(Self::POPUP_EXIT)
+                .await;
+            let _ = host.update(cx, |host, cx| host.finish_popup_exit(generation, cx));
+        })
+        .detach();
+    }
+    /// Remove the current popup immediately. A superseding open never lingers:
+    /// a fade that a newer window replaces is cut short instead of racing it.
+    fn discard(&mut self, cx: &mut Context<Self>) {
+        self.preferences_placed = None;
+        self.cancel_popup_exit(cx);
         self.panel = None;
         self.folder_drag_layer = false;
         self.tray_menu.clear();
+        self.expanded_menus.clear();
+        self.collapsing_menus.clear();
         if let Some(window) = self.popup.take() {
             let _ = window.update(cx, |_, window, _| window.remove_window());
         }
     }
+    /// A failed desktop action shows its hint for this long; a later failure
+    /// restarts the timer so the hint stays a transient toast, not a permanent
+    /// resident of every popup.
+    const ERROR_BANNER: Duration = Duration::from_millis(4000);
+    /// A collapsing submenu card fades for this long before the popup
+    /// reclaims its height, matching the popup exit ride's rhythm.
+    const SUBMENU_FADE: Duration = Duration::from_millis(170);
+    /// The collapse fade ran out: fold the submenu away. A re-expansion
+    /// during the fade already removed the id, so this becomes a no-op.
+    fn finish_submenu_collapse(&mut self, id: i32, cx: &mut Context<Self>) {
+        if !self.collapsing_menus.contains(&id) {
+            return;
+        }
+        self.collapsing_menus.retain(|other| *other != id);
+        self.expanded_menus.retain(|other| *other != id);
+        self.changed(cx);
+    }
+    fn show_error(&mut self, error: String, cx: &mut Context<Self>) {
+        self.error = Some(error);
+        self.error_generation = self.error_generation.wrapping_add(1);
+        let generation = self.error_generation;
+        cx.notify();
+        cx.spawn(async move |host, cx| {
+            cx.background_executor()
+                .timer(Self::ERROR_BANNER)
+                .await;
+            let _ = host.update(cx, |host, cx| host.release_error(generation, cx));
+        })
+        .detach();
+    }
+    /// The hint's lifetime ran out. The generation check keeps an older timer
+    /// from erasing a newer banner that replaced it while it waited.
+    fn release_error(&mut self, generation: u64, cx: &mut Context<Self>) {
+        if self.error_generation != generation {
+            return;
+        }
+        self.error = None;
+        self.changed(cx);
+    }
+    /// Weld off an in-flight exit so at most one fade waits for its release.
+    /// Carry the user's open submenus onto a refreshed menu. An owner that
+    /// republishes its tree (a bluetooth or wifi scan repopulating its device
+    /// list) may renumber ids, so a fold first follows its id and then, when
+    /// the id is gone, the parent that still carries the same label.
+    fn remap_expanded(&mut self, items: Vec<services::MenuItem>) -> Vec<services::MenuItem> {
+        if self.expanded_menus.is_empty() {
+            return items;
+        }
+        let mut labels: Vec<String> = Vec::new();
+        collect_expanded_labels(&self.tray_menu, &self.expanded_menus, &mut labels);
+        let keep: Vec<i32> = self
+            .expanded_menus
+            .iter()
+            .copied()
+            .filter(|id| tree_has_parent(&items, *id))
+            .collect();
+        let mut next = keep;
+        if !labels.is_empty() {
+            collect_label_parents(&items, &labels, &mut next);
+        }
+        next.sort_unstable();
+        next.dedup();
+        self.expanded_menus = next;
+        items
+    }
+    /// Weld off an in-flight exit so at most one fade waits for its release.
+    fn cancel_popup_exit(&mut self, cx: &mut Context<Self>) {
+        self.exit_generation = self.exit_generation.wrapping_add(1);
+        self.panel_exit = false;
+        if let Some(window) = self.exiting.take() {
+            let _ = window.update(cx, |_, window, _| window.remove_window());
+        }
+    }
+    /// The fade ran out: release the surface and clear the panel state that was
+    /// kept alive only so the view could keep painting during the fade.
+    fn finish_popup_exit(&mut self, generation: u64, cx: &mut Context<Self>) {
+        if self.exit_generation != generation {
+            return;
+        }
+        self.panel_exit = false;
+        self.panel = None;
+        self.folder_drag_layer = false;
+        self.tray_menu.clear();
+        self.expanded_menus.clear();
+        self.collapsing_menus.clear();
+        self.anchored = None;
+        if let Some(window) = self.exiting.take() {
+            let _ = window.update(cx, |_, window, _| window.remove_window());
+        }
+        self.changed(cx);
+    }
     fn open(&mut self, panel: Panel, cx: &mut Context<Self>) {
-        self.close(cx);
+        self.discard(cx);
         if let Panel::Tray(id) = &panel {
             self.service.send(services::Command::GetMenu(id.clone()));
         }
@@ -1053,7 +1319,7 @@ impl Host {
         }) {
             Ok(window) => self.popup = Some(window),
             Err(error) => {
-                self.error = Some(format!("无法打开面板：{error}"));
+                self.show_error(format!("无法打开面板：{error}"), cx);
                 self.panel = None;
             }
         }
@@ -1895,7 +2161,21 @@ impl AssetSource for ShellAssets {
             "display.svg" => include_bytes!("../assets/icons/display.svg"),
             "settings.svg" => include_bytes!("../assets/icons/settings.svg"),
             "wallpaper.svg" => include_bytes!("../assets/icons/wallpaper.svg"),
-            _ => return Ok(None),
+            "menu-ring.svg" => include_bytes!("../assets/icons/menu-ring.svg"),
+            "menu-check.svg" => include_bytes!("../assets/icons/menu-check.svg"),
+            "chevron-right.svg" => include_bytes!("../assets/icons/chevron-right.svg"),
+            "chevron-down.svg" => include_bytes!("../assets/icons/chevron-down.svg"),
+            // Absolute paths are resolved system theme icons; serve the file.
+            _ => {
+                let file = std::path::Path::new(path);
+                if file.is_absolute() {
+                    match std::fs::read(file) {
+                        Ok(bytes) => return Ok(Some(std::borrow::Cow::Owned(bytes))),
+                        Err(_) => return Ok(None),
+                    }
+                }
+                return Ok(None);
+            }
         };
         Ok(Some(std::borrow::Cow::Borrowed(bytes)))
     }
@@ -2204,3 +2484,40 @@ mod notification_lifecycle_tests {
         });
     }
 }
+
+#[cfg(test)]
+mod error_banner_tests {
+    use ::core::prelude::v1::test;
+
+    use super::*;
+
+    #[gpui::test]
+    fn a_service_error_banner_is_a_transient_toast(cx: &mut TestAppContext) {
+        let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
+        host.update(cx, |host, cx| {
+            host.service_event(services::Event::Error("菜单项目不可用".into()), cx);
+        });
+        host.read_with(cx, |host, _| assert!(host.error.is_some()));
+        cx.executor().advance_clock(Host::ERROR_BANNER);
+        cx.run_until_parked();
+        host.read_with(cx, |host, _| assert!(host.error.is_none()));
+    }
+
+    #[gpui::test]
+    fn a_replaced_error_banner_outlives_the_older_release_timer(cx: &mut TestAppContext) {
+        let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
+        let tick = Duration::from_millis(100);
+        host.update(cx, |host, cx| host.show_error("第一次错误".into(), cx));
+        cx.executor().advance_clock(Host::ERROR_BANNER - tick);
+        host.update(cx, |host, cx| host.show_error("第二次错误".into(), cx));
+        cx.executor().advance_clock(tick);
+        cx.run_until_parked();
+        host.read_with(cx, |host, _| {
+            assert_eq!(host.error.as_deref(), Some("第二次错误"));
+        });
+        cx.executor().advance_clock(Host::ERROR_BANNER);
+        cx.run_until_parked();
+        host.read_with(cx, |host, _| assert!(host.error.is_none()));
+    }
+}
+
