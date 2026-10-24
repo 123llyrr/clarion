@@ -26,8 +26,13 @@ pub(crate) fn test_host(
         clipboard_available: false,
         clipboard_paused: false,
         tray_menu: Vec::new(),
+        expanded_menus: Vec::new(),
+        collapsing_menus: Vec::new(),
         error: None,
+        error_generation: 0,
         panel: None,
+        anchored: None,
+        panel_exit: false,
         preview: true,
         dnd: false,
         folder_drag_layer: false,
@@ -40,6 +45,8 @@ pub(crate) fn test_host(
         environment,
         outputs: BTreeMap::new(),
         popup: None,
+        exiting: None,
+        exit_generation: 0,
         toast: None,
         toast_id: None,
         options: Options {
@@ -87,6 +94,10 @@ pub(crate) fn open_folder(
 
 pub(crate) fn popup(host: &Entity<Host>, cx: &App) -> WindowHandle<ShellView> {
     host.read(cx).popup.expect("test panel was not created")
+}
+
+pub(crate) fn snapshot(host: &Entity<Host>, cx: &App) -> Arc<ViewState> {
+    Arc::new(host.read(cx).snapshot())
 }
 
 pub(crate) fn output_name(host: &Entity<Host>, cx: &App) -> String {

@@ -29,7 +29,7 @@ fn text(text: impl Into<String>, size: f32, weight: FontWeight, color: Hsla) -> 
     }
 }
 
-fn card(p: Palette) -> Div {
+pub(super) fn card(p: Palette) -> Div {
     div()
         .rounded(px(11.))
         .border_1()

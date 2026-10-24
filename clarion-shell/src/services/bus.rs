@@ -299,6 +299,10 @@ struct Registered {
     path: String,
     interface: String,
     item: TrayItem,
+    /// The layout as it was last fetched: the popup displays this exact list,
+    /// so a click is validated against it instead of a fresh re-fetch that
+    /// could disagree with what the user is looking at.
+    menu: Vec<MenuItem>,
     _signals: Vec<zbus::Task<()>>,
 }
 
@@ -336,6 +340,43 @@ fn watch_item(
     .collect()
 }
 
+/// The menu owner publishes layout revisions itself: `LayoutUpdated` after it
+/// rewrote the tree and `ItemsPropertiesUpdated` when toggles flip state.
+/// Watching them keeps the displayed menu (rows, ids and check states) in step
+/// with the owner without polling.
+fn watch_menu(
+    connection: &Connection,
+    id: &str,
+    owner: &str,
+    menu_path: &str,
+    reload: &Sender<String>,
+) -> Vec<zbus::Task<()>> {
+    ["LayoutUpdated", "ItemsPropertiesUpdated"]
+        .into_iter()
+        .map(|signal| {
+            let connection_clone = connection.clone();
+            let owner = owner.to_owned();
+            let path = menu_path.to_owned();
+            let reload = reload.clone();
+            let id = id.to_owned();
+            connection.executor().spawn(
+                async move {
+                    if let Ok(proxy) =
+                        Proxy::new_owned(connection_clone, owner, path, MENU_IFACE).await
+                    {
+                        if let Ok(mut signals) = proxy.receive_signal(signal).await {
+                            while signals.next().await.is_some() {
+                                let _ = reload.try_send(id.clone());
+                            }
+                        }
+                    }
+                },
+                "Clarion tray menu",
+            )
+        })
+        .collect()
+}
+
 async fn owner(connection: &Connection, name: &str) -> Result<String> {
     let dbus = zbus::fdo::DBusProxy::new(connection).await?;
     Ok(dbus.get_name_owner(name.try_into()?).await?.to_string())
@@ -363,6 +404,26 @@ fn boolean(properties: &Properties, name: &str, default: bool) -> bool {
         .unwrap_or(default)
 }
 
+fn argb_png(width: i32, height: i32, argb: Vec<u8>) -> Option<Vec<u8>> {
+    if width <= 0 || height <= 0 || width > 1024 || height > 1024 {
+        return None;
+    }
+    if argb.len() != (width as usize) * (height as usize) * 4 {
+        return None;
+    }
+    let mut rgba = Vec::with_capacity(argb.len());
+    for pixel in argb.as_chunks::<4>().0 {
+        rgba.extend_from_slice(&[pixel[1], pixel[2], pixel[3], pixel[0]]);
+    }
+    let image = image::RgbaImage::from_raw(width as u32, height as u32, rgba)?;
+    let mut output = Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(image)
+        .thumbnail(64, 64)
+        .write_to(&mut output, image::ImageFormat::Png)
+        .ok()?;
+    Some(output.into_inner())
+}
+
 fn icon(properties: &Properties, name: &str) -> Option<Vec<u8>> {
     let values: Vec<(i32, i32, Vec<u8>)> =
         properties.get(name)?.try_clone().ok()?.try_into().ok()?;
@@ -378,13 +439,36 @@ fn icon(properties: &Properties, name: &str) -> Option<Vec<u8>> {
         .collect();
     images.sort_by_key(|(w, _, _)| (*w - 32).abs());
     let (width, height, argb) = images.into_iter().next()?;
-    let mut rgba = Vec::with_capacity(argb.len());
-    for pixel in argb.as_chunks::<4>().0 {
-        rgba.extend_from_slice(&[pixel[1], pixel[2], pixel[3], pixel[0]]);
+    argb_png(width, height, argb)
+}
+
+/// dbusmenu packs `icon-data` as one `(iiay)` struct; some owners send the
+/// SNI-style array, others a raw encoded image. All normalize to a PNG the
+/// view can cache.
+fn menu_icon(properties: &Properties, name: &str) -> Option<Vec<u8>> {
+    let value = properties.get(name)?.try_clone().ok()?;
+    if let Ok((width, height, argb)) = <(i32, i32, Vec<u8>)>::try_from(value.clone()) {
+        return argb_png(width, height, argb);
     }
-    let image = image::RgbaImage::from_raw(width as u32, height as u32, rgba)?;
+    if let Ok(images) = <Vec<(i32, i32, Vec<u8>)>>::try_from(value.clone()) {
+        let mut best: Option<(usize, Vec<u8>)> = None;
+        for (width, height, argb) in images {
+            if let Some(png) = argb_png(width, height, argb) {
+                let near = (width - 32).unsigned_abs() as usize;
+                if best.as_ref().is_none_or(|(size, _)| near < *size) {
+                    best = Some((near, png));
+                }
+            }
+        }
+        if best.is_some() {
+            return best.map(|(_, png)| png);
+        }
+    }
+    // A raw `ay` byte string: an already-encoded image, usually PNG.
+    let raw = <Vec<u8>>::try_from(value).ok()?;
+    let decoded = image::load_from_memory(&raw).ok()?;
     let mut output = Cursor::new(Vec::new());
-    image::DynamicImage::ImageRgba8(image)
+    decoded
         .thumbnail(64, 64)
         .write_to(&mut output, image::ImageFormat::Png)
         .ok()?;
@@ -482,6 +566,11 @@ fn parse_layout(layout: Layout, depth: usize, budget: &mut usize) -> Option<Menu
         visible: boolean(&p, "visible", true),
         separator: string(&p, "type") == "separator",
         toggle,
+        icon_name: {
+            let name = string(&p, "icon-name");
+            if name.is_empty() { None } else { Some(name) }
+        },
+        icon_png: menu_icon(&p, "icon-data"),
         children,
     })
 }
@@ -502,6 +591,7 @@ async fn register(
     registration: Registration,
     items: &mut HashMap<String, Registered>,
     refresh: &Sender<()>,
+    reload: &Sender<String>,
 ) -> Result<bool> {
     if items.len() >= 128 {
         return Ok(false);
@@ -535,8 +625,13 @@ async fn register(
             item_is_menu: false,
         },
         _signals: signals,
+        menu: Vec::new(),
     };
     read_item(connection, &mut item).await?;
+    if let Some(menu_path) = item.item.menu_path.clone() {
+        item._signals
+            .extend(watch_menu(connection, &id, &item.owner, &menu_path, reload));
+    }
     items.insert(id, item);
     Ok(true)
 }
@@ -594,6 +689,7 @@ pub(super) async fn run(events: Sender<Event>, commands: Receiver<Command>) -> R
     let _ = connection.request_name(host_name.as_str()).await;
     let mut items: HashMap<String, Registered> = HashMap::new();
     let (refresh, refreshed) = async_channel::bounded(1);
+    let (menu_reload, menu_reloaded) = async_channel::bounded::<String>(64);
     let owner_connection = connection.clone();
     let owner_refresh = refresh.clone();
     let _owners = connection.executor().spawn(
@@ -614,7 +710,7 @@ pub(super) async fn run(events: Sender<Event>, commands: Receiver<Command>) -> R
     loop {
         while let Ok(registration) = pending.try_recv() {
             let key = format!("{}{}", registration.service, registration.path);
-            if register(&connection, registration, &mut items, &refresh)
+            if register(&connection, registration, &mut items, &refresh, &menu_reload)
                 .await
                 .unwrap_or(false)
             {
@@ -624,6 +720,22 @@ pub(super) async fn run(events: Sender<Event>, commands: Receiver<Command>) -> R
         }
         if refreshed.try_recv().is_ok() {
             tick = Instant::now() - Duration::from_secs(3);
+        }
+        // Menu owners republished their layout: catch each mentioned item up
+        // with its current tree so an open popup repaints the new row state.
+        let mut reloaded: Vec<String> = Vec::new();
+        while let Ok(id) = menu_reloaded.try_recv() {
+            if !reloaded.contains(&id) {
+                reloaded.push(id);
+            }
+        }
+        for id in reloaded {
+            if let Some(item) = items.get_mut(&id) {
+                if let Ok(menu) = get_menu(&connection, item).await {
+                    item.menu = menu.clone();
+                    let _ = events.try_send(Event::TrayMenu { id, items: menu });
+                }
+            }
         }
         if tick.elapsed() >= Duration::from_secs(2) {
             tick = Instant::now();
@@ -648,8 +760,14 @@ pub(super) async fn run(events: Sender<Event>, commands: Receiver<Command>) -> R
                                     path: value[index..].into(),
                                     sender: String::new(),
                                 };
-                                let _ =
-                                    register(&connection, registration, &mut items, &refresh).await;
+                                let _ = register(
+                                    &connection,
+                                    registration,
+                                    &mut items,
+                                    &refresh,
+                                    &menu_reload,
+                                )
+                                .await;
                             }
                         }
                     }
@@ -746,9 +864,10 @@ pub(super) async fn run(events: Sender<Event>, commands: Receiver<Command>) -> R
                     }
                 }
                 Command::TrayActivate { id, x, y } => {
-                    let item = items.get(&id).context("托盘项目已退出")?;
+                    let item = items.get_mut(&id).context("托盘项目已退出")?;
                     if item.item.item_is_menu {
                         let menu = get_menu(&connection, item).await?;
+                        item.menu = menu.clone();
                         let _ = events.try_send(Event::TrayMenu { id, items: menu });
                     } else {
                         let proxy = Proxy::new(
@@ -762,30 +881,47 @@ pub(super) async fn run(events: Sender<Event>, commands: Receiver<Command>) -> R
                     }
                 }
                 Command::GetMenu(id) => {
-                    let item = items.get(&id).context("托盘项目已退出")?;
+                    let item = items.get_mut(&id).context("托盘项目已退出")?;
                     let menu = get_menu(&connection, item).await?;
+                    item.menu = menu.clone();
                     let _ = events.try_send(Event::TrayMenu { id, items: menu });
                 }
                 Command::MenuClick { id, item: menu_id } => {
-                    let item = items.get(&id).context("托盘项目已退出")?;
-                    let menu = get_menu(&connection, item).await?;
+                    let item = items.get_mut(&id).context("托盘项目已退出")?;
+                    // The popup displays the layout fetched when it opened:
+                    // validate against that stored list rather than re-fetching
+                    // a fresh one, which rejects rows the application restated
+                    // between the menu being drawn and the click. Disabled
+                    // rows never paint a button, so the displayed list is the
+                    // authority for what is clickable.
                     fn enabled(items: &[MenuItem], id: i32) -> bool {
                         items.iter().any(|item| {
                             (item.id == id && item.enabled && item.visible && !item.separator)
                                 || enabled(&item.children, id)
                         })
                     }
-                    anyhow::ensure!(enabled(&menu, menu_id), "菜单项目不可用");
-                    let path = item.item.menu_path.as_ref().context("托盘菜单不可用")?;
-                    let proxy =
-                        Proxy::new(&connection, item.owner.as_str(), path.as_str(), MENU_IFACE)
-                            .await?;
-                    let _: () = proxy
+                    anyhow::ensure!(enabled(&item.menu, menu_id), "菜单项目不可用");
+                    let owner = item.owner.clone();
+                    let path = item.item.menu_path.clone().context("托盘菜单不可用")?;
+                    let proxy = Proxy::new(&connection, owner.as_str(), path.as_str(), MENU_IFACE)
+                        .await?;
+                    // A menu owner can reject an id after it regenerated its
+                    // layout. The refreshed rows below tell the truth about
+                    // the menu, so the rejection stays silent instead of
+                    // toasting an error the user cannot act on.
+                    let _: std::result::Result<(), _> = proxy
                         .call(
                             "Event",
                             &(menu_id, "clicked", Value::from(0i32), now_ms() as u32),
                         )
-                        .await?;
+                        .await;
+                    // A toggled row repaints in the open popup: most menu
+                    // owners restate their layout only around the next
+                    // AboutToShow, so refetch right away and hand the new
+                    // state to the shell.
+                    let menu = get_menu(&connection, item).await?;
+                    item.menu = menu.clone();
+                    let _ = events.try_send(Event::TrayMenu { id, items: menu });
                 }
                 _ => {}
             }
