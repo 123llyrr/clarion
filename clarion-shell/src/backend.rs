@@ -857,6 +857,19 @@ fn battery_snapshot(root: &Path) -> (Option<f64>, bool) {
         {
             continue;
         }
+        let present = fs::read_to_string(path.join("present"))
+            .ok()
+            .and_then(|present| present.trim().parse::<u8>().ok());
+        if present == Some(0) {
+            continue;
+        }
+        // HID pens, touch controllers and similar per-device batteries are not
+        // the system battery. Only `scope=Device` marks them explicitly.
+        let peripheral =
+            fs::read_to_string(path.join("scope")).is_ok_and(|scope| scope.trim() == "Device");
+        if peripheral {
+            continue;
+        }
         if let Some(capacity) = fs::read_to_string(path.join("capacity"))
             .ok()
             .and_then(|s| s.trim().parse::<f64>().ok())
@@ -1017,6 +1030,53 @@ impl Drop for CommandServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn battery_snapshot_ignores_peripheral_and_absent_batteries() {
+        let directory = tempfile::tempdir().unwrap();
+        let write = |name: &str, files: &[(&str, &str)]| {
+            let path = directory.path().join(name);
+            fs::create_dir_all(&path).unwrap();
+            for (file, value) in files {
+                fs::write(path.join(file), value).unwrap();
+            }
+        };
+        write(
+            "BAT0",
+            &[
+                ("type", "Battery\n"),
+                ("present", "1\n"),
+                ("capacity", "90\n"),
+                ("status", "Not charging\n"),
+            ],
+        );
+        write(
+            "hid-touch-battery",
+            &[
+                ("type", "Battery\n"),
+                ("present", "0\n"),
+                ("capacity", "0\n"),
+                ("status", "Unknown\n"),
+                ("scope", "Device\n"),
+            ],
+        );
+        write(
+            "hid-pen-battery",
+            &[
+                ("type", "Battery\n"),
+                ("present", "1\n"),
+                ("capacity", "20\n"),
+                ("status", "Discharging\n"),
+                ("scope", "Device\n"),
+            ],
+        );
+        write("AC0", &[("type", "Mains\n"), ("status", "Online\n")]);
+        let (battery, charging) = battery_snapshot(directory.path());
+        assert!(
+            (battery.unwrap() - 0.9).abs() < 1e-6,
+            "the main battery must not be averaged with peripheral batteries: {battery:?}"
+        );
+        assert!(!charging);
+    }
     #[test]
     fn new_generation_never_retains_previous_windows_or_outputs() {
         let mut state = EventStreamState::default();
