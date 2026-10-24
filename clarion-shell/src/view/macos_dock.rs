@@ -253,15 +253,14 @@ pub(super) struct DockGeometry {
     pub item: f32,
     /// The icon size.
     pub icon: f32,
-    /// The main-axis span of the tray as last painted.
-    pub tray_start: f32,
-    pub tray_end: f32,
     /// The cross-axis span of the tray as last painted.
     pub tray_cross_start: f32,
     pub tray_cross_end: f32,
-    /// The main-axis span of the trash tile.
+    /// The trailing edge (right or bottom) of the last application slot,
+    /// where the folder strip begins.
+    pub apps_end: f32,
+    /// The leading edge of the trash tile on the main axis.
     pub trash_start: f32,
-    pub trash_end: f32,
 }
 
 /// Local to the Dock view: pointer packets never rebuild the top bar, catalog,
@@ -293,12 +292,16 @@ pub(super) struct DockViewMotion {
     pub(super) drag_accept: Option<String>,
     /// A folder from outside the Dock is hovering the tray and the Dock is
     /// holding open an extra folder slot for it.
-    pub(super) folder_drop_active: bool,
-    /// The reserved slot should show the folder placeholder rather than stay
-    /// empty because the pointer is over the trash or an application.
+    pub(super) folder_drop_active: bool,    /// The reserved slot should show the folder placeholder. It stays true
+    /// while the drag remains over the Dock, including over apps or the
+    /// shifted trash, until the drag leaves or ends.
     pub(super) folder_drop_visible: bool,
     /// Fade and scale of the folder pin placeholder.
     pub(super) folder_drop: crate::dock_motion::Motion,
+    /// Wall-clock anchor for the slow hover pulse that keeps frames coming
+    /// while the Dock believes the pointer rests on it, so the platform-based
+    /// recovery below can fire even without further motion.
+    hover_pulse: std::time::Instant,
     /// Main-axis centers and hit reach of the app tiles as last painted. File
     /// drags resolve the tile under the pointer against this row instead of
     /// mapping hover from another surface.
@@ -331,14 +334,12 @@ impl DockViewMotion {
             geometry: DockGeometry {
                 base: 0.,
                 folder_base: 0.,
+                apps_end: 0.,
                 item: 60.,
                 icon: 48.,
-                tray_start: 0.,
-                tray_end: 0.,
                 tray_cross_start: 0.,
                 tray_cross_end: 0.,
                 trash_start: 0.,
-                trash_end: 0.,
             },
             press: None,
             drag: None,
@@ -351,6 +352,7 @@ impl DockViewMotion {
             folder_drop_active: false,
             folder_drop_visible: false,
             folder_drop: crate::dock_motion::Motion::new(0.),
+            hover_pulse: std::time::Instant::now(),
             drag_targets: Vec::new(),
             reorder: std::collections::HashMap::new(),
             pointer: crate::dock_motion::Motion::with_frequency(0., 40.),
@@ -745,6 +747,44 @@ impl DockDrawerMotion {
 }
 
 impl ShellView {
+    /// Temporary hover diagnostic used while chasing the stuck magnified
+    /// folder after a pin; appends one state line per hover event to a
+    /// well-known file. Removed once the root cause is pinned down.
+    fn hover_trace(
+        &self,
+        event: &str,
+        hovered: bool,
+        window: &Window,
+        drag_active: bool,
+    ) {
+        if cfg!(test) {
+            return;
+        }
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/clarion-dock-hover.log")
+        else {
+            return;
+        };
+        let mouse = window.mouse_position();
+        use std::io::Write as _;
+        let _ = writeln!(
+            file,
+            "{} {event} hovered={hovered} seen={} target={:?} win_hovered={} drag_active={drag_active} mouse=({},{})",
+            stamp,
+            self.dock_drag_seen,
+            self.dock_motion.pointer_target,
+            window.is_window_hovered(),
+            f32::from(mouse.x),
+            f32::from(mouse.y),
+        );
+    }
+
     /// The Dock app under `position` that would accept `paths`, if any.
     fn drag_accept_target(
         &self,
@@ -819,17 +859,28 @@ impl ShellView {
         metrics.restrict_overflow(pinned, running, recent);
         let now = self.dock_motion.epoch.elapsed();
         if !cx.has_active_drag() {
+            if self.dock_drag_seen {
+                self.hover_trace("end-drag-cleanup", true, window, false);
+                // An external drag ends in FileDropEvent::Exited, which carries
+                // no position and therefore never dispatches the final "outside"
+                // mouse move. Clear the hover explicitly or the last icon stays
+                // magnified after the pointer has left the Dock.
+                self.dock_motion.pointer_target = None;
+                self.dock_motion.hovered = false;
+                self.dock_motion.tooltip_name = None;
+                self.dock_motion.tooltip_armed = None;
+            }
             self.dock_motion.drag_accept = None;
             self.dock_motion.folder_drop_active = false;
             self.dock_motion.folder_drop_visible = false;
             self.dock_drag_seen = false;
-        }
-        // The host owns the extra slot because it also owns the layer-surface
-        // size. Release it after the drag ends or after the pointer leaves the
-        // tray, even if no final drag-move packet arrives.
-        if host.folder_drop_preview && !self.dock_motion.folder_drop_active {
-            let h = self.host.clone();
-            h.update(cx, |h, cx| h.handle(Action::FolderDropPreview(false), cx));
+            // The reservation is host-wide, so only release it when no drag is
+            // active at all. An inactive Dock on another output must never
+            // release the slot that the Dock under the pointer is using.
+            if host.folder_drop_preview {
+                let h = self.host.clone();
+                h.update(cx, |h, cx| h.handle(Action::FolderDropPreview(false), cx));
+            }
         }
         let folder_drop_target = if self.dock_motion.folder_drop_active
             && self.dock_motion.folder_drop_visible
@@ -844,6 +895,53 @@ impl ShellView {
             self.dock_motion.folder_drop.retarget(folder_drop_target, now);
         }
         let folder_drop = self.dock_motion.folder_drop.sample(now);
+        // On Wayland the pointer leave can never reach the element hover
+        // listeners in one specific case: the pin resizes and repositions the
+        // Dock surface right under the cursor, and the surface reconfigure
+        // swallows the leave-or-enter pair that would tell the row about it.
+        // The platform window knows whether it still owns the cursor, so any
+        // render where the Dock still believes the pointer is resting while
+        // the window has lost it reconciles the hover state. A slow pulse
+        // keeps frames coming while the row believes it is hovered so this
+        // recovery runs even if no motion arrives afterwards.
+        if cfg!(test) {
+            // Tests control hover strictly through simulated events.
+        } else {
+            // A live data-device drag takes the pointer focus away from this
+            // surface (`wl_pointer.leave` while the drag grab runs), which
+            // would look exactly like the lost-pointer state. The drag path
+            // drives the hover state itself below, so reconciliation must not
+            // fight it while a drag is active.
+            if self.dock_motion.hovered
+                && !cx.has_active_drag()
+                && !window.is_window_hovered()
+            {
+                self.hover_trace(
+                    "watchdog-clear",
+                    true,
+                    window,
+                    cx.has_active_drag(),
+                );
+                self.dock_motion.hovered = false;
+                self.dock_motion.pointer_target = None;
+                self.dock_motion.tooltip_name = None;
+                self.dock_motion.tooltip_armed = None;
+                self.dock_drag_seen = false;
+                self.dock_motion.drag_accept = None;
+                let h = self.host.clone();
+                cx.defer(move |cx| h.update(cx, |h, cx| h.handle(Action::DockHover(false), cx)));
+                cx.notify();
+            }
+            let wall = std::time::Instant::now();
+            if self.dock_motion.hovered
+                && wall.duration_since(self.dock_motion.hover_pulse)
+                    >= std::time::Duration::from_millis(250)
+            {
+                self.hover_trace("pulse", true, window, cx.has_active_drag());
+                self.dock_motion.hover_pulse = wall;
+                window.request_animation_frame();
+            }
+        }
         if cx.has_active_drag() && self.dock_drag_seen {
             // The Dock window saw the drag itself, or a folder surface
             // forwarded the pointer events from its invisible drag layer.
@@ -931,6 +1029,10 @@ impl ShellView {
         // The frosted shape is the resting tray alone. Lifted, magnified icons
         // are still clickable but must not smear the backdrop beside the tray.
         let glass: Vec<Bounds<Pixels>> = regions.clone();
+        // Magnified icons lift out of the resting tray on the side away from
+        // the screen edge. Folder drops must keep their preview alive over that
+        // visible, clickable band instead of requiring the resting tray box.
+        let folder_drop_lift = metrics.growth + metrics.bounce_amplitude;
         let mut content = div().absolute().inset_0();
         let launcher_offset = usize::from(host.prefs.show_launcher);
         // The pinned applications that did not fit the row wait in the overflow
@@ -990,12 +1092,12 @@ impl ShellView {
                 .unwrap_or(metrics.main_padding + metrics.end_gap),
             item: metrics.item,
             icon: metrics.icon_size,
-            tray_start: if vertical { tray_y } else { tray_x },
-            tray_end: if vertical {
-                tray_y + tray_h
-            } else {
-                tray_x + tray_w
-            },
+            apps_end: folder_start
+                .checked_sub(1)
+                .and_then(|index| (index >= launcher_offset).then_some(index))
+                .and_then(|index| idle_slots.get(index))
+                .map(|slot| slot.origin_main + slot.size)
+                .unwrap_or(metrics.main_padding),
             tray_cross_start: if vertical { tray_x } else { tray_y },
             tray_cross_end: if vertical {
                 tray_x + tray_w
@@ -1003,10 +1105,6 @@ impl ShellView {
                 tray_y + tray_h
             },
             trash_start: slots.last().map(|slot| slot.origin_main).unwrap_or(0.),
-            trash_end: slots
-                .last()
-                .map(|slot| slot.origin_main + slot.size)
-                .unwrap_or(0.),
         };
         // While a reorder is in flight the untouched pinned icons slide towards
         // their new slots instead of jumping. Each icon owns a critically damped
@@ -1167,6 +1265,10 @@ impl ShellView {
                         progress
                     };
                     let drop_host = self.host.clone();
+                    // The + matches the badge an app shows when it accepts a
+                    // dragged file: the reserved slot is another pin, styled
+                    // like the communication point it is.
+                    let plus = icon * 0.46;
                     let placeholder = div()
                         .id("dock-folder-drop-placeholder")
                         .debug_selector(|| "dock-folder-drop-placeholder".into())
@@ -1185,8 +1287,20 @@ impl ShellView {
                         .child(
                             div()
                                 .size(px(icon))
+                                .relative()
                                 .opacity(progress)
-                                .child(folder_tile_icon(None, icon, false, p)),
+                                .child(folder_tile_icon(None, icon, false, p))
+                                .child(
+                                    div()
+                                        .id("dock-folder-drop-plus")
+                                        .debug_selector(|| "dock-folder-drop-plus".into())
+                                        .absolute()
+                                        .left(px(icon / 2. - plus / 2.))
+                                        .top(px(icon / 2. - plus / 2.))
+                                        .w(px(plus))
+                                        .h(px(plus))
+                                        .child(drop_accept_badge(plus, p)),
+                                ),
                         )
                         .can_drop(|value, _, _| {
                             value
@@ -1376,6 +1490,22 @@ impl ShellView {
                         folder_open,
                         p,
                     ));
+                    // A lifted folder tile is often the visible drop target.
+                    // Accept a lone external folder and pin it to the folder
+                    // group, matching the slot preview instead of letting the
+                    // release fall through without an action.
+                    let folder_tile_drop_host = self.host.clone();
+                    tile = tile
+                        .can_drop(|_, _, _| true)
+                        .on_drop::<gpui::ExternalPaths>(move |paths, _, cx| {
+                            let paths = paths.paths();
+                            if paths.len() == 1 && paths[0].is_dir() {
+                                let folder = paths[0].clone();
+                                folder_tile_drop_host.update(cx, |host, cx| {
+                                    host.handle(Action::PinFolder(folder), cx)
+                                });
+                            }
+                        });
                     let name = folder.name.clone();
                     let pressed = folder.path.to_string_lossy().into_owned();
                     let released = pressed.clone();
@@ -1561,8 +1691,10 @@ impl ShellView {
                             .on_drop::<gpui::ExternalPaths>(move |paths, _, cx| {
                                 let paths = paths.paths().to_vec();
                                 if !crate::mime::app_accepts_paths(&drop_app, &paths) {
-                                    // Consume unsupported drops so they can never
-                                    // become a folder pin.
+                                    // Unsupported drops stay consumed so a
+                                    // stray file never opens or changes the
+                                    // Dock; pinning is decided in the folder
+                                    // strip only.
                                     return;
                                 }
                                 drop_host.update(cx, |host, cx| {
@@ -1802,6 +1934,15 @@ impl ShellView {
             window.request_animation_frame();
         }
         let drop_host = self.host.clone();
+        // The tray only accepts a folder pin inside the strip between the last
+        // application tile and the trash; over the applications the drop is
+        // decided by their own tiles and stays open-or-consumed.
+        let strip_start = self.dock_motion.geometry.apps_end
+            + ((self.dock_motion.geometry.folder_base
+                - self.dock_motion.geometry.apps_end)
+                / 3.)
+                .max(0.);
+        let strip_end = self.dock_motion.geometry.trash_start;
         let tray = div()
             .absolute()
             .left(px(tray_x))
@@ -1809,11 +1950,16 @@ impl ShellView {
             .w(px(tray_w))
             .h(px(tray_h))
             .rounded(px(metrics.radius))
-            .can_drop(|value, _, _| {
+            .can_drop(move |value, window, _| {
                 value
                     .downcast_ref::<gpui::ExternalPaths>()
                     .is_some_and(|paths| {
-                        paths.paths().len() == 1 && paths.paths()[0].is_dir()
+                        let mouse = window.mouse_position();
+                        let main = f32::from(if vertical { mouse.y } else { mouse.x });
+                        main >= strip_start
+                            && main < strip_end
+                            && paths.paths().len() == 1
+                            && paths.paths()[0].is_dir()
                     })
             })
             .on_drop::<gpui::ExternalPaths>(move |paths, _, cx| {
@@ -2027,31 +2173,42 @@ impl ShellView {
                     }
                     let main = f32::from(if vertical { position.y } else { position.x });
                     let cross = f32::from(if vertical { position.x } else { position.y });
-                    let over_tray = inside
-                        && main >= this.dock_motion.geometry.tray_start
-                        && main <= this.dock_motion.geometry.tray_end
-                        && cross >= this.dock_motion.geometry.tray_cross_start
-                        && cross <= this.dock_motion.geometry.tray_cross_end;
-                    let over_app = inside
-                        && this.dock_motion.drag_targets.iter().any(|(_, center, reach)| {
-                            (main - *center).abs() <= *reach
-                        });
-                    let over_trash = main >= this.dock_motion.geometry.trash_start
-                        && main <= this.dock_motion.geometry.trash_end;
+                    let cross_start = if left {
+                        this.dock_motion.geometry.tray_cross_start
+                    } else {
+                        this.dock_motion.geometry.tray_cross_start - folder_drop_lift
+                    };
+                    let cross_end = if left {
+                        this.dock_motion.geometry.tray_cross_end + folder_drop_lift
+                    } else {
+                        this.dock_motion.geometry.tray_cross_end
+                    };
+                    // The fold strip starts a third of the way between the
+                    // application group's trailing edge and the first folder
+                    // slot (or the trash, when nothing is pinned), so drops
+                    // heading for the applications keep using their tiles.
+                    // Detection lives inside this strip: over the applications
+                    // a drag is only checked for openable targets, and the
+                    // trash never pins.
+                    let strip_start = this.dock_motion.geometry.apps_end
+                        + ((this.dock_motion.geometry.folder_base
+                            - this.dock_motion.geometry.apps_end)
+                            / 3.)
+                            .max(0.);
+                    let over_folder_strip = inside
+                        && main >= strip_start
+                        && main < this.dock_motion.geometry.trash_start
+                        && cross >= cross_start
+                        && cross <= cross_end;
                     let paths = event.drag(cx).paths();
-                    let holds_folder = over_tray && paths.len() == 1 && paths[0].is_dir();
-                    let over_control = over_app || over_trash;
-                    // Once the slot is open it stays open while the folder is
-                    // still over the tray, even when the pointer crosses the
-                    // trash or an app. That keeps the shifted trash from
-                    // oscillating out from under the drop target.
-                    let reserve = holds_folder
-                        && (this.dock_motion.folder_drop_active
-                            || (!over_control && this.dock_motion.drag_accept.is_none()));
-                    // Once the slot is reserved, keep its placeholder visible
-                    // while the pointer crosses the trash or an app. Hiding it
-                    // here made the slot look like it had disappeared even
-                    // though the host was still holding it open.
+                    let reserve = over_folder_strip
+                        && paths.len() == 1
+                        && paths[0].is_dir()
+                        && this.dock_motion.drag_accept.is_none();
+                    // The slot is a live offer, not a latch: leaving the strip
+                    // — towards the applications or the trash — ends the
+                    // reservation, so detection only exists inside the folder
+                    // area.
                     let visible = reserve;
                     if this.dock_motion.folder_drop_active != reserve {
                         this.dock_motion.folder_drop_active = reserve;
@@ -2080,6 +2237,14 @@ impl ShellView {
                         && position.y <= viewport.height;
                     let path = event.drag(cx).path.clone();
                     let was_hovered = this.dock_motion.hovered;
+                    if was_hovered != inside {
+                        this.hover_trace(
+                            if inside { "drag-enter-strip" } else { "drag-leave-strip" },
+                            inside,
+                            window,
+                            true,
+                        );
+                    }
                     this.dock_drag_seen = true;
                     this.dock_motion.hovered = inside;
                     let mut changed = was_hovered != inside;
@@ -2132,16 +2297,30 @@ impl ShellView {
                 }),
             )
             .on_hover(cx.listener(move |this, hovered, window, cx| {
-                if this.dock_motion.hovered == *hovered {
-                    return;
-                }
-                this.dock_motion.hovered = *hovered;
+                let event_name = if *hovered { "hover-enter" } else { "hover-exit" };
+                this.hover_trace(event_name, *hovered, window, cx.has_active_drag());
                 if *hovered {
+                    if this.dock_motion.hovered {
+                        this.hover_trace("hover-same", true, window, cx.has_active_drag());
+                        return;
+                    }
+                    this.hover_trace("hover-apply", true, window, cx.has_active_drag());
+                    this.dock_motion.hovered = true;
                     let pos = window.mouse_position();
                     let target = f32::from(if vertical { pos.y } else { pos.x });
                     this.dock_motion.pointer.snap(target);
                     this.dock_motion.pointer_target = Some(target);
                 } else {
+                    // The magnification target is not only driven by this
+                    // listener: plain moves inside the surface re-establish it
+                    // without touching `hovered` (see the mouse-move handler),
+                    // and the drag-end cleanup may already have reset `hovered`
+                    // before this exit arrives. A leave therefore must clear
+                    // the whole hover state even when `hovered` looks
+                    // unchanged, or a row that just absorbed a dropped folder
+                    // keeps the icon magnified while the pointer is outside.
+                    this.hover_trace("exit-clear", false, window, cx.has_active_drag());
+                    this.dock_motion.hovered = false;
                     this.dock_motion.pointer_target = None;
                     this.dock_drag_seen = false;
                     this.dock_motion.drag_accept = None;

@@ -950,7 +950,7 @@ impl ShellView {
             .folder_fan_offset
             .min(entries.len().saturating_sub(capacity));
         let visible = capacity.min(entries.len().saturating_sub(self.folder_fan_offset));
-        let (items, fan_bounds) = fan_geometry(
+        let (items, _fan_bounds) = fan_geometry(
             anchor,
             host.prefs.dock_position,
             entries.len(),
@@ -1187,17 +1187,31 @@ impl ShellView {
         let labels_left = items.first().is_some_and(|item| {
             f32::from(item.label.center().x) < f32::from(item.icon.center().x)
         });
+        // The back button is anchored to the folder tile, not to the fan
+        // geometry: navigating into deeper folders changes the fan contents
+        // and therefore the fan bounds, so deriving the button from them made
+        // it drift around. It rides on the fan-facing side of the tile but is
+        // raised above the Dock row so it never covers the Dock icons.
+        let fan_bend = fan_direction(host.prefs.dock_position, anchor, viewport);
         let (back_x, back_y) = match host.prefs.dock_position {
-            DockPosition::Bottom => (
-                if labels_left {
-                    f32::from(fan_bounds.right()) + 8.
-                } else {
-                    f32::from(fan_bounds.left()) - 70.
-                },
-                anchor_y - 34.,
+            DockPosition::Bottom => {
+                (
+                    if fan_bend < 0. {
+                        anchor_x - icon_size / 2. - 70.
+                    } else {
+                        anchor_x + icon_size / 2. + 8.
+                    },
+                    anchor_y - icon_size / 2. - 68.,
+                )
+            }
+            DockPosition::Left => (
+                anchor_x + icon_size / 2. + 8.,
+                anchor_y - icon_size / 2. - 68.,
             ),
-            DockPosition::Left => (anchor_x + 20., f32::from(fan_bounds.top()) - 34.),
-            DockPosition::Right => (anchor_x - 90., f32::from(fan_bounds.top()) - 34.),
+            DockPosition::Right => (
+                anchor_x - icon_size / 2. - 70.,
+                anchor_y - icon_size / 2. - 68.,
+            ),
         };
         let back_left = anchor_x + (back_x - anchor_x) * fan_open;
         let back_top = anchor_y + (back_y - anchor_y) * fan_open;
