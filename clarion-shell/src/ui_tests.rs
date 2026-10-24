@@ -11,6 +11,17 @@ use gpui::{
 use super::{Host, Panel, ShellView};
 use crate::app::testing;
 
+/// A closing bar popup keeps its surface alive for the exit fade and a
+/// background release timer. The test clock must run to that timer before the
+/// window is really removed; the ride itself samples at every frame in between.
+fn settle_exit(visual: &mut VisualTestContext) {
+    visual
+        .cx
+        .background_executor
+        .advance_clock(std::time::Duration::from_millis(400));
+    visual.run_until_parked();
+}
+
 struct Fixture {
     _root: tempfile::TempDir,
     catalog: clarion_launcher::catalog::AppCatalog,
@@ -188,6 +199,7 @@ fn every_non_search_panel_has_a_real_escape_dispatch_path(cx: &mut TestAppContex
         });
         visual.run_until_parked();
         visual.simulate_keystrokes("escape");
+        settle_exit(&mut visual);
         host.read_with(cx, |host, _| {
             assert!(host.panel.is_none(), "Escape failed for {kind:?}")
         });
@@ -392,11 +404,12 @@ fn image_cache_survives_unrelated_snapshots_and_replaces_only_changed_tray_pixel
 fn wallpaper_chooser_releases_the_exclusive_panel_before_requesting_a_dialog(
     cx: &mut TestAppContext,
 ) {
-    let (_fixture, host, _view, visual, window) = panel(cx, Panel::Controls);
+    let (_fixture, host, _view, mut visual, window) = panel(cx, Panel::Controls);
     host.update(cx, |host, cx| {
         host.handle(crate::app::Action::PickWallpaper, cx)
     });
     visual.run_until_parked();
+    settle_exit(&mut visual);
     host.read_with(cx, |host, _| assert!(host.panel.is_none()));
     assert!(
         !cx.read(|cx| cx
@@ -543,4 +556,120 @@ fn clicking_outside_a_dock_menu_dismisses_it(cx: &mut TestAppContext) {
             "a press outside the Dock menu must dismiss it"
         );
     });
+}
+
+#[gpui::test]
+fn a_tray_menu_click_opens_the_popup_under_that_icon(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    cx.update(super::bind_keys);
+    let host = cx
+        .update(|cx| testing::test_host(cx, fixture.catalog.clone(), fixture.environment.clone()));
+    cx.update(|cx| {
+        host.update(cx, |host, _| {
+            host.tray = vec![crate::services::TrayItem {
+                id: "menu-item".into(),
+                owner: ":1.2".into(),
+                path: "/Item".into(),
+                title: "Fixture".into(),
+                icon_name: String::new(),
+                icon_png: None,
+                status: "Active".into(),
+                menu_path: None,
+                item_is_menu: true,
+            }];
+        });
+    });
+    let state = cx.update(|cx| testing::snapshot(&host, cx));
+    let bar = cx.add_window(|window, cx| {
+        window.resize(gpui::size(px(900.), px(24.)));
+        super::ShellView::new(host.clone(), super::Surface::Bar, "test".into(), state, cx)
+    });
+    let mut bar_visual = VisualTestContext::from_window(*bar, cx);
+    bar_visual.update(|window, _| window.refresh());
+    bar_visual.run_until_parked();
+    let bounds = bar_visual
+        .debug_bounds("tray-menu-item")
+        .expect("the tray icon is painted");
+    bar_visual.simulate_click(bounds.center(), Modifiers::default());
+    bar_visual.run_until_parked();
+    let mx = f32::from(bounds.center().x);
+    host.read_with(cx, |host, _| {
+        assert_eq!(
+            host.panel,
+            Some(Panel::Tray("menu-item".into())),
+            "the click opens the item's menu"
+        );
+        assert_eq!(
+            host.anchored,
+            Some(mx),
+            "the pointer's bar-space x anchors the popup"
+        );
+        assert!(!host.panel_exit, "an open panel is not riding its exit");
+    });
+    // The test window reports pointer coordinates in its own pixel space, so
+    // feed a known anchor instead: with it the popup drops under the icon,
+    // never at the resting right margin of the output.
+    cx.update(|cx| {
+        let mut state = (*testing::snapshot(&host, cx)).clone();
+        state.anchored = Some(400.);
+        let anchored =
+            crate::app::panels::placement(&state, &Panel::Tray("menu-item".into()), 900., 800.);
+        let popup = anchored.popup.expect("the tray popup is reported");
+        // The popup is centred on the click position; the clamp only pulls it
+        // back when the centre would leave the popup clipped by an edge.
+        assert_eq!(f32::from(popup.origin.x), 400. - 260. / 2.);
+        assert_eq!(f32::from(popup.origin.y), 24. + 8.);
+    });
+}
+
+#[gpui::test]
+fn clicking_outside_a_bar_popup_dismisses_it_once_the_exit_ride_finishes(
+    cx: &mut TestAppContext,
+) {
+    let (_fixture, host, _view, mut visual, window) = panel(cx, Panel::Controls);
+    // The modal window covers the whole output; this press lands on its
+    // catcher, well away from the visible control center rectangle.
+    visual.simulate_mouse_down(point(px(10.), px(760.)), MouseButton::Left, Modifiers::default());
+    visual.run_until_parked();
+    host.read_with(cx, |host, _| {
+        // The dismissal keeps the surface alive for the closing fade: `panel`
+        // stays visible to the view while the ride runs.
+        assert!(host.panel_exit, "the close starts an exit ride");
+        assert_eq!(host.panel, Some(Panel::Controls));
+    });
+    assert!(
+        cx.read(|cx| cx
+            .windows()
+            .iter()
+            .any(|handle| handle.window_id() == window.window_id())),
+        "the fading surface is not cut mid-ride"
+    );
+    settle_exit(&mut visual);
+    host.read_with(cx, |host, _| assert!(host.panel.is_none()));
+    assert!(
+        !cx.read(|cx| cx
+            .windows()
+            .iter()
+            .any(|handle| handle.window_id() == window.window_id())),
+        "the release timer frees the surface"
+    );
+}
+
+#[gpui::test]
+fn reduced_motion_releases_a_bar_popup_right_away(cx: &mut TestAppContext) {
+    let (_fixture, host, _view, mut visual, window) = panel(cx, Panel::Controls);
+    host.update(cx, |host, _| host.prefs.reduce_motion = true);
+    visual.simulate_keystrokes("escape");
+    visual.run_until_parked();
+    host.read_with(cx, |host, _| {
+        assert!(host.panel.is_none());
+        assert!(!host.panel_exit, "reduced motion snaps the release");
+    });
+    assert!(
+        !cx.read(|cx| cx
+            .windows()
+            .iter()
+            .any(|handle| handle.window_id() == window.window_id())),
+        "no fade keeps the surface alive"
+    );
 }

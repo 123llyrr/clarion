@@ -59,6 +59,11 @@ pub struct MenuItem {
     pub visible: bool,
     pub separator: bool,
     pub toggle: Option<bool>,
+    /// The owner's device/menu icon: a freedesktop icon name when given.
+    pub icon_name: Option<String>,
+    /// The same icon as raw bytes (dbusmenu `icon-data`), already normalized
+    /// to PNG so the view can cache and paint it directly.
+    pub icon_png: Option<Vec<u8>>,
     pub children: Vec<MenuItem>,
 }
 

@@ -1443,3 +1443,53 @@ fn list_and_grid_render_entries_without_wrapping_long_names(cx: &mut TestAppCont
         "long entry bounds: {long:?}"
     );
 }
+
+#[gpui::test]
+fn the_fan_back_button_holds_its_spot_while_navigating_deeper(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let sub = root.path().join("Sub");
+    let deep = sub.join("Deep");
+    std::fs::create_dir_all(&deep).unwrap();
+    std::fs::write(sub.join("note.txt"), b"x").unwrap();
+    std::fs::write(deep.join("marker.txt"), b"x").unwrap();
+    let root = root.path().canonicalize().unwrap();
+    let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
+    host.update(cx, |host, cx| {
+        host.handle(Action::PinFolder(root.clone()), cx);
+        host.handle(
+            Action::SetFolderLayout(root.clone(), FolderLayout::Fan),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    let window = cx.update(|cx| testing::open_folder(&host, root, cx));
+    let view = window.root(cx).unwrap();
+    let mut visual = VisualTestContext::from_window(*window, cx);
+    visual.update(|window, cx| {
+        view.read(cx).focus(window, cx);
+        window.refresh();
+    });
+    visual.run_until_parked();
+    // The root owns only the Sub directory, so fan item 0 enters the level
+    // below and the back button appears.
+    let item = visual.debug_bounds("folder-fan-0").unwrap();
+    visual.simulate_mouse_move(item.center(), None, gpui::Modifiers::default());
+    visual.simulate_mouse_down(item.center(), gpui::MouseButton::Left, gpui::Modifiers::default());
+    visual.run_until_parked();
+    visual.simulate_mouse_up(item.center(), gpui::MouseButton::Left, gpui::Modifiers::default());
+    visual.run_until_parked();
+    let back = visual
+        .debug_bounds("folder-fan-back")
+        .expect("the fan shows the back button after entering a folder");
+    host.update(cx, |host, cx| {
+        host.handle(Action::NavigateFolder(deep.clone()), cx);
+    });
+    visual.run_until_parked();
+    let back_deeper = visual
+        .debug_bounds("folder-fan-back")
+        .expect("the back button survives deeper navigation");
+    assert_eq!(
+        back_deeper, back,
+        "the back button holds a fixed spot beside the Dock icon"
+    );
+}

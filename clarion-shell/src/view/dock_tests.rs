@@ -55,6 +55,20 @@ impl Fixture {
         pinned: &[&str],
         extra: &[&str],
     ) -> Self {
+        Self::with_mixed_apps_mime(cx, animate_launch, pinned, extra, "text/plain;")
+    }
+
+    fn with_directory_app(cx: &mut TestAppContext) -> Self {
+        Self::with_mixed_apps_mime(cx, false, &[APP_ID], &[], "inode/directory;")
+    }
+
+    fn with_mixed_apps_mime(
+        cx: &mut TestAppContext,
+        animate_launch: bool,
+        pinned: &[&str],
+        extra: &[&str],
+        mime: &str,
+    ) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let applications = directory.path().join("data/applications");
         std::fs::create_dir_all(&applications).unwrap();
@@ -62,7 +76,7 @@ impl Fixture {
             std::fs::write(
                 applications.join(id),
                 format!(
-                    "[Desktop Entry]\nType=Application\nDBusActivatable=true\nName={id}\nCategories=Utility;\nMimeType=text/plain;\n"
+                    "[Desktop Entry]\nType=Application\nDBusActivatable=true\nName={id}\nCategories=Utility;\nMimeType={mime}\n"
                 ),
             )
             .unwrap();
@@ -550,6 +564,225 @@ fn dragging_a_folder_tile_reorders_only_the_folder_group(cx: &mut TestAppContext
 }
 
 #[gpui::test]
+fn dragging_a_folder_over_a_lifted_dock_icon_keeps_the_preview(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let pinned = directory.path().join("Pinned");
+    let dragged = directory.path().join("Dragged");
+    std::fs::create_dir(&pinned).unwrap();
+    std::fs::create_dir(&dragged).unwrap();
+    let mut fixture = Fixture::new(cx, false);
+    let host = fixture.host.clone();
+    fixture.visual.cx.update(|cx| {
+        host.update(cx, |host, cx| {
+            host.prefs.dock_folders = vec![crate::preferences::DockFolderPreference {
+                path: pinned.to_string_lossy().into_owned(),
+                display: crate::preferences::FolderDisplay::Folder,
+                layout: crate::preferences::FolderLayout::Auto,
+                sort: crate::preferences::FolderSort::Name,
+                descending: false,
+            }];
+            host.changed(cx);
+        });
+    });
+    fixture.visual.update(|window, _| window.refresh());
+    fixture.visual.run_until_parked();
+    let folder = fixture.visual.debug_bounds("dock-folder-0").unwrap();
+    let tray_top = fixture
+        .view
+        .read_with(&fixture.visual, |view, _| {
+            view.dock_motion.geometry.tray_cross_start
+        });
+    // Start inside the resting tray so the icon magnifies, then move onto the
+    // lifted artwork that is still part of the Dock's input region.
+    let low = point(folder.center().x, px(tray_top + 1.));
+    fixture.visual.simulate_event(gpui::FileDropEvent::Entered {
+        position: low,
+        paths: gpui::ExternalPaths::new([dragged.clone()]),
+    });
+    fixture.visual.run_until_parked();
+    fixture.advance_motion(Duration::from_millis(350));
+    let raised = fixture.visual.debug_bounds("dock-folder-0").unwrap();
+    assert!(
+        raised.top() < px(tray_top),
+        "the magnified folder should extend above the resting tray: {raised:?} / {tray_top}"
+    );
+    let high = point(raised.center().x, raised.top() + px(2.));
+    assert!(
+        fixture.contains_input(high),
+        "the lifted artwork should remain a real pointer target"
+    );
+    fixture
+        .visual
+        .simulate_event(gpui::FileDropEvent::Pending { position: high });
+    fixture.visual.run_until_parked();
+    fixture.view.read_with(&fixture.visual, |view, _| {
+        assert!(view.dock_motion.folder_drop_active);
+        assert!(view.dock_motion.folder_drop_visible);
+    });
+    assert!(
+        fixture
+            .visual
+            .debug_bounds("dock-folder-drop-placeholder")
+            .is_some(),
+        "the folder slot preview stays visible over the lifted icon"
+    );
+    fixture
+        .visual
+        .simulate_event(gpui::FileDropEvent::Submit { position: high });
+    fixture.visual.run_until_parked();
+    host.read_with(&fixture.visual, |host, _| {
+        assert_eq!(host.prefs.dock_folders.len(), 2);
+        assert_eq!(
+            host.prefs.dock_folders[1].path,
+            dragged.canonicalize().unwrap().to_string_lossy()
+        );
+    });
+}
+
+#[gpui::test]
+fn leaving_a_folder_drag_clears_the_magnified_icon(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let folder = directory.path().join("Dragged");
+    std::fs::create_dir(&folder).unwrap();
+    let mut fixture = Fixture::new(cx, false);
+    let idle = fixture.bounds();
+    fixture.visual.simulate_event(gpui::FileDropEvent::Entered {
+        position: idle.center(),
+        paths: gpui::ExternalPaths::new([folder]),
+    });
+    fixture.visual.run_until_parked();
+    fixture.advance_motion(Duration::from_millis(350));
+    let enlarged = fixture.bounds();
+    assert!(
+        enlarged.size.width > idle.size.width + px(10.),
+        "the drag should magnify the icon: {idle:?} / {enlarged:?}"
+    );
+    fixture
+        .visual
+        .simulate_event(gpui::FileDropEvent::Exited);
+    fixture.visual.run_until_parked();
+    fixture.advance_motion(Duration::from_millis(500));
+    let settled = fixture.bounds();
+    assert_eq!(settled.size, idle.size, "the icon returns to its resting size");
+    fixture.view.read_with(&fixture.visual, |view, _| {
+        assert!(view.dock_motion.pointer_target.is_none());
+        assert!(!view.dock_motion.hovered);
+        assert!(view.dock_motion.tooltip_name.is_none());
+        assert!(view.dock_motion.tooltip_armed.is_none());
+    });
+}
+
+#[gpui::test]
+fn dragging_a_folder_over_a_pinned_app_only_offers_opening(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let existing = directory.path().join("Existing");
+    let dragged = directory.path().join("Dragged");
+    std::fs::create_dir(&existing).unwrap();
+    std::fs::create_dir(&dragged).unwrap();
+    let mut fixture = Fixture::new(cx, false);
+    let host = fixture.host.clone();
+    fixture.visual.cx.update(|cx| {
+        host.update(cx, |host, cx| {
+            host.prefs.dock_folders = vec![crate::preferences::DockFolderPreference {
+                path: existing.to_string_lossy().into_owned(),
+                display: crate::preferences::FolderDisplay::Folder,
+                layout: crate::preferences::FolderLayout::Auto,
+                sort: crate::preferences::FolderSort::Name,
+                descending: false,
+            }];
+            host.changed(cx);
+        });
+    });
+    fixture.visual.update(|window, _| window.refresh());
+    fixture.visual.run_until_parked();
+    let app = fixture.bounds();
+    let trash_before = fixture.visual.debug_bounds("dock-trash").unwrap();
+    fixture.visual.simulate_event(gpui::FileDropEvent::Entered {
+        position: app.center(),
+        paths: gpui::ExternalPaths::new([dragged.clone()]),
+    });
+    fixture.visual.run_until_parked();
+    fixture.view.read_with(&fixture.visual, |view, _| {
+        assert!(
+            !view.dock_motion.folder_drop_active,
+            "the folder slot is not offered over the application area"
+        );
+        assert!(!view.dock_motion.folder_drop_visible);
+    });
+    assert!(
+        fixture
+            .visual
+            .debug_bounds("dock-folder-drop-placeholder")
+            .is_none(),
+        "no placeholder over an application tile"
+    );
+    assert_eq!(
+        fixture.visual.debug_bounds("dock-trash").unwrap(),
+        trash_before,
+        "the trash does not shift while the pointer is over an application"
+    );
+    fixture
+        .visual
+        .simulate_event(gpui::FileDropEvent::Submit {
+            position: app.center(),
+        });
+    fixture.visual.run_until_parked();
+    host.read_with(&fixture.visual, |host, _| {
+        assert_eq!(
+            host.prefs.dock_folders.len(),
+            1,
+            "dropping on an application that cannot open folders does not pin"
+        );
+        assert_eq!(
+            host.prefs.dock_folders[0].path,
+            existing.canonicalize().unwrap().to_string_lossy()
+        );
+    });
+}
+
+#[gpui::test]
+fn dropping_a_folder_on_an_app_that_opens_directories_launches_that_app(
+    cx: &mut TestAppContext,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let folder = directory.path().join("Pinned");
+    std::fs::create_dir(&folder).unwrap();
+    let mut fixture = Fixture::with_directory_app(cx);
+    let position = fixture.bounds().center();
+    fixture.visual.simulate_event(gpui::FileDropEvent::Entered {
+        position,
+        paths: gpui::ExternalPaths::new([folder.clone()]),
+    });
+    fixture.visual.run_until_parked();
+    fixture.view.read_with(&fixture.visual, |view, _| {
+        assert_eq!(view.dock_motion.drag_accept.as_deref(), Some(APP_ID));
+    });
+    assert!(
+        fixture
+            .visual
+            .debug_bounds("dock-folder-drop-placeholder")
+            .is_none(),
+        "an app that accepts directories keeps its own drop target"
+    );
+    fixture
+        .visual
+        .simulate_event(gpui::FileDropEvent::Submit { position });
+    fixture.visual.run_until_parked();
+    fixture.host.read_with(&fixture.visual, |host, _| {
+        assert!(host.prefs.dock_folders.is_empty());
+    });
+    let mut launched = None;
+    while let Ok(command) = fixture.commands.try_recv() {
+        if let backend::Command::LaunchDesktopWithPaths(desktop, paths) = command {
+            launched = Some((desktop, paths));
+        }
+    }
+    let (desktop, paths) = launched.expect("the directory opens in the accepting app");
+    assert_eq!(desktop.file_name().unwrap(), APP_ID);
+    assert_eq!(paths, [folder]);
+}
+
+#[gpui::test]
 fn dropping_a_folder_on_empty_tray_space_pins_it(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().unwrap();
     let folder = directory.path().join("Pinned");
@@ -574,6 +807,14 @@ fn dropping_a_folder_on_empty_tray_space_pins_it(cx: &mut TestAppContext) {
     assert!(
         placeholder.right() <= trash_after.left() + px(0.01),
         "the placeholder owns a real slot before the trash instead of covering it"
+    );
+    let plus = fixture
+        .visual
+        .debug_bounds("dock-folder-drop-plus")
+        .expect("the reserved slot shows the + pin affordance");
+    assert!(
+        placeholder.contains(&plus.center()),
+        "the + badge marks the middle of the reserved slot: {placeholder:?} / {plus:?}"
     );
     let drop = placeholder.center();
     fixture
@@ -660,22 +901,212 @@ fn a_new_folder_previews_after_the_existing_folder_group(cx: &mut TestAppContext
 }
 
 #[gpui::test]
-fn dropping_a_folder_on_trash_or_an_app_does_not_pin_it(cx: &mut TestAppContext) {
+fn dropping_a_folder_after_magnified_hovering_exits_is_cleared(
+    cx: &mut TestAppContext,
+) {
+    // Regression for the follow-up to the placeholder work: completing a
+    // folder drop must not leave the next hover stuck. Hover a neighbour,
+    // then leave the Dock; the magnified tile must relax again.
+    let directory = tempfile::tempdir().unwrap();
+    let pinned = directory.path().join("Pinned");
+    let dragged = directory.path().join("Dragged");
+    for path in [&pinned, &dragged] {
+        std::fs::create_dir(path).unwrap();
+    }
+    let mut fixture = Fixture::new(cx, false);
+    let host = fixture.host.clone();
+    let pinned = pinned.canonicalize().unwrap();
+    fixture.visual.cx.update(|cx| {
+        host.update(cx, |host, cx| {
+            host.prefs.dock_folders = vec![crate::preferences::DockFolderPreference {
+                path: pinned.to_string_lossy().into_owned(),
+                display: crate::preferences::FolderDisplay::Folder,
+                layout: crate::preferences::FolderLayout::Auto,
+                sort: crate::preferences::FolderSort::Name,
+                descending: false,
+            }];
+            host.changed(cx);
+        });
+    });
+    fixture.visual.update(|window, _| window.refresh());
+    fixture.visual.run_until_parked();
+    let neighbour_idle = fixture
+        .visual
+        .debug_bounds("dock-folder-0")
+        .unwrap()
+        .size;
+    // Drop the new folder on the reserved slot right after the folder tiles.
+    let pinned_tile = fixture.visual.debug_bounds("dock-folder-0").unwrap();
+    let offset = point(pinned_tile.right() + px(10.), pinned_tile.center().y);
+    fixture.visual.simulate_event(gpui::FileDropEvent::Entered {
+        position: offset,
+        paths: gpui::ExternalPaths::new([dragged.clone()]),
+    });
+    fixture.visual.run_until_parked();
+    let slot = fixture
+        .visual
+        .debug_bounds("dock-folder-drop-placeholder")
+        .expect("the reserved slot shows its placeholder");
+    fixture
+        .visual
+        .simulate_event(gpui::FileDropEvent::Submit {
+            position: slot.center(),
+        });
+    fixture.visual.run_until_parked();
+    let dragged = dragged.canonicalize().unwrap();
+    host.read_with(&fixture.visual, |host, _| {
+        assert_eq!(host.prefs.dock_folders.len(), 2);
+        assert_eq!(
+            host.prefs.dock_folders[1].path,
+            dragged.to_string_lossy()
+        );
+    });
+    // Hover the neighbouring folder with the plain pointer.
+    let neighbour = fixture.visual.debug_bounds("dock-folder-0").unwrap();
+    fixture
+        .visual
+        .simulate_mouse_move(neighbour.center(), None, Modifiers::default());
+    fixture.visual.run_until_parked();
+    fixture.view.read_with(&fixture.visual, |view, _| {
+        assert!(view.dock_motion.hovered);
+        assert!(view.dock_motion.pointer_target.is_some());
+    });
+    fixture.advance_motion(Duration::from_millis(250));
+    let neighbour_big = fixture
+        .visual
+        .debug_bounds("dock-folder-0")
+        .unwrap()
+        .size;
+    assert!(
+        neighbour_big.width > neighbour_idle.width,
+        "the hovered folder magnifies: {neighbour_idle:?} -> {neighbour_big:?}"
+    );
+    // Leaving the surface loses no motion; the exit must reset the hover.
+    fixture.visual.simulate_event(MouseExitEvent {
+        position: neighbour.center(),
+        pressed_button: None,
+        modifiers: Modifiers::default(),
+    });
+    fixture.visual.run_until_parked();
+    fixture.view.read_with(&fixture.visual, |view, _| {
+        assert!(!view.dock_motion.hovered);
+        assert!(view.dock_motion.pointer_target.is_none());
+    });
+    fixture.advance_motion(Duration::from_secs(2));
+    assert_eq!(
+        fixture.visual.debug_bounds("dock-folder-0").unwrap().size,
+        neighbour_idle,
+        "the magnified folder returns to rest after the exit"
+    );
+    assert!(!fixture.animation_active());
+}
+
+#[gpui::test]
+fn an_exit_after_plain_moves_clears_the_magnification_target(
+    cx: &mut TestAppContext,
+) {
+    // Regression for the real Wayland ordering captured while chasing the
+    // post-pin stuck icon: the drop's end-drag cleanup resets `hovered`, then
+    // plain surface moves re-establish the magnification target through the
+    // mouse-move handler without any hover transition, and the final exit
+    // arrives while `hovered` is already false. The exit must clear the
+    // target regardless of the current hover state.
+    let mut fixture = Fixture::new(cx, false);
+    let idle = fixture.bounds();
+    let center = fixture.bounds().center();
+    // Arm the element hover listeners with a real move first, so the surface
+    // exit is actually delivered (the exit runs only for a queued hover).
+    fixture
+        .visual
+        .simulate_mouse_move(center, None, Modifiers::default());
+    fixture.visual.run_until_parked();
+    fixture.visual.update(|window, cx| {
+        // Exactly the stuck state from the hover log: `hovered` was reset by
+        // the trailing cleanup render while plain moves re-magnified, and the
+        // row no longer believes the pointer is hovering it.
+        fixture.view.update(cx, |view, _| {
+            view.dock_motion.hovered = false;
+            view.dock_drag_seen = false;
+        });
+        window.refresh();
+    });
+    fixture.visual.run_until_parked();
+    fixture.advance_motion(Duration::from_millis(250));
+    assert!(
+        fixture.bounds().size.width > idle.size.width + px(15.),
+        "the magnification target set by plain moves magnifies the tile"
+    );
+    fixture.visual.simulate_event(MouseExitEvent {
+        position: center,
+        pressed_button: None,
+        modifiers: Modifiers::default(),
+    });
+    fixture.visual.run_until_parked();
+    fixture.view.read_with(&fixture.visual, |view, _| {
+        assert!(!view.dock_motion.hovered);
+        assert!(view.dock_motion.pointer_target.is_none());
+    });
+    fixture.advance_motion(Duration::from_secs(2));
+    assert_eq!(fixture.bounds().size, idle.size);
+    assert!(!fixture.animation_active());
+}
+
+#[gpui::test]
+fn an_inactive_dock_does_not_release_the_folder_slot_during_a_drag(
+    cx: &mut TestAppContext,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let folder = directory.path().join("Dragged");
+    std::fs::create_dir(&folder).unwrap();
+    let mut fixture = Fixture::new(cx, false);
+    let host = fixture.host.clone();
+    let trash = fixture.visual.debug_bounds("dock-trash").unwrap();
+    fixture.visual.simulate_event(gpui::FileDropEvent::Entered {
+        position: trash.center(),
+        paths: gpui::ExternalPaths::new([folder]),
+    });
+    fixture.visual.run_until_parked();
+    fixture.view.read_with(&fixture.visual, |view, _| {
+        assert!(!view.dock_motion.folder_drop_active);
+    });
+    // Simulate another output's Dock receiving the reservation. This view did
+    // not see the drag, so it must not cancel the host-owned slot while the
+    // global drag is still active.
+    fixture.visual.cx.update(|cx| {
+        host.update(cx, |host, cx| {
+            host.folder_drop_preview = true;
+            host.changed(cx);
+        });
+    });
+    fixture.visual.run_until_parked();
+    host.read_with(&fixture.visual, |host, _| {
+        assert!(
+            host.folder_drop_preview,
+            "an inactive output must not cancel the active Dock's folder slot"
+        );
+    });
+    fixture
+        .visual
+        .simulate_event(gpui::FileDropEvent::Exited);
+    fixture.visual.run_until_parked();
+}
+
+#[gpui::test]
+fn dropping_a_folder_on_trash_does_not_pin_it(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().unwrap();
     let folder = directory.path().join("Pinned");
     std::fs::create_dir(&folder).unwrap();
     let mut fixture = Fixture::new(cx, false);
     let trash = fixture.visual.debug_bounds("dock-trash").unwrap();
-    for position in [trash.center(), fixture.bounds().center()] {
-        fixture.visual.simulate_event(gpui::FileDropEvent::Entered {
-            position,
-            paths: gpui::ExternalPaths::new([folder.clone()]),
-        });
-        fixture
-            .visual
-            .simulate_event(gpui::FileDropEvent::Submit { position });
-        fixture.visual.run_until_parked();
-    }
+    let position = trash.center();
+    fixture.visual.simulate_event(gpui::FileDropEvent::Entered {
+        position,
+        paths: gpui::ExternalPaths::new([folder]),
+    });
+    fixture
+        .visual
+        .simulate_event(gpui::FileDropEvent::Submit { position });
+    fixture.visual.run_until_parked();
     fixture.host.read_with(&fixture.visual, |host, _| {
         assert!(host.prefs.dock_folders.is_empty());
     });
@@ -717,16 +1148,33 @@ fn dropping_on_the_shifted_trash_still_does_not_pin(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn the_reserved_folder_slot_stays_visible_over_the_shifted_trash(cx: &mut TestAppContext) {
+fn moving_a_folder_drag_over_the_trash_hides_the_slot(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().unwrap();
-    let folder = directory.path().join("Pinned");
-    std::fs::create_dir(&folder).unwrap();
+    let folder_empty = directory.path().join("Empty");
+    let folder_dragged = directory.path().join("Dragged");
+    std::fs::create_dir(&folder_empty).unwrap();
+    std::fs::create_dir(&folder_dragged).unwrap();
     let mut fixture = Fixture::new(cx, false);
+    let host = fixture.host.clone();
+    fixture.visual.cx.update(|cx| {
+        host.update(cx, |host, cx| {
+            host.prefs.dock_folders = vec![crate::preferences::DockFolderPreference {
+                path: folder_empty.to_string_lossy().into_owned(),
+                display: crate::preferences::FolderDisplay::Folder,
+                layout: crate::preferences::FolderLayout::Auto,
+                sort: crate::preferences::FolderSort::Name,
+                descending: false,
+            }];
+            host.changed(cx);
+        });
+    });
+    fixture.visual.update(|window, _| window.refresh());
+    fixture.visual.run_until_parked();
     let trash_before = fixture.visual.debug_bounds("dock-trash").unwrap();
     let empty = point(trash_before.left() - px(6.), trash_before.center().y);
     fixture.visual.simulate_event(gpui::FileDropEvent::Entered {
         position: empty,
-        paths: gpui::ExternalPaths::new([folder]),
+        paths: gpui::ExternalPaths::new([folder_dragged]),
     });
     fixture.visual.run_until_parked();
     let trash_after = fixture.visual.debug_bounds("dock-trash").unwrap();
@@ -737,18 +1185,18 @@ fn the_reserved_folder_slot_stays_visible_over_the_shifted_trash(cx: &mut TestAp
         });
     fixture.visual.run_until_parked();
     fixture.view.read_with(&fixture.visual, |view, _| {
-        assert!(view.dock_motion.folder_drop_active);
         assert!(
-            view.dock_motion.folder_drop_visible,
-            "the reserved folder slot keeps its placeholder while the pointer crosses the trash"
+            !view.dock_motion.folder_drop_active,
+            "the strip ends before the trash; hovering the trash cancels the offer"
         );
+        assert!(!view.dock_motion.folder_drop_visible);
     });
     assert!(
         fixture
             .visual
             .debug_bounds("dock-folder-drop-placeholder")
-            .is_some(),
-        "the placeholder does not blink out over the shifted trash"
+            .is_none(),
+        "the placeholder is gone while the pointer holds over the trash"
     );
 }
 
@@ -1627,4 +2075,124 @@ fn clicking_a_drawer_tile_activates_the_app_and_dismisses_the_drawer(cx: &mut Te
             "clicking a drawer tile must dismiss the drawer"
         );
     });
+}
+
+
+#[gpui::test]
+fn pinning_and_unpinning_a_folder_grows_the_icon_in_and_rides_it_out(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let folder_path = directory.path().join("Projects");
+    std::fs::create_dir(&folder_path).unwrap();
+    let mut fixture = Fixture::with_apps(cx, false, &[APP_A]);
+    let host = fixture.host.clone();
+    let path = folder_path.to_string_lossy().into_owned();
+    let pin = |host: &Entity<crate::app::Host>,
+               folders: Vec<crate::preferences::DockFolderPreference>,
+               fixture: &mut Fixture| {
+        fixture.visual.cx.update(|cx| {
+            host.update(cx, |host, cx| {
+                host.prefs.dock_folders = folders;
+                host.changed(cx);
+            });
+        });
+        fixture.visual.update(|window, _| window.refresh());
+    };
+    let folder_prefs = vec![crate::preferences::DockFolderPreference {
+        path: path.clone(),
+        display: crate::preferences::FolderDisplay::Folder,
+        layout: crate::preferences::FolderLayout::Auto,
+        sort: crate::preferences::FolderSort::Name,
+        descending: false,
+    }];
+
+    // The row before any folder is pinned.
+    let rest_trash = fixture.visual.debug_bounds("dock-trash").unwrap();
+
+    // Pin: the arrival slide keys straight to the folder path, the tile
+    // paints on its slot, and the resting layout still grows to make room.
+    pin(&host, folder_prefs.clone(), &mut fixture);
+    fixture.view.read_with(&fixture.visual, |view, _| {
+        assert!(
+            view.dock_motion.folders_seeded,
+            "the pin diff seeds itself on the first render"
+        );
+        assert!(
+            view.dock_motion
+                .folder_appear
+                .get(&path)
+                .is_some_and(|slide| slide.target() == 1.),
+            "the pin keys a grow-in slide for the new folder"
+        );
+        assert!(
+            view.dock_motion.folder_exiting.is_empty(),
+            "pinning must not seed an exit ride"
+        );
+    });
+    let pinned_trash = fixture.visual.debug_bounds("dock-trash").unwrap();
+    assert!(
+        pinned_trash.right() > rest_trash.right(),
+        "the pinned slot reserves room for the incoming folder"
+    );
+    assert!(
+        fixture.visual.debug_bounds("dock-folder-0").is_some(),
+        "the pinned folder tile paints during the grow-in"
+    );
+
+    // Finish the grow-in deterministically (the slide clock is real time in
+    // tests, not the mocked test clock) so the fade below starts from full
+    // size, the way a folder pinned since an earlier frame would.
+    fixture.view.update(&mut fixture.visual, |view, cx| {
+        if let Some(slide) = view.dock_motion.folder_appear.get_mut(&path) {
+            slide.snap(1.);
+        }
+        cx.notify();
+    });
+    fixture.visual.update(|window, _| window.refresh());
+
+    // Unpin: on the first frame the tile rides out on a reserved slot and
+    // the row must NOT reflow yet.
+    pin(&host, Vec::new(), &mut fixture);
+    fixture.view.read_with(&fixture.visual, |view, _| {
+        assert_eq!(
+            view.dock_motion.folder_exiting.len(),
+            1,
+            "the unpinned folder rides an exit slide on a reserved slot"
+        );
+        assert_eq!(
+            view.dock_motion.folder_exiting[0]
+                .0
+                .path
+                .to_string_lossy(),
+            path.as_str()
+        );
+    });
+    let riding_trash = fixture.visual.debug_bounds("dock-trash").unwrap();
+    assert_eq!(
+        riding_trash, pinned_trash,
+        "the row keeps the slot reserved while the fade runs"
+    );
+    assert!(
+        fixture.visual.debug_bounds("dock-folder-exit").is_some(),
+        "the fading folder tile paints during the exit ride"
+    );
+
+    // Settle the ride directly; the next render retires it and reflows.
+    fixture.view.update(&mut fixture.visual, |view, cx| {
+        if let Some((_, slide)) = view.dock_motion.folder_exiting.first_mut() {
+            slide.snap(0.);
+        }
+        cx.notify();
+    });
+    fixture.visual.update(|window, _| window.refresh());
+    fixture.visual.run_until_parked();
+    fixture.view.read_with(&fixture.visual, |view, _| {
+        assert!(
+            view.dock_motion.folder_exiting.is_empty(),
+            "a finished ride retires on the next render"
+        );
+    });
+    // The test platform's debug_bounds accumulate across frames, so the row
+    // reflow is asserted on geometry rather than on element absence.
+    let settled_trash = fixture.visual.debug_bounds("dock-trash").unwrap();
+    assert_eq!(settled_trash, rest_trash, "the row reflows after the fade");
 }

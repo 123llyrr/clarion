@@ -8,7 +8,11 @@ use crate::{
     services,
 };
 use gpui::{prelude::*, *};
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::Arc,
+};
 
 mod dock_folder;
 mod macos_controls;
@@ -55,6 +59,12 @@ pub struct ShellView {
     folder_fan_closed: bool,
     /// Whether the last `panel()` render used the fan layout.
     folder_fan_active: bool,
+    /// The appear/disappear ride for a bar popup: `None` snaps, `Some` tracks
+    /// the fade between 0 (closed) and 1 (open) at the shared response.
+    popup_motion: Option<crate::dock_motion::Motion>,
+    /// The clock `popup_motion` samples against, captured at view creation so
+    /// tests can settle the ride by snapping instead of racing real time.
+    popup_epoch: std::time::Instant,
     /// Keeps the folder surface mapped but empty while a file drag is in
     /// flight. The layer still owns the pointer grab, which is what lets the
     /// drag preview follow the cursor across the whole output.
@@ -67,6 +77,17 @@ pub struct ShellView {
     activated: bool,
     image_cache: std::collections::HashMap<String, Arc<Image>>,
     tray_image_hashes: std::collections::HashMap<String, [u8; 32]>,
+    /// Resolved freedesktop icon names, cached per view so the bar and the
+    /// tray menus never walk the theme directories twice for one name.
+    theme_icons: std::cell::RefCell<HashMap<String, Option<PathBuf>>>,
+    /// The open/close fade of one submenu card, keyed by its menu item id.
+    /// The card itself renders at the sampled opacity; the host releases the
+    /// collapsed id once its fade has run out.
+    submenu_motion:
+        std::cell::RefCell<HashMap<i32, (std::time::Instant, crate::dock_motion::Elastic)>>,
+    /// The painted popup rectangle's height, sprung between the placement
+    /// heights the expanding and folding submenus produce.
+    popup_height_motion: Option<crate::dock_motion::Elastic>,
     cached_snapshot: std::sync::Weak<ViewState>,
 }
 #[derive(Clone, Copy)]
@@ -268,6 +289,8 @@ impl ShellView {
             folder_fan_closing: None,
             folder_fan_closed: false,
             folder_fan_active: false,
+            popup_motion: None,
+            popup_epoch: std::time::Instant::now(),
             folder_drag_layer: false,
             dock_drag_seen: false,
             #[cfg(test)]
@@ -276,6 +299,9 @@ impl ShellView {
             activated: false,
             image_cache: Default::default(),
             tray_image_hashes: Default::default(),
+            theme_icons: Default::default(),
+            submenu_motion: Default::default(),
+            popup_height_motion: None,
             cached_snapshot: Default::default(),
         }
     }
@@ -342,6 +368,18 @@ impl ShellView {
                 }
             }
         }
+        // Menu rows carry their owner's device icons as bytes; key them by
+        // content so a renaming tree still hits the same decoded image.
+        let mut menu_icons: Vec<Vec<u8>> = Vec::new();
+        collect_menu_icons(&self.state.tray_menu, &mut menu_icons);
+        for bytes in menu_icons {
+            let hash: [u8; 32] = Sha256::digest(&bytes).into();
+            let key = format!("menu-icon:{}", icon_key(&hash));
+            keep.insert(key.clone());
+            self.image_cache
+                .entry(key)
+                .or_insert_with(|| Arc::new(Image::from_bytes(ImageFormat::Png, bytes)));
+        }
         self.image_cache.retain(|key, _| keep.contains(key));
         self.tray_image_hashes.retain(|key, _| keep.contains(key));
     }
@@ -377,6 +415,82 @@ impl ShellView {
             .child(text.into())
             .on_click(move |_, _, cx| host.update(cx, |host, cx| host.handle(action.clone(), cx)))
             .into_any_element()
+    }
+    /// The tray menu row: one compact metronome — 4pt vertical paddings, a
+    /// fixed 18pt line under the 15pt type — so every row paints exactly the
+    /// height the popup estimate grants it.
+    fn row_button(
+        &self,
+        id: impl Into<SharedString>,
+        text: String,
+        action: Action,
+        p: Palette,
+        leading: Option<AnyElement>,
+        trailing: Option<AnyElement>,
+    ) -> AnyElement {
+        let host = self.host.clone();
+        let id = id.into();
+        let selector = id.to_string();
+        let row = div()
+            .id(id.clone())
+            .debug_selector(move || selector.clone())
+            .min_w_0()
+            .max_w_full()
+            .flex()
+            .items_center()
+            .gap(px(5.))
+            .px(px(8.))
+            .py(px(4.))
+            .rounded(px(7.))
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .text_ellipsis()
+            .text_color(p.fg)
+            .text_size(px(15.))
+            .line_height(px(18.))
+            .cursor_pointer()
+            .hover(move |s| s.bg(p.line));
+        let row = if let Some(leading) = leading {
+            row.child(leading).child(text)
+        } else {
+            row.child(text)
+        };
+        let row = if let Some(trailing) = trailing {
+            row.child(div().flex_1()).child(trailing)
+        } else {
+            row
+        };
+        row.on_click(move |_, _, cx| host.update(cx, |host, cx| host.handle(action.clone(), cx)))
+            .into_any_element()
+    }
+    /// The ring and dot of a checkable row. The state owns the colour: an
+    /// active row shows the accent, an inactive one a quiet grey, so the
+    /// toggled column reads the same on enabled and disabled rows.
+    fn check_circle(&self, on: bool, p: Palette) -> AnyElement {
+        let color = if on { p.accent } else { p.muted };
+        let path = icon_path(if on { "menu-check.svg" } else { "menu-ring.svg" });
+        if path.is_file() {
+            return svg()
+                .path(path.to_string_lossy().into_owned())
+                .size(px(16.))
+                .text_color(color)
+                .into_any_element();
+        }
+        // The assets did not ship: keep a plain ring so the column still aligns.
+        let mut ring = div()
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .w(px(14.))
+            .h(px(14.))
+            .rounded(px(7.))
+            .border_2()
+            .border_color(color);
+        if on {
+            ring = ring.child(div().size(px(6.)).rounded(px(3.)).bg(color));
+        }
+        ring.into_any_element()
     }
     fn icon(&self, path: Option<PathBuf>, size: f32, p: Palette) -> AnyElement {
         if let Some(path) = path {
@@ -431,6 +545,14 @@ impl ShellView {
     fn bar(&self, host: &ViewState, p: Palette, width: f32, cx: &App) -> AnyElement {
         // Menu-bar content sits on the compositor's live backdrop. In particular,
         // do not cover it with the old opaque application-panel background.
+        // The bar carries its own scale: every glyph and the text ride the
+        // bar height (40pt is the reference), macOS menu-bar style.
+        let bar = host.prefs.bar_height as f32;
+        let scale = (bar / 40.).clamp(0.7, 2.);
+        let tile = (bar * 0.8).round().clamp(24., 44.);
+        let tray_glyph = (bar * 0.5).round().clamp(14., 26.);
+        let status_glyph = (bar * 0.44).round().clamp(12., 22.);
+        let text = (14. * scale).clamp(11., 20.);
         let focused = host.desktop.windows.iter().find(|w| w.is_focused);
         let appname = focused
             .and_then(|w| w.app_id.as_deref())
@@ -465,12 +587,12 @@ impl ShellView {
                 rgba(0xffffff38)
             })
             .text_color(p.fg)
-            .text_size(px(13.))
-            .line_height(px(18.))
+            .text_size(px(text))
+            .line_height(px((text * 1.4).round()))
             .child(
                 div()
                     .id("clarion-menu-mark")
-                    .w(px(32.))
+                    .w(px((32. * scale).round().max(28.)))
                     .h_full()
                     .flex()
                     .items_center()
@@ -480,8 +602,8 @@ impl ShellView {
                     .hover(move |s| s.bg(p.line))
                     .child(
                         img(mark)
-                            .w(px(24.5))
-                            .h(px(26.5))
+                            .w(px(24.5 * scale))
+                            .h(px(26.5 * scale))
                             .flex_shrink_0()
                             .object_fit(ObjectFit::Contain),
                     )
@@ -511,30 +633,32 @@ impl ShellView {
                 .filter(|item| item.status != "Passive")
                 .take(6)
             {
-                let id = item.id.clone();
-                let action = if item.item_is_menu {
-                    Action::Panel(Panel::Tray(id.clone()))
-                } else {
-                    Action::Service(services::Command::TrayActivate {
-                        id: id.clone(),
-                        x: 0,
-                        y: 0,
-                    })
-                };
+                let left_id = item.id.clone();
+                let right_id = item.id.clone();
+                let menu = item.item_is_menu;
                 let h = self.host.clone();
-                let menu = id.clone();
                 let icon = if let Some(image) = self.image_cache.get(&format!("tray:{}", item.id)) {
                     img(image.clone())
-                        .size(px(16.))
+                        .size(px(tray_glyph))
                         .object_fit(ObjectFit::Contain)
                         .into_any_element()
+                } else if let Some(named) = self.bar_icon(&item.icon_name, tray_glyph, p) {
+                    // A status item that only publishes a freedesktop icon
+                    // name (nm-applet, bluetooth applets) resolves through
+                    // the theme instead of falling to the placeholder.
+                    named
                 } else {
-                    self.symbol("circle", 14., p)
+                    self.symbol("circle", (tray_glyph - 4.).max(10.), p)
                 };
                 row = row.child(
                     div()
-                        .id(SharedString::from(format!("tray-{id}")))
-                        .w(px(28.))
+                        .id(SharedString::from(format!("tray-{left_id}")))
+                        .debug_selector({
+                            let selector = format!("tray-{left_id}");
+                            move || selector.clone()
+                        })
+                        .w(px(tile))
+                        .mr(px(5.))
                         .h_full()
                         .flex()
                         .items_center()
@@ -543,39 +667,75 @@ impl ShellView {
                         .cursor_pointer()
                         .hover(move |s| s.bg(p.line))
                         .child(icon)
-                        .on_click(move |_, _, cx| {
-                            h.update(cx, |h, cx| h.handle(action.clone(), cx))
+                        // A menu item opens its popup right under this icon, so
+                        // an activation carries the pointer's bar-space x. The
+                        // non-menu activation is a plain command.
+                        .on_click(move |event: &ClickEvent, _, cx| {
+                            h.update(cx, |h, cx| {
+                                if menu {
+                                    let x = f32::from(event.position().x);
+                                    h.handle(
+                                        Action::AnchoredPanel(Panel::Tray(left_id.clone()), x),
+                                        cx,
+                                    )
+                                } else {
+                                    h.handle(
+                                        Action::Service(services::Command::TrayActivate {
+                                            id: left_id.clone(),
+                                            x: 0,
+                                            y: 0,
+                                        }),
+                                        cx,
+                                    )
+                                }
+                            })
                         })
                         .on_mouse_down(MouseButton::Right, {
                             let h = self.host.clone();
-                            move |_, _, cx| {
+                            move |event: &MouseDownEvent, _, cx| {
+                                let x = f32::from(event.position.x);
                                 h.update(cx, |h, cx| {
-                                    h.handle(Action::Panel(Panel::Tray(menu.clone())), cx)
+                                    h.handle(Action::AnchoredPanel(Panel::Tray(right_id.clone()), x), cx)
                                 })
                             }
                         }),
                 );
             }
         }
-        row = row.child(self.status_button("recent", "clipboard", Action::Panel(Panel::Recent), p));
+        row = row.child(self.status_button(
+            "recent",
+            "clipboard",
+            Action::Panel(Panel::Recent),
+            p,
+            tile,
+            status_glyph,
+        ));
         if width > 520. {
             row = row.child(self.status_button(
                 "capture",
                 "scan",
                 Action::Panel(Panel::Screenshot),
                 p,
+                tile,
+                status_glyph,
             ));
         }
         if host.dnd {
-            row =
-                row.child(self.status_button("dnd-active", "moon", Action::DoNotDisturb(false), p));
+            row = row.child(self.status_button(
+                "dnd-active",
+                "moon",
+                Action::DoNotDisturb(false),
+                p,
+                tile,
+                status_glyph,
+            ));
         }
         if width > 800. {
             if let Some(battery) = host.system.battery {
                 let fill = div()
-                    .w(px((19. * battery.clamp(0., 1.)) as f32))
-                    .h(px(7.))
-                    .rounded(px(1.))
+                    .w(px((19. * scale) * battery.clamp(0., 1.) as f32))
+                    .h(px(7. * scale))
+                    .rounded(px(1. * scale))
                     .bg(if host.system.charging {
                         rgb(0x30d158).into()
                     } else {
@@ -584,14 +744,14 @@ impl ShellView {
                 let mut indicator = div()
                     .id("menu-battery")
                     .h_full()
-                    .px(px(6.))
+                    .px(px(6. * scale))
                     .flex()
                     .items_center()
-                    .gap(px(5.));
+                    .gap(px(5. * scale));
                 if host.prefs.show_battery_percentage {
                     indicator = indicator.child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(px(12. * scale))
                             .child(format!("{}%", (battery * 100.).round())),
                     );
                 }
@@ -600,33 +760,35 @@ impl ShellView {
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(1.5))
+                            .gap(px(1.5 * scale))
                             .child(
                                 div()
-                                    .w(px(23.))
-                                    .h(px(11.))
-                                    .p(px(1.))
+                                    .w(px(23. * scale))
+                                    .h(px(11. * scale))
+                                    .p(px(1. * scale))
                                     .border_1()
                                     .border_color(p.fg.opacity(0.65))
-                                    .rounded(px(2.5))
+                                    .rounded(px(2.5 * scale))
                                     .child(fill),
                             )
                             .child(
                                 div()
-                                    .w(px(1.5))
-                                    .h(px(4.))
-                                    .rounded(px(0.75))
+                                    .w(px(1.5 * scale))
+                                    .h(px(4. * scale))
+                                    .rounded(px(0.75 * scale))
                                     .bg(p.fg.opacity(0.65)),
                             ),
                     ),
                 );
             }
         }
-        row = row.child(self.status_button(
+        row = row.child(self.anchored_status_button(
             "controls",
             "control-center",
-            Action::Panel(Panel::Controls),
+            Panel::Controls,
             p,
+            tile,
+            status_glyph,
         ));
         let clock = if host.prefs.clock_show_date && width > 880. {
             format!("{}  {}", host.system.date, host.system.clock)
@@ -638,10 +800,10 @@ impl ShellView {
             div()
                 .id("menu-clock")
                 .h_full()
-                .px(px(8.))
+                .px(px(8. * scale))
                 .flex()
                 .items_center()
-                .text_size(px(13.))
+                .text_size(px(text))
                 .font_weight(FontWeight::MEDIUM)
                 .cursor_pointer()
                 .rounded(px(4.))
@@ -655,11 +817,51 @@ impl ShellView {
         )
         .into_any_element()
     }
-    fn status_button(&self, id: &str, name: &str, action: Action, p: Palette) -> AnyElement {
+    fn status_button(
+        &self,
+        id: &str,
+        name: &str,
+        action: Action,
+        p: Palette,
+        tile: f32,
+        icon_size: f32,
+    ) -> AnyElement {
         let h = self.host.clone();
+        self.status_button_base(id, name, p, tile, icon_size)
+            .on_click(move |_, _, cx| h.update(cx, |h, cx| h.handle(action.clone(), cx)))
+            .into_any_element()
+    }
+    /// A status button whose popup drops from the button itself: the click
+    /// carries the pointer's bar-space x with it.
+    fn anchored_status_button(
+        &self,
+        id: &str,
+        name: &str,
+        panel: Panel,
+        p: Palette,
+        tile: f32,
+        icon_size: f32,
+    ) -> AnyElement {
+        let h = self.host.clone();
+        self.status_button_base(id, name, p, tile, icon_size)
+            .on_click(move |event: &ClickEvent, _, cx| {
+                let x = f32::from(event.position().x);
+                h.update(cx, |h, cx| h.handle(Action::AnchoredPanel(panel.clone(), x), cx))
+            })
+            .into_any_element()
+    }
+    fn status_button_base(
+        &self,
+        id: &str,
+        name: &str,
+        p: Palette,
+        tile: f32,
+        icon_size: f32,
+    ) -> Stateful<Div> {
         div()
             .id(SharedString::from(id.to_owned()))
-            .w(px(28.))
+            .w(px(tile))
+            .mr(px(3.))
             .h_full()
             .flex()
             .items_center()
@@ -667,9 +869,7 @@ impl ShellView {
             .rounded(px(4.))
             .cursor_pointer()
             .hover(move |s| s.bg(p.line))
-            .child(self.symbol(name, 15., p))
-            .on_click(move |_, _, cx| h.update(cx, |h, cx| h.handle(action.clone(), cx)))
-            .into_any_element()
+            .child(self.symbol(name, icon_size, p))
     }
     fn empty(&self, title: &str, detail: &str, p: Palette) -> AnyElement {
         div()
@@ -841,12 +1041,21 @@ impl ShellView {
         let Some(Panel::Tray(id)) = &host.panel else {
             return div().into_any_element();
         };
-        let mut menu = div().flex().flex_col().gap_2();
+        // The entry rhythm matches the height estimate: `TOP_GAP` between the
+        // top-level entries.
+        let mut menu = div().flex().flex_col().gap(px(6.));
         if host.tray_menu.is_empty() {
             menu = menu.child("正在读取应用菜单…");
         }
-        for item in &host.tray_menu {
-            menu = menu.child(self.menu_entry(id, item, p, 0));
+        // Invisible entries never render, so the popup's height estimate and
+        // the painted rows stay the same list.
+        let items = host
+            .tray_menu
+            .iter()
+            .filter(|item| item.visible)
+            .collect::<Vec<_>>();
+        for item in items {
+            menu = menu.child(self.menu_entry(id, item, p, 0, &host.expanded_menus));
         }
         menu.into_any_element()
     }
@@ -856,6 +1065,7 @@ impl ShellView {
         item: &services::MenuItem,
         p: Palette,
         depth: usize,
+        expanded: &[i32],
     ) -> AnyElement {
         if !item.visible || depth > 5 {
             return div().into_any_element();
@@ -863,33 +1073,234 @@ impl ShellView {
         if item.separator {
             return div().h(px(1.)).my_2().bg(p.line).into_any_element();
         }
-        let mut row = div().flex().flex_col().gap_1().pl(px(depth as f32 * 10.));
-        let label = format!(
-            "{}{}",
-            if item.toggle == Some(true) {
-                "✓ "
-            } else {
-                ""
-            },
-            item.label.replace('_', "")
-        );
-        if item.enabled {
-            row = row.child(self.button(
+        // The nesting is drawn by the rounded child panels below; rows
+        // themselves align in one clean column.
+        let mut row = div().flex().flex_col().gap(px(3.));
+        let label = item.label.replace('_', "");
+        let children: Vec<_> = item
+            .children
+            .iter()
+            .filter(|child| child.visible)
+            .collect();
+        // A submenu folds behind its chevron row; the tree belongs to the
+        // shell, so opening it never reaches the application. A collapsing
+        // card still paints while its fade rides out.
+        let parent = !children.is_empty() && depth < 5;
+        let open = parent && expanded.contains(&item.id);
+        let collapsing = open && self.state.collapsing_menus.contains(&item.id);
+        let action = if parent {
+            Action::MenuExpand(item.id)
+        } else {
+            Action::Service(services::Command::MenuClick {
+                id: id.into(),
+                item: item.id,
+            })
+        };
+        // The owner's icon (device type, signal, battery) leads the row; the
+        // check ring follows so the toggled column stays aligned.
+        let ring = item
+            .toggle
+            .map(|_| self.check_circle(item.toggle == Some(true), p));
+        let leading = self.menu_item_icon(item, p).or(ring);
+        let title = if item.enabled {
+            let trailing = parent.then(|| self.chevron(open, p));
+            self.row_button(
                 format!("menu-{id}-{}", item.id),
                 label,
-                Action::Service(services::Command::MenuClick {
-                    id: id.into(),
-                    item: item.id,
-                }),
+                action,
                 p,
-            ));
+                leading,
+                trailing,
+            )
         } else {
-            row = row.child(div().text_sm().text_color(p.muted).p_2().child(label));
-        }
-        for child in &item.children {
-            row = row.child(self.menu_entry(id, child, p, depth + 1));
+            // The same paddings as an enabled row so one row is always the
+            // same height the popup was sized with. A disabled parent still
+            // folds its children: the tree belongs to the shell.
+            let mut line = div()
+                .id(SharedString::from(format!("menu-{id}-{}", item.id)))
+                .flex()
+                .items_center()
+                .gap(px(5.))
+                .min_w_0()
+                .max_w_full()
+                .px(px(8.))
+                .py(px(4.))
+                .rounded(px(7.))
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .text_size(px(15.))
+                .line_height(px(18.))
+                .text_color(p.muted);
+            if let Some(leading) = leading {
+                line = line.child(leading);
+            }
+            line = line.child(label);
+            if parent {
+                let host = self.host.clone();
+                let target = item.id;
+                line = line
+                    .cursor_pointer()
+                    .child(div().flex_1())
+                    .child(self.chevron(open, p))
+                    .on_click(move |_, _, cx| {
+                        host.update(cx, |host, cx| host.handle(Action::MenuExpand(target), cx))
+                    });
+            }
+            line.into_any_element()
+        };
+        if open {
+            // The expanded parent folds into its own card as the title row,
+            // wearing the same card recipe as the control center tiles, and
+            // the card aligns with the popup's other rows on both sides. The
+            // card fades and settles with the shared response motion.
+            let fade = self.submenu_fade(item.id, !collapsing);
+            let mut card = macos_controls::card(p)
+                .flex()
+                .flex_col()
+                .gap(px(3.))
+                .px(px(4.))
+                .py(px(3.))
+                .child(title);
+            let mut nested = div().flex().flex_col().gap(px(3.));
+            for child in children {
+                nested = nested.child(self.menu_entry(id, child, p, depth + 1, expanded));
+            }
+            card = card.child(nested);
+            // The elastic swing reads twice: the card settles into its spot
+            // (slightly above at rest, dipping past it on the overshoot) and
+            // its content fades with the same spring.
+            row = row.child(
+                card.opacity(fade.clamp(0., 1.)).mt(px(((1. - fade) * 6.).clamp(-8., 8.))),
+            );
+        } else {
+            row = row.child(title);
         }
         row.into_any_element()
+    }
+    /// The owner's icon for a row: raw bytes first, then a resolved theme
+    /// icon name. Theme svgs recolor to the palette; bitmaps stay as sent.
+    fn menu_item_icon(
+        &self,
+        item: &services::MenuItem,
+        p: Palette,
+    ) -> Option<AnyElement> {
+        use sha2::{Digest, Sha256};
+        if let Some(bytes) = &item.icon_png {
+            let hash: [u8; 32] = Sha256::digest(bytes).into();
+            let key = format!("menu-icon:{}", icon_key(&hash));
+            if let Some(image) = self.image_cache.get(&key) {
+                return Some(
+                    img(image.clone())
+                        .size(px(16.))
+                        .object_fit(ObjectFit::Contain)
+                        .into_any_element(),
+                );
+            }
+            return None;
+        }
+        self.named_icon(item.icon_name.as_deref()?, 16., p)
+    }
+    /// The bar's status icon. The bar reads one mono voice, so the theme's
+    /// symbolic variant of the published name is preferred — a vendor badge
+    /// silhouette (`blueman-active` is one filled squircle) would otherwise
+    /// tint into a featureless block instead of a glyph.
+    fn bar_icon(&self, name: &str, size: f32, p: Palette) -> Option<AnyElement> {
+        if name.is_empty() {
+            return None;
+        }
+        let mut cache = self.theme_icons.borrow_mut();
+        let path = if name.ends_with("symbolic") {
+            theme_icon(name, &mut cache)
+        } else {
+            theme_icon(&format!("{name}-symbolic"), &mut cache)
+                .or_else(|| theme_icon(name, &mut cache))
+        }?;
+        drop(cache);
+        if path.extension().is_some_and(|ext| ext == "svg") {
+            return Some(
+                svg()
+                    .path(path.to_string_lossy().into_owned())
+                    .size(px(size))
+                    .text_color(p.fg)
+                    .into_any_element(),
+            );
+        }
+        Some(
+            img(path)
+                .size(px(size))
+                .object_fit(ObjectFit::Contain)
+                .into_any_element(),
+        )
+    }
+    /// A freedesktop icon name rendered at the given size. Theme svgs recolor
+    /// to the palette so a status glyph keeps one voice with the row text.
+    fn named_icon(&self, name: &str, size: f32, p: Palette) -> Option<AnyElement> {
+        if name.is_empty() {
+            return None;
+        }
+        let path = theme_icon(name, &mut self.theme_icons.borrow_mut())?;
+        if path.extension().is_some_and(|ext| ext == "svg") {
+            return Some(
+                svg()
+                    .path(path.to_string_lossy().into_owned())
+                    .size(px(size))
+                    .text_color(p.fg)
+                    .into_any_element(),
+            );
+        }
+        Some(
+            img(path)
+                .size(px(size))
+                .object_fit(ObjectFit::Contain)
+                .into_any_element(),
+        )
+    }
+    /// The folding arrow of a submenu row: right while collapsed, down while
+    /// expanded, in the muted palette like macOS submenu markers.
+    fn chevron(&self, expanded: bool, p: Palette) -> AnyElement {
+        let path = icon_path(if expanded {
+            "chevron-down.svg"
+        } else {
+            "chevron-right.svg"
+        });
+        if path.is_file() {
+            return svg()
+                .path(path.to_string_lossy().into_owned())
+                .size(px(18.))
+                .text_color(p.muted)
+                .into_any_element();
+        }
+        div()
+            .size(px(18.))
+            .text_center()
+            .text_color(p.muted)
+            .child(if expanded { "▾" } else { "▸" })
+            .into_any_element()
+    }
+    /// The open/close ride of a submenu card: 0 fully folded, 1 fully open.
+    /// The spring overshoots its resting spot and swings back, so the fold
+    /// reads elastic. A collapsing card keeps rendering while it rides out;
+    /// the host drops the id from its expanded set once the timer has run.
+    fn submenu_fade(&self, id: i32, open: bool) -> f32 {
+        let reduce = self.state.prefs.reduce_motion;
+        let mut map = self.submenu_motion.borrow_mut();
+        let entry = map.entry(id).or_insert_with(|| {
+            (
+                std::time::Instant::now(),
+                crate::dock_motion::Elastic::new(0.),
+            )
+        });
+        let (start, spring) = entry;
+        let target = if open { 1. } else { 0. };
+        if spring.target() != target {
+            if reduce {
+                spring.snap(target);
+            } else {
+                spring.retarget(target, start.elapsed());
+            }
+        }
+        spring.sample(start.elapsed()).value
     }
     /// The applications folded into the Dock's overflow tile, as a fixed 3x3
     /// grid. A click activates the application; a right click opens its Dock
@@ -940,39 +1351,30 @@ impl ShellView {
         let mut drawer_active = false;
         if self.drawer.drag.is_some() {
             let dragged = self.drawer.drag.as_ref().map(|drag| drag.id.clone());
-            for (index, id) in order.iter().enumerate() {
-                if dragged.as_deref() == Some(id.as_str()) {
-                    continue;
-                }
-                let (tx, ty) = geometry.cell_origin(index);
-                let mx = self
-                    .drawer
-                    .reorder_x
-                    .entry(id.clone())
-                    .or_insert_with(|| crate::dock_motion::Motion::with_frequency(tx, 30.));
-                if mx.target() != tx {
-                    mx.retarget(tx, now);
-                }
-                drawer_active |= mx.sample(now).active;
-                let my = self
-                    .drawer
-                    .reorder_y
-                    .entry(id.clone())
-                    .or_insert_with(|| crate::dock_motion::Motion::with_frequency(ty, 30.));
-                if my.target() != ty {
-                    my.retarget(ty, now);
-                }
-                drawer_active |= my.sample(now).active;
-            }
+            let positions: Vec<(String, f32, f32)> = order
+                .iter()
+                .enumerate()
+                .filter(|(_, id)| dragged.as_deref() != Some(id.as_str()))
+                .map(|(index, id)| {
+                    let (tx, ty) = geometry.cell_origin(index);
+                    (id.clone(), tx, ty)
+                })
+                .collect();
+            drawer_active |= crate::dock_motion::track_reorder(
+                &mut self.drawer.reorder_x,
+                30.,
+                positions.iter().map(|(id, tx, _)| (id.clone(), *tx)),
+                now,
+            );
+            drawer_active |= crate::dock_motion::track_reorder(
+                &mut self.drawer.reorder_y,
+                30.,
+                positions.iter().map(|(id, _, ty)| (id.clone(), *ty)),
+                now,
+            );
         } else {
-            for motion in self.drawer.reorder_x.values_mut() {
-                motion.snap(motion.target());
-            }
-            for motion in self.drawer.reorder_y.values_mut() {
-                motion.snap(motion.target());
-            }
-            self.drawer.reorder_x.clear();
-            self.drawer.reorder_y.clear();
+            crate::dock_motion::drain_reorder(&mut self.drawer.reorder_x);
+            crate::dock_motion::drain_reorder(&mut self.drawer.reorder_y);
         }
         let mut surface = div()
             .id("dock-drawer")
@@ -1240,12 +1642,17 @@ impl ShellView {
         // A Dock menu and its overflow drawer are modal: the window covers the
         // whole output so a click outside the visible popup can dismiss it, and
         // the placement reports where the visible popup sits inside that window.
+        // The bar popups (tray menus, control center, recent clipboard) share
+        // that arrangement so clicking anywhere else on screen dismisses them.
         let modal = matches!(
             &panel,
             Panel::Dock(_)
                 | Panel::DockOverflow { .. }
                 | Panel::DockFolder { .. }
                 | Panel::DockFolderMenu { .. }
+                | Panel::Controls
+                | Panel::Recent
+                | Panel::Tray(_)
         );
         let placement = if modal {
             Some(crate::app::panels::placement(host, &panel, width, height))
@@ -1274,12 +1681,8 @@ impl ShellView {
             body = body.bg(p.panel).border_1().border_color(p.line);
         }
         if panel == Panel::Controls {
-            return body
-                .p(px(12.))
-                .child(self.macos_controls(host, p))
-                .into_any_element();
-        }
-        if panel == Panel::Screenshot {
+            // The control center rides the shared modal popup below.
+        } else if panel == Panel::Screenshot {
             let mut tools = div().flex().items_center().gap(px(5.));
             for (id, label, symbol, mode) in [
                 ("capture-screen", "整个屏幕", "capture-screen", 1),
@@ -1324,6 +1727,7 @@ impl ShellView {
         }
         let content = match &panel {
             Panel::Recent => self.recent(host, p, cx),
+            Panel::Controls => self.macos_controls(host, p),
             Panel::Tray(_) => self.tray_menu(host, p),
             Panel::Dock(id) => self.dock_menu(host, id, p),
             Panel::DockFolder { .. } => {
@@ -1337,7 +1741,13 @@ impl ShellView {
             }
             _ => unreachable!(),
         };
-        body = body.p(px(10.)).flex().flex_col().gap(px(8.));
+        body = body.flex().flex_col().gap(px(8.));
+        body = if panel == Panel::Controls || matches!(panel, Panel::Tray(_)) {
+            // The control center and the tray menus share one surface recipe.
+            body.p(px(12.))
+        } else {
+            body.p(px(10.))
+        };
         if panel == Panel::Recent {
             body = body
                 .child(
@@ -1365,40 +1775,120 @@ impl ShellView {
                     .child(error.clone()),
             );
         }
-        if let Some(arrow) = arrow {
-            use crate::app::panels::{ArrowEdge, DOCK_ARROW};
+        if let Some(placement) = placement.as_ref() {
             let popup = placement
-                .as_ref()
-                .and_then(|placement| placement.popup)
-                .expect("a modal popup carries its visible rectangle");
+                .popup
+                .expect("a modal panel carries its visible rectangle");
             let pw = f32::from(popup.size.width);
             let ph = f32::from(popup.size.height);
-            // The content is laid out inside the visible popup, leaving the
-            // strip the pointer occupies empty.
-            let mut inner = body.child(content);
-            inner = match arrow.edge {
-                ArrowEdge::Bottom => inner
-                    .w(px(pw))
-                    .h(px((ph - DOCK_ARROW).max(0.)))
-                    .absolute()
-                    .left(px(0.))
-                    .top(px(0.)),
-                ArrowEdge::Left => inner
-                    .w(px((pw - DOCK_ARROW).max(0.)))
-                    .h(px(ph))
-                    .absolute()
-                    .left(px(DOCK_ARROW))
-                    .top(px(0.)),
-                ArrowEdge::Right => inner
-                    .w(px((pw - DOCK_ARROW).max(0.)))
-                    .h(px(ph))
-                    .absolute()
-                    .left(px(0.))
-                    .top(px(0.)),
+            if arrow.is_none() {
+                // A bar dashboard sizes its popup and keeps an inner scroll, so
+                // a list longer than the rectangle scrolls instead of clipping.
+                body = body.child(
+                    div()
+                        .id("panel-scroll")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .track_scroll(&self.scroll)
+                        .child(content),
+                );
+            } else {
+                body = body.child(content);
+            }
+            let mut inner = body;
+            if let Some(arrow) = arrow {
+                use crate::app::panels::{ArrowEdge, DOCK_ARROW};
+                // The content is laid out inside the visible popup, leaving the
+                // strip the pointer occupies empty.
+                inner = match arrow.edge {
+                    ArrowEdge::Bottom => inner
+                        .w(px(pw))
+                        .h(px((ph - DOCK_ARROW).max(0.)))
+                        .absolute()
+                        .left(px(0.))
+                        .top(px(0.)),
+                    ArrowEdge::Left => inner
+                        .w(px((pw - DOCK_ARROW).max(0.)))
+                        .h(px(ph))
+                        .absolute()
+                        .left(px(DOCK_ARROW))
+                        .top(px(0.)),
+                    ArrowEdge::Right => inner
+                        .w(px((pw - DOCK_ARROW).max(0.)))
+                        .h(px(ph))
+                        .absolute()
+                        .left(px(0.))
+                        .top(px(0.)),
+                };
+            }
+            // The appear/disappear ride: the bar popups fade and sink into
+            // place while opening and ride back up while closing, then the
+            // Host's release timer frees the surface. Dock menus keep their
+            // static entrance; their geometry tests click at settled coords.
+            // The painted rectangle's height springs between the placement
+            // heights the folding submenus produce, so the whole container
+            // rides the internal change instead of snapping.
+            let (ride, drawn_h) = if arrow.is_none() {
+                let now = self.popup_epoch.elapsed();
+                let motion = self.popup_motion.get_or_insert_with(|| {
+                    let mut motion = crate::dock_motion::Motion::new(0.);
+                    if host.prefs.reduce_motion {
+                        motion.snap(1.);
+                    } else {
+                        motion.retarget(1., now);
+                    }
+                    motion
+                });
+                if host.panel_exit {
+                    if host.prefs.reduce_motion {
+                        motion.snap(0.);
+                    } else if motion.target() != 0. {
+                        motion.retarget(0., now);
+                    }
+                }
+                let sample = motion.sample(now);
+                if sample.active {
+                    window.request_animation_frame();
+                }
+                let height = self.popup_height_motion.get_or_insert_with(|| {
+                    let mut spring = crate::dock_motion::Elastic::new(ph);
+                    if host.prefs.reduce_motion {
+                        spring.snap(ph);
+                    }
+                    spring
+                });
+                if height.target() != ph {
+                    if host.prefs.reduce_motion {
+                        height.snap(ph);
+                    } else {
+                        height.retarget(ph, now);
+                    }
+                }
+                let sprung = height.sample(now);
+                if sprung.active {
+                    window.request_animation_frame();
+                }
+                (
+                    sample.value.clamp(0., 1.),
+                    sprung.value.max(24.),
+                )
+            } else {
+                (1., ph)
             };
-            // A fullscreen invisible catcher dismisses the menu on a click
+            // A submenu card mid-fade needs its own frames even after the
+            // popup ride has settled.
+            if self
+                .submenu_motion
+                .borrow()
+                .values()
+                .any(|(start, motion)| motion.sample(start.elapsed()).active)
+            {
+                window.request_animation_frame();
+            }
+            // A fullscreen invisible catcher dismisses the panel on a click
             // outside the visible popup. It is an earlier sibling, so the popup
-            // wins the hit test and clicks inside the menu never reach it.
+            // wins the hit test and clicks inside never reach it.
             let h = self.host.clone();
             let backdrop = div()
                 .id("dock-menu-backdrop")
@@ -1416,25 +1906,26 @@ impl ShellView {
                 h.update(cx, |h, cx| h.handle(Action::Close, cx))
             });
             let overlay = div().relative().size_full().child(backdrop);
-            return overlay
-                .child(
-                    div()
-                        .absolute()
-                        .left(popup.origin.x)
-                        .top(popup.origin.y)
-                        .w(px(pw))
-                        .h(px(ph))
-                        .relative()
-                        // The catcher covers the whole output, so a click inside
-                        // the visible popup must not also reach it.
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
-                        .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .on_mouse_up(MouseButton::Right, |_, _, cx| cx.stop_propagation())
-                        .child(popup_shape(arrow, pw, ph, p))
-                        .child(inner),
-                )
-                .into_any_element();
+            let mut surfaced = div()
+                .absolute()
+                .left(popup.origin.x)
+                // The ride sinks the popup a little from its resting top, back
+                // up into place as it reaches 1.
+                .top(px(f32::from(popup.origin.y) + (1. - ride) * -8.))
+                .w(px(pw))
+                .h(px(drawn_h))
+                .relative()
+                .opacity(ride)
+                // The catcher covers the whole output, so a click inside the
+                // visible popup must not also reach it.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+                .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_mouse_up(MouseButton::Right, |_, _, cx| cx.stop_propagation());
+            if let Some(arrow) = arrow {
+                surfaced = surfaced.child(popup_shape(arrow, pw, ph, p));
+            }
+            return overlay.child(surfaced.child(inner)).into_any_element();
         }
         body.child(
             div()
@@ -1494,6 +1985,9 @@ impl Render for ShellView {
                     | Panel::DockOverflow { .. }
                     | Panel::DockFolder { .. }
                     | Panel::DockFolderMenu { .. }
+                    | Panel::Controls
+                    | Panel::Recent
+                    | Panel::Tray(_)
             )
         );
         if matches!(self.kind, Surface::Panel)
@@ -2029,6 +2523,198 @@ pub fn popup_region(
 }
 fn icon_path(name: &str) -> PathBuf {
     image_path(&format!("{name}.svg"))
+}
+
+/// Hex key for a content-hash so decoded menu icons cache by their bytes.
+fn icon_key(hash: &[u8]) -> String {
+    hash.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Collect every menu item's raw icon bytes, depth first.
+fn collect_menu_icons(items: &[services::MenuItem], out: &mut Vec<Vec<u8>>) {
+    for item in items {
+        if let Some(bytes) = &item.icon_png {
+            out.push(bytes.clone());
+        }
+        collect_menu_icons(&item.children, out);
+    }
+}
+
+/// Resolve a freedesktop icon name to a real file on the theme paths. Device,
+/// signal and battery icons ship in the system themes; the shell only needs a
+/// small, ordered probe over the common sizes and categories.
+fn theme_icon(name: &str, cache: &mut HashMap<String, Option<PathBuf>>) -> Option<PathBuf> {
+    if let Some(cached) = cache.get(name) {
+        return cached.clone();
+    }
+    let resolved = resolve_theme_icon(name);
+    cache.insert(name.to_owned(), resolved.clone());
+    resolved
+}
+
+/// The icon theme the desktop currently selected: the GTK settings (both
+/// majors) first, then KDE's kdeglobals, then the spec fallback theme.
+fn current_icon_theme() -> String {
+    if let Ok(home) = std::env::var("HOME") {
+        let config = PathBuf::from(&home).join(".config");
+        for file in ["gtk-4.0/settings.ini", "gtk-3.0/settings.ini"] {
+            if let Ok(text) = std::fs::read_to_string(config.join(file)) {
+                if let Some(theme) = ini_value(&text, "gtk-icon-theme-name") {
+                    return theme;
+                }
+            }
+        }
+        if let Ok(text) = std::fs::read_to_string(config.join("kdeglobals")) {
+            if let Some(theme) = ini_value(&text, "Theme") {
+                return theme;
+            }
+        }
+    }
+    "hicolor".to_owned()
+}
+
+/// One `key = value` pair out of an ini-style settings file.
+fn ini_value(text: &str, key: &str) -> Option<String> {
+    for line in text.lines() {
+        if let Some((name, value)) = line.split_once('=') {
+            if name.trim() == key {
+                let value = value.trim().trim_matches('"');
+                if !value.is_empty() {
+                    return Some(value.to_owned());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Probe one theme directory for the icon. Themes use two layouts —
+/// `size/category` (hicolor) and `category/size` (MacTahoe) — so try both.
+fn probe_theme(dir: &std::path::Path, name: &str) -> Option<PathBuf> {
+    const SIZES: &[&str] = &[
+        "scalable",
+        "symbolic",
+        "256",
+        "256x256",
+        "128",
+        "128x128",
+        "96",
+        "96x96",
+        "64",
+        "64x64",
+        "48",
+        "48x48",
+        "32",
+        "32x32",
+        "24",
+        "24x24",
+        "22",
+        "22x22",
+        "16",
+        "16x16",
+    ];
+    const CATEGORIES: &[&str] = &[
+        "devices",
+        "status",
+        "actions",
+        "apps",
+        "panel",
+        "places",
+        "categories",
+        "",
+    ];
+    for size in SIZES {
+        for category in CATEGORIES {
+            // Full-colour art ships as gradients the single-palette svg
+            // rasterizer cannot honour (it paints them one flat colour), so
+            // bitmaps win for non-symbolic names; symbolic glyphs only exist
+            // as vectors and recolor by design.
+            let extensions: &[&str] = if name.ends_with("symbolic") {
+                &["svg", "png"]
+            } else {
+                &["png", "svg"]
+            };
+            for extension in extensions {
+                let path = dir
+                    .join(size)
+                    .join(category)
+                    .join(format!("{name}.{extension}"));
+                if path.is_file() {
+                    return Some(path);
+                }
+                let path = dir
+                    .join(category)
+                    .join(size)
+                    .join(format!("{name}.{extension}"));
+                if path.is_file() {
+                    return Some(path);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn resolve_theme_icon(name: &str) -> Option<PathBuf> {
+    if name.is_empty() || name.contains("..") {
+        return None;
+    }
+    let absolute = PathBuf::from(name);
+    if absolute.is_absolute() {
+        return absolute.is_file().then_some(absolute);
+    }
+    let home = std::env::var("HOME").ok().map(PathBuf::from);
+    // The desktop's chosen theme wins; hicolor is the spec fallback; every
+    // other installed theme follows in deterministic order because vendors
+    // ship device glyphs in their own theme (breeze, blueman, ...).
+    let current = current_icon_theme();
+    let roots = |theme: &str, out: &mut Vec<PathBuf>| {
+        if let Some(home) = &home {
+            out.push(home.join(".icons").join(theme));
+            out.push(home.join(".local/share/icons").join(theme));
+        }
+        out.push(PathBuf::from("/usr/share/icons").join(theme));
+    };
+    let mut themes: Vec<PathBuf> = Vec::new();
+    roots(&current, &mut themes);
+    if current != "hicolor" {
+        roots("hicolor", &mut themes);
+    }
+    let mut others: Vec<PathBuf> = Vec::new();
+    for root in [PathBuf::from("/usr/share/icons")].into_iter().chain(
+        home.iter()
+            .flat_map(|home| [home.join(".icons"), home.join(".local/share/icons")]),
+    ) {
+        if let Ok(entries) = std::fs::read_dir(&root) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let theme = path.file_name().map(|n| n.to_string_lossy().into_owned());
+                if path.is_dir()
+                    && theme.as_deref().is_none_or(|theme| theme != current && theme != "hicolor")
+                {
+                    others.push(path);
+                }
+            }
+        }
+    }
+    others.sort();
+    themes.extend(others);
+    themes.push(PathBuf::from("/usr/share/pixmaps"));
+    for theme in &themes {
+        if theme.ends_with("pixmaps") {
+            for extension in ["svg", "png"] {
+                let path = theme.join(format!("{name}.{extension}"));
+                if path.is_file() {
+                    return Some(path);
+                }
+            }
+            continue;
+        }
+        if let Some(path) = probe_theme(theme, name) {
+            return Some(path);
+        }
+    }
+    None
 }
 fn image_path(filename: &str) -> PathBuf {
     let prefix = std::env::current_exe()
