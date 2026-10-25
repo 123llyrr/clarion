@@ -165,6 +165,7 @@ impl PointerAxisEvent<NativeInput> for WheelEvent {
         match self.delta {
             MouseScrollDelta::LineDelta(..) => AxisSource::Wheel,
             MouseScrollDelta::PixelDelta(..) => AxisSource::Continuous,
+            _ => AxisSource::Continuous,
         }
     }
     fn relative_direction(&self, _: Axis) -> AxisRelativeDirection {
