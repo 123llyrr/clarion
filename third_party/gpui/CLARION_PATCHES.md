@@ -18,7 +18,10 @@ Clarion additions:
   `set_glass_region`, a frosted shape independent of the input region. `None`
   falls back to the input region, so callers that only set one shape are
   unchanged. The Dock frosts only its resting tray while lifted icons stay
-  clickable outside it.
+  clickable outside it. Region requests keep every rectangle up to the protocol
+  encoder's bound: scanline masks (one row per rectangle for a tilted Dock
+  label) reach a few hundred rectangles, and a tighter cap silently starves the
+  shapes reported last.
 - `platform/linux/wayland/client.rs`: optional layer-shell global, role event
   dispatch, output resolution, optional xdg parent selection, and an opt-in
   keep-alive policy for applications reopening windows after IPC commands.

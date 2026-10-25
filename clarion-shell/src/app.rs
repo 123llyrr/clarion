@@ -49,6 +49,11 @@ pub enum Action {
     /// own coordinate space, so its popup drops from the clicked icon instead
     /// of the resting screen edge.
     AnchoredPanel(Panel, f32),
+    /// A surface-dispatched action that names the monitor it came from. A
+    /// panel it opens belongs to that monitor even when keyboard focus rests
+    /// on another one (a bar or Dock on a secondary output is still clickable
+    /// without focusing it).
+    OnOutput(String, Box<Action>),
     Close,
     Launch(String),
     Focus(u64),
@@ -98,6 +103,14 @@ pub enum Action {
     DockEdgeHover(bool),
     DoNotDisturb(bool),
     PickWallpaper,
+}
+impl Action {
+    /// Tag a panel opener with the monitor whose surface dispatched it, so a
+    /// click on a secondary bar or Dock still drops its popup on that monitor
+    /// instead of following keyboard focus.
+    pub fn on_output(output: impl Into<String>, action: Action) -> Self {
+        Action::OnOutput(output.into(), Box::new(action))
+    }
 }
 #[derive(Clone)]
 pub struct DockApp {
@@ -222,6 +235,11 @@ pub struct Host {
     environment: HashMap<String, String>,
     outputs: BTreeMap<String, OutputViews>,
     popup: Option<WindowHandle<ShellView>>,
+    /// The monitor whose surface dispatched the action currently being
+    /// applied. A bar or Dock click can land on a monitor that does not hold
+    /// keyboard focus; its popup still belongs to that monitor, not to the
+    /// focused one.
+    dispatch_output: Option<String>,
     /// The platform window kept alive while a closing popup rides its fade
     /// out; superseded fades are cut short.
     exiting: Option<WindowHandle<ShellView>>,
@@ -294,6 +312,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 environment,
                 outputs: BTreeMap::new(),
                 popup: None,
+                dispatch_output: None,
                 exiting: None,
                 exit_generation: 0,
                 toast: None,
@@ -744,6 +763,14 @@ impl Host {
             }
             Action::PickWallpaper => self.desktop_action(DesktopAction::Wallpaper(None), cx),
             Action::Close => self.close(cx),
+            Action::OnOutput(output, action) => {
+                // Bar and Dock surfaces live on every output. Carry the one
+                // that dispatched the action while it applies, so its popup is
+                // created there instead of on the keyboard-focused output.
+                let previous = self.dispatch_output.replace(output);
+                self.apply(*action, cx);
+                self.dispatch_output = previous;
+            }
             Action::Panel(panel) => {
                 // A non-anchored opener drops its popup at the resting edge.
                 self.anchored = None;
@@ -1250,7 +1277,13 @@ impl Host {
             }
         }
         self.panel = Some(panel);
-        let output = self.active_output();
+        // A popup opened from a bar or Dock belongs to that surface's monitor;
+        // keyboard focus may still sit on a different output.
+        let output = self
+            .dispatch_output
+            .clone()
+            .filter(|output| self.outputs.contains_key(output))
+            .unwrap_or_else(|| self.active_output());
         let view = self.outputs.get(&output);
         let display = view.map(|v| v.display);
         let (w, h) = view.map(|v| (v.width, v.height)).unwrap_or((1200., 800.));

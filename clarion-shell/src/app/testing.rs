@@ -45,6 +45,7 @@ pub(crate) fn test_host(
         environment,
         outputs: BTreeMap::new(),
         popup: None,
+        dispatch_output: None,
         exiting: None,
         exit_generation: 0,
         toast: None,
@@ -107,6 +108,41 @@ pub(crate) fn output_name(host: &Entity<Host>, cx: &App) -> String {
         .next()
         .cloned()
         .expect("test output was not created")
+}
+
+/// Register an extra monitor that shares the test platform's only display, so
+/// a dispatched action can name an output other than the one that holds focus.
+pub(crate) fn register_output(host: &Entity<Host>, name: &str, cx: &mut App) {
+    host.update(cx, |host, cx| {
+        let Some(view) = host.outputs.values().next() else {
+            return;
+        };
+        let view = OutputViews {
+            bar: view.bar,
+            dock: view.dock,
+            edge: view.edge,
+            desktop: view.desktop,
+            display: view.display,
+            width: view.width,
+            height: view.height,
+        };
+        host.outputs.insert(name.to_owned(), view);
+        host.changed(cx);
+    });
+}
+
+/// Apply an action tagged with the surface output that dispatched it, the way
+/// a bar or Dock click does.
+pub(crate) fn dispatch_on_output(
+    host: &Entity<Host>,
+    output: &str,
+    action: Action,
+    cx: &mut App,
+) -> WindowHandle<ShellView> {
+    host.update(cx, |host, cx| {
+        host.apply(Action::on_output(output, action), cx)
+    });
+    host.read(cx).popup.expect("test panel was not created")
 }
 
 pub(crate) fn open_dock(host: &Entity<Host>, cx: &mut App) -> WindowHandle<ShellView> {

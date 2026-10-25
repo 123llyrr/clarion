@@ -673,3 +673,39 @@ fn reduced_motion_releases_a_bar_popup_right_away(cx: &mut TestAppContext) {
         "no fade keeps the surface alive"
     );
 }
+
+#[gpui::test]
+fn a_bar_popup_lands_on_the_monitor_that_dispatched_the_click(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let host = cx
+        .update(|cx| testing::test_host(cx, fixture.catalog.clone(), fixture.environment.clone()));
+    // The test platform has a single display: the primary output holds the
+    // focus, and the second monitor is only ever reached by its own bar.
+    let primary = cx.update(|cx| {
+        testing::open_dock(&host, cx);
+        testing::output_name(&host, cx)
+    });
+    let secondary = format!("zz-{primary}");
+    cx.update(|cx| testing::register_output(&host, &secondary, cx));
+    assert_eq!(
+        host.read_with(cx, |host, _| host.active_output()),
+        primary,
+        "focus must stay on the primary output for the click to prove anything"
+    );
+    let window = cx.update(|cx| {
+        testing::dispatch_on_output(
+            &host,
+            &secondary,
+            crate::app::Action::AnchoredPanel(Panel::Tray("tray".into()), 700.),
+            cx,
+        )
+    });
+    let opened = window
+        .read_with(cx, |view, _| view.output().to_owned())
+        .expect("the panel window is alive");
+    assert_eq!(
+        opened,
+        secondary,
+        "the tray menu belongs to the bar that was clicked, not to the focused output"
+    );
+}

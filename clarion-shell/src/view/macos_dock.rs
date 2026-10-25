@@ -312,6 +312,10 @@ pub(super) struct DockViewMotion {
     /// seeds the snapshot: without this gate a shell restart would replay a
     /// batch of false arrivals for folders that were already pinned.
     pub(super) folders_seeded: bool,
+    /// The folder whose fan panel was open as the previous render saw it. When
+    /// the fan finishes retracting and the panel closes, the tile replays its
+    /// grow-in so the icon does not pop in on the frame the panel disappears.
+    pub(super) folder_fan_root: Option<std::path::PathBuf>,
     /// Resting slot layout fingerprints. The idle geometry (used for the
     /// strip bounds and drawer mapping) only changes with the metrics; every
     /// magnification frame reuses the cached sample instead of re-running the
@@ -444,6 +448,7 @@ impl DockViewMotion {
             folder_exiting: Vec::new(),
             folders_snapshot: Vec::new(),
             folders_seeded: false,
+            folder_fan_root: None,
             idle_fingerprint: None,
             idle_slots: std::rc::Rc::new(Vec::new()),
             hover_pulse: std::time::Instant::now(),
@@ -1002,6 +1007,26 @@ impl ShellView {
                     }
                 }
             }
+            // The fan folds back into its tile and the panel closes. Let the
+            // folder artwork grow back from the placeholder shape instead of
+            // swapping in from the open control on a single frame.
+            let fan_root = match host.panel.as_ref() {
+                Some(Panel::DockFolder { root }) => Some(root.clone()),
+                _ => None,
+            };
+            if let Some(closed) = motion.folder_fan_root.take() {
+                if fan_root.as_ref() != Some(&closed)
+                    && !host.prefs.reduce_motion
+                    && host.dock_folders.iter().any(|folder| folder.path == closed)
+                {
+                    motion
+                        .folder_appear
+                        .entry(closed.to_string_lossy().into_owned())
+                        .or_insert_with(|| crate::dock_motion::Motion::new(0.))
+                        .retarget(1., now);
+                }
+            }
+            motion.folder_fan_root = fan_root;
             motion.folders_seeded = true;
             motion.folders_snapshot = host.dock_folders.clone();
         }
@@ -1719,15 +1744,19 @@ impl ShellView {
                 }
                 let h = self.host.clone();
                 let ids = hidden.clone();
+                let surface_output = self.output.clone();
                 let icon_size = slot.size.round() as u16;
                 tile = tile
                     .on_click(move |_, _, cx| {
                         h.update(cx, |h, cx| {
                             h.handle(
-                                Action::Panel(Panel::DockOverflow {
-                                    ids: ids.clone(),
-                                    icon_size,
-                                }),
+                                Action::on_output(
+                                    surface_output.clone(),
+                                    Action::Panel(Panel::DockOverflow {
+                                        ids: ids.clone(),
+                                        icon_size,
+                                    }),
+                                ),
                                 cx,
                             )
                         })
@@ -1771,6 +1800,7 @@ impl ShellView {
                     let path = folder.path.clone();
                     let context = folder.path.clone();
                     let context_host = self.host.clone();
+                    let context_output = self.output.clone();
                     tile = tile
                         .on_mouse_down(
                             MouseButton::Left,
@@ -1799,17 +1829,27 @@ impl ShellView {
                                 }
                                 let h = this.host.clone();
                                 let path = path.clone();
+                                let surface_output = this.output.clone();
                                 h.update(cx, |h, cx| {
-                                    h.handle(Action::OpenFolder(path), cx)
+                                    h.handle(
+                                        Action::on_output(
+                                            surface_output.clone(),
+                                            Action::OpenFolder(path),
+                                        ),
+                                        cx,
+                                    )
                                 });
                             }),
                         )
                         .on_mouse_down(MouseButton::Right, move |_, _, cx| {
                             context_host.update(cx, |host, cx| {
                                 host.handle(
-                                    Action::Panel(Panel::DockFolderMenu {
-                                        path: context.clone(),
-                                    }),
+                                    Action::on_output(
+                                        context_output.clone(),
+                                        Action::Panel(Panel::DockFolderMenu {
+                                            path: context.clone(),
+                                        }),
+                                    ),
                                     cx,
                                 )
                             })
@@ -1875,9 +1915,18 @@ impl ShellView {
                 }
                 if launcher {
                     let h = self.host.clone();
+                    let surface_output = self.output.clone();
                     tile = tile
                         .on_click(move |_, _, cx| {
-                            h.update(cx, |h, cx| h.handle(Action::Panel(Panel::Apps), cx))
+                            h.update(cx, |h, cx| {
+                                h.handle(
+                                    Action::on_output(
+                                        surface_output.clone(),
+                                        Action::Panel(Panel::Apps),
+                                    ),
+                                    cx,
+                                )
+                            })
                         })
                         .can_drop(|_, _, _| true)
                         .on_drop::<gpui::ExternalPaths>(|_, _, cx| cx.stop_propagation());
@@ -1921,9 +1970,16 @@ impl ShellView {
                         )
                         .on_mouse_down(MouseButton::Right, {
                             let h = self.host.clone();
+                            let surface_output = self.output.clone();
                             move |_, _, cx| {
                                 h.update(cx, |h, cx| {
-                                    h.handle(Action::Panel(Panel::Dock(context.clone())), cx)
+                                    h.handle(
+                                        Action::on_output(
+                                            surface_output.clone(),
+                                            Action::Panel(Panel::Dock(context.clone())),
+                                        ),
+                                        cx,
+                                    )
                                 })
                             }
                         })

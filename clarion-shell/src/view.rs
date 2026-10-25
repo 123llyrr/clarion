@@ -244,6 +244,12 @@ fn update_slider(
 }
 
 impl ShellView {
+    /// The output this surface belongs to. Tests read it to prove which
+    /// monitor a dispatched click opened its popup on.
+    #[cfg(test)]
+    pub(crate) fn output(&self) -> &str {
+        &self.output
+    }
     pub fn new(
         host: Entity<Host>,
         kind: Surface,
@@ -574,6 +580,7 @@ impl ShellView {
             "clarion-mark-black.png"
         });
         let h = self.host.clone();
+        let bar_output = self.output.clone();
         let mut row = div()
             .id("macos-menu-bar")
             .size_full()
@@ -608,7 +615,15 @@ impl ShellView {
                             .object_fit(ObjectFit::Contain),
                     )
                     .on_click(move |_, _, cx| {
-                        h.update(cx, |h, cx| h.handle(Action::Panel(Panel::Preferences), cx))
+                        h.update(cx, |h, cx| {
+                            h.handle(
+                                Action::on_output(
+                                    bar_output.clone(),
+                                    Action::Panel(Panel::Preferences),
+                                ),
+                                cx,
+                            )
+                        })
                     }),
             )
             .child(
@@ -637,6 +652,9 @@ impl ShellView {
                 let right_id = item.id.clone();
                 let menu = item.item_is_menu;
                 let h = self.host.clone();
+                // The bar exists on every output: a tray popup belongs to the
+                // monitor whose bar was clicked, focused or not.
+                let bar_output = self.output.clone();
                 let icon = if let Some(image) = self.image_cache.get(&format!("tray:{}", item.id)) {
                     img(image.clone())
                         .size(px(tray_glyph))
@@ -675,7 +693,13 @@ impl ShellView {
                                 if menu {
                                     let x = f32::from(event.position().x);
                                     h.handle(
-                                        Action::AnchoredPanel(Panel::Tray(left_id.clone()), x),
+                                        Action::on_output(
+                                            bar_output.clone(),
+                                            Action::AnchoredPanel(
+                                                Panel::Tray(left_id.clone()),
+                                                x,
+                                            ),
+                                        ),
                                         cx,
                                     )
                                 } else {
@@ -692,10 +716,20 @@ impl ShellView {
                         })
                         .on_mouse_down(MouseButton::Right, {
                             let h = self.host.clone();
+                            let bar_output = self.output.clone();
                             move |event: &MouseDownEvent, _, cx| {
                                 let x = f32::from(event.position.x);
                                 h.update(cx, |h, cx| {
-                                    h.handle(Action::AnchoredPanel(Panel::Tray(right_id.clone()), x), cx)
+                                    h.handle(
+                                        Action::on_output(
+                                            bar_output.clone(),
+                                            Action::AnchoredPanel(
+                                                Panel::Tray(right_id.clone()),
+                                                x,
+                                            ),
+                                        ),
+                                        cx,
+                                    )
                                 })
                             }
                         }),
@@ -796,6 +830,7 @@ impl ShellView {
             host.system.clock.clone()
         };
         let h = self.host.clone();
+        let bar_output = self.output.clone();
         row.child(
             div()
                 .id("menu-clock")
@@ -811,7 +846,13 @@ impl ShellView {
                 .child(menu_text(clock, FontWeight::NORMAL, p.fg, cx))
                 .on_click(move |_, _, cx| {
                     h.update(cx, |h, cx| {
-                        h.handle(Action::Panel(Panel::Notifications), cx)
+                        h.handle(
+                            Action::on_output(
+                                bar_output.clone(),
+                                Action::Panel(Panel::Notifications),
+                            ),
+                            cx,
+                        )
                     })
                 }),
         )
@@ -827,6 +868,9 @@ impl ShellView {
         icon_size: f32,
     ) -> AnyElement {
         let h = self.host.clone();
+        // Bar buttons live on every output; a popup they open belongs to this
+        // bar's monitor, not to whichever output holds keyboard focus.
+        let action = Action::on_output(self.output.clone(), action);
         self.status_button_base(id, name, p, tile, icon_size)
             .on_click(move |_, _, cx| h.update(cx, |h, cx| h.handle(action.clone(), cx)))
             .into_any_element()
@@ -843,10 +887,16 @@ impl ShellView {
         icon_size: f32,
     ) -> AnyElement {
         let h = self.host.clone();
+        let output = self.output.clone();
         self.status_button_base(id, name, p, tile, icon_size)
             .on_click(move |event: &ClickEvent, _, cx| {
                 let x = f32::from(event.position().x);
-                h.update(cx, |h, cx| h.handle(Action::AnchoredPanel(panel.clone(), x), cx))
+                h.update(cx, |h, cx| {
+                    h.handle(
+                        Action::on_output(output.clone(), Action::AnchoredPanel(panel.clone(), x)),
+                        cx,
+                    )
+                })
             })
             .into_any_element()
     }
@@ -1510,9 +1560,16 @@ impl ShellView {
                     )
                     .on_mouse_down(MouseButton::Right, {
                         let h = self.host.clone();
+                        let surface_output = self.output.clone();
                         move |_, _, cx| {
                             h.update(cx, |h, cx| {
-                                h.handle(Action::Panel(Panel::Dock(context.clone())), cx)
+                                h.handle(
+                                    Action::on_output(
+                                        surface_output.clone(),
+                                        Action::Panel(Panel::Dock(context.clone())),
+                                    ),
+                                    cx,
+                                )
                             })
                         }
                     })
@@ -2004,26 +2061,22 @@ impl Render for ShellView {
             )];
             // Set the frost region first so the background effect never falls
             // back to blurring the whole fullscreen window for a frame.
-            if !p.frosted() {
+            if !p.frosted() || self.folder_drag_layer {
                 window.set_glass_region(Some(&[]));
             } else if let Some(panel) = host.panel.as_ref() {
                 let placement =
                     crate::app::panels::placement(host, panel, width, height);
                 if let Some(popup) = placement.popup {
-                    if self.folder_drag_layer {
-                        // The popup is now an invisible drag layer; never leave
-                        // its old frost rectangle over the desktop.
-                        window.set_glass_region(Some(&[]));
-                    } else {
-                        // Frost the popup's actual outline. A plain rectangle would
-                        // blur the transparent corners and the strip beside the
-                        // pointer wedge, leaving a rectangular halo around it.
-                        window.set_glass_region(Some(&popup_region(placement.arrow, popup)));
-                    }
-                } else {
+                    // Frost the popup's actual outline. A plain rectangle would
+                    // blur the transparent corners and the strip beside the
+                    // pointer wedge, leaving a rectangular halo around it.
+                    window.set_glass_region(Some(&popup_region(placement.arrow, popup)));
+                } else if !matches!(panel, Panel::DockFolder { .. }) {
                     // `None` falls back to the full input region in the
-                    // compositor, which would blur the whole output. The fan
-                    // must explicitly advertise an empty frost region.
+                    // compositor, which would blur the whole output. Panels
+                    // without a visible rectangle advertise an empty frost
+                    // region — except the fan, which paints its own regions
+                    // while rendering and must not be wiped here.
                     window.set_glass_region(Some(&[]));
                 }
             }

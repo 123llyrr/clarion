@@ -16,6 +16,11 @@ the notices for Feather-derived icons. It is used as a monochrome action mark in
 the native menu bar and screenshot controls; the themed screenshot
 application artwork remains separate.
 
+`external-link.svg` is the unmodified `external-link` icon from the same Lucide
+revision and license. It is the Dock folder fan's terminal action mark (open the
+folder in the file manager), matching the `open_in_new` glyph used by the
+reference Dock.
+
 ## Rasterized icons
 
 `activity-monitor.png`, `preview.png`, `launchpad.png`, `trash-empty.png`,
