@@ -225,6 +225,174 @@ pub const ENTRIES: &[Command] = &[
         override_value: None,
     },
     Command {
+        id: "system.lock",
+        slash: "lock",
+        aliases: &["lockscreen", "screenlock"],
+        title: "锁屏",
+        keywords: &["lock", "lockscreen", "screen", "session", "锁屏", "锁定"],
+        kind: CommandKind::Action,
+        value: None,
+        scope: None,
+        key: None,
+        override_value: None,
+    },
+    Command {
+        id: "system.logout",
+        slash: "logout",
+        aliases: &["signout", "log-out"],
+        title: "注销",
+        keywords: &["logout", "signout", "session", "注销", "退出登录"],
+        kind: CommandKind::Action,
+        value: None,
+        scope: None,
+        key: None,
+        override_value: None,
+    },
+    Command {
+        id: "system.suspend",
+        slash: "suspend",
+        aliases: &["sleep"],
+        title: "挂起",
+        keywords: &["suspend", "sleep", "挂起", "休眠", "睡眠"],
+        kind: CommandKind::Action,
+        value: None,
+        scope: None,
+        key: None,
+        override_value: None,
+    },
+    Command {
+        id: "system.reboot",
+        slash: "reboot",
+        aliases: &["restart"],
+        title: "重启",
+        keywords: &["reboot", "restart", "重启"],
+        kind: CommandKind::Action,
+        value: None,
+        scope: None,
+        key: None,
+        override_value: None,
+    },
+    Command {
+        id: "system.shutdown",
+        slash: "shutdown",
+        aliases: &["poweroff"],
+        title: "关机",
+        keywords: &["shutdown", "poweroff", "关机"],
+        kind: CommandKind::Action,
+        value: None,
+        scope: None,
+        key: None,
+        override_value: None,
+    },
+    Command {
+        id: "shell.screenshot",
+        slash: "screenshot",
+        aliases: &["shot", "capture"],
+        title: "截图",
+        keywords: &["screenshot", "capture", "shot", "截图"],
+        kind: CommandKind::Action,
+        value: None,
+        scope: None,
+        key: None,
+        override_value: None,
+    },
+    Command {
+        id: "shell.notifications",
+        slash: "notifications",
+        aliases: &["notification-center"],
+        title: "通知中心",
+        keywords: &["notifications", "notification", "notification center", "通知", "通知中心"],
+        kind: CommandKind::Action,
+        value: None,
+        scope: None,
+        key: None,
+        override_value: None,
+    },
+    Command {
+        id: "shell.recent",
+        slash: "recent-content",
+        aliases: &["clipboard-history", "history-panel"],
+        title: "最近内容",
+        keywords: &["recent", "history", "clipboard", "最近", "剪贴板"],
+        kind: CommandKind::Action,
+        value: None,
+        scope: None,
+        key: None,
+        override_value: None,
+    },
+    Command {
+        id: "shell.control",
+        slash: "control",
+        aliases: &["control-center"],
+        title: "控制中心",
+        keywords: &["control", "controls", "center", "控制中心"],
+        kind: CommandKind::Action,
+        value: None,
+        scope: None,
+        key: None,
+        override_value: None,
+    },
+    Command {
+        id: "settings.launcher.fullscreen",
+        slash: "launcher-fullscreen",
+        aliases: &["fullscreen-launcher"],
+        title: "启动台：全屏",
+        keywords: &["launcher", "fullscreen", "启动台", "全屏"],
+        kind: CommandKind::Action,
+        value: None,
+        scope: None,
+        key: None,
+        override_value: None,
+    },
+    Command {
+        id: "settings.launcher.palette",
+        slash: "launcher-palette",
+        aliases: &["palette-launcher"],
+        title: "启动台：弹窗",
+        keywords: &["launcher", "palette", "popup", "启动台", "弹窗"],
+        kind: CommandKind::Action,
+        value: None,
+        scope: None,
+        key: None,
+        override_value: None,
+    },
+    Command {
+        id: "settings.wallpaper",
+        slash: "wallpaper-pick",
+        aliases: &["change-wallpaper"],
+        title: "更换壁纸",
+        keywords: &["wallpaper", "background", "壁纸", "背景"],
+        kind: CommandKind::Action,
+        value: None,
+        scope: None,
+        key: None,
+        override_value: None,
+    },
+    Command {
+        id: "settings.reduce-motion",
+        slash: "reduce-motion",
+        aliases: &["motion"],
+        title: "减少动态效果",
+        keywords: &["reduce", "motion", "animation", "动效", "动画"],
+        kind: CommandKind::Action,
+        value: None,
+        scope: None,
+        key: None,
+        override_value: None,
+    },
+    Command {
+        id: "settings.dock-autohide",
+        slash: "dock-autohide",
+        aliases: &["autohide"],
+        title: "Dock 自动隐藏",
+        keywords: &["dock", "autohide", "auto hide", "自动隐藏"],
+        kind: CommandKind::Action,
+        value: None,
+        scope: None,
+        key: None,
+        override_value: None,
+    },
+    Command {
         id: "apps.list",
         slash: "list",
         aliases: &[],
@@ -444,11 +612,38 @@ mod tests {
 
     #[test]
     fn the_table_matches_the_reference_count() {
-        assert_eq!(ENTRIES.len(), 24);
+        assert_eq!(ENTRIES.len(), 38);
         assert_eq!(ENTRIES.iter().filter(|entry| entry.kind == CommandKind::Mode).count(), 6);
         assert_eq!(ENTRIES.iter().filter(|entry| entry.kind == CommandKind::Tool).count(), 6);
-        assert_eq!(ENTRIES.iter().filter(|entry| entry.kind == CommandKind::Action).count(), 4);
+        assert_eq!(ENTRIES.iter().filter(|entry| entry.kind == CommandKind::Action).count(), 18);
         assert_eq!(ENTRIES.iter().filter(|entry| entry.kind == CommandKind::Override).count(), 8);
+    }
+
+    #[test]
+    fn system_and_settings_actions_are_searchable() {
+        // Chinese titles, English words and slash names all reach the entry.
+        for (query, id) in [
+            ("锁屏", "system.lock"),
+            ("lock", "system.lock"),
+            ("重启", "system.reboot"),
+            ("restart", "system.reboot"),
+            ("关机", "system.shutdown"),
+            ("挂起", "system.suspend"),
+            ("注销", "system.logout"),
+            ("自动隐藏", "settings.dock-autohide"),
+            ("fullscreen", "settings.launcher.fullscreen"),
+            ("弹窗", "settings.launcher.palette"),
+        ] {
+            let found = search(query, Mode::Search, None);
+            assert!(
+                found.iter().any(|entry| entry.id == id),
+                "{query:?} should reach {id}, got {:?}",
+                found.iter().map(|entry| entry.id).collect::<Vec<_>>()
+            );
+        }
+        // Slash resolution covers the new names and their aliases.
+        assert_eq!(resolve("poweroff", "", Mode::Search, None).unwrap().id, "system.shutdown");
+        assert_eq!(resolve("lock", "", Mode::Search, None).unwrap().id, "system.lock");
     }
 
     #[test]
@@ -494,7 +689,7 @@ mod tests {
     fn the_command_list_skips_overrides_and_ranks_prefixes_first() {
         let ids: Vec<&str> = listable().map(|entry| entry.id).collect();
         assert!(!ids.iter().any(|id| id.starts_with("apps.") || id.starts_with("clipboard.")));
-        assert_eq!(ids.len(), 16);
+        assert_eq!(ids.len(), 30);
         let found = search("calc", Mode::Search, None);
         assert_eq!(found.first().unwrap().id, "tool.calculator");
         let found = search("设置", Mode::Search, None);

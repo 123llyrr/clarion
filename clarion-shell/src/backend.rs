@@ -105,6 +105,8 @@ pub enum Command {
     SavePreferences(Preferences),
     /// Count one successful application launch in the palette history.
     RecordLaunch(String),
+    /// Lock, suspend or power the session off through logind/systemd.
+    System(crate::app::SystemAction),
 }
 
 #[derive(Clone, Debug)]
@@ -623,6 +625,7 @@ fn perform(
                 Duration::from_secs(3),
             )?;
         }
+        Command::System(action) => run_system_action(action, options)?,
         Command::OpenSettings => {
             request(
                 &options.environment,
@@ -697,6 +700,50 @@ fn perform(
                 clarion_launcher::usage::LaunchHistory::load(&options.environment);
             history.record_launch(&id, clarion_launcher::usage::unix_millis());
             history.save(&options.environment)?;
+        }
+    }
+    Ok(())
+}
+
+/// Run one of the session's power actions. `loginctl`/`systemctl` return once
+/// the request is queued, and the caller already runs on the worker thread.
+fn run_system_action(action: crate::app::SystemAction, options: &Options) -> Result<()> {
+    use crate::app::SystemAction;
+    let timeout = Duration::from_secs(10);
+    match action {
+        SystemAction::Lock => {
+            // Locking the caller's own session needs no id; passing the known
+            // one keeps it deterministic under nested sessions.
+            match options.environment.get("XDG_SESSION_ID") {
+                Some(session) => run_tool(
+                    "loginctl",
+                    &["lock-session", session],
+                    &options.environment,
+                    timeout,
+                )?,
+                None => run_tool("loginctl", &["lock-session"], &options.environment, timeout)?,
+            };
+        }
+        SystemAction::Logout => {
+            let session = options
+                .environment
+                .get("XDG_SESSION_ID")
+                .context("无法确定当前会话（XDG_SESSION_ID）")?;
+            run_tool(
+                "loginctl",
+                &["terminate-session", session],
+                &options.environment,
+                timeout,
+            )?;
+        }
+        SystemAction::Suspend => {
+            run_tool("systemctl", &["suspend"], &options.environment, timeout)?;
+        }
+        SystemAction::Reboot => {
+            run_tool("systemctl", &["reboot"], &options.environment, timeout)?;
+        }
+        SystemAction::Shutdown => {
+            run_tool("systemctl", &["poweroff"], &options.environment, timeout)?;
         }
     }
     Ok(())

@@ -918,6 +918,40 @@ fn palette_commands_report_scope_and_unimplemented_entries(cx: &mut TestAppConte
 }
 
 #[gpui::test]
+fn palette_system_actions_hand_off_to_the_worker(cx: &mut TestAppContext) {
+    let (_fixture, host, _view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    let received = cx.update(|cx| testing::capture_backend(&host, cx));
+    visual.simulate_input("/lock");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    let command = received
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("the lock request reaches the backend");
+    assert!(
+        matches!(
+            command,
+            crate::backend::Command::System(crate::app::SystemAction::Lock)
+        ),
+        "a slash action hands the session action to the worker"
+    );
+    host.read_with(cx, |host, _| {
+        assert!(host.panel_exit, "the palette folds away after a power action");
+    });
+}
+
+#[gpui::test]
+fn palette_settings_actions_toggle_preferences(cx: &mut TestAppContext) {
+    let (_fixture, host, _view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    assert!(!host.read_with(cx, |host, _| host.prefs.reduce_motion));
+    visual.simulate_input("/reduce-motion");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    host.read_with(cx, |host, _| {
+        assert!(host.prefs.reduce_motion, "the toggle flipped the preference");
+    });
+}
+
+#[gpui::test]
 fn right_clicking_a_palette_tile_opens_a_menu_surface_over_the_palette(
     cx: &mut TestAppContext,
 ) {

@@ -26,15 +26,15 @@ const COMMAND_PITCH: f32 = 42.;
 /// sheet's full inner width — full and partial rows alike stay symmetric —
 /// and each tile sits centred in its slot. `GRID_GAP` is the vertical gutter.
 const GRID_COLUMNS: usize = 5;
-const GRID_TILE_W: f32 = 132.;
-const GRID_TILE_H: f32 = 110.;
-const GRID_GAP: f32 = 10.;
+const GRID_TILE_W: f32 = 128.;
+const GRID_TILE_H: f32 = 128.;
+const GRID_GAP: f32 = 5.;
 /// Row pitch, including the gutter under each row.
 const GRID_PITCH: f32 = GRID_TILE_H + GRID_GAP;
 /// A categorized section's header block and its divider, both fixed so the
 /// keyboard scroll maths can walk the plan in pixels.
-const SECTION_HEADER_H: f32 = 20.;
-const SECTION_DIVIDER_H: f32 = 10.;
+const SECTION_HEADER_H: f32 = 16.;
+const SECTION_DIVIDER_H: f32 = 12.;
 
 /// One categorized slice of the resting grid: its header title, the category
 /// a "更多" button narrows the tag bar to (recent launches carry none), and
@@ -60,12 +60,35 @@ fn implemented(command: &Command) -> bool {
     match command.kind {
         CommandKind::Mode => matches!(command.value, Some("search" | "apps" | "commands")),
         CommandKind::Tool => false,
-        CommandKind::Action => matches!(
-            command.id,
-            "theme.light" | "theme.dark" | "settings.open"
-        ),
+        CommandKind::Action => action_ready(command.id),
         CommandKind::Override => matches!(command.key, Some("appsLayout" | "appsOrder")),
     }
+}
+
+/// Every action entry the shell can actually dispatch. The table keeps the
+/// reference set; this is the executable subset, including the session power
+/// actions and the settings toggles the palette offers.
+fn action_ready(id: &str) -> bool {
+    matches!(
+        id,
+        "theme.light"
+            | "theme.dark"
+            | "settings.open"
+            | "settings.launcher.fullscreen"
+            | "settings.launcher.palette"
+            | "settings.wallpaper"
+            | "settings.reduce-motion"
+            | "settings.dock-autohide"
+            | "shell.screenshot"
+            | "shell.notifications"
+            | "shell.recent"
+            | "shell.control"
+            | "system.lock"
+            | "system.logout"
+            | "system.suspend"
+            | "system.reboot"
+            | "system.shutdown"
+    )
 }
 
 fn kind_label(kind: CommandKind) -> &'static str {
@@ -498,6 +521,26 @@ impl ShellView {
                 "theme.light" => Some(Action::Theme("light".into())),
                 "theme.dark" => Some(Action::Theme("dark".into())),
                 "settings.open" => Some(Action::Settings),
+                "settings.launcher.fullscreen" => Some(Action::LauncherPresentation(
+                    LauncherPresentation::Fullscreen,
+                )),
+                "settings.launcher.palette" => Some(Action::LauncherPresentation(
+                    LauncherPresentation::Palette,
+                )),
+                "settings.wallpaper" => Some(Action::PickWallpaper),
+                "settings.reduce-motion" => {
+                    Some(Action::ReduceMotion(!host.prefs.reduce_motion))
+                }
+                "settings.dock-autohide" => Some(Action::AutoHide(!host.prefs.dock_auto_hide)),
+                "shell.screenshot" => Some(Action::Panel(Panel::Screenshot)),
+                "shell.notifications" => Some(Action::Panel(Panel::Notifications)),
+                "shell.recent" => Some(Action::Panel(Panel::Recent)),
+                "shell.control" => Some(Action::Panel(Panel::Controls)),
+                "system.lock" => Some(Action::System(SystemAction::Lock)),
+                "system.logout" => Some(Action::System(SystemAction::Logout)),
+                "system.suspend" => Some(Action::System(SystemAction::Suspend)),
+                "system.reboot" => Some(Action::System(SystemAction::Reboot)),
+                "system.shutdown" => Some(Action::System(SystemAction::Shutdown)),
                 _ => None,
             };
             if let Some(action) = action {

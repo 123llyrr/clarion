@@ -120,6 +120,19 @@ pub enum Action {
     DockEdgeHover(bool),
     DoNotDisturb(bool),
     PickWallpaper,
+    /// Lock, suspend or power the session off. The worker owns the bus
+    /// round-trip so a slow logind/systemd never blocks the UI.
+    System(SystemAction),
+}
+
+/// The session power actions the launcher's action catalog offers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SystemAction {
+    Lock,
+    Logout,
+    Suspend,
+    Reboot,
+    Shutdown,
 }
 impl Action {
     /// Tag a panel opener with the monitor whose surface dispatched it, so a
@@ -1127,6 +1140,12 @@ impl Host {
                     });
                 })
                 .detach();
+            }
+            Action::System(action) => {
+                // The worker owns the bus round-trip; the palette just hands
+                // the request over and folds away.
+                let _ = self.backend.send(backend::Command::System(action));
+                self.close(cx);
             }
         }
         self.targets();

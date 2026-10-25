@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Clarion's single visual system. No legacy themes or alternate launcher.
 use crate::{
-    app::{Action, DockApp, Host, Panel, ViewState},
+    app::{Action, DockApp, Host, Panel, SystemAction, ViewState},
     backend,
     input::{BackspaceAtStart, QueryChanged, TextInput},
     preferences::{
