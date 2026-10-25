@@ -49,11 +49,21 @@ pub struct TextInput {
     horizontal_offset: Pixels,
     compact: bool,
     light: bool,
+    /// A boxless headline field: no border, no fill, larger type. The
+    /// launcher sheet uses it as its title line.
+    bare: bool,
 }
 
 pub struct QueryChanged(pub String);
 
 impl gpui::EventEmitter<QueryChanged> for TextInput {}
+
+/// Backspace arrived at the start of an empty field. The palette listens for
+/// this to unwind its session (leave a tool/mode, drop an override) instead of
+/// deleting a character that does not exist.
+pub struct BackspaceAtStart;
+
+impl gpui::EventEmitter<BackspaceAtStart> for TextInput {}
 
 #[derive(PartialEq)]
 struct ImeCoordinates {
@@ -94,6 +104,14 @@ impl TextInput {
         self.light = !dark;
         self
     }
+    /// The boxless headline style. `dark` picks the ink: dark text on a light
+    /// surface, light text on a dark one, so the line stays readable under
+    /// both themes.
+    pub fn with_bare(mut self, dark: bool) -> Self {
+        self.bare = true;
+        self.light = !dark;
+        self
+    }
     pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
@@ -110,6 +128,7 @@ impl TextInput {
             horizontal_offset: px(0.),
             compact: false,
             light: false,
+            bare: false,
         }
     }
 
@@ -169,6 +188,10 @@ impl TextInput {
     }
 
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
+        if self.content.is_empty() && self.marked_range.is_none() {
+            cx.emit(BackspaceAtStart);
+            return;
+        }
         if self.selected_range.is_empty() {
             self.select_to(self.previous_boundary(self.cursor_offset()), cx)
         }
@@ -711,26 +734,62 @@ impl Render for TextInput {
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .rounded(px(if self.compact { 6. } else { 16. }))
-            .border_1()
-            .border_color(rgba(0xffffff24))
-            .bg(if self.compact {
-                rgba(0x00000000)
-            } else {
-                rgba(0x080d1699)
+            .when(!self.bare, |field| {
+                field
+                    .border_1()
+                    .border_color(rgba(0xffffff24))
+                    .bg(if self.compact {
+                        rgba(0x00000000)
+                    } else {
+                        rgba(0x080d1699)
+                    })
             })
             .text_color(if self.light {
                 rgb(0x24242a)
             } else {
                 rgb(0xf4f6ff)
             })
-            .line_height(px(if self.compact { 18. } else { 30. }))
-            .text_size(px(if self.compact { 13. } else { 18. }))
+            // The bare style is a headline, not a form control: it draws no
+            // box and sets its own larger type (the launcher sheet's title
+            // line).
+            .line_height(px(if self.bare {
+                38.
+            } else if self.compact {
+                18.
+            } else {
+                30.
+            }))
+            .text_size(px(if self.bare {
+                22.
+            } else if self.compact {
+                13.
+            } else {
+                18.
+            }))
             .child(
                 div()
-                    .h(px(if self.compact { 28. } else { 54. }))
+                    .h(px(if self.bare {
+                        40.
+                    } else if self.compact {
+                        28.
+                    } else {
+                        54.
+                    }))
                     .w_full()
-                    .px(px(if self.compact { 8. } else { 18. }))
-                    .py(px(if self.compact { 5. } else { 12. }))
+                    .px(px(if self.bare {
+                        0.
+                    } else if self.compact {
+                        8.
+                    } else {
+                        18.
+                    }))
+                    .py(px(if self.bare {
+                        0.
+                    } else if self.compact {
+                        5.
+                    } else {
+                        12.
+                    }))
                     .child(SpikeTextElement { input: cx.entity() }),
             )
     }

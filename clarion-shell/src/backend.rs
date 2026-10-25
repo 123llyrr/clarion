@@ -103,6 +103,8 @@ pub enum Command {
     },
     RefreshCatalog,
     SavePreferences(Preferences),
+    /// Count one successful application launch in the palette history.
+    RecordLaunch(String),
 }
 
 #[derive(Clone, Debug)]
@@ -689,6 +691,12 @@ fn perform(
         Command::SavePreferences(preferences) => {
             preferences.save(&options.environment, options.preview)?;
             emit(events, Event::Preferences(preferences), alive);
+        }
+        Command::RecordLaunch(id) => {
+            let mut history =
+                clarion_launcher::usage::LaunchHistory::load(&options.environment);
+            history.record_launch(&id, clarion_launcher::usage::unix_millis());
+            history.save(&options.environment)?;
         }
     }
     Ok(())

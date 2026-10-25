@@ -3,7 +3,8 @@ use crate::{
     backend,
     desktop::{DesktopAction, DesktopView},
     preferences::{
-        DockFolderPreference, DockPosition, FolderDisplay, FolderLayout, FolderSort, Preferences,
+        DockFolderPreference, DockPosition, FolderDisplay, FolderLayout, FolderSort,
+        LauncherPresentation, Preferences,
     },
     services,
     view::{ShellView, Surface},
@@ -11,6 +12,7 @@ use crate::{
 };
 use clarion_ipc::{Action as CoreAction, DockEdge, DockTarget, MinimizeEffect};
 use clarion_launcher::catalog::{AppCatalog, AppCategory, DesktopApp};
+use clarion_launcher::usage::{unix_millis, LaunchHistory};
 use gpui::{prelude::*, *};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
@@ -25,6 +27,9 @@ mod dock_folder_tests;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Panel {
     Apps,
+    /// The compact launcher palette: scored search, modes and tools over the
+    /// same catalog the fullscreen Launchpad shows.
+    Spotlight,
     Recent,
     Notifications,
     Controls,
@@ -94,11 +99,23 @@ pub enum Action {
     AutoHide(bool),
     Magnification(bool),
     ShowRecentApplications(bool),
+    LauncherPresentation(LauncherPresentation),
+    /// Open the launcher in whichever presentation the preferences select.
+    Launcher,
+    /// Open one launcher tile's application menu as a surface over the
+    /// launcher. The launcher stays open underneath.
+    OpenMenu { id: String, anchor: (i32, i32) },
+    /// Fold the launcher's application menu away and hand the keyboard back to
+    /// the launcher it belongs to.
+    CloseMenu,
     MagnificationScale(f64),
     AnimateOpeningApplications(bool),
     ReduceMotion(bool),
     Screenshot(u8),
     Settings,
+    /// Run one palette command row, addressed by its stable id. The session
+    /// lives in the popup view, so the click routes back through the host.
+    PaletteCommand(String),
     DockHover(bool),
     DockEdgeHover(bool),
     DoNotDisturb(bool),
@@ -144,6 +161,8 @@ pub struct ViewState {
     pub desktop: backend::DesktopSnapshot,
     pub system: backend::SystemSnapshot,
     pub catalog: Arc<AppCatalog>,
+    /// Launch counts used by the palette's usage-aware ordering.
+    pub launch_history: Arc<LaunchHistory>,
     pub notifications: Vec<services::Notification>,
     pub tray: Vec<services::TrayItem>,
     pub history: Vec<services::HistoryEntry>,
@@ -198,6 +217,7 @@ pub struct Host {
     pub desktop: backend::DesktopSnapshot,
     pub system: backend::SystemSnapshot,
     pub catalog: Arc<AppCatalog>,
+    pub launch_history: Arc<LaunchHistory>,
     pub notifications: Vec<services::Notification>,
     pub tray: Vec<services::TrayItem>,
     pub history: Vec<services::HistoryEntry>,
@@ -235,6 +255,13 @@ pub struct Host {
     environment: HashMap<String, String>,
     outputs: BTreeMap<String, OutputViews>,
     popup: Option<WindowHandle<ShellView>>,
+    /// The application menu surface floating over the launcher. It is kept
+    /// apart from `popup` so the launcher (and its draft) stays open underneath.
+    pub(crate) menu: Option<WindowHandle<ShellView>>,
+    /// A menu surface is being created right now. Mapping it takes the keyboard,
+    /// and the launcher's deactivation must not read that as a click elsewhere
+    /// before `menu` itself lands.
+    pub(crate) menu_opening: bool,
     /// The monitor whose surface dispatched the action currently being
     /// applied. A bar or Dock click can land on a monitor that does not hold
     /// keyboard focus; its popup still belongs to that monitor, not to the
@@ -282,11 +309,13 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             crate::input::TextInput::bind_keys(cx);
             DesktopView::bind_keys(cx);
             crate::view::bind_keys(cx);
+            let launch_history = Arc::new(LaunchHistory::load(&environment));
             let host = cx.new(|_| Host {
                 prefs,
                 desktop: Default::default(),
                 system: Default::default(),
                 catalog: Arc::new(AppCatalog::default()),
+                launch_history,
                 notifications: vec![],
                 tray: vec![],
                 history: vec![],
@@ -312,6 +341,8 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 environment,
                 outputs: BTreeMap::new(),
                 popup: None,
+                menu: None,
+                menu_opening: false,
                 dispatch_output: None,
                 exiting: None,
                 exit_generation: 0,
@@ -434,6 +465,7 @@ impl Host {
             desktop: self.desktop.clone(),
             system: self.system.clone(),
             catalog: self.catalog.clone(),
+            launch_history: self.launch_history.clone(),
             notifications: self.notifications.clone(),
             tray: self.tray.clone(),
             history: self.history.clone(),
@@ -553,7 +585,8 @@ impl Host {
                 self.targets();
             }
             backend::Event::Command(command) => match command.as_str() {
-                "launcher" | "spotlight" => self.handle(Action::Panel(Panel::Apps), cx),
+                "launcher" => self.handle(Action::Launcher, cx),
+                "spotlight" => self.handle(Action::Panel(Panel::Spotlight), cx),
                 "close" => self.handle(Action::Close, cx),
                 "preferences" => self.handle(Action::Panel(Panel::Preferences), cx),
                 "screenshot" => self.handle(Action::Panel(Panel::Screenshot), cx),
@@ -727,6 +760,14 @@ impl Host {
                 cx.notify()
             });
         }
+        if let Some(menu) = self.menu {
+            // The card lists live windows, so it follows a refreshed snapshot
+            // just like the launcher under it.
+            let _ = menu.update(cx, |v, _, cx| {
+                v.state = state.clone();
+                cx.notify()
+            });
+        }
     }
     pub fn core(&self, action: CoreAction) {
         let _ = self.backend.send(backend::Command::Action(action));
@@ -771,6 +812,18 @@ impl Host {
                 self.apply(*action, cx);
                 self.dispatch_output = previous;
             }
+            Action::Launcher => {
+                self.anchored = None;
+                let panel = match self.prefs.launcher_presentation {
+                    LauncherPresentation::Fullscreen => Panel::Apps,
+                    LauncherPresentation::Palette => Panel::Spotlight,
+                };
+                if self.panel.as_ref() == Some(&panel) {
+                    self.close(cx);
+                } else {
+                    self.open(panel, cx);
+                }
+            }
             Action::Panel(panel) => {
                 // A non-anchored opener drops its popup at the resting edge.
                 self.anchored = None;
@@ -780,6 +833,8 @@ impl Host {
                     self.open(panel, cx);
                 }
             }
+            Action::OpenMenu { id, anchor } => self.open_menu(id, anchor, cx),
+            Action::CloseMenu => self.close_menu(cx),
             Action::AnchoredPanel(panel, x) => {
                 self.anchored = Some(x);
                 if self.panel.as_ref() == Some(&panel) {
@@ -791,9 +846,15 @@ impl Host {
             Action::Launch(id) => {
                 if let Some(app) = self.catalog.get(&id) {
                     self.auto_hidden = false;
+                    // Count the launch for the palette's smart ordering; the
+                    // worker owns the atomic file write so the UI never blocks.
+                    // The launch itself goes first: it is the command every
+                    // existing observer reads.
+                    Arc::make_mut(&mut self.launch_history).record_launch(&id, unix_millis());
                     let _ = self
                         .backend
                         .send(backend::Command::LaunchDesktop(app.desktop_file.clone()));
+                    let _ = self.backend.send(backend::Command::RecordLaunch(id.clone()));
                     if self.prefs.animate_opening_applications && !self.prefs.reduce_motion {
                         let now = Instant::now();
                         let started = self.launches.entry(id.clone()).or_insert(now);
@@ -1000,6 +1061,13 @@ impl Host {
                 self.save(cx);
                 self.changed(cx);
             }
+            Action::LauncherPresentation(value) => {
+                if self.prefs.launcher_presentation != value {
+                    self.prefs.launcher_presentation = value;
+                    self.save(cx);
+                    self.changed(cx);
+                }
+            }
             Action::MagnificationScale(value) => {
                 if value.is_finite() {
                     self.prefs.magnification_scale = value.clamp(1., 2.);
@@ -1022,6 +1090,13 @@ impl Host {
             Action::Settings => {
                 let _ = self.backend.send(backend::Command::OpenSettings);
                 self.close(cx);
+            }
+            Action::PaletteCommand(id) => {
+                if let Some(popup) = self.popup {
+                    let _ = popup.update(cx, |view, _, cx| {
+                        view.palette_command_by_id(&id, cx)
+                    });
+                }
             }
             Action::Screenshot(mode) => {
                 self.close(cx);
@@ -1115,6 +1190,9 @@ impl Host {
     const POPUP_EXIT: Duration = Duration::from_millis(170);
     fn close(&mut self, cx: &mut Context<Self>) {
         self.preferences_placed = None;
+        // The launcher's menu is not part of the panel's exit ride; it folds
+        // away at once and its launcher keeps focus for the fade.
+        self.dismiss_menu(cx);
         // A fading bar popup repaints and rides out before its surface is
         // released; anything else dismisses as before, right away.
         let animate = self
@@ -1159,6 +1237,8 @@ impl Host {
     fn discard(&mut self, cx: &mut Context<Self>) {
         self.preferences_placed = None;
         self.cancel_popup_exit(cx);
+        // The menu is a surface of its own; it never outlives its launcher.
+        self.dismiss_menu(cx);
         self.panel = None;
         self.folder_drag_layer = false;
         self.tray_menu.clear();
@@ -1264,7 +1344,7 @@ impl Host {
         if let Panel::Tray(id) = &panel {
             self.service.send(services::Command::GetMenu(id.clone()));
         }
-        if panel == Panel::Apps {
+        if panel == Panel::Apps || panel == Panel::Spotlight {
             let _ = self.backend.send(backend::Command::RefreshCatalog);
         }
         if panel == Panel::Notifications {
@@ -1355,6 +1435,80 @@ impl Host {
                 self.show_error(format!("无法打开面板：{error}"), cx);
                 self.panel = None;
             }
+        }
+    }
+    /// Open one launcher tile's application menu as a surface of its own over
+    /// the launcher. The launcher keeps its window, draft and selection; only
+    /// the keyboard moves to the menu while it is up. A card painted into the
+    /// launcher's window could never be frosted — the compositor blurs what lies
+    /// behind a surface, never its own content.
+    fn open_menu(&mut self, id: String, anchor: (i32, i32), cx: &mut Context<Self>) {
+        self.dismiss_menu(cx);
+        if !matches!(self.panel, Some(Panel::Apps | Panel::Spotlight)) {
+            return;
+        }
+        // The menu belongs to the launcher's monitor, not to whichever output
+        // happens to hold keyboard focus.
+        let output = self
+            .dispatch_output
+            .clone()
+            .filter(|output| self.outputs.contains_key(output))
+            .unwrap_or_else(|| self.active_output());
+        let view = self.outputs.get(&output);
+        let display = view.map(|v| v.display);
+        let (w, h) = view.map(|v| (v.width, v.height)).unwrap_or((1200., 800.));
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(w), px(h)));
+        let options = window_options(
+            "clarion-panel",
+            display,
+            bounds,
+            self.preview,
+            LayerShellAnchor::ALL,
+            -1,
+            LayerShellKeyboardInteractivity::Exclusive,
+            LayerShellMargins::default(),
+            LayerShellLayer::Overlay,
+        );
+        let host = cx.entity();
+        let state = Arc::new(self.snapshot());
+        self.menu_opening = true;
+        let opened = cx.open_window(options, move |window, cx| {
+            let view = cx.new(|cx| {
+                ShellView::new_launcher_menu(host, output, state, id, anchor, cx)
+            });
+            view.update(cx, |view, cx| view.observe_activation(window, cx));
+            view.read(cx).focus(window, cx);
+            view
+        });
+        self.menu_opening = false;
+        match opened {
+            Ok(window) => {
+                self.menu = Some(window);
+                // Take the keyboard only once the host knows a menu is up: the
+                // launcher's deactivation must not dismiss it as "a click
+                // elsewhere".
+                let _ = window.update(cx, |_, window, _| window.activate_window());
+            }
+            Err(error) => self.show_error(format!("无法打开应用菜单：{error}"), cx),
+        }
+    }
+    /// Fold the launcher's application menu away and hand the keyboard back to
+    /// the launcher, so its field keeps typing.
+    fn close_menu(&mut self, cx: &mut Context<Self>) {
+        if self.dismiss_menu(cx) {
+            if let Some(launcher) = self.popup.as_ref() {
+                let _ = launcher.update(cx, |_, window, _| window.activate_window());
+            }
+        }
+    }
+    /// Release the menu surface without touching the launcher's focus.
+    fn dismiss_menu(&mut self, cx: &mut Context<Self>) -> bool {
+        match self.menu.take() {
+            Some(window) => {
+                let _ = window.update(cx, |_, window, _| window.remove_window());
+                true
+            }
+            None => false,
         }
     }
     fn show_toast(&mut self, id: u32, cx: &mut Context<Self>) {

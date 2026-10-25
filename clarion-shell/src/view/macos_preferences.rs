@@ -516,6 +516,46 @@ impl ShellView {
                     }),
             );
         }
+        let mut launcher_styles = div()
+            .w(px(282.))
+            .h(px(24.))
+            .flex()
+            .rounded(px(5.))
+            .bg(p.card)
+            .border_1()
+            .border_color(separator);
+        for (key, label, id) in [
+            (
+                LauncherPresentation::Fullscreen,
+                "全屏",
+                "prefs-launcher-fullscreen",
+            ),
+            (LauncherPresentation::Palette, "弹窗", "prefs-launcher-palette"),
+        ] {
+            let h = self.host.clone();
+            let selected = host.prefs.launcher_presentation == key;
+            launcher_styles = launcher_styles.child(
+                div()
+                    .id(id)
+                    .debug_selector(move || id.into())
+                    .flex_1()
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.))
+                    .text_size(px(12.))
+                    .when(selected, |s| s.bg(p.accent).text_color(rgb(0xffffff)))
+                    .when(!selected, |s| s.hover(move |s| s.bg(p.line)))
+                    .cursor_pointer()
+                    .child(pref_text(label))
+                    .on_click(move |_, _, cx| {
+                        h.update(cx, |host, cx| {
+                            host.handle(Action::LauncherPresentation(key), cx)
+                        })
+                    }),
+            );
+        }
         let size_slider = div()
             .w(px(304.))
             .flex()
@@ -711,6 +751,7 @@ impl ShellView {
                 )
                 .min_h(px(30.)),
             )
+            .child(form_row("启动台：", launcher_styles).min_h(px(30.)))
             .child(
                 form_row(
                     "启动动画：",

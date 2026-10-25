@@ -10,6 +10,8 @@ description = "Shared XDG application catalog and safe launch services for Clari
 [dependencies]
 anyhow.workspace = true
 libc = "0.2"
+serde.workspace = true
+serde_json.workspace = true
 tempfile = "3"
 walkdir = "2.5"
 

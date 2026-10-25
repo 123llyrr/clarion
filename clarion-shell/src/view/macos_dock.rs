@@ -1922,7 +1922,7 @@ impl ShellView {
                                 h.handle(
                                     Action::on_output(
                                         surface_output.clone(),
-                                        Action::Panel(Panel::Apps),
+                                        Action::Launcher,
                                     ),
                                     cx,
                                 )

@@ -8,7 +8,7 @@ use gpui::{
     VisualTestContext, WindowHandle,
 };
 
-use super::{Host, Panel, ShellView};
+use super::{Action, Host, LauncherPresentation, Panel, ShellView};
 use crate::app::testing;
 
 /// A closing bar popup keeps its surface alive for the exit fade and a
@@ -137,6 +137,7 @@ fn search_navigation_and_enter_release_the_current_view_and_window_before_launch
     );
     visual.simulate_keystrokes("enter");
     visual.run_until_parked();
+    settle_exit(&mut visual);
     host.read_with(cx, |host, _| {
         assert!(host.panel.is_none());
         assert_eq!(
@@ -709,3 +710,390 @@ fn a_bar_popup_lands_on_the_monitor_that_dispatched_the_click(cx: &mut TestAppCo
         "the tray menu belongs to the bar that was clicked, not to the focused output"
     );
 }
+
+#[gpui::test]
+fn the_launcher_command_opens_the_presentation_the_preferences_select(
+    cx: &mut TestAppContext,
+) {
+    let fixture = Fixture::new();
+    let host = cx
+        .update(|cx| testing::test_host(cx, fixture.catalog.clone(), fixture.environment.clone()));
+    host.update(cx, |host, cx| host.handle(Action::Launcher, cx));
+    cx.run_until_parked();
+    assert_eq!(
+        host.read_with(cx, |host, _| host.panel.clone()),
+        Some(Panel::Apps),
+        "the fullscreen Launchpad stays the default"
+    );
+    // The same entry point, now with the palette preference, replaces the
+    // fullscreen surface instead of stacking another panel beside it.
+    host.update(cx, |host, cx| {
+        host.prefs.launcher_presentation = LauncherPresentation::Palette;
+        host.handle(Action::Launcher, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        host.read_with(cx, |host, _| host.panel.clone()),
+        Some(Panel::Spotlight)
+    );
+    // A second launcher press closes the open palette. The palette keeps its
+    // surface alive for the closing fade, so the release timer has to run.
+    host.update(cx, |host, cx| host.handle(Action::Launcher, cx));
+    cx.run_until_parked();
+    assert_eq!(
+        host.read_with(cx, |host, _| (host.panel.clone(), host.panel_exit)),
+        (Some(Panel::Spotlight), true)
+    );
+    cx.background_executor
+        .advance_clock(std::time::Duration::from_millis(400));
+    cx.run_until_parked();
+    assert_eq!(host.read_with(cx, |host, _| host.panel.clone()), None);
+}
+
+#[gpui::test]
+fn the_launcher_palette_ranks_scored_matches_and_enter_launches(
+    cx: &mut TestAppContext,
+) {
+    let (_fixture, host, view, mut visual, window) = panel(cx, Panel::Spotlight);
+    visual.simulate_input("browser");
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.query.clone()),
+        "browser"
+    );
+    // The score ladder only keeps the application whose name matches.
+    let names: Vec<String> = view.read_with(&visual, |view, _| {
+        use clarion_launcher::search::AppOrder;
+        super::spotlight::palette_apps(&view.state, &view.query, AppOrder::Name)
+            .into_iter()
+            .map(|app| app.name.clone())
+            .collect()
+    });
+    assert_eq!(names, vec!["Alpha Browser".to_owned()]);
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    settle_exit(&mut visual);
+    host.read_with(cx, |host, _| {
+        assert!(host.panel.is_none());
+        assert_eq!(
+            host.prefs.recent_app_ids.first().map(String::as_str),
+            Some("alpha.desktop")
+        );
+    });
+    assert!(
+        !cx.read(|cx| cx
+            .windows()
+            .iter()
+            .any(|handle| handle.window_id() == window.window_id())),
+        "launching must remove the actual palette window"
+    );
+}
+
+#[gpui::test]
+fn the_palette_runs_a_slash_mode_command_and_clears_the_draft(cx: &mut TestAppContext) {
+    use clarion_launcher::session::Mode;
+    let (_fixture, host, view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    visual.simulate_input("/apps");
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.palette_row_count(&view.state)),
+        1,
+        "the slash draft offers its one matching command"
+    );
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    assert_eq!(
+        view.read_with(&visual, |view, _| (view.palette.mode, view.query.clone())),
+        (Mode::Apps, String::new()),
+        "a mode command consumes the draft and keeps the palette open"
+    );
+    host.read_with(cx, |host, _| {
+        assert_eq!(host.panel, Some(Panel::Spotlight));
+    });
+    // The grid stays the default layout; the list override applies on demand
+    // and drops out again when the saved value is chosen.
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.palette_layout(&view.state)),
+        super::LauncherLayout::Grid
+    );
+    visual.simulate_input("/list");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.palette_layout(&view.state)),
+        super::LauncherLayout::List
+    );
+}
+
+#[gpui::test]
+fn palette_backspace_unwinds_the_override_but_not_a_mode_switch(cx: &mut TestAppContext) {
+    use clarion_launcher::session::Mode;
+    let (_fixture, _host, view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    visual.simulate_keystrokes("ctrl-1");
+    visual.simulate_input("/list");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    assert_eq!(
+        view.read_with(&visual, |view, _| (
+            view.palette.mode,
+            view.palette_layout(&view.state),
+            view.query.clone()
+        )),
+        (Mode::Apps, super::LauncherLayout::List, String::new())
+    );
+    visual.simulate_keystrokes("backspace");
+    visual.run_until_parked();
+    assert_eq!(
+        view.read_with(&visual, |view, _| (
+            view.palette.mode,
+            view.palette_layout(&view.state)
+        )),
+        (Mode::Apps, super::LauncherLayout::Grid),
+        "the first backspace drops the layout override"
+    );
+    // Mode switches replace the session instead of stacking it (the reference
+    // does the same), so a further backspace has nothing to unwind.
+    visual.simulate_keystrokes("backspace");
+    visual.run_until_parked();
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.palette.mode),
+        Mode::Apps
+    );
+}
+
+#[gpui::test]
+fn palette_commands_report_scope_and_unimplemented_entries(cx: &mut TestAppContext) {
+    use clarion_launcher::session::Mode;
+    let (_fixture, host, view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    // `>` opens the command list without leaving a mode: the field keeps the
+    // prefix and every accepted row is filtered by the current scope.
+    visual.simulate_input(">");
+    assert!(
+        view.read_with(&visual, |view, _| view.palette_row_count(&view.state)) > 0,
+        "the bare prefix lists the available commands"
+    );
+    visual.simulate_input("grid");
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.palette_row_count(&view.state)),
+        0,
+        "a layout override is not offered outside apps mode"
+    );
+    visual.simulate_keystrokes("ctrl-a backspace");
+    // Typing the out-of-scope command anyway explains instead of doing nothing.
+    visual.simulate_input("/grid");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.palette.mode),
+        Mode::Search
+    );
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.palette_error.clone()),
+        Some("该命令只在对应模式下可用".to_owned())
+    );
+    // Tools have no page yet, so they are rejected instead of faking one.
+    // A rejected draft is kept, so clear it before the next attempt.
+    visual.simulate_keystrokes("ctrl-a backspace");
+    visual.simulate_input("/calc 2*3");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.palette_error.clone()),
+        Some("该命令尚未接入".to_owned())
+    );
+    // Escape clears the rejected draft before it closes anything.
+    visual.simulate_keystrokes("escape");
+    visual.run_until_parked();
+    assert_eq!(
+        view.read_with(&visual, |view, _| (
+            view.query.clone(),
+            view.palette_error.is_some()
+        )),
+        (String::new(), false)
+    );
+    visual.simulate_keystrokes("escape");
+    visual.run_until_parked();
+    host.read_with(cx, |host, _| {
+        assert_eq!(host.panel, Some(Panel::Spotlight), "escape starts the close ride");
+        assert!(host.panel_exit);
+    });
+}
+
+#[gpui::test]
+fn right_clicking_a_palette_tile_opens_a_menu_surface_over_the_palette(
+    cx: &mut TestAppContext,
+) {
+    let (_fixture, host, view, mut visual, window) = panel(cx, Panel::Spotlight);
+    // The fixture has three applications, so the first grid row is centred:
+    // its first tile spans x 381..519 inside the palette popup, below the
+    // header block and the first category header.
+    let tile = point(px(450.), px(320.));
+    visual.simulate_mouse_down(tile, MouseButton::Right, Modifiers::none());
+    visual.simulate_mouse_up(tile, MouseButton::Right, Modifiers::none());
+    visual.run_until_parked();
+    let menu = host
+        .read_with(cx, |host, _| host.menu)
+        .expect("right-clicking a tile opens its application menu");
+    assert_ne!(
+        menu.window_id(),
+        window.window_id(),
+        "the menu needs a surface of its own for the compositor to frost it"
+    );
+    assert!(
+        cx.read(|cx| cx
+            .windows()
+            .iter()
+            .any(|handle| handle.window_id() == window.window_id())),
+        "the palette window stays open under its menu"
+    );
+    host.read_with(cx, |host, _| {
+        assert_eq!(host.panel, Some(Panel::Spotlight), "the launcher stays open")
+    });
+    // The menu surface catches every pointer event over the palette: a click
+    // on the card keeps it open...
+    let mut menu_visual = VisualTestContext::from_window(menu.into(), cx);
+    menu_visual.simulate_mouse_down(
+        point(px(444.), px(336.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    menu_visual.run_until_parked();
+    assert!(host.read_with(cx, |host, _| host.menu.is_some()));
+    // ...while a click outside folds it away and leaves the palette alone.
+    menu_visual.simulate_mouse_down(
+        point(px(750.), px(600.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    menu_visual.run_until_parked();
+    assert!(
+        host.read_with(cx, |host, _| host.menu.is_none()),
+        "a click outside folds the menu"
+    );
+    host.read_with(cx, |host, _| {
+        assert_eq!(host.panel, Some(Panel::Spotlight));
+        assert!(!host.panel_exit, "the launcher is not on its way out");
+    });
+    // The palette still has the keyboard: it types, and it still closes on its
+    // own escape once the draft is gone.
+    visual.simulate_input("a");
+    assert_eq!(view.read_with(&visual, |view, _| view.query.clone()), "a");
+    visual.simulate_keystrokes("escape");
+    visual.run_until_parked();
+    assert_eq!(view.read_with(&visual, |view, _| view.query.clone()), "");
+    visual.simulate_keystrokes("escape");
+    visual.run_until_parked();
+    host.read_with(cx, |host, _| assert!(host.panel_exit));
+}
+
+#[gpui::test]
+fn selecting_a_category_tag_filters_the_grid_tiles(cx: &mut TestAppContext) {
+    let (_fixture, host, view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    // The three fixture applications carry no XDG categories, so they all sit
+    // in "其他": their tiles paint, and the "其他" tag is the only one offered.
+    let tag = visual
+        .debug_bounds("spotlight-tag-other")
+        .expect("the only present category offers a tag");
+    assert!(visual.debug_bounds("spotlight-tile-beta.desktop").is_some());
+    assert!(visual.debug_bounds("spotlight-tag-utilities").is_none());
+
+    // Clicking the tag selects its category — the user-visible path.
+    let center = tag.center();
+    visual.simulate_mouse_down(center, MouseButton::Left, Modifiers::none());
+    visual.simulate_mouse_up(center, MouseButton::Left, Modifiers::none());
+    visual.run_until_parked();
+    view.read_with(&visual, |view, _| {
+        assert_eq!(
+            view.palette_category,
+            Some(clarion_launcher::catalog::AppCategory::Other),
+            "clicking a tag selects its category"
+        );
+    });
+
+    // A tag for a category the catalog has no applications in must empty the
+    // grid — the filter used to change the layout but leave every tile.
+    visual.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            view.palette_toggle_category(
+                clarion_launcher::catalog::AppCategory::Utilities,
+                cx,
+            )
+        });
+    });
+    let state = view.read_with(&visual, |view, _| view.state.clone());
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.palette_row_count(&state)),
+        0,
+        "an empty category tag filters every application away"
+    );
+
+    // Picking the category the applications do belong to shows them flat.
+    visual.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            view.palette_toggle_category(clarion_launcher::catalog::AppCategory::Other, cx)
+        });
+    });
+    let state = view.read_with(&visual, |view, _| view.state.clone());
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.palette_row_count(&state)),
+        3
+    );
+    host.read_with(cx, |host, _| {
+        assert_eq!(
+            host.panel,
+            Some(Panel::Spotlight),
+            "tag filtering keeps the palette open"
+        );
+    });
+}
+
+#[gpui::test]
+fn escape_in_the_launcher_menu_folds_only_the_menu(cx: &mut TestAppContext) {
+    let (_fixture, host, _view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    let tile = point(px(450.), px(320.));
+    visual.simulate_mouse_down(tile, MouseButton::Right, Modifiers::none());
+    visual.simulate_mouse_up(tile, MouseButton::Right, Modifiers::none());
+    visual.run_until_parked();
+    let menu = host
+        .read_with(cx, |host, _| host.menu)
+        .expect("right-clicking a tile opens its application menu");
+    let mut menu_visual = VisualTestContext::from_window(menu.into(), cx);
+    menu_visual.simulate_keystrokes("escape");
+    menu_visual.run_until_parked();
+    assert!(
+        host.read_with(cx, |host, _| host.menu.is_none()),
+        "escape folds the menu away"
+    );
+    host.read_with(cx, |host, _| {
+        assert_eq!(host.panel, Some(Panel::Spotlight), "the launcher stays up");
+        assert!(!host.panel_exit, "the launcher is not on its way out");
+    });
+    // The menu gave the keyboard back, so the launcher still closes.
+    visual.simulate_keystrokes("escape");
+    visual.run_until_parked();
+    host.read_with(cx, |host, _| assert!(host.panel_exit));
+}
+
+#[gpui::test]
+fn right_clicking_a_launchpad_tile_keeps_the_launchpad_closeable(cx: &mut TestAppContext) {
+    let (_fixture, host, _view, mut visual, window) = panel(cx, Panel::Apps);
+    // The first tile of the fullscreen grid.
+    let tile = point(px(100.), px(120.));
+    visual.simulate_mouse_down(tile, MouseButton::Right, Modifiers::none());
+    visual.simulate_mouse_up(tile, MouseButton::Right, Modifiers::none());
+    visual.run_until_parked();
+    let menu = host
+        .read_with(cx, |host, _| host.menu)
+        .expect("right-clicking a tile opens its application menu");
+    assert_ne!(menu.window_id(), window.window_id());
+    host.read_with(cx, |host, _| assert_eq!(host.panel, Some(Panel::Apps)));
+    // Escape in the menu folds it away and the launchpad stays up...
+    let mut menu_visual = VisualTestContext::from_window(menu.into(), cx);
+    menu_visual.simulate_keystrokes("escape");
+    menu_visual.run_until_parked();
+    assert!(host.read_with(cx, |host, _| host.menu.is_none()));
+    host.read_with(cx, |host, _| assert_eq!(host.panel, Some(Panel::Apps)));
+    // ...so the next escape can still close the launcher.
+    visual.simulate_keystrokes("escape");
+    visual.run_until_parked();
+    host.read_with(cx, |host, _| assert_eq!(host.panel, None));
+}
+

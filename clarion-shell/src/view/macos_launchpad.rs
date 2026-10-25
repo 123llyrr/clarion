@@ -262,12 +262,27 @@ impl ShellView {
                             h.update(cx, |h, cx| h.handle(Action::Launch(id.clone()), cx));
                         })
                         .on_mouse_down(MouseButton::Right, {
-                            let h = self.host.clone();
-                            move |_, _, cx| {
+                            // The menu is a surface of its own over the
+                            // launcher: the compositor can frost the card, and
+                            // no pointer event reaches the tiles underneath.
+                            let output = self.output.clone();
+                            let view = cx.entity().downgrade();
+                            let id = context.clone();
+                            move |event, _, cx| {
                                 cx.stop_propagation();
-                                h.update(cx, |h, cx| {
-                                    h.handle(Action::Panel(Panel::Dock(context.clone())), cx)
-                                });
+                                let anchor = (
+                                    f32::from(event.position.x).round() as i32,
+                                    f32::from(event.position.y).round() as i32,
+                                );
+                                let action = Action::on_output(
+                                    output.clone(),
+                                    Action::OpenMenu {
+                                        id: id.clone(),
+                                        anchor,
+                                    },
+                                );
+                                let _ =
+                                    view.update(cx, |view, cx| view.invoke(action, cx));
                             }
                         }),
                 );
