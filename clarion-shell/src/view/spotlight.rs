@@ -18,10 +18,11 @@ use clarion_launcher::search::{ranked_apps, AppOrder};
 use clarion_launcher::session::{Mode, Route, SavedStyles};
 use clarion_launcher::usage::unix_millis;
 
-/// Uniform list row plus the two points between rows.
-const LIST_PITCH: f32 = 48.;
-/// Command rows are slightly tighter than application rows.
-const COMMAND_PITCH: f32 = 42.;
+/// One-list-row height and the gutter under it. Application and command rows
+/// share the rhythm, including the pixel-based keyboard scroll maths.
+const LIST_ROW_H: f32 = 54.;
+const LIST_GAP: f32 = 4.;
+const LIST_PITCH: f32 = LIST_ROW_H + LIST_GAP;
 /// Five tiles per grid row. Every row renders five equal slots across the
 /// sheet's full inner width — full and partial rows alike stay symmetric —
 /// and each tile sits centred in its slot. `GRID_GAP` is the vertical gutter.
@@ -101,6 +102,45 @@ fn kind_label(kind: CommandKind) -> &'static str {
         CommandKind::Tool => "工具",
         CommandKind::Action => "动作",
         CommandKind::Override => "显示",
+    }
+}
+
+/// The leading glyph for a command. Entries with a close visual match get
+/// their own icon; the rest fall back to the command's kind so every row has
+/// the same visual anchor as an application row.
+fn command_icon(command: &Command) -> &'static str {
+    match command.id {
+        "mode.search" => "launchpad.svg",
+        "mode.apps" => "grid.svg",
+        "mode.wallpapers" => "wallpaper.svg",
+        "mode.clipboard" => "clipboard.svg",
+        "mode.files" => "generic-folder.svg",
+        "mode.commands" => "terminal.svg",
+        "theme.light" => "sun.svg",
+        "theme.dark" => "moon.svg",
+        "settings.open" | "tool.settings" => "settings.svg",
+        "settings.launcher.fullscreen" | "settings.launcher.palette" => "launchpad.svg",
+        "settings.wallpaper" => "wallpaper.svg",
+        "settings.reduce-motion" => "sliders.svg",
+        "settings.dock-autohide" => "display.svg",
+        "shell.screenshot" => "capture-screen.svg",
+        "shell.notifications" => "bell.svg",
+        "shell.recent" => "clipboard.svg",
+        "shell.control" => "control-center.svg",
+        "tool.web" => "safari.svg",
+        "tool.calculator" | "tool.currency" => "calculator.svg",
+        "tool.time" => "calendar.svg",
+        "tool.actions" => "scan.svg",
+        "apps.grid" => "grid.svg",
+        "apps.list" | "apps.smart" | "apps.most-used" | "apps.recent" | "apps.name" => {
+            "sliders.svg"
+        }
+        _ => match command.kind {
+            CommandKind::Mode => "launchpad.svg",
+            CommandKind::Tool => "scan.svg",
+            CommandKind::Action => "settings.svg",
+            CommandKind::Override => "sliders.svg",
+        },
     }
 }
 
@@ -282,8 +322,7 @@ impl ShellView {
     fn palette_metrics(&self, host: &ViewState) -> (usize, f32) {
         match self.palette_body() {
             PaletteBody::Apps if self.palette_grid(host) => (GRID_COLUMNS, GRID_PITCH),
-            PaletteBody::Apps => (1, LIST_PITCH),
-            PaletteBody::Commands | PaletteBody::Slash => (1, COMMAND_PITCH),
+            PaletteBody::Apps | PaletteBody::Commands | PaletteBody::Slash => (1, LIST_PITCH),
         }
     }
 
@@ -713,10 +752,11 @@ impl ShellView {
                 cx,
             );
         }
-        let mut list = div().flex().flex_col().gap(px(2.)).pb(px(2.));
+        let mut list = div().flex().flex_col().gap(px(LIST_GAP)).pb(px(2.));
         for (index, app) in found.iter().enumerate() {
             let selected = index == self.selection;
             let id = app.id.clone();
+            let row_selector = format!("spotlight-app-{id}");
             let name = app.name.clone();
             let generic = app.generic_name.clone();
             let icon = app.icon_path.clone();
@@ -724,11 +764,12 @@ impl ShellView {
             let h = self.host.clone();
             list = list.child(
                 div()
-                    .id(SharedString::from(format!("spotlight-app-{id}")))
-                    .h(px(46.))
+                    .id(SharedString::from(row_selector.clone()))
+                    .debug_selector(move || row_selector.clone())
+                    .h(px(LIST_ROW_H))
                     .flex_shrink_0()
-                    .px(px(10.))
-                    .rounded(px(10.))
+                    .px(px(12.))
+                    .rounded(px(14.))
                     .flex()
                     .items_center()
                     .gap(px(12.))
@@ -1011,7 +1052,12 @@ impl ShellView {
             .h(px(SECTION_DIVIDER_H))
             .flex_shrink_0()
             .py(px(4.))
-            .child(div().h(px(2.)).bg(p.line))
+            .child(
+                div()
+                    .h(px(1.))
+                    .debug_selector(|| "spotlight-rule-section".to_owned())
+                    .bg(p.line),
+            )
             .into_any_element()
     }
 
@@ -1025,58 +1071,80 @@ impl ShellView {
                 cx,
             );
         }
-        let mut list = div().flex().flex_col().gap(px(2.)).pb(px(2.));
+        let mut list = div().flex().flex_col().gap(px(LIST_GAP)).pb(px(2.));
         for (index, entry) in found.iter().enumerate() {
             let selected = index == self.selection;
             let id = entry.id;
             let slash = entry.slash;
             let title = entry.title;
             let kind = kind_label(entry.kind);
+            let icon = command_icon(entry);
+            let row_selector = format!("spotlight-command-{id}");
+            let icon_selector = format!("spotlight-command-icon-{id}");
+            let subtitle_selector = format!("spotlight-command-subtitle-{id}");
             let h = self.host.clone();
             list = list.child(
                 div()
-                    .id(SharedString::from(format!("spotlight-command-{id}")))
-                    .h(px(40.))
+                    .id(SharedString::from(row_selector.clone()))
+                    .debug_selector(move || row_selector.clone())
+                    .h(px(LIST_ROW_H))
                     .flex_shrink_0()
-                    .px(px(9.))
-                    .rounded(px(8.))
+                    .px(px(12.))
+                    .rounded(px(14.))
                     .flex()
                     .items_center()
-                    .gap(px(10.))
+                    .gap(px(12.))
                     .when(selected, |row| row.bg(p.accent.opacity(0.20)))
                     .hover(move |row| row.bg(p.line))
                     .cursor_pointer()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .child(
                         div()
-                            .w(px(126.))
-                            .text_size(px(13.))
-                            .text_color(p.accent)
-                            .whitespace_nowrap()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .child(menu_text(
-                                format!("/{slash}"),
-                                FontWeight::SEMIBOLD,
-                                p.accent,
-                                cx,
-                            )),
+                            .debug_selector(move || icon_selector.clone())
+                            .size(px(36.))
+                            .rounded(px(10.))
+                            .bg(p.card)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(self.symbol(icon, 22., p)),
                     )
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
-                            .text_size(px(13.))
-                            .text_color(p.fg)
-                            .whitespace_nowrap()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .child(menu_text(
-                                title.to_owned(),
-                                FontWeight::MEDIUM,
-                                p.fg,
-                                cx,
-                            )),
+                            .flex()
+                            .flex_col()
+                            .gap(px(1.))
+                            .child(
+                                div()
+                                    .text_size(px(14.))
+                                    .text_color(p.fg)
+                                    .whitespace_nowrap()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .child(menu_text(
+                                        title.to_owned(),
+                                        FontWeight::SEMIBOLD,
+                                        p.fg,
+                                        cx,
+                                    )),
+                            )
+                            .child(
+                                div()
+                                    .debug_selector(move || subtitle_selector.clone())
+                                    .text_size(px(11.))
+                                    .text_color(p.muted)
+                                    .whitespace_nowrap()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .child(menu_text(
+                                        format!("/{slash}"),
+                                        FontWeight::MEDIUM,
+                                        p.muted,
+                                        cx,
+                                    )),
+                            ),
                     )
                     .child(
                         div()

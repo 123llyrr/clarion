@@ -1103,6 +1103,58 @@ fn palette_enter_opens_the_selected_tile_after_hidden_category_apps(cx: &mut Tes
 }
 
 #[gpui::test]
+fn spotlight_app_list_rows_use_the_roomier_list_geometry(cx: &mut TestAppContext) {
+    let (_fixture, _host, _view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    visual.simulate_keystrokes("ctrl-1");
+    visual.simulate_input("/list");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+
+    let row = visual
+        .debug_bounds("spotlight-app-alpha.desktop")
+        .expect("the application list paints alpha");
+    assert_eq!(f32::from(row.size.height), 54.);
+}
+
+#[gpui::test]
+fn spotlight_rules_are_hairlines(cx: &mut TestAppContext) {
+    let apps = [
+        ("utility-1", "Utility 1", "Utility;"),
+        ("office-1", "Office 1", "Office;"),
+    ];
+    let (_fixture, _host, _view, mut visual, _window) =
+        panel_with_apps(cx, Panel::Spotlight, &apps);
+
+    for selector in ["spotlight-rule-search", "spotlight-rule-section"] {
+        let line = visual
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} is painted"));
+        assert_eq!(f32::from(line.size.height), 1.);
+    }
+}
+
+#[gpui::test]
+fn command_rows_have_a_leading_icon_and_a_slash_subtitle(cx: &mut TestAppContext) {
+    let (_fixture, _host, _view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    visual.simulate_input(">dark");
+    visual.run_until_parked();
+
+    let row = visual
+        .debug_bounds("spotlight-command-theme.dark")
+        .expect("the dark-theme command is painted");
+    assert_eq!(f32::from(row.size.height), 54.);
+
+    let icon = visual
+        .debug_bounds("spotlight-command-icon-theme.dark")
+        .expect("the command carries a leading icon");
+    assert_eq!(icon.size, gpui::size(px(36.), px(36.)));
+    let subtitle = visual
+        .debug_bounds("spotlight-command-subtitle-theme.dark")
+        .expect("the slash command is the subtitle");
+    assert!(icon.origin.x < subtitle.origin.x);
+}
+
+#[gpui::test]
 fn selecting_a_category_tag_filters_the_grid_tiles(cx: &mut TestAppContext) {
     let (_fixture, host, view, mut visual, _window) = panel(cx, Panel::Spotlight);
     // The three fixture applications carry no XDG categories, so they all sit

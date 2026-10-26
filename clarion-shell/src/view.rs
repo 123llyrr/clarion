@@ -2022,10 +2022,9 @@ impl ShellView {
             body.p(px(12.))
         } else if panel == Panel::Spotlight {
             // The palette keeps a real margin around its grid and list, and
-            // reads a point larger than the menus. The vertical margin stays
-            // tighter than the horizontal one so the sheet keeps its rows.
-            // The extra three points keep the content away from the rim wash.
-            body.px(px(21.)).py(px(13.)).text_size(px(14.))
+            // reads a point larger than the menus. The sheet grows by the same
+            // six points as the padding so the content area stays put.
+            body.px(px(24.)).py(px(16.)).text_size(px(14.))
         } else {
             body.p(px(10.))
         };
@@ -2075,11 +2074,21 @@ impl ShellView {
                             self.symbol("wine.svg", 28., p),
                         ),
                 )
-                .child(div().h(px(2.)).my(px(3.)).bg(p.line));
+                .child(
+                    div()
+                        .h(px(1.))
+                        .my(px(3.))
+                        .debug_selector(|| "spotlight-rule-search".to_owned())
+                        .bg(p.line),
+                );
             if let Some(pills) = self.spotlight_pills(host, p, cx) {
-                body = body
-                    .child(pills)
-                    .child(div().h(px(2.)).my(px(3.)).bg(p.line));
+                body = body.child(pills).child(
+                    div()
+                        .h(px(1.))
+                        .my(px(3.))
+                        .debug_selector(|| "spotlight-rule-pills".to_owned())
+                        .bg(p.line),
+                );
             }
             if let Some(error) = &self.palette_error {
                 body = body.child(

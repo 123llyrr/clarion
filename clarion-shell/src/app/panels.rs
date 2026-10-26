@@ -47,11 +47,14 @@ pub(crate) const DOCK_MENU_WIDTH: f32 = 250.;
 /// The launcher sheet's painted corner radius. The compositor's frost region
 /// must use the same value, or the blur pokes out past the rounded corners as
 /// square patches.
-pub(crate) const SPOTLIGHT_RADIUS: f32 = 26.;
-/// The launcher sheet's resting width.
-pub(crate) const SPOTLIGHT_WIDTH: f32 = 740.;
-/// The launcher sheet is a little shorter than it is wide.
-pub(crate) const SPOTLIGHT_ASPECT: f32 = 0.85;
+pub(crate) const SPOTLIGHT_RADIUS: f32 = 31.;
+/// The launcher sheet's resting size. The extra six points on each axis
+/// offset the six-point increase in the inner body padding, so the content
+/// area keeps the same width and height.
+pub(crate) const SPOTLIGHT_WIDTH: f32 = 746.;
+pub(crate) const SPOTLIGHT_HEIGHT: f32 = 635.;
+/// Keep the sheet's proportions when a small output clamps its width.
+const SPOTLIGHT_ASPECT: f32 = SPOTLIGHT_HEIGHT / SPOTLIGHT_WIDTH;
 pub(crate) const FOLDER_LIST_WIDTH: f32 = 300.;
 pub(crate) const FOLDER_GRID_WIDTH: f32 = 380.;
 pub(crate) const FOLDER_MENU_WIDTH: f32 = 240.;
@@ -859,7 +862,7 @@ mod tests {
         assert!(palette.arrow.is_none());
         let popup = palette.popup.expect("the palette reports its popup");
         let width = super::SPOTLIGHT_WIDTH;
-        let height = width * super::SPOTLIGHT_ASPECT;
+        let height = super::SPOTLIGHT_HEIGHT;
         assert_eq!(popup.size, size(px(width), px(height)));
         assert_eq!(
             popup.origin,
@@ -869,6 +872,15 @@ mod tests {
         let compact = placement(&state, &Panel::Spotlight, 640., 320.);
         let popup = compact.popup.expect("the palette reports its popup");
         assert_eq!(popup.size, size(px(608.), px(272.)));
+    }
+
+    #[gpui::test]
+    fn the_launcher_palette_grows_to_offset_the_larger_inner_padding(cx: &mut TestAppContext) {
+        let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
+        let state = host.read_with(cx, |host, _| host.snapshot());
+        let palette = placement(&state, &Panel::Spotlight, 1440., 900.);
+        let popup = palette.popup.expect("the palette reports its popup");
+        assert_eq!(popup.size, size(px(746.), px(635.)));
     }
 
     #[gpui::test]
