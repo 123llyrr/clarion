@@ -12,6 +12,9 @@ use super::{now_ms, HistoryEntry, HistoryKind};
 
 pub(super) const TEXT_LIMIT: usize = 1024 * 1024;
 pub(super) const IMAGE_LIMIT: usize = 16 * 1024 * 1024;
+/// Opaque payloads (PDF, video, archives) share the media ceiling: they are
+/// stored and pasted back byte for byte, never rendered.
+pub(super) const BLOB_LIMIT: usize = 16 * 1024 * 1024;
 const BYTE_LIMIT: usize = 64 * 1024 * 1024;
 const ENTRY_LIMIT: usize = 80;
 /// The metadata file inside the history directory. Payloads sit beside it, one
@@ -47,6 +50,7 @@ pub(super) fn state_dir() -> Option<PathBuf> {
 /// One entry as it is written to `index.json`. The payload itself lives in the
 /// blob beside it; the derived fields (text, thumbnail, dimensions) are rebuilt
 /// from that blob on load, so only the facts the session decides are stored.
+/// `kind` is `text`, `image`, `screenshot`, `files` or `binary`.
 #[derive(Serialize, Deserialize)]
 struct StoredEntry {
     id: String,
@@ -106,23 +110,31 @@ impl History {
         if self.paused || payload.bytes.is_empty() {
             return false;
         }
-        let image = payload.mime == "image/png";
-        if payload.bytes.len() > if image { IMAGE_LIMIT } else { TEXT_LIMIT } {
+        let image = image_mime(&payload.mime);
+        let texty = payload.mime.starts_with("text/");
+        let limit = if image {
+            IMAGE_LIMIT
+        } else if texty {
+            TEXT_LIMIT
+        } else {
+            BLOB_LIMIT
+        };
+        if payload.bytes.len() > limit {
             return false;
         }
-        let text = if image {
-            String::new()
-        } else {
+        let raw = if texty {
             let Ok(text) = std::str::from_utf8(&payload.bytes) else {
                 return false;
             };
             text.to_owned()
+        } else {
+            String::new()
         };
         // A `text/uri-list` of local files is a file copy: keep the URIs in the
         // payload (so they can be pasted back into a file manager) and show the
         // plain paths. A URI list of anything else stays an ordinary text entry.
         let paths = if payload.mime == "text/uri-list" {
-            uri_paths(&text)
+            uri_paths(&raw)
         } else {
             None
         };
@@ -130,8 +142,10 @@ impl History {
             "image"
         } else if paths.is_some() {
             "files"
-        } else {
+        } else if texty {
             "text"
+        } else {
+            "blob"
         };
         let text = match paths {
             Some(ref paths) => paths
@@ -139,7 +153,10 @@ impl History {
                 .map(|path| path.to_string_lossy().into_owned())
                 .collect::<Vec<_>>()
                 .join("\n"),
-            None => text,
+            // Rich text is searched, previewed and pasted-as-text through its
+            // plain rendering; the markup itself stays in the payload.
+            None if payload.mime == "text/html" => html_to_text(&raw),
+            None => raw,
         };
         let id = format!(
             "{}:{:x}",
@@ -194,8 +211,10 @@ impl History {
                     HistoryKind::Image
                 } else if paths.is_some() {
                     HistoryKind::Files
-                } else {
+                } else if texty {
                     HistoryKind::Text
+                } else {
+                    HistoryKind::Binary
                 },
                 text,
                 thumbnail_png: thumbnail,
@@ -283,6 +302,8 @@ impl History {
                     "image/png".to_owned()
                 } else if stored.kind == "files" {
                     "text/uri-list".to_owned()
+                } else if stored.kind == "binary" {
+                    "application/octet-stream".to_owned()
                 } else {
                     "text/plain".to_owned()
                 }
@@ -327,6 +348,7 @@ impl History {
                     HistoryKind::Image => "image",
                     HistoryKind::Screenshot => "screenshot",
                     HistoryKind::Files => "files",
+                    HistoryKind::Binary => "binary",
                 }
                 .to_owned(),
                 pinned: entry.pinned,
@@ -430,8 +452,119 @@ fn percent_decode(value: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
+/// The still-image mimes the shell can decode. Everything else that is not
+/// text becomes an opaque `Binary` entry.
+pub(super) fn image_mime(mime: &str) -> bool {
+    matches!(mime, "image/png" | "image/jpeg")
+}
+
+/// The plain rendering of an HTML payload: what the row, the search and the
+/// text preview show. The markup stays in the payload for the paste back.
+pub(super) fn html_to_text(html: &str) -> String {
+    let mut text = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(lt) = rest.find('<') {
+        decode_entities(&mut text, &rest[..lt]);
+        let Some(gt) = rest[lt..].find('>') else {
+            rest = "";
+            break;
+        };
+        let raw = &rest[lt + 1..lt + gt];
+        let closing = raw.starts_with('/');
+        let name: String = raw
+            .trim_start_matches('/')
+            .trim_start()
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric())
+            .collect::<String>()
+            .to_ascii_lowercase();
+        if matches!(
+            name.as_str(),
+            "br" | "p"
+                | "div"
+                | "li"
+                | "tr"
+                | "h1"
+                | "h2"
+                | "h3"
+                | "h4"
+                | "h5"
+                | "h6"
+                | "blockquote"
+                | "pre"
+                | "section"
+                | "article"
+                | "ul"
+                | "ol"
+                | "table"
+        ) {
+            text.push('\n');
+        }
+        rest = &rest[lt + gt + 1..];
+        // Stylesheets and scripts are markup machinery, not content.
+        if !closing && (name == "script" || name == "style") {
+            let close = format!("</{name}");
+            let lowered = rest.to_ascii_lowercase();
+            if let Some(pos) = lowered.find(&close) {
+                rest = &rest[pos..];
+            }
+        }
+    }
+    decode_entities(&mut text, rest);
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The handful of entities a copied fragment carries: named ones and numeric
+/// escapes, including the non-breaking space that would otherwise stay glued
+/// to the neighbouring word.
+fn decode_entities(out: &mut String, raw: &str) {
+    let mut rest = raw;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let after = &rest[amp..];
+        let Some(semi) = after.find(';').filter(|semi| *semi <= 12) else {
+            out.push('&');
+            rest = &after[1..];
+            continue;
+        };
+        let entity = &after[1..semi];
+        let decoded = match entity {
+            "amp" => Some('&'),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            "nbsp" => Some(' '),
+            _ => entity
+                .strip_prefix('#')
+                .and_then(|digits| {
+                    if let Some(hex) = digits.strip_prefix(['x', 'X']) {
+                        u32::from_str_radix(hex, 16).ok()
+                    } else {
+                        digits.parse::<u32>().ok()
+                    }
+                })
+                .and_then(char::from_u32),
+        };
+        match decoded {
+            Some(ch) => out.push(ch),
+            None => out.push_str(&after[..=semi]),
+        }
+        rest = &after[semi + 1..];
+    }
+    out.push_str(rest);
+}
+
 pub(super) fn thumbnail(bytes: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
-    if bytes.len() > IMAGE_LIMIT || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+    if bytes.len() > IMAGE_LIMIT {
+        return None;
+    }
+    let format = image::guess_format(bytes).ok()?;
+    if !matches!(format, image::ImageFormat::Png | image::ImageFormat::Jpeg) {
         return None;
     }
     let reader = ImageReader::new(Cursor::new(bytes))
@@ -446,7 +579,7 @@ pub(super) fn thumbnail(bytes: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
     {
         return None;
     }
-    let image = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
+    let image = image::load_from_memory_with_format(bytes, format)
         .ok()?
         .thumbnail(320, 320);
     let mut output = Cursor::new(Vec::new());
@@ -545,6 +678,87 @@ mod tests {
             .expect("the link stays text");
         assert_eq!(link.text.trim(), "https://example.com/a");
         assert!(link.file_path.is_none());
+    }
+
+    #[test]
+    fn rich_text_enters_as_text_with_a_plain_rendering() {
+        let html = b"<style>p{color:red}</style><p>Hello <b>world</b></p><p>second &amp; last</p>";
+        let mut history = History::new();
+        assert!(history.insert(Payload {
+            mime: "text/html".into(),
+            bytes: Arc::new(html.to_vec()),
+            screenshot: false,
+            file_path: None,
+        }));
+        let entry = &history.snapshot()[0];
+        assert_eq!(entry.kind, HistoryKind::Text);
+        assert_eq!(entry.text, "Hello world\nsecond & last");
+        assert_eq!(entry.mime, "text/html");
+        assert_eq!(
+            history.payload(&entry.id).unwrap().bytes.as_slice(),
+            html,
+            "the markup is kept for the paste back"
+        );
+    }
+
+    #[test]
+    fn opaque_payloads_ride_the_file_tag_and_survive_a_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("clipboard");
+        let mut history = History::with_state(Some(dir.clone()));
+        let video = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom".to_vec();
+        assert!(history.insert(Payload {
+            mime: "video/mp4".into(),
+            bytes: Arc::new(video.clone()),
+            screenshot: false,
+            file_path: None,
+        }));
+        assert!(history.insert(Payload {
+            mime: "application/pdf".into(),
+            bytes: Arc::new(b"%PDF-1.7\n...".to_vec()),
+            screenshot: false,
+            file_path: None,
+        }));
+        let entries = history.snapshot();
+        assert_eq!(entries.len(), 2);
+        let clip = entries
+            .iter()
+            .find(|entry| entry.mime == "video/mp4")
+            .expect("video rides the opaque payloads");
+        assert_eq!(clip.kind, HistoryKind::Binary, "no separate video class");
+        assert!(clip.text.is_empty(), "nothing to search or preview");
+        assert!(clip.thumbnail_png.is_none());
+        assert_eq!(clip.bytes, video.len());
+        assert_eq!(history.payload(&clip.id).unwrap().bytes.as_slice(), video);
+
+        let reopened = History::with_state(Some(dir)).snapshot();
+        let clip = reopened
+            .iter()
+            .find(|entry| entry.mime == "video/mp4")
+            .expect("the payload comes back by its mime");
+        assert_eq!(clip.kind, HistoryKind::Binary);
+        assert_eq!(clip.bytes, video.len());
+    }
+
+    #[test]
+    fn jpeg_captures_are_thumbnailed_like_png() {
+        let image = image::RgbaImage::from_pixel(5, 3, image::Rgba([1, 2, 3, 255]));
+        let mut out = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image)
+            .write_to(&mut out, image::ImageFormat::Jpeg)
+            .unwrap();
+        let mut history = History::new();
+        assert!(history.insert(Payload {
+            mime: "image/jpeg".into(),
+            bytes: Arc::new(out.into_inner()),
+            screenshot: false,
+            file_path: None,
+        }));
+        let entry = &history.snapshot()[0];
+        assert_eq!(entry.kind, HistoryKind::Image);
+        assert_eq!((entry.width, entry.height), (Some(5), Some(3)));
+        assert!(entry.thumbnail_png.is_some());
+        assert_eq!(entry.mime, "image/jpeg");
     }
 
     fn png(width: u32, height: u32) -> Vec<u8> {

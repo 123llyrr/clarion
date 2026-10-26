@@ -4,6 +4,7 @@ mod app;
 mod backend;
 mod desktop;
 mod desktop_icons;
+mod file_icons;
 mod dock_folder;
 mod dock_motion;
 mod input;

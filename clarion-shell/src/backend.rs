@@ -94,6 +94,8 @@ pub enum Command {
     LaunchDesktop(PathBuf),
     LaunchDesktopWithPaths(PathBuf, Vec<PathBuf>),
     OpenPath(PathBuf),
+    /// Open a web URL through the desktop handler.
+    OpenUrl(String),
     OpenSettings,
     SetVolume(f64),
     SetMuted(bool),
@@ -621,6 +623,21 @@ fn perform(
                     "--",
                     path.to_str().context("Location is not UTF-8")?,
                 ],
+                &options.environment,
+                Duration::from_secs(3),
+            )?;
+        }
+        Command::OpenUrl(url) => {
+            let scheme = url.to_ascii_lowercase();
+            anyhow::ensure!(
+                (scheme.starts_with("https://") || scheme.starts_with("http://"))
+                    && !url.contains(char::is_whitespace)
+                    && !url.contains(char::is_control),
+                "Invalid URL"
+            );
+            run_tool(
+                "gio",
+                &["open", "--", url.as_str()],
                 &options.environment,
                 Duration::from_secs(3),
             )?;

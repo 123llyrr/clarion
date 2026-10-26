@@ -115,10 +115,10 @@ fn folder_tile_icon(
     open: bool,
     p: Palette,
 ) -> AnyElement {
-    use crate::desktop_icons::{icon, rotated_icon, DesktopIconKind};
     let Some(folder) = folder else {
-        return icon(DesktopIconKind::Folder, size);
+        return crate::file_icons::icon(None, true, &[], size, 0.);
     };
+    let tags = crate::file_icons::tags(&folder.path);
     let entries = folder
         .snapshot
         .as_ref()
@@ -152,7 +152,9 @@ fn folder_tile_icon(
             .into_any_element();
     }
     if folder.display == crate::preferences::FolderDisplay::Folder || entries.is_empty() {
-        return icon(DesktopIconKind::Folder, size);
+        // The pinned folder itself always reads as a folder, with its own
+        // tags on the corner.
+        return crate::file_icons::icon(None, true, &tags, size, 0.);
     }
     let mut stack = div().relative().w(px(size)).h(px(size));
     let mut picked = folder_preview_entries(entries);
@@ -160,12 +162,7 @@ fn folder_tile_icon(
     let artwork_size = size;
     for (layer, entry) in picked.into_iter().enumerate() {
         let offset = layer as f32 * 0.03;
-        let kind = match entry.kind {
-            crate::dock_folder::FolderEntryKind::Directory => DesktopIconKind::Folder,
-            crate::dock_folder::FolderEntryKind::Application => DesktopIconKind::Application,
-            crate::dock_folder::FolderEntryKind::Image => DesktopIconKind::Image,
-            crate::dock_folder::FolderEntryKind::Document => DesktopIconKind::Document,
-        };
+        let is_dir = entry.kind == crate::dock_folder::FolderEntryKind::Directory;
         let angle = match layer {
             0 => -16.,
             1 => 8.,
@@ -176,7 +173,13 @@ fn folder_tile_icon(
                 .absolute()
                 .left(px(size * offset))
                 .top(px(size * offset))
-                .child(rotated_icon(kind, angle, artwork_size)),
+                .child(crate::file_icons::icon(
+                    Some(&entry.path),
+                    is_dir,
+                    &entry.tags,
+                    artwork_size,
+                    angle,
+                )),
         );
     }
     stack.into_any_element()

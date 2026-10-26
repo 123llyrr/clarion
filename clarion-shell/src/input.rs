@@ -52,6 +52,9 @@ pub struct TextInput {
     /// A boxless headline field: no border, no fill, larger type. The
     /// launcher sheet uses it as its title line.
     bare: bool,
+    /// Draw no field of its own, because the surface around it is the control
+    /// (the fullscreen launcher's search capsule). Keeps the compact metrics.
+    boxless: bool,
 }
 
 pub struct QueryChanged(pub String);
@@ -119,6 +122,14 @@ impl TextInput {
         self.light = !dark;
         self
     }
+    /// The fullscreen launcher's search line: compact metrics with no box of
+    /// its own, because the capsule around it is the control.
+    pub fn with_capsule(mut self, dark: bool) -> Self {
+        self.compact = true;
+        self.boxless = true;
+        self.light = !dark;
+        self
+    }
     pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
@@ -136,6 +147,7 @@ impl TextInput {
             compact: false,
             light: false,
             bare: false,
+            boxless: false,
         }
     }
 
@@ -747,7 +759,7 @@ impl Render for TextInput {
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .rounded(px(if self.compact { 6. } else { 16. }))
-            .when(!self.bare, |field| {
+            .when(!self.bare && !self.boxless, |field| {
                 field
                     .border_1()
                     .border_color(rgba(0xffffff24))

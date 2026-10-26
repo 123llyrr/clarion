@@ -40,6 +40,10 @@ pub enum HistoryKind {
     Screenshot,
     /// A `text/uri-list` capture whose entries are all local files.
     Files,
+    /// An opaque payload the shell cannot render, e.g. a PDF or a video the
+    /// application offered as raw bytes. Videos are not their own class: they
+    /// ride the file tag with the other non-text payloads.
+    Binary,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

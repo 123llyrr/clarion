@@ -12,11 +12,13 @@
 //! their backends; until then their commands are filtered out instead of
 //! offering dead entries.
 use super::*;
+use clarion_launcher::actions::{self, PaletteAction};
 use clarion_launcher::catalog::{AppCategory, DesktopApp};
 use clarion_launcher::commands::{self, Command, CommandKind, ResolveError};
 use clarion_launcher::search::{ranked_apps, AppOrder};
-use clarion_launcher::session::{Mode, Route, SavedStyles};
+use clarion_launcher::session::{Mode, Route, SavedStyles, Tool};
 use clarion_launcher::usage::unix_millis;
+use clarion_launcher::web;
 
 /// One-list-row height and the gutter under it. Application and command rows
 /// share the rhythm, including the pixel-based keyboard scroll maths.
@@ -76,7 +78,12 @@ impl ClipboardFilter {
                 kind,
                 services::HistoryKind::Image | services::HistoryKind::Screenshot
             ),
-            Self::Files => matches!(kind, services::HistoryKind::Files),
+            // Videos and other opaque payloads ride the file tag: they are
+            // content the sheet cannot render, not a class of their own.
+            Self::Files => matches!(
+                kind,
+                services::HistoryKind::Files | services::HistoryKind::Binary
+            ),
         }
     }
 }
@@ -108,6 +115,10 @@ enum PaletteBody {
     Clipboard,
     Commands,
     Slash,
+    /// The `/actions` catalog: compositor actions and shell toggles.
+    Actions,
+    /// The `/web` page: search engines and literal URLs.
+    Web,
 }
 
 /// Whether a command has a working implementation behind it. The table keeps
@@ -118,7 +129,8 @@ fn implemented(command: &Command) -> bool {
         CommandKind::Mode => {
             matches!(command.value, Some("search" | "apps" | "commands" | "clipboard"))
         }
-        CommandKind::Tool => false,
+        // The action catalog and the web page have a body behind them so far.
+        CommandKind::Tool => matches!(command.value, Some("actions" | "web")),
         CommandKind::Action => action_ready(command.id),
         CommandKind::Override => matches!(
             command.key,
@@ -151,6 +163,90 @@ fn action_ready(id: &str) -> bool {
             | "system.reboot"
             | "system.shutdown"
     )
+}
+
+/// The compositor IPC action behind a catalog id. `None` means the shell has
+/// no mapping yet; the palette refuses rather than closing on a dead entry.
+fn core_action(id: &str) -> Option<clarion_ipc::Action> {
+    use clarion_ipc::Action as Ipc;
+    Some(match id {
+        // Windows.
+        "window.close" => Ipc::CloseWindow { id: None },
+        "window.fullscreen" => Ipc::FullscreenWindow { id: None },
+        "window.windowed-fullscreen" => Ipc::ToggleWindowedFullscreen { id: None },
+        "window.minimize" => Ipc::MinimizeWindow { id: None },
+        "window.focus-previous" => Ipc::FocusWindowPrevious {},
+        "window.focus-up" => Ipc::FocusWindowUp {},
+        "window.focus-down" => Ipc::FocusWindowDown {},
+        "window.focus-top" => Ipc::FocusWindowTop {},
+        "window.focus-bottom" => Ipc::FocusWindowBottom {},
+        "window.move-up" => Ipc::MoveWindowUp {},
+        "window.move-down" => Ipc::MoveWindowDown {},
+        "window.swap-left" => Ipc::SwapWindowLeft {},
+        "window.swap-right" => Ipc::SwapWindowRight {},
+        "window.consume-left" => Ipc::ConsumeOrExpelWindowLeft { id: None },
+        "window.consume-right" => Ipc::ConsumeOrExpelWindowRight { id: None },
+        "window.expel" => Ipc::ExpelWindowFromColumn {},
+        "window.center" => Ipc::CenterWindow { id: None },
+        // Columns.
+        "column.focus-left" => Ipc::FocusColumnLeft {},
+        "column.focus-right" => Ipc::FocusColumnRight {},
+        "column.focus-first" => Ipc::FocusColumnFirst {},
+        "column.focus-last" => Ipc::FocusColumnLast {},
+        "column.focus-left-wrap" => Ipc::FocusColumnLeftOrLast {},
+        "column.focus-right-wrap" => Ipc::FocusColumnRightOrFirst {},
+        "column.move-left" => Ipc::MoveColumnLeft {},
+        "column.move-right" => Ipc::MoveColumnRight {},
+        "column.move-first" => Ipc::MoveColumnToFirst {},
+        "column.move-last" => Ipc::MoveColumnToLast {},
+        "column.toggle-tabbed" => Ipc::ToggleColumnTabbedDisplay {},
+        "column.toggle-dwindle" => Ipc::ToggleColumnDwindleDisplay {},
+        "column.center" => Ipc::CenterColumn {},
+        "column.center-visible" => Ipc::CenterVisibleColumns {},
+        // Workspaces. Moving a window or column follows the focus, the way a
+        // keyboard gesture would.
+        "workspace.focus-down" => Ipc::FocusWorkspaceDown {},
+        "workspace.focus-up" => Ipc::FocusWorkspaceUp {},
+        "workspace.focus-previous" => Ipc::FocusWorkspacePrevious {},
+        "workspace.move-down" => Ipc::MoveWorkspaceDown {},
+        "workspace.move-up" => Ipc::MoveWorkspaceUp {},
+        "workspace.window-down" => Ipc::MoveWindowToWorkspaceDown { focus: true },
+        "workspace.window-up" => Ipc::MoveWindowToWorkspaceUp { focus: true },
+        "workspace.column-down" => Ipc::MoveColumnToWorkspaceDown { focus: true },
+        "workspace.column-up" => Ipc::MoveColumnToWorkspaceUp { focus: true },
+        // Monitors.
+        "monitor.focus-left" => Ipc::FocusMonitorLeft {},
+        "monitor.focus-right" => Ipc::FocusMonitorRight {},
+        "monitor.focus-down" => Ipc::FocusMonitorDown {},
+        "monitor.focus-up" => Ipc::FocusMonitorUp {},
+        "monitor.focus-previous" => Ipc::FocusMonitorPrevious {},
+        "monitor.focus-next" => Ipc::FocusMonitorNext {},
+        "monitor.window-left" => Ipc::MoveWindowToMonitorLeft {},
+        "monitor.window-right" => Ipc::MoveWindowToMonitorRight {},
+        "monitor.window-down" => Ipc::MoveWindowToMonitorDown {},
+        "monitor.window-up" => Ipc::MoveWindowToMonitorUp {},
+        "monitor.column-left" => Ipc::MoveColumnToMonitorLeft {},
+        "monitor.column-right" => Ipc::MoveColumnToMonitorRight {},
+        "monitor.column-next" => Ipc::MoveColumnToMonitorNext {},
+        // Screens and the session.
+        "system.power-off-monitors" => Ipc::PowerOffMonitors {},
+        "system.power-on-monitors" => Ipc::PowerOnMonitors {},
+        "system.screen-transition" => Ipc::DoScreenTransition { delay_ms: None },
+        "system.inhibit-shortcuts" => Ipc::ToggleKeyboardShortcutsInhibit {},
+        "screenshot.screen" => Ipc::ScreenshotScreen {
+            write_to_disk: true,
+            show_pointer: true,
+            path: None,
+        },
+        "screenshot.window" => Ipc::ScreenshotWindow {
+            id: None,
+            write_to_disk: true,
+            show_pointer: false,
+            path: None,
+            is_preview: false,
+        },
+        _ => return None,
+    })
 }
 
 fn kind_label(kind: CommandKind) -> &'static str {
@@ -195,6 +291,42 @@ fn clipboard_title(entry: &services::HistoryEntry) -> String {
                 name
             }
         }
+        // Opaque payloads have no text to preview: name the class of content,
+        // or the file they came from when the source told us.
+        services::HistoryKind::Binary => match &entry.file_path {
+            Some(path) => path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| binary_label(&entry.mime).to_owned()),
+            None => binary_label(&entry.mime).to_owned(),
+        },
+    }
+}
+
+/// A friendly class for an opaque payload; the mime itself stays in the
+/// metadata line.
+fn binary_label(mime: &str) -> &'static str {
+    if mime.starts_with("video/") {
+        "视频"
+    } else if mime.starts_with("audio/") {
+        "音频"
+    } else if mime == "application/pdf" {
+        "PDF"
+    } else if mime.contains("zip")
+        || mime.contains("tar")
+        || mime.contains("compressed")
+        || mime.contains("rar")
+        || mime.contains("7z")
+    {
+        "压缩包"
+    } else if mime.contains("document")
+        || mime.contains("msword")
+        || mime.contains("officedocument")
+        || mime.contains("opendocument")
+    {
+        "文档"
+    } else {
+        "内容"
     }
 }
 
@@ -204,7 +336,8 @@ fn clipboard_meta(entry: &services::HistoryEntry) -> String {
         services::HistoryKind::Text => "文字",
         services::HistoryKind::Image => "图片",
         services::HistoryKind::Screenshot => "截图",
-        services::HistoryKind::Files => "文件",
+        // Videos and other opaque payloads ride the file tag.
+        services::HistoryKind::Files | services::HistoryKind::Binary => "文件",
     };
     let detail = match entry.kind {
         services::HistoryKind::Text => format!("{} 字", entry.text.chars().count()),
@@ -214,6 +347,8 @@ fn clipboard_meta(entry: &services::HistoryEntry) -> String {
                 entry.text.lines().filter(|line| !line.is_empty()).count()
             )
         }
+        // No dimensions to report: the mime is the useful fact.
+        services::HistoryKind::Binary => entry.mime.clone(),
         _ => entry
             .width
             .zip(entry.height)
@@ -346,6 +481,14 @@ impl ShellView {
             Route::Commands(_) => return PaletteBody::Commands,
             _ => {}
         }
+        // A tool page owns the sheet until it is popped, whatever mode it was
+        // opened from.
+        if self.palette.tool == Some(Tool::Actions) {
+            return PaletteBody::Actions;
+        }
+        if self.palette.tool == Some(Tool::Web) {
+            return PaletteBody::Web;
+        }
         match self.palette.mode {
             Mode::Commands => PaletteBody::Commands,
             Mode::Clipboard => PaletteBody::Clipboard,
@@ -359,6 +502,12 @@ impl ShellView {
     /// While the draft merely composes a command, the generic command mark
     /// stands in; the selection never moves the header.
     pub(super) fn palette_glyph_path(&self) -> PathBuf {
+        if self.palette.tool == Some(Tool::Actions) {
+            return self.themed_glyph_path("system-run-symbolic", "activity-monitor.svg");
+        }
+        if self.palette.tool == Some(Tool::Web) {
+            return self.themed_glyph_path("web-browser-symbolic", "safari.svg");
+        }
         match self.palette.mode {
             Mode::Commands => self.themed_glyph_path("layers-button-symbolic", "terminal.svg"),
             Mode::Clipboard => {
@@ -501,7 +650,10 @@ impl ShellView {
                 Route::Slash { name, .. } => name,
                 _ => String::new(),
             },
-            PaletteBody::Apps | PaletteBody::Clipboard => return Vec::new(),
+            PaletteBody::Apps
+            | PaletteBody::Clipboard
+            | PaletteBody::Actions
+            | PaletteBody::Web => return Vec::new(),
         };
         commands::search(&filter, self.palette.mode, self.palette.tool)
             .into_iter()
@@ -509,8 +661,27 @@ impl ShellView {
             .collect()
     }
 
+    /// The action catalog narrowed by the draft. The page is already scoped
+    /// to `Tool::Actions`, so the plain query is the filter.
+    fn palette_actions(&self) -> Vec<&'static PaletteAction> {
+        if self.palette_body() != PaletteBody::Actions {
+            return Vec::new();
+        }
+        actions::search(&self.query)
+    }
+
+    /// The web page's rows for the draft: engines, or the literal URL.
+    fn palette_web(&self) -> Vec<web::WebSearch> {
+        if self.palette_body() != PaletteBody::Web {
+            return Vec::new();
+        }
+        web::searches(&self.query)
+    }
+
     pub(super) fn palette_row_count(&self, host: &ViewState) -> usize {
         match self.palette_body() {
+            PaletteBody::Actions => self.palette_actions().len(),
+            PaletteBody::Web => self.palette_web().len(),
             PaletteBody::Apps => {
                 let visible = self.palette_visible_apps(host);
                 if self.palette_grid(host) {
@@ -532,7 +703,9 @@ impl ShellView {
             PaletteBody::Apps
             | PaletteBody::Clipboard
             | PaletteBody::Commands
-            | PaletteBody::Slash => (1, LIST_PITCH),
+            | PaletteBody::Slash
+            | PaletteBody::Actions
+            | PaletteBody::Web => (1, LIST_PITCH),
         }
     }
 
@@ -752,6 +925,20 @@ impl ShellView {
                     self.palette_run_checked(entry, "", host, cx);
                 }
             }
+            PaletteBody::Actions => {
+                if let Some(entry) = self.palette_actions().get(self.selection).copied() {
+                    self.palette_run_action(entry, host, cx);
+                }
+            }
+            PaletteBody::Web => {
+                let found = self.palette_web();
+                let Some(entry) = found.get(self.selection) else {
+                    return;
+                };
+                let url = entry.url.clone();
+                self.invoke(Action::OpenUrl(url), cx);
+                self.invoke(Action::Close, cx);
+            }
             PaletteBody::Slash => {
                 let Route::Slash { name, arguments } = self.palette.route(&self.query) else {
                     return;
@@ -778,6 +965,40 @@ impl ShellView {
                     }
                 }
             }
+        }
+    }
+
+    /// Rows of the action catalog are clicked from inside the surface: look
+    /// the id up again so the same deferred path runs as a key press.
+    pub(crate) fn palette_action_by_id(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(entry) = actions::by_id(id) else {
+            return;
+        };
+        let host = self.state.clone();
+        self.palette_run_action(entry, &host, cx);
+    }
+
+    /// Run one catalog entry. Entries that also live in the command table ride
+    /// that dispatch (and its mode/override bookkeeping); the compositor ones
+    /// are plain IPC and close the sheet once sent.
+    fn palette_run_action(
+        &mut self,
+        action: &'static PaletteAction,
+        host: &ViewState,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(entry) = commands::by_id(action.id) {
+            if entry.kind == CommandKind::Action {
+                self.palette_run_checked(entry, "", host, cx);
+                return;
+            }
+        }
+        match core_action(action.id) {
+            Some(core) => {
+                self.invoke(Action::Core(core), cx);
+                self.invoke(Action::Close, cx);
+            }
+            None => self.palette_reject("该动作尚未接入", cx),
         }
     }
 
@@ -1015,6 +1236,8 @@ impl ShellView {
             }
             PaletteBody::Commands => Some(self.spotlight_chip("命令", true, p, cx)),
             PaletteBody::Slash => Some(self.spotlight_chip("命令补全", true, p, cx)),
+            PaletteBody::Actions => Some(self.spotlight_chip("动作", true, p, cx)),
+            PaletteBody::Web => Some(self.spotlight_chip("网页", true, p, cx)),
         }
     }
 
@@ -1132,6 +1355,8 @@ impl ShellView {
             }
             PaletteBody::Clipboard => self.spotlight_clipboard(host, p, cx),
             PaletteBody::Commands | PaletteBody::Slash => self.spotlight_commands(p, cx),
+            PaletteBody::Actions => self.spotlight_actions(p, cx),
+            PaletteBody::Web => self.spotlight_web(p, cx),
         }
     }
 
@@ -1565,9 +1790,12 @@ impl ShellView {
         self.palette_apply(entry, "", host, cx);
     }
 
-    /// The plate glyph for one clipboard kind, through the theme's own icons.
-    fn clipboard_glyph(&self, kind: services::HistoryKind) -> PathBuf {
-        match kind {
+    /// The plate glyph for one clipboard entry, through the theme's own icons.
+    /// Rich text keeps the paste mark; opaque payloads borrow the icon of
+    /// their media class (video, audio, documents) and fall back to a plain
+    /// document.
+    fn clipboard_glyph(&self, entry: &services::HistoryEntry) -> PathBuf {
+        match entry.kind {
             services::HistoryKind::Text => {
                 self.themed_glyph_path("edit-paste-symbolic", "clipboard.svg")
             }
@@ -1579,6 +1807,18 @@ impl ShellView {
             }
             services::HistoryKind::Files => {
                 self.themed_glyph_path("folder-symbolic", "generic-folder.svg")
+            }
+            services::HistoryKind::Binary => {
+                let theme = if entry.mime.starts_with("video/") {
+                    "video-x-generic-symbolic"
+                } else if entry.mime.starts_with("audio/") {
+                    "audio-x-generic-symbolic"
+                } else if entry.mime.contains("document") || entry.mime == "application/pdf" {
+                    "x-office-document-symbolic"
+                } else {
+                    "text-x-generic-symbolic"
+                };
+                self.themed_glyph_path(theme, "generic-document.svg")
             }
         }
     }
@@ -1598,7 +1838,7 @@ impl ShellView {
         let id = entry.id.clone();
         let title = clipboard_title(entry);
         let meta = clipboard_meta(entry);
-        let glyph = self.clipboard_glyph(entry.kind);
+        let glyph = self.clipboard_glyph(entry);
         let thumbnail = self
             .image_cache
             .get(&format!("history:{}", entry.id))
@@ -1767,7 +2007,7 @@ impl ShellView {
             services::HistoryKind::Text => "文字",
             services::HistoryKind::Image => "图片",
             services::HistoryKind::Screenshot => "截图",
-            services::HistoryKind::Files => "文件",
+            services::HistoryKind::Files | services::HistoryKind::Binary => "文件",
         };
         let title = clipboard_title(entry);
         let id = entry.id.clone();
@@ -1821,6 +2061,44 @@ impl ShellView {
                         .line_height(px(19.))
                         .text_color(p.fg)
                         .child(entry.text.chars().take(1600).collect::<String>()),
+                );
+            }
+            services::HistoryKind::Binary => {
+                let glyph = self.clipboard_glyph(entry);
+                card = card.child(
+                    div()
+                        .id("spotlight-clipboard-binary")
+                        .debug_selector(|| "spotlight-clipboard-binary".to_owned())
+                        .flex_1()
+                        .min_h_0()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .gap(px(8.))
+                        .child(self.glyph(&glyph, 44., p))
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(p.fg)
+                                .child(menu_text(
+                                    binary_label(&entry.mime).to_owned(),
+                                    FontWeight::SEMIBOLD,
+                                    p.fg,
+                                    cx,
+                                )),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(p.muted)
+                                .child(menu_text(
+                                    "无法预览，可直接复制".to_owned(),
+                                    FontWeight::NORMAL,
+                                    p.muted,
+                                    cx,
+                                )),
+                        ),
                 );
             }
             services::HistoryKind::Image | services::HistoryKind::Screenshot => {
@@ -2029,6 +2307,225 @@ impl ShellView {
                         cx.stop_propagation();
                         h.update(cx, |h, cx| {
                             h.handle(Action::PaletteCommand(id.to_owned()), cx)
+                        });
+                    }),
+            );
+        }
+        list.into_any_element()
+    }
+
+    /// The web page: one row per engine (or the literal URL), each opening its
+    /// target with `gio open` and folding the sheet away.
+    fn spotlight_web(&self, p: Palette, cx: &Context<Self>) -> AnyElement {
+        let found = self.palette_web();
+        if found.is_empty() {
+            return palette_empty("没有可用的搜索引擎", "输入 /web 重试", p, cx);
+        }
+        let icon = self.themed_glyph_path("web-browser-symbolic", "safari.svg");
+        let mut list = div().flex().flex_col().gap(px(LIST_GAP)).pb(px(2.));
+        for (index, entry) in found.iter().enumerate() {
+            let selected = index == self.selection;
+            let row_id = entry.id();
+            let title = entry.title();
+            let subtitle = entry.subtitle();
+            let url = entry.url.clone();
+            let glyph = icon.clone();
+            let row_selector = format!("spotlight-web-{row_id}");
+            let icon_selector = format!("spotlight-web-icon-{row_id}");
+            let subtitle_selector = format!("spotlight-web-subtitle-{row_id}");
+            let h = self.host.clone();
+            list = list.child(
+                div()
+                    .id(SharedString::from(row_selector.clone()))
+                    .debug_selector(move || row_selector.clone())
+                    .h(px(LIST_ROW_H))
+                    .flex_shrink_0()
+                    .px(px(12.))
+                    .rounded(px(14.))
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .when(selected, |row| row.bg(p.accent.opacity(0.20)))
+                    .hover(move |row| row.bg(p.line))
+                    .cursor_pointer()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .debug_selector(move || icon_selector.clone())
+                            .size(px(36.))
+                            .rounded(px(10.))
+                            .bg(p.card)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(self.glyph(&glyph, 22., p)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(1.))
+                            .child(
+                                div()
+                                    .text_size(px(14.))
+                                    .text_color(p.fg)
+                                    .whitespace_nowrap()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .child(menu_text(
+                                        title,
+                                        FontWeight::SEMIBOLD,
+                                        p.fg,
+                                        cx,
+                                    )),
+                            )
+                            .child(
+                                div()
+                                    .debug_selector(move || subtitle_selector.clone())
+                                    .text_size(px(11.))
+                                    .text_color(p.muted)
+                                    .whitespace_nowrap()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .child(menu_text(
+                                        subtitle,
+                                        FontWeight::MEDIUM,
+                                        p.muted,
+                                        cx,
+                                    )),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(p.muted)
+                            .whitespace_nowrap()
+                            .child(menu_text(
+                                "打开".to_owned(),
+                                FontWeight::MEDIUM,
+                                p.muted,
+                                cx,
+                            )),
+                    )
+                    .on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        let url = url.clone();
+                        h.update(cx, |h, cx| {
+                            h.handle(Action::OpenUrl(url.clone()), cx);
+                            h.handle(Action::Close, cx);
+                        });
+                    }),
+            );
+        }
+        list.into_any_element()
+    }
+
+    /// The action catalog: every row is one dispatchable compositor action or
+    /// shell toggle, with its section as the subtitle. Titles come from the
+    /// toolkit-independent table in `clarion-launcher`.
+    fn spotlight_actions(&self, p: Palette, cx: &Context<Self>) -> AnyElement {
+        let found = self.palette_actions();
+        if found.is_empty() {
+            return palette_empty(
+                "没有匹配的动作",
+                "输入 /actions 浏览全部动作",
+                p,
+                cx,
+            );
+        }
+        let icon = self.themed_glyph_path("system-run-symbolic", "activity-monitor.svg");
+        let mut list = div().flex().flex_col().gap(px(LIST_GAP)).pb(px(2.));
+        for (index, entry) in found.iter().enumerate() {
+            let selected = index == self.selection;
+            let id = entry.id;
+            let title = entry.title;
+            let group = entry.group;
+            let glyph = icon.clone();
+            let row_selector = format!("spotlight-action-{id}");
+            let icon_selector = format!("spotlight-action-icon-{id}");
+            let group_selector = format!("spotlight-action-group-{id}");
+            let h = self.host.clone();
+            list = list.child(
+                div()
+                    .id(SharedString::from(row_selector.clone()))
+                    .debug_selector(move || row_selector.clone())
+                    .h(px(LIST_ROW_H))
+                    .flex_shrink_0()
+                    .px(px(12.))
+                    .rounded(px(14.))
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .when(selected, |row| row.bg(p.accent.opacity(0.20)))
+                    .hover(move |row| row.bg(p.line))
+                    .cursor_pointer()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .debug_selector(move || icon_selector.clone())
+                            .size(px(36.))
+                            .rounded(px(10.))
+                            .bg(p.card)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(self.glyph(&glyph, 22., p)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(1.))
+                            .child(
+                                div()
+                                    .text_size(px(14.))
+                                    .text_color(p.fg)
+                                    .whitespace_nowrap()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .child(menu_text(
+                                        title.to_owned(),
+                                        FontWeight::SEMIBOLD,
+                                        p.fg,
+                                        cx,
+                                    )),
+                            )
+                            .child(
+                                div()
+                                    .debug_selector(move || group_selector.clone())
+                                    .text_size(px(11.))
+                                    .text_color(p.muted)
+                                    .whitespace_nowrap()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .child(menu_text(
+                                        group.to_owned(),
+                                        FontWeight::MEDIUM,
+                                        p.muted,
+                                        cx,
+                                    )),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(p.muted)
+                            .whitespace_nowrap()
+                            .child(menu_text(
+                                "运行".to_owned(),
+                                FontWeight::MEDIUM,
+                                p.muted,
+                                cx,
+                            )),
+                    )
+                    .on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        h.update(cx, |h, cx| {
+                            h.handle(Action::RunCatalog(id.to_owned()), cx)
                         });
                     }),
             );

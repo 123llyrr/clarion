@@ -56,7 +56,30 @@ fn clipboard_entry(
     }
 }
 
-struct Fixture {
+/// One opaque clipboard payload (a video, a PDF): no text to search, just the
+/// mime the row and the preview name.
+fn clipboard_blob_entry(
+    id: &str,
+    mime: &str,
+    bytes: usize,
+    created_at: u64,
+) -> crate::services::HistoryEntry {
+    crate::services::HistoryEntry {
+        id: id.to_owned(),
+        kind: crate::services::HistoryKind::Binary,
+        text: String::new(),
+        thumbnail_png: None,
+        pinned: false,
+        created_at,
+        file_path: None,
+        mime: mime.to_owned(),
+        bytes,
+        width: None,
+        height: None,
+    }
+}
+
+pub(super) struct Fixture {
     _root: tempfile::TempDir,
     catalog: clarion_launcher::catalog::AppCatalog,
     environment: HashMap<String, String>,
@@ -136,7 +159,7 @@ fn panel(
     panel_with_fixture(cx, kind, Fixture::new())
 }
 
-fn panel_with_apps(
+pub(super) fn panel_with_apps(
     cx: &mut TestAppContext,
     kind: Panel,
     apps: &[(&str, &str, &str)],
@@ -1028,6 +1051,151 @@ fn palette_settings_actions_toggle_preferences(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_web_page_searches_through_engines(cx: &mut TestAppContext) {
+    let (_fixture, host, _view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    let received = cx.update(|cx| testing::capture_backend(&host, cx));
+    visual.simulate_input("/search");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    assert!(
+        visual.debug_bounds("spotlight-web-google").is_some()
+            && visual.debug_bounds("spotlight-web-bilibili").is_some(),
+        "an empty draft lists the engines"
+    );
+
+    // A bare query keeps every engine, each with its own encoded search.
+    visual.simulate_input("rust wayland");
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("spotlight-web-duckduckgo").is_some());
+
+    // An engine prefix narrows to one row and Enter opens it.
+    visual.simulate_keystrokes("ctrl-a backspace");
+    visual.simulate_input("gh tokio");
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("spotlight-web-github").is_some());
+    assert!(
+        visual.debug_bounds("spotlight-web-google").is_none(),
+        "the prefix hides the other engines"
+    );
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    let command = received
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("the search reaches the backend");
+    assert!(
+        matches!(
+            command,
+            crate::backend::Command::OpenUrl(url)
+                if url == "https://github.com/search?q=tokio"
+        ),
+        "the engine prefix builds its search URL"
+    );
+    host.read_with(cx, |host, _| {
+        assert!(host.panel_exit, "the sheet folds away after opening the search");
+    });
+}
+
+#[gpui::test]
+fn the_web_page_opens_a_literal_url(cx: &mut TestAppContext) {
+    let (_fixture, host, _view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    let received = cx.update(|cx| testing::capture_backend(&host, cx));
+    visual.simulate_input("/web");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    visual.simulate_input("https://example.com/a?b=1");
+    visual.run_until_parked();
+    assert!(
+        visual.debug_bounds("spotlight-web-url").is_some(),
+        "a URL becomes its own row"
+    );
+    assert!(visual.debug_bounds("spotlight-web-google").is_none());
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    let command = received
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("the URL reaches the backend");
+    assert!(matches!(
+        command,
+        crate::backend::Command::OpenUrl(url) if url == "https://example.com/a?b=1"
+    ));
+}
+
+#[gpui::test]
+fn the_actions_page_lists_filters_and_runs_compositor_actions(cx: &mut TestAppContext) {
+    let (_fixture, host, _view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    let received = cx.update(|cx| testing::capture_backend(&host, cx));
+    visual.simulate_input("/actions");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    assert!(
+        visual.debug_bounds("spotlight-action-window.close").is_some(),
+        "the catalog opens on its first window action"
+    );
+    assert!(
+        visual.debug_bounds("spotlight-action-window.close").is_some()
+            && visual.debug_bounds("spotlight-action-system.suspend").is_some(),
+        "the whole catalog is listed, not only one section"
+    );
+
+    // The draft narrows the catalog by title, keyword or section.
+    visual.simulate_input("关闭窗口");
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("spotlight-action-window.close").is_some());
+    assert!(
+        visual.debug_bounds("spotlight-action-column.focus-left").is_none(),
+        "a filtered page hides the rest of the catalog"
+    );
+
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    let command = received
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("the compositor action reaches the backend");
+    assert!(
+        matches!(
+            command,
+            crate::backend::Command::Action(clarion_ipc::Action::CloseWindow { id: None })
+        ),
+        "the catalog entry maps to its IPC action"
+    );
+    host.read_with(cx, |host, _| {
+        assert!(host.panel_exit, "the sheet folds away after running an action");
+    });
+}
+
+#[gpui::test]
+fn the_actions_page_runs_shell_actions_and_pops_back(cx: &mut TestAppContext) {
+    let (_fixture, host, _view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    visual.simulate_input("/actions");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    visual.simulate_input("减少动效");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    host.read_with(cx, |host, _| {
+        assert!(
+            host.prefs.reduce_motion,
+            "shell entries keep their command dispatch"
+        );
+    });
+
+    // An empty draft backspaces out of the tool page, back to the sheet's
+    // previous state instead of closing it.
+    visual.simulate_keystrokes("ctrl-a backspace");
+    visual.run_until_parked();
+    visual.simulate_keystrokes("backspace");
+    visual.run_until_parked();
+    assert!(
+        visual.debug_bounds("spotlight-action-window.close").is_none(),
+        "backspace leaves the catalog"
+    );
+    host.read_with(cx, |host, _| {
+        assert_eq!(host.panel, Some(Panel::Spotlight), "the sheet stays open");
+        assert!(!host.panel_exit);
+    });
+}
+
+#[gpui::test]
 fn right_clicking_a_palette_tile_opens_a_menu_surface_over_the_palette(
     cx: &mut TestAppContext,
 ) {
@@ -1452,6 +1620,7 @@ fn clipboard_type_tags_filter_by_content_kind(cx: &mut TestAppContext) {
             clipboard_entry("text:a", HistoryKind::Text, "alpha", 3),
             clipboard_entry("image:b", HistoryKind::Image, "capture.png", 2),
             clipboard_entry("files:c", HistoryKind::Files, "/tmp/c.txt", 1),
+            clipboard_blob_entry("blob:d", "video/mp4", 2_400_000, 4),
         ];
         host.clipboard_available = true;
         host.changed(cx);
@@ -1463,6 +1632,7 @@ fn clipboard_type_tags_filter_by_content_kind(cx: &mut TestAppContext) {
     assert!(visual.debug_bounds("spotlight-clip-text:a").is_some());
     assert!(visual.debug_bounds("spotlight-clip-image:b").is_some());
     assert!(visual.debug_bounds("spotlight-clip-files:c").is_some());
+    assert!(visual.debug_bounds("spotlight-clip-blob:d").is_some());
     assert!(visual.debug_bounds("spotlight-clip-tag-text").is_some());
     assert!(visual.debug_bounds("spotlight-clip-tag-image").is_some());
     assert!(visual.debug_bounds("spotlight-clip-tag-files").is_some());
@@ -1507,6 +1677,10 @@ fn clipboard_type_tags_filter_by_content_kind(cx: &mut TestAppContext) {
         Some(ClipboardFilter::Files)
     );
     assert!(visual.debug_bounds("spotlight-clip-files:c").is_some());
+    assert!(
+        visual.debug_bounds("spotlight-clip-blob:d").is_some(),
+        "an opaque video rides the file tag"
+    );
     assert!(visual.debug_bounds("spotlight-clip-image:b").is_none());
 
     // The tag itself is clickable and toggles off.
@@ -1521,6 +1695,35 @@ fn clipboard_type_tags_filter_by_content_kind(cx: &mut TestAppContext) {
         "a second press on the tag shows every type"
     );
     assert!(visual.debug_bounds("spotlight-clip-text:a").is_some());
+}
+
+#[gpui::test]
+fn the_clipboard_details_preview_an_opaque_payload(cx: &mut TestAppContext) {
+    let (_fixture, host, _view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    host.update(cx, |host, cx| {
+        host.history = vec![clipboard_blob_entry("blob:video", "video/mp4", 2_400_000, 1)];
+        host.clipboard_available = true;
+        host.changed(cx);
+    });
+    visual.simulate_input("/clipboard");
+    visual.simulate_keystrokes("enter");
+    visual.simulate_input("/detail");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    assert!(
+        visual.debug_bounds("spotlight-clipboard-binary").is_some(),
+        "the preview names the payload class instead of an empty text block"
+    );
+    assert!(
+        visual.debug_bounds("spotlight-clipboard-text").is_none(),
+        "there are no words to show"
+    );
+
+    // The compact row copies it back unchanged.
+    visual.simulate_input("/compact");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("spotlight-clip-blob:video").is_some());
 }
 
 #[gpui::test]
@@ -1752,8 +1955,21 @@ fn escape_in_the_launcher_menu_folds_only_the_menu(cx: &mut TestAppContext) {
 #[gpui::test]
 fn right_clicking_a_launchpad_tile_keeps_the_launchpad_closeable(cx: &mut TestAppContext) {
     let (_fixture, host, _view, mut visual, window) = panel(cx, Panel::Apps);
-    // The first tile of the fullscreen grid.
-    let tile = point(px(100.), px(120.));
+    // The first tile of the fullscreen grid, wherever the page puts it.
+    let first = _view
+        .read_with(&visual, |view, _| {
+            view.state
+                .catalog
+                .search("")
+                .first()
+                .map(|app| app.id.clone())
+        })
+        .expect("the catalog has fixture apps");
+    let selector: &'static str = Box::leak(format!("launchpad-app-{first}").into_boxed_str());
+    let tile = visual
+        .debug_bounds(selector)
+        .expect("the first tile is painted")
+        .center();
     visual.simulate_mouse_down(tile, MouseButton::Right, Modifiers::none());
     visual.simulate_mouse_up(tile, MouseButton::Right, Modifiers::none());
     visual.run_until_parked();

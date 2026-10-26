@@ -349,13 +349,17 @@ impl ShellView {
                     .with_bare(state.dark())
             } else {
                 let dark_input = launchpad || state.dark();
-                TextInput::new(cx)
-                    .with_placeholder(if launchpad {
-                        "搜索"
-                    } else {
-                        "搜索最近内容"
-                    })
-                    .with_compact(dark_input)
+                let mut input = TextInput::new(cx).with_placeholder(if launchpad {
+                    "搜索应用"
+                } else {
+                    "搜索最近内容"
+                });
+                input = if launchpad {
+                    input.with_capsule(dark_input)
+                } else {
+                    input.with_compact(dark_input)
+                };
+                input
             }
         });
         cx.subscribe(&input, |this, _, QueryChanged(query), cx| {
@@ -1341,7 +1345,12 @@ impl ShellView {
             if self.filter == 3 && !matches!(entry.kind, services::HistoryKind::Screenshot) {
                 continue;
             }
-            if self.filter == 4 && !matches!(entry.kind, services::HistoryKind::Files) {
+            if self.filter == 4
+                && !matches!(
+                    entry.kind,
+                    services::HistoryKind::Files | services::HistoryKind::Binary
+                )
+            {
                 continue;
             }
             count += 1;
@@ -1349,7 +1358,7 @@ impl ShellView {
                 services::HistoryKind::Text => "文字",
                 services::HistoryKind::Image => "图片",
                 services::HistoryKind::Screenshot => "截图",
-                services::HistoryKind::Files => "文件",
+                services::HistoryKind::Files | services::HistoryKind::Binary => "文件",
             };
             let mut card = div()
                 .p_4()
@@ -1369,6 +1378,13 @@ impl ShellView {
                         .w_full()
                         .max_h(px(150.))
                         .object_fit(ObjectFit::Contain),
+                );
+            } else if entry.kind == services::HistoryKind::Binary {
+                card = card.child(
+                    div()
+                        .text_xs()
+                        .text_color(p.muted)
+                        .child(format!("{}（无法预览，可直接复制）", entry.mime)),
                 );
             } else {
                 card = card.child(
@@ -2714,28 +2730,24 @@ impl Render for ShellView {
                     this.palette_toggle_clipboard_layout(&host, cx);
                 }
             }))
-            .on_action(cx.listener(|this, _: &Previous, window, cx| {
+            .on_action(cx.listener(|this, _: &Previous, _window, cx| {
                 if !this.input.read(cx).has_preedit() {
                     this.selection = this.selection.saturating_sub(1);
-                    if this.state.panel == Some(Panel::Apps) {
-                        this.keyboard_selection_into_view(this.state.as_ref(), window);
-                    } else if this.state.panel == Some(Panel::Spotlight) {
+                    if this.state.panel == Some(Panel::Spotlight) {
                         this.palette_note_slash_navigation();
                         this.palette_selection_into_view(&this.state);
                     }
                     cx.notify();
                 }
             }))
-            .on_action(cx.listener(|this, _: &Next, window, cx| {
+            .on_action(cx.listener(|this, _: &Next, _window, cx| {
                 if !this.input.read(cx).has_preedit() {
                     let count = match this.state.panel {
                         Some(Panel::Spotlight) => this.palette_row_count(&this.state),
                         _ => this.state.catalog.search(&this.query).len(),
                     };
                     this.selection = (this.selection + 1).min(count.saturating_sub(1));
-                    if this.state.panel == Some(Panel::Apps) {
-                        this.keyboard_selection_into_view(this.state.as_ref(), window);
-                    } else if this.state.panel == Some(Panel::Spotlight) {
+                    if this.state.panel == Some(Panel::Spotlight) {
                         this.palette_note_slash_navigation();
                         this.palette_selection_into_view(&this.state);
                     }
@@ -3287,6 +3299,9 @@ fn probe_theme(dir: &std::path::Path, name: &str) -> Option<PathBuf> {
         "apps",
         "panel",
         "places",
+        // File-type marks live in `mimes`; without it every document fell back
+        // to the bundled artwork instead of the theme the desktop selected.
+        "mimes",
         "categories",
         "",
     ];
@@ -3322,7 +3337,7 @@ fn probe_theme(dir: &std::path::Path, name: &str) -> Option<PathBuf> {
     None
 }
 
-fn resolve_theme_icon(name: &str) -> Option<PathBuf> {
+pub(crate) fn resolve_theme_icon(name: &str) -> Option<PathBuf> {
     if name.is_empty() || name.contains("..") {
         return None;
     }

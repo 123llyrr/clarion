@@ -2,9 +2,8 @@
 //! Embedded desktop artwork. Each immutable image gets a stable GPUI asset key,
 //! so drawing another file never reopens an icon or starts another decode.
 
-use std::collections::HashMap;
 use std::io::Cursor;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 
 use gpui::prelude::*;
 use gpui::*;
@@ -26,7 +25,13 @@ fn embedded(kind: DesktopIconKind) -> &'static [u8] {
     }
 }
 
-fn image(kind: DesktopIconKind) -> Arc<Image> {
+/// The raw PNG for a kind, for callers that rotate or re-encode the artwork
+/// before it reaches the screen.
+pub(crate) fn bytes(kind: DesktopIconKind) -> &'static [u8] {
+    embedded(kind)
+}
+
+pub(crate) fn image(kind: DesktopIconKind) -> Arc<Image> {
     static FOLDER: OnceLock<Arc<Image>> = OnceLock::new();
     static DOCUMENT: OnceLock<Arc<Image>> = OnceLock::new();
     static PICTURE: OnceLock<Arc<Image>> = OnceLock::new();
@@ -48,21 +53,7 @@ fn image(kind: DesktopIconKind) -> Arc<Image> {
         .clone()
 }
 
-fn rotated_image(kind: DesktopIconKind, degrees: f32) -> Arc<Image> {
-    static CACHE: OnceLock<Mutex<HashMap<(DesktopIconKind, i16), Arc<Image>>>> =
-        OnceLock::new();
-    let key = (kind, (degrees * 10.).round() as i16);
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(image) = cache.lock().unwrap().get(&key).cloned() {
-        return image;
-    }
-    let rotated = rotate_png(embedded(kind), degrees);
-    let image = Arc::new(Image::from_bytes(ImageFormat::Png, rotated));
-    cache.lock().unwrap().insert(key, image.clone());
-    image
-}
-
-fn rotate_png(bytes: &[u8], degrees: f32) -> Vec<u8> {
+pub(crate) fn rotate_png(bytes: &[u8], degrees: f32) -> Vec<u8> {
     let Ok(source) = ::image::load_from_memory_with_format(bytes, ::image::ImageFormat::Png) else {
         return bytes.to_vec();
     };
@@ -114,25 +105,6 @@ fn sample(source: &::image::RgbaImage, x: f32, y: f32) -> ::image::Rgba<u8> {
 
 pub(crate) fn icon(kind: DesktopIconKind, size: f32) -> AnyElement {
     render_image(image(kind), size)
-}
-
-pub(crate) fn rotated_icon(kind: DesktopIconKind, degrees: f32, size: f32) -> AnyElement {
-    render_image(rotated_image(kind, degrees), size)
-}
-
-#[cfg(test)]
-mod tests {
-    use ::core::prelude::v1::test;
-    use super::*;
-
-    #[test]
-    fn rotated_icons_are_cached_by_kind_and_angle() {
-        let first = rotated_image(DesktopIconKind::Folder, -12.);
-        let second = rotated_image(DesktopIconKind::Folder, -12.);
-        let third = rotated_image(DesktopIconKind::Folder, 8.);
-        assert!(Arc::ptr_eq(&first, &second));
-        assert!(!Arc::ptr_eq(&first, &third));
-    }
 }
 
 fn render_image(image: Arc<Image>, size: f32) -> AnyElement {

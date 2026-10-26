@@ -422,6 +422,7 @@ fn folder_stack_preview_puts_files_on_top_and_folders_at_the_back() {
         path: std::path::PathBuf::from(name),
         name: name.to_owned(),
         kind,
+        tags: Vec::new(),
         modified: None,
         size: 0,
     };

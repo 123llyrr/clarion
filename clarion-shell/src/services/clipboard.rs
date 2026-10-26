@@ -18,7 +18,7 @@ use wayland_protocols::ext::data_control::v1::client::{
     ext_data_control_offer_v1 as offer, ext_data_control_source_v1 as source,
 };
 
-use super::history::{History, Payload, IMAGE_LIMIT, TEXT_LIMIT};
+use super::history::{History, Payload, BLOB_LIMIT, IMAGE_LIMIT, TEXT_LIMIT};
 use super::{Command, Event};
 
 const SCREENSHOT: &str = "application/x-clarion-screenshot";
@@ -95,8 +95,9 @@ impl State {
                 source.offer("text/plain;charset=utf-8".into());
                 source.offer("UTF8_STRING".into());
             }
-            // A file list is also useful as paths in a terminal or text field.
-            "text/uri-list" => {
+            // A file list is also useful as paths in a terminal or text field,
+            // and rich text as its readable words.
+            "text/uri-list" | "text/html" => {
                 source.offer("text/plain".into());
                 source.offer("text/plain;charset=utf-8".into());
             }
@@ -194,32 +195,75 @@ pub(super) fn sensitive(mime: &str) -> bool {
     .iter()
     .any(|part| mime.contains(part))
 }
-fn canonical(mime: &str) -> Option<&'static str> {
-    match mime.to_ascii_lowercase().replace([' ', '\t'], "").as_str() {
-        "image/png" => Some("image/png"),
-        "text/uri-list" => Some("text/uri-list"),
-        "text/plain" | "text/plain;charset=utf-8" | "utf8_string" => Some("text/plain"),
-        _ => None,
+/// The mime without parameters, lower-cased, with the legacy X11 atoms folded
+/// into what they mean. `None` marks the atoms the selection protocol uses for
+/// its own bookkeeping (`TARGETS`, timestamps, our own owner mark).
+fn canonical(mime: &str) -> Option<String> {
+    let lowered = mime.to_ascii_lowercase().replace([' ', '\t'], "");
+    let base = lowered.split(';').next().unwrap_or_default();
+    if base.is_empty() || base.starts_with("application/x-clarion-") {
+        return None;
     }
+    Some(
+        match base {
+            "utf8_string" | "string" | "text" | "compound_text" => "text/plain",
+            "targets" | "timestamp" | "multiple" | "save_targets" | "delete"
+            | "insert_selection" | "insert_property" => return None,
+            other => other,
+        }
+        .to_owned(),
+    )
+}
+
+/// Which offering to read, richest first: a still image, then rich text (its
+/// plain rendering is rebuilt from the markup), a local file list, plain text,
+/// any other textual flavor, and finally an opaque payload (PDF, video, audio)
+/// that is stored and pasted back byte for byte.
+fn pick_mime(offered: &[String]) -> Option<String> {
+    let candidates: Vec<String> = offered.iter().filter_map(|mime| canonical(mime)).collect();
+    for wanted in [
+        "image/png",
+        "image/jpeg",
+        "text/html",
+        "text/uri-list",
+        "text/plain",
+    ] {
+        if let Some(mime) = candidates.iter().find(|mime| mime.as_str() == wanted) {
+            return Some(mime.clone());
+        }
+    }
+    if let Some(mime) = candidates.iter().find(|mime| !mime.starts_with("image/")) {
+        return Some(mime.clone());
+    }
+    candidates.into_iter().next()
 }
 
 /// The bytes to hand a consumer asking for `mime` out of this payload. A file
-/// list also answers as plain text, so terminals and text fields get the paths.
+/// list and a rich-text fragment also answer as plain text, so terminals and
+/// text fields get the paths and the readable words.
 fn payload_bytes(payload: &Payload, mime: &str) -> Option<Arc<Vec<u8>>> {
     let wanted = canonical(mime)?;
-    if wanted == payload.mime {
+    if canonical(&payload.mime).as_deref() == Some(wanted.as_str()) {
         return Some(payload.bytes.clone());
     }
-    if payload.mime == "text/uri-list" && wanted == "text/plain" {
-        let list = std::str::from_utf8(&payload.bytes).ok()?;
-        let text = super::history::uri_paths(list)?
-            .iter()
-            .map(|path| path.to_string_lossy().into_owned())
-            .collect::<Vec<_>>()
-            .join("\n");
-        return Some(Arc::new(text.into_bytes()));
+    match (payload.mime.as_str(), wanted.as_str()) {
+        ("text/uri-list", "text/plain") => {
+            let list = std::str::from_utf8(&payload.bytes).ok()?;
+            let text = super::history::uri_paths(list)?
+                .iter()
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("\n");
+            Some(Arc::new(text.into_bytes()))
+        }
+        ("text/html", "text/plain") => {
+            let html = String::from_utf8_lossy(&payload.bytes);
+            Some(Arc::new(
+                super::history::html_to_text(&html).into_bytes(),
+            ))
+        }
+        _ => None,
     }
-    None
 }
 
 impl Dispatch<wl_registry::WlRegistry, ()> for State {
@@ -322,26 +366,9 @@ impl Dispatch<device::ExtDataControlDeviceV1, ()> for State {
                 {
                     return;
                 }
-                let selected = offered
-                    .mimes
-                    .iter()
-                    .find(|mime| canonical(mime) == Some("image/png"))
-                    .or_else(|| {
-                        offered
-                            .mimes
-                            .iter()
-                            .find(|mime| canonical(mime) == Some("text/uri-list"))
-                    })
-                    .or_else(|| {
-                        offered
-                            .mimes
-                            .iter()
-                            .find(|mime| canonical(mime) == Some("text/plain"))
-                    });
-                let Some(mime) = selected else {
+                let Some(mime) = pick_mime(&offered.mimes) else {
                     return;
                 };
-                let canonical = canonical(mime).unwrap().to_owned();
                 let screenshot = offered.mimes.iter().any(|m| m == SCREENSHOT);
                 if state.read_jobs.load(Ordering::Acquire) >= 2 {
                     return;
@@ -366,21 +393,19 @@ impl Dispatch<device::ExtDataControlDeviceV1, ()> for State {
                 let epoch = state.epoch.clone();
                 let jobs = state.read_jobs.clone();
                 jobs.fetch_add(1, Ordering::AcqRel);
+                let limit = if mime.starts_with("image/") {
+                    IMAGE_LIMIT
+                } else if mime.starts_with("text/") {
+                    TEXT_LIMIT
+                } else {
+                    BLOB_LIMIT
+                };
                 std::thread::spawn(move || {
-                    if let Some(bytes) = read_pipe(
-                        reader,
-                        if canonical == "image/png" {
-                            IMAGE_LIMIT
-                        } else {
-                            TEXT_LIMIT
-                        },
-                        &epoch,
-                        generation,
-                    ) {
+                    if let Some(bytes) = read_pipe(reader, limit, &epoch, generation) {
                         let _ = sender.send(ReadResult {
                             generation,
                             payload: Payload {
-                                mime: canonical,
+                                mime,
                                 bytes: Arc::new(bytes),
                                 screenshot,
                                 file_path: None,
@@ -598,9 +623,79 @@ mod tests {
         assert!(sensitive("x-kde-passwordManagerHint"));
         assert!(sensitive("application/x-keepassxc"));
         assert!(!sensitive("text/plain"));
-        assert_eq!(canonical("text/plain; charset=UTF-8"), Some("text/plain"));
-        assert_eq!(canonical("text/uri-list"), Some("text/uri-list"));
-        assert_eq!(canonical("text/html"), None);
+        assert_eq!(
+            canonical("text/plain; charset=UTF-8").as_deref(),
+            Some("text/plain")
+        );
+        assert_eq!(canonical("text/uri-list").as_deref(), Some("text/uri-list"));
+        assert_eq!(canonical("text/html").as_deref(), Some("text/html"));
+        assert_eq!(canonical("UTF8_STRING").as_deref(), Some("text/plain"));
+        assert_eq!(
+            canonical("application/x-clarion-native-owner-42"),
+            None,
+            "our own owner mark is not content"
+        );
+        assert_eq!(canonical("TARGETS"), None, "protocol bookkeeping");
+    }
+
+    #[test]
+    fn the_richest_offering_wins() {
+        let offer = |mimes: &[&str]| mimes.iter().map(|mime| (*mime).to_owned()).collect::<Vec<_>>();
+        // Rich text is preferred over its own plain rendering.
+        assert_eq!(
+            pick_mime(&offer(&[
+                "text/plain;charset=utf-8",
+                "text/html;charset=utf-8",
+                "TARGETS",
+            ]))
+            .as_deref(),
+            Some("text/html")
+        );
+        // A file list beats plain text; a still image beats everything.
+        assert_eq!(
+            pick_mime(&offer(&["text/plain", "text/uri-list"])).as_deref(),
+            Some("text/uri-list")
+        );
+        assert_eq!(
+            pick_mime(&offer(&["text/html", "image/png", "text/plain"])).as_deref(),
+            Some("image/png")
+        );
+        // Opaque payloads are still captured, so a video or a PDF copy lands in
+        // the history instead of being dropped.
+        assert_eq!(
+            pick_mime(&offer(&["video/mp4", "audio/x-wav"])).as_deref(),
+            Some("video/mp4")
+        );
+        assert_eq!(
+            pick_mime(&offer(&["TARGETS", "TIMESTAMP", "text/plain;charset=utf-8"])).as_deref(),
+            Some("text/plain")
+        );
+        assert_eq!(pick_mime(&[]), None);
+    }
+
+    #[test]
+    fn rich_text_also_answers_as_plain_text() {
+        let payload = Payload {
+            mime: "text/html".into(),
+            bytes: Arc::new(
+                b"<p>Hello <b>world</b></p><p>second &amp; last</p>".to_vec(),
+            ),
+            screenshot: false,
+            file_path: None,
+        };
+        assert_eq!(
+            payload_bytes(&payload, "text/plain")
+                .expect("the readable words")
+                .as_slice(),
+            b"Hello world\nsecond & last"
+        );
+        assert_eq!(
+            payload_bytes(&payload, "text/html")
+                .expect("the original markup")
+                .as_slice(),
+            payload.bytes.as_slice()
+        );
+        assert!(payload_bytes(&payload, "text/uri-list").is_none());
     }
 
     #[test]

@@ -21,6 +21,15 @@ revision and license. It is the Dock folder fan's terminal action mark (open the
 folder in the file manager), matching the `open_in_new` glyph used by the
 reference Dock.
 
+## Launcher action marks
+
+`chevron-left.svg` and `search.svg` are original Clarion action marks under
+GPL-3.0-or-later. The chevron is the fullscreen launcher's paging arrow pair
+(`chevron-right.svg` mirrors it) and `search.svg` is the magnifier prefix of its
+search capsule. The shell still prefers the current icon theme's
+`go-previous-symbolic` / `go-next-symbolic` / `system-search-symbolic` glyphs and
+uses these files only when the theme has no answer.
+
 ## Rasterized icons
 
 `activity-monitor.png`, `preview.png`, `launchpad.png`, `trash-empty.png`,

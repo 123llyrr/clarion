@@ -339,7 +339,13 @@ impl Render for FolderDragPreview {
                 blur_radius: px(12.),
                 spread_radius: px(0.),
             }])
-            .child(entry_icon(FolderEntryKind::Document, 28.))
+            .child(crate::file_icons::icon(
+                Some(&self.path),
+                self.path.is_dir(),
+                &[],
+                28.,
+                0.,
+            ))
             .child(
                 div()
                     .max_w(px(180.))
@@ -373,18 +379,15 @@ fn section_label(label: &'static str, p: Palette) -> AnyElement {
         .into_any_element()
 }
 
-fn desktop_kind(kind: FolderEntryKind) -> crate::desktop_icons::DesktopIconKind {
-    use crate::desktop_icons::DesktopIconKind;
-    match kind {
-        FolderEntryKind::Directory => DesktopIconKind::Folder,
-        FolderEntryKind::Application => DesktopIconKind::Application,
-        FolderEntryKind::Image => DesktopIconKind::Image,
-        FolderEntryKind::Document => DesktopIconKind::Document,
-    }
-}
-
-fn entry_icon(kind: FolderEntryKind, size: f32) -> AnyElement {
-    crate::desktop_icons::icon(desktop_kind(kind), size)
+/// Theme-matched artwork for one folder entry, with its tags riding along.
+fn entry_icon(
+    path: Option<&std::path::Path>,
+    kind: FolderEntryKind,
+    tags: &[String],
+    size: f32,
+    angle: f32,
+) -> AnyElement {
+    crate::file_icons::icon(path, kind == FolderEntryKind::Directory, tags, size, angle)
 }
 
 const FAN_LABEL_W: f32 = 112.;
@@ -1131,7 +1134,13 @@ impl ShellView {
                 .top(px(y - glyph / 2.))
                 .size(px(glyph))
                 .opacity(opacity)
-                .child(crate::desktop_icons::icon(desktop_kind(entry.kind), glyph));
+                .child(entry_icon(
+                    Some(&entry.path),
+                    entry.kind,
+                    &entry.tags,
+                    glyph,
+                    0.,
+                ));
             overlay = overlay.child(layer);
         }
         for item in &items {
@@ -1198,10 +1207,12 @@ impl ShellView {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(crate::desktop_icons::rotated_icon(
-                            desktop_kind(kind),
-                            icon_angle,
+                        .child(entry_icon(
+                            Some(&path),
+                            kind,
+                            &entry.tags,
                             icon_size * icon_scale,
+                            icon_angle,
                         )),
                 );
             let drag_view = view.clone();
@@ -1696,7 +1707,7 @@ impl ShellView {
             .rounded(px(5.))
             .cursor_pointer()
             .hover(|style| style.bg(p.line))
-            .child(entry_icon(kind, 24.))
+            .child(entry_icon(Some(&entry.path), kind, &entry.tags, 24., 0.))
             .child(
                 div()
                     .flex_1()
@@ -1779,7 +1790,7 @@ impl ShellView {
             .rounded(px(8.))
             .cursor_pointer()
             .hover(|style| style.bg(p.line))
-            .child(entry_icon(kind, 40.))
+            .child(entry_icon(Some(&entry.path), kind, &entry.tags, 40., 0.))
             .child(
                 div()
                     .w_full()

@@ -26,6 +26,8 @@ pub struct FolderEntry {
     pub path: PathBuf,
     pub name: String,
     pub kind: FolderEntryKind,
+    /// Finder-style tags (`user.xdg.tags`), drawn as dots on the artwork.
+    pub tags: Vec<String>,
     pub modified: Option<SystemTime>,
     pub size: u64,
 }
@@ -81,10 +83,12 @@ pub fn scan_folder(
             FolderEntryKind::Document
         };
         let name = file_name.to_string_lossy().into_owned();
+        let tags = crate::file_icons::tags(&entry_path);
         entries.push(FolderEntry {
             path: entry_path,
             name,
             kind,
+            tags,
             modified: metadata.modified().ok(),
             size: if metadata.is_file() {
                 metadata.len()

@@ -82,6 +82,8 @@ pub enum Action {
     /// Hold open (or release) one extra folder slot for an external drop.
     FolderDropPreview(bool),
     OpenPathsWithApp { app_id: String, paths: Vec<PathBuf> },
+    /// Open a web URL through the desktop handler (the `/web` page).
+    OpenUrl(String),
     Core(CoreAction),
     Service(services::Command),
     Backend(backend::Command),
@@ -116,6 +118,8 @@ pub enum Action {
     /// Run one palette command row, addressed by its stable id. The session
     /// lives in the popup view, so the click routes back through the host.
     PaletteCommand(String),
+    /// Run one row of the `/actions` catalog by its stable id.
+    RunCatalog(String),
     DockHover(bool),
     DockEdgeHover(bool),
     DoNotDisturb(bool),
@@ -939,6 +943,9 @@ impl Host {
                 let _ = self.backend.send(backend::Command::OpenPath(path));
                 self.close(cx);
             }
+            Action::OpenUrl(url) => {
+                let _ = self.backend.send(backend::Command::OpenUrl(url));
+            }
             Action::RefreshFolder(path) => self.request_folder_scan(path, cx),
             Action::SetFolderDisplay(path, display) => {
                 self.configure_folder(&path, |folder| folder.display = display, cx)
@@ -1108,6 +1115,13 @@ impl Host {
                 if let Some(popup) = self.popup {
                     let _ = popup.update(cx, |view, _, cx| {
                         view.palette_command_by_id(&id, cx)
+                    });
+                }
+            }
+            Action::RunCatalog(id) => {
+                if let Some(popup) = self.popup {
+                    let _ = popup.update(cx, |view, _, cx| {
+                        view.palette_action_by_id(&id, cx)
                     });
                 }
             }
@@ -2370,6 +2384,8 @@ impl AssetSource for ShellAssets {
             "menu-ring.svg" => include_bytes!("../assets/icons/menu-ring.svg"),
             "menu-check.svg" => include_bytes!("../assets/icons/menu-check.svg"),
             "chevron-right.svg" => include_bytes!("../assets/icons/chevron-right.svg"),
+            "chevron-left.svg" => include_bytes!("../assets/icons/chevron-left.svg"),
+            "search.svg" => include_bytes!("../assets/icons/search.svg"),
             "chevron-down.svg" => include_bytes!("../assets/icons/chevron-down.svg"),
             // Absolute paths are resolved system theme icons; serve the file.
             _ => {
