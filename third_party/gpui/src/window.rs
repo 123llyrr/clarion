@@ -752,6 +752,12 @@ impl Frame {
         self.tab_stops.clear();
         self.focus = None;
 
+        // Query-only map for `VisualTestContext::debug_bounds`. Frames are
+        // reused, so a selector painted in an earlier frame would otherwise
+        // still report bounds after its element is gone.
+        #[cfg(any(test, feature = "test-support"))]
+        self.debug_bounds.clear();
+
         #[cfg(any(feature = "inspector", debug_assertions))]
         {
             self.next_inspector_instance_ids.clear();
