@@ -284,6 +284,106 @@ fn update_slider(
     send.then_some(value)
 }
 
+const RIM_WASH_BAND: f32 = 28.;
+
+struct RimWashBand {
+    points: Vec<Point<Pixels>>,
+    angle: f32,
+}
+
+fn push_rim_arc(
+    points: &mut Vec<Point<Pixels>>,
+    center_x: f32,
+    center_y: f32,
+    radius: f32,
+    start_degrees: f32,
+    end_degrees: f32,
+) {
+    const STEPS: usize = 16;
+    for step in 1..=STEPS {
+        let t = step as f32 / STEPS as f32;
+        let angle = (start_degrees + (end_degrees - start_degrees) * t).to_radians();
+        points.push(point(
+            px(center_x + radius * angle.cos()),
+            px(center_y + radius * angle.sin()),
+        ));
+    }
+}
+
+/// Four edge bands whose outer boundaries follow the sheet's rounded corners.
+/// The top and bottom bands carry the corner arcs; the side bands only cover
+/// the straight middle, so no band paints the square space outside an arc.
+fn spotlight_rim_wash_bands(
+    width: f32,
+    height: f32,
+    radius: f32,
+    thickness: f32,
+) -> Vec<RimWashBand> {
+    if width <= 0. || height <= 0. {
+        return Vec::new();
+    }
+    let radius = radius.max(0.).min(width / 2.).min(height / 2.);
+    let band = thickness.max(radius).min(width / 2.).min(height / 2.);
+    if band <= 0. {
+        return Vec::new();
+    }
+    let mut bands = Vec::with_capacity(4);
+
+    let mut top = vec![point(px(radius), px(0.)), point(px(width - radius), px(0.))];
+    push_rim_arc(&mut top, width - radius, radius, radius, -90., 0.);
+    top.push(point(px(width), px(band)));
+    top.push(point(px(0.), px(band)));
+    top.push(point(px(0.), px(radius)));
+    push_rim_arc(&mut top, radius, radius, radius, 180., 270.);
+    bands.push(RimWashBand {
+        points: top,
+        angle: 180.,
+    });
+
+    let mut bottom = vec![
+        point(px(radius), px(height)),
+        point(px(width - radius), px(height)),
+    ];
+    push_rim_arc(
+        &mut bottom,
+        width - radius,
+        height - radius,
+        radius,
+        90.,
+        0.,
+    );
+    bottom.push(point(px(width), px(height - band)));
+    bottom.push(point(px(0.), px(height - band)));
+    bottom.push(point(px(0.), px(height - radius)));
+    push_rim_arc(&mut bottom, radius, height - radius, radius, 180., 90.);
+    bands.push(RimWashBand {
+        points: bottom,
+        angle: 0.,
+    });
+
+    if height > 2. * band {
+        bands.push(RimWashBand {
+            points: vec![
+                point(px(0.), px(band)),
+                point(px(band), px(band)),
+                point(px(band), px(height - band)),
+                point(px(0.), px(height - band)),
+            ],
+            angle: 90.,
+        });
+        bands.push(RimWashBand {
+            points: vec![
+                point(px(width - band), px(band)),
+                point(px(width), px(band)),
+                point(px(width), px(height - band)),
+                point(px(width - band), px(height - band)),
+            ],
+            angle: 270.,
+        });
+    }
+    bands
+}
+
 impl ShellView {
     /// The output this surface belongs to. Tests read it to prove which
     /// monitor a dispatched click opened its popup on.
@@ -739,32 +839,41 @@ impl ShellView {
             .into_any_element()
     }
     /// The soft wash fading inward from the sheet's rim — the inner shadow a
-    /// macOS panel carries. Four short gradient strips meet at the rounded
-    /// corners; the tint rides the scrim so light and dark themes read the
-    /// same way. The wash paints above the content but registers no input,
-    /// so rows underneath keep their hover and clicks.
+    /// macOS panel carries. The four bands are painted as paths that follow
+    /// the sheet's rounded outline. Rectangular bands cannot be clipped by
+    /// `overflow_hidden` in GPUI (it only clips to a rectangle), which left
+    /// square tinted patches in the corners.
     fn popup_rim_wash(&self, radius: f32, p: Palette) -> AnyElement {
         let tint = p.scrim.opacity(0.45);
         let clear = p.scrim.opacity(0.);
-        let strip = move |angle: f32| {
-            div().bg(linear_gradient(
-                angle,
-                linear_color_stop(tint, 0.),
-                linear_color_stop(clear, 1.),
-            ))
-        };
-        div()
-            .absolute()
-            .left_0()
-            .top_0()
-            .size_full()
-            .rounded(px(radius))
-            .overflow_hidden()
-            .child(strip(180.).absolute().top_0().left_0().w_full().h(px(28.)))
-            .child(strip(0.).absolute().bottom_0().left_0().w_full().h(px(28.)))
-            .child(strip(90.).absolute().top_0().left_0().w(px(28.)).h_full())
-            .child(strip(270.).absolute().top_0().right_0().w(px(28.)).h_full())
-            .into_any_element()
+        canvas(
+            |_, _, _| (),
+            move |bounds, _, window, _| {
+                let width = f32::from(bounds.size.width);
+                let height = f32::from(bounds.size.height);
+                let bands = spotlight_rim_wash_bands(width, height, radius, RIM_WASH_BAND);
+                for band in bands {
+                    let mut path = PathBuilder::fill();
+                    path.add_polygon(&band.points, true);
+                    path.translate(bounds.origin);
+                    if let Ok(path) = path.build() {
+                        window.paint_path(
+                            path,
+                            linear_gradient(
+                                band.angle,
+                                linear_color_stop(tint, 0.),
+                                linear_color_stop(clear, 1.),
+                            ),
+                        );
+                    }
+                }
+            },
+        )
+        .absolute()
+        .left_0()
+        .top_0()
+        .size_full()
+        .into_any_element()
     }
     fn bar(&self, host: &ViewState, p: Palette, width: f32, cx: &App) -> AnyElement {
         // Menu-bar content sits on the compositor's live backdrop. In particular,
@@ -2052,7 +2161,8 @@ impl ShellView {
             // The palette keeps a real margin around its grid and list, and
             // reads a point larger than the menus. The vertical margin stays
             // tighter than the horizontal one so the sheet keeps its rows.
-            body.px(px(18.)).py(px(10.)).text_size(px(14.))
+            // The extra three points keep the content away from the rim wash.
+            body.px(px(21.)).py(px(13.)).text_size(px(14.))
         } else {
             body.p(px(10.))
         };
@@ -3331,6 +3441,38 @@ mod tests {
                 assert!(path.build().is_ok(), "the popup outline builds for {edge:?}");
             }
         }
+    }
+
+    #[::core::prelude::v1::test]
+    fn the_spotlight_rim_wash_stays_inside_the_rounded_corners() {
+        let bands = spotlight_rim_wash_bands(740., 629., 26., RIM_WASH_BAND);
+        assert_eq!(bands.len(), 4, "top, bottom, left and right washes");
+        let contains = |band: &RimWashBand, x: f32, y: f32| {
+            let mut inside = false;
+            let mut previous = band.points.last().copied().expect("non-empty band");
+            for current in &band.points {
+                let (px, py) = (f32::from(previous.x), f32::from(previous.y));
+                let (cx, cy) = (f32::from(current.x), f32::from(current.y));
+                if (py > y) != (cy > y) && x < (cx - px) * (y - py) / (cy - py) + px {
+                    inside = !inside;
+                }
+                previous = *current;
+            }
+            inside
+        };
+        // The old rectangular strips painted this corner square. The wash now
+        // follows the sheet's arc, so no band may cover any of the four corners.
+        for (x, y) in [(0.5, 0.5), (739.5, 0.5), (0.5, 628.5), (739.5, 628.5)] {
+            assert!(
+                !bands.iter().any(|band| contains(band, x, y)),
+                "the rim wash must not paint the square corner at ({x}, {y})"
+            );
+        }
+        // Each edge still carries its gradient.
+        assert!(contains(&bands[0], 370., 1.));
+        assert!(contains(&bands[1], 370., 628.));
+        assert!(contains(&bands[2], 1., 314.5));
+        assert!(contains(&bands[3], 739., 314.5));
     }
 }
 
