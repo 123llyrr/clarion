@@ -29,17 +29,28 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        Self::with_apps(&[
+            ("alpha", "Alpha Browser", ""),
+            ("beta", "Beta Notes", ""),
+            ("chinese", "中文编辑器", ""),
+        ])
+    }
+
+    fn with_apps(apps: &[(&str, &str, &str)]) -> Self {
         let root = tempfile::tempdir().unwrap();
         let data = root.path().join("data");
         std::fs::create_dir_all(data.join("applications")).unwrap();
-        for (id, name) in [
-            ("alpha", "Alpha Browser"),
-            ("beta", "Beta Notes"),
-            ("chinese", "中文编辑器"),
-        ] {
+        for (id, name, categories) in apps {
+            let categories = if categories.is_empty() {
+                String::new()
+            } else {
+                format!("Categories={categories}\n")
+            };
             std::fs::write(
                 data.join("applications").join(format!("{id}.desktop")),
-                format!("[Desktop Entry]\nType=Application\nDBusActivatable=true\nName={name}\n"),
+                format!(
+                    "[Desktop Entry]\nType=Application\nDBusActivatable=true\nName={name}\n{categories}"
+                ),
             )
             .unwrap();
         }
@@ -69,7 +80,7 @@ impl Fixture {
         ]
         .into();
         let catalog = clarion_launcher::catalog::AppCatalog::load(&environment).unwrap();
-        assert_eq!(catalog.apps().len(), 3);
+        assert_eq!(catalog.apps().len(), apps.len());
         Self {
             _root: root,
             catalog,
@@ -88,7 +99,34 @@ fn panel(
     VisualTestContext,
     WindowHandle<ShellView>,
 ) {
-    let fixture = Fixture::new();
+    panel_with_fixture(cx, kind, Fixture::new())
+}
+
+fn panel_with_apps(
+    cx: &mut TestAppContext,
+    kind: Panel,
+    apps: &[(&str, &str, &str)],
+) -> (
+    Fixture,
+    Entity<Host>,
+    Entity<ShellView>,
+    VisualTestContext,
+    WindowHandle<ShellView>,
+) {
+    panel_with_fixture(cx, kind, Fixture::with_apps(apps))
+}
+
+fn panel_with_fixture(
+    cx: &mut TestAppContext,
+    kind: Panel,
+    fixture: Fixture,
+) -> (
+    Fixture,
+    Entity<Host>,
+    Entity<ShellView>,
+    VisualTestContext,
+    WindowHandle<ShellView>,
+) {
     cx.update(|cx| {
         crate::input::TextInput::bind_keys(cx);
         super::bind_keys(cx);
@@ -1016,6 +1054,52 @@ fn right_clicking_a_palette_tile_opens_a_menu_surface_over_the_palette(
     visual.simulate_keystrokes("escape");
     visual.run_until_parked();
     host.read_with(cx, |host, _| assert!(host.panel_exit));
+}
+
+#[gpui::test]
+fn palette_enter_opens_the_selected_tile_after_hidden_category_apps(cx: &mut TestAppContext) {
+    let apps = [
+        ("utility-1", "Utility 1", "Utility;"),
+        ("utility-2", "Utility 2", "Utility;"),
+        ("utility-3", "Utility 3", "Utility;"),
+        ("utility-4", "Utility 4", "Utility;"),
+        ("utility-5", "Utility 5", "Utility;"),
+        ("utility-6", "Utility 6", "Utility;"),
+        ("utility-7", "Utility 7", "Utility;"),
+        ("office-1", "Office 1", "Office;"),
+        ("office-2", "Office 2", "Office;"),
+        ("office-3", "Office 3", "Office;"),
+    ];
+    let (_fixture, host, view, mut visual, _window) = panel_with_apps(cx, Panel::Spotlight, &apps);
+
+    // The Utilities section shows five tiles and hides utility-6/7 behind
+    // "更多". The next visible tile is Office 1, at flat selection 5.
+    assert!(
+        visual.debug_bounds("spotlight-more-utilities").is_some(),
+        "the Utilities header still advertises its hidden apps"
+    );
+    let state = view.read_with(&visual, |view, _| view.state.clone());
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.palette_row_count(&state)),
+        8,
+        "keyboard navigation must not reach tiles hidden behind 更多"
+    );
+    for _ in 0..5 {
+        visual.simulate_keystrokes("down");
+    }
+    visual.run_until_parked();
+    assert_eq!(view.read_with(&visual, |view, _| view.selection), 5);
+
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    settle_exit(&mut visual);
+    host.read_with(cx, |host, _| {
+        assert_eq!(
+            host.prefs.recent_app_ids.first().map(String::as_str),
+            Some("office-1.desktop"),
+            "Enter must launch the highlighted tile, not a hidden Utility"
+        );
+    });
 }
 
 #[gpui::test]

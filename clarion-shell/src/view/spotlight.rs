@@ -42,7 +42,11 @@ const SECTION_DIVIDER_H: f32 = 12.;
 struct PaletteSection<'a> {
     title: &'static str,
     category: Option<AppCategory>,
+    /// The applications this section paints. The resting grid shows one row,
+    /// so this is capped at `GRID_COLUMNS`.
     apps: Vec<&'a DesktopApp>,
+    /// The full category count, used by the header and its "更多" action.
+    total: usize,
 }
 
 /// What the palette is showing for the current session and draft.
@@ -215,20 +219,24 @@ impl ShellView {
             sections.push(PaletteSection {
                 title: "最近使用",
                 category: None,
+                total: recents.len(),
                 apps: recents,
             });
         }
         for category in AppCategory::ALL {
-            let apps: Vec<&'a DesktopApp> = rest
+            let mut apps: Vec<&'a DesktopApp> = rest
                 .iter()
                 .copied()
                 .filter(|app| app.category == category)
                 .collect();
             if !apps.is_empty() {
+                let total = apps.len();
+                apps.truncate(GRID_COLUMNS);
                 sections.push(PaletteSection {
                     title: category.title(),
                     category: Some(category),
                     apps,
+                    total,
                 });
             }
         }
@@ -257,7 +265,15 @@ impl ShellView {
 
     pub(super) fn palette_row_count(&self, host: &ViewState) -> usize {
         match self.palette_body() {
-            PaletteBody::Apps => self.palette_visible_apps(host).len(),
+            PaletteBody::Apps => {
+                let visible = self.palette_visible_apps(host);
+                if self.palette_grid(host) {
+                    if let Some(sections) = self.palette_sections(host, &visible) {
+                        return sections.iter().map(|section| section.apps.len()).sum();
+                    }
+                }
+                visible.len()
+            }
             PaletteBody::Commands | PaletteBody::Slash => self.palette_commands().len(),
         }
     }
@@ -284,21 +300,21 @@ impl ShellView {
         if self.palette_grid(host) && self.query.is_empty() && self.palette_category.is_none() {
             let ranked = self.palette_visible_apps(host);
             if let Some(sections) = self.palette_sections(host, &ranked) {
-                // The first application of the selected row; sections chunk
-                // their own rows, so find the row by walking the plan.
-                let row_first = self.selection - self.selection % GRID_COLUMNS;
+                // Sections chunk their own rows, so find the selected tile by
+                // walking the same plan the grid paints.
                 let mut y = 0.;
-                let mut index = 0usize;
+                let mut first = 0usize;
                 let mut target: Option<f32> = None;
                 for (si, section) in sections.iter().enumerate() {
                     y += SECTION_HEADER_H + GRID_GAP;
-                    if row_first >= index && row_first < section.apps.len() + index {
-                        let local = (row_first - index) / GRID_COLUMNS;
+                    let end = first + section.apps.len();
+                    if self.selection >= first && self.selection < end {
+                        let local = (self.selection - first) / GRID_COLUMNS;
                         target = Some(y + local as f32 * GRID_PITCH);
                         break;
                     }
-                    index += section.apps.len();
-                    let rows = section.apps.len().min(GRID_COLUMNS).div_ceil(GRID_COLUMNS);
+                    first = end;
+                    let rows = section.apps.len().div_ceil(GRID_COLUMNS);
                     y += rows as f32 * GRID_PITCH;
                     if si + 1 != sections.len() {
                         y += SECTION_DIVIDER_H + GRID_GAP;
@@ -811,11 +827,10 @@ impl ShellView {
                 let last = sections.len().saturating_sub(1);
                 let mut index = 0;
                 for (si, section) in sections.iter().enumerate() {
-                    let shown = section.apps.len().min(GRID_COLUMNS);
                     grid = grid
                         .child(self.spotlight_category_row(section, p, cx))
-                        .child(self.spotlight_tile_row(&section.apps[..shown], index, p, cx));
-                    index += shown;
+                        .child(self.spotlight_tile_row(&section.apps, index, p, cx));
+                    index += section.apps.len();
                     if si != last {
                         grid = grid.child(self.spotlight_divider(p));
                     }
@@ -934,7 +949,7 @@ impl ShellView {
         p: Palette,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let overflow = section.category.is_some() && section.apps.len() > GRID_COLUMNS;
+        let overflow = section.category.is_some() && section.total > GRID_COLUMNS;
         let mut trailing = div()
             .flex()
             .items_center()
@@ -945,7 +960,7 @@ impl ShellView {
                     .text_color(p.muted)
                     .whitespace_nowrap()
                     .child(menu_text(
-                        format!("{} 项", section.apps.len()),
+                        format!("{} 项", section.total),
                         FontWeight::MEDIUM,
                         p.muted,
                         cx,
@@ -954,12 +969,11 @@ impl ShellView {
         if overflow {
             let view = cx.entity().downgrade();
             let category = section.category.expect("overflow implies a category");
+            let selector = format!("spotlight-more-{}", category.key());
             trailing = trailing.child(
                 div()
-                    .id(SharedString::from(format!(
-                        "spotlight-more-{}",
-                        category.key()
-                    )))
+                    .id(SharedString::from(selector.clone()))
+                    .debug_selector(move || selector.clone())
                     .px(px(4.))
                     .rounded(px(4.))
                     .text_size(px(13.))
