@@ -3,7 +3,7 @@
 use crate::{
     app::{Action, DockApp, Host, Panel, SystemAction, ViewState},
     backend,
-    input::{BackspaceAtStart, QueryChanged, TextInput},
+    input::{BackspaceAtStart, DeleteAtEnd, QueryChanged, TextInput},
     preferences::{
         DockPosition, LauncherLayout, LauncherPresentation, MAX_SURFACE_OPACITY,
         MIN_SURFACE_OPACITY,
@@ -15,7 +15,7 @@ use clarion_launcher::session::{BackspaceState, Mode, Session};
 use gpui::{prelude::*, *};
 use std::{
     collections::HashMap,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
@@ -32,18 +32,35 @@ actions!(
     [
         Dismiss,
         Activate,
+        ActivateKeepOpen,
         Previous,
         Next,
         PaletteSearch,
-        PaletteApps
+        PaletteApps,
+        PaletteClipboardText,
+        PaletteClipboardImage,
+        PaletteClipboardFiles,
+        PaletteClipboardLayout
     ]
 );
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("escape", Dismiss, Some("ClarionPanel")),
         KeyBinding::new("enter", Activate, Some("ClarionPanel")),
+        KeyBinding::new("shift-enter", ActivateKeepOpen, Some("ClarionPanel")),
         KeyBinding::new("up", Previous, Some("ClarionPanel")),
         KeyBinding::new("down", Next, Some("ClarionPanel")),
+        // Vim and readline walks over the same list.
+        KeyBinding::new("ctrl-k", Previous, Some("ClarionPanel")),
+        KeyBinding::new("ctrl-p", Previous, Some("ClarionPanel")),
+        KeyBinding::new("ctrl-j", Next, Some("ClarionPanel")),
+        KeyBinding::new("ctrl-n", Next, Some("ClarionPanel")),
+        // Clipboard mode only: the type tags and the layout switch. The
+        // handlers ignore them in every other mode.
+        KeyBinding::new("alt-t", PaletteClipboardText, Some("ClarionPanel")),
+        KeyBinding::new("alt-i", PaletteClipboardImage, Some("ClarionPanel")),
+        KeyBinding::new("alt-f", PaletteClipboardFiles, Some("ClarionPanel")),
+        KeyBinding::new("alt-d", PaletteClipboardLayout, Some("ClarionPanel")),
         KeyBinding::new("ctrl-0", PaletteSearch, Some("ClarionPanel")),
         KeyBinding::new("ctrl-1", PaletteApps, Some("ClarionPanel")),
     ]);
@@ -60,6 +77,15 @@ pub enum Surface {
     LauncherMenu,
     Toast(u32),
     DockEdge,
+}
+/// The palette header's leading mark and the cross-fade between two of them.
+/// The outgoing mark shrinks and fades under the incoming one, so a slash route
+/// answers the very first keystroke and a row walk in the `/` list follows the
+/// keyboard instead of popping.
+struct PaletteGlyph {
+    from: PathBuf,
+    to: PathBuf,
+    progress: crate::dock_motion::Motion,
 }
 pub struct ShellView {
     pub host: Entity<Host>,
@@ -78,9 +104,17 @@ pub struct ShellView {
     /// The category tag the palette grid is filtered by, or `None` when every
     /// categorized section shows.
     palette_category: Option<AppCategory>,
+    /// The clipboard body's content-type tag, or `None` for every entry.
+    palette_clipboard_filter: Option<spotlight::ClipboardFilter>,
+    /// Set once the keyboard walks the slash completion list, so Enter on a
+    /// bare `/` runs the highlighted row instead of explaining the syntax.
+    palette_slash_picked: bool,
     filter: u8,
     selection: usize,
     scroll: ScrollHandle,
+    /// The clipboard details layout's own list scroll: that list is nested in
+    /// a fixed viewport, so it cannot share the sheet's handle.
+    clipboard_scroll: ScrollHandle,
     folder_fan_offset: usize,
     folder_fan_root: Option<PathBuf>,
     folder_fan_started: Option<std::time::Instant>,
@@ -93,6 +127,11 @@ pub struct ShellView {
     /// The appear/disappear ride for a bar popup: `None` snaps, `Some` tracks
     /// the fade between 0 (closed) and 1 (open) at the shared response.
     popup_motion: Option<crate::dock_motion::Motion>,
+    /// The palette header glyph's cross-fade: the mark on screen, the one it is
+    /// trading places with, and the spring between them. A slash route leads
+    /// with the command under the keyboard, so either side is an arbitrary
+    /// icon rather than one fixed pair.
+    palette_glyph: Option<PaletteGlyph>,
     /// The clock `popup_motion` samples against, captured at view creation so
     /// tests can settle the ride by snapping instead of racing real time.
     popup_epoch: std::time::Instant,
@@ -321,6 +360,9 @@ impl ShellView {
         });
         cx.subscribe(&input, |this, _, QueryChanged(query), cx| {
             this.query = query.clone();
+            // Every edit starts the slash completion over: Enter only runs the
+            // highlighted row once the keyboard has actually moved in it.
+            this.palette_slash_picked = false;
             // Keep the session's draft in step with the field so mode switches
             // and `Backspace` unwinding see the same text the user sees.
             let literal = this.palette.literal;
@@ -345,6 +387,14 @@ impl ShellView {
             }
         })
         .detach();
+        cx.subscribe(&input, |this, _, _: &DeleteAtEnd, cx| {
+            if this.state.panel != Some(Panel::Spotlight) {
+                return;
+            }
+            let host = this.state.clone();
+            this.palette_delete_selected(&host, cx);
+        })
+        .detach();
         let dock_motion = macos_dock::DockViewMotion::new(state.dock_revealed);
         let drawer = macos_dock::DockDrawerMotion::new();
         Self {
@@ -359,9 +409,12 @@ impl ShellView {
             palette: Session::new(Mode::Search, 0),
             palette_error: None,
             palette_category: None,
+            palette_clipboard_filter: None,
+            palette_slash_picked: false,
             filter: 0,
             selection: 0,
             scroll: ScrollHandle::new(),
+            clipboard_scroll: ScrollHandle::new(),
             folder_fan_offset: 0,
             folder_fan_root: None,
             folder_fan_started: None,
@@ -369,6 +422,7 @@ impl ShellView {
             folder_fan_closed: false,
             folder_fan_active: false,
             popup_motion: None,
+            palette_glyph: None,
             popup_epoch: std::time::Instant::now(),
             folder_drag_layer: false,
             dock_drag_seen: false,
@@ -709,6 +763,20 @@ impl ShellView {
                 theme_icon(symbol, &mut cache)
             })
             .unwrap_or_else(|| icon_path(name));
+        self.glyph(&path, size, p)
+    }
+    /// Resolve a glyph by its desktop-theme symbolic name. Themes that lack the
+    /// name fall back to the bundled asset's own alias, then to the bundled
+    /// file, so a missing mark degrades instead of blanking out.
+    fn themed_glyph_path(&self, symbol: &str, fallback_asset: &str) -> PathBuf {
+        let mut cache = self.theme_icons.borrow_mut();
+        theme_icon(symbol, &mut cache)
+            .or_else(|| {
+                symbolic_name(fallback_asset).and_then(|alias| theme_icon(alias, &mut cache))
+            })
+            .unwrap_or_else(|| icon_path(fallback_asset))
+    }
+    fn glyph(&self, path: &Path, size: f32, p: Palette) -> AnyElement {
         if path.is_file() {
             svg()
                 .path(path.to_string_lossy().into_owned())
@@ -722,6 +790,79 @@ impl ShellView {
                 .child("◇")
                 .into_any_element()
         }
+    }
+    /// The palette header's leading mark. `path` is the mark the body on screen
+    /// calls for — the store mark for applications, the selected command's own
+    /// icon for the command bodies. One spring swaps them: the outgoing mark
+    /// shrinks and fades under the incoming one.
+    fn spotlight_glyph(
+        &mut self,
+        path: PathBuf,
+        host: &ViewState,
+        window: &mut Window,
+        p: Palette,
+    ) -> AnyElement {
+        const SIZE: f32 = 30.;
+        let now = self.popup_epoch.elapsed();
+        let reduced = host.prefs.reduce_motion;
+        let glyph = self.palette_glyph.get_or_insert_with(|| PaletteGlyph {
+            from: path.clone(),
+            to: path.clone(),
+            progress: crate::dock_motion::Motion::new(1.),
+        });
+        if glyph.to != path {
+            glyph.from = std::mem::replace(&mut glyph.to, path);
+            if reduced {
+                glyph.progress.snap(1.);
+            } else {
+                glyph.progress.snap(0.);
+                glyph.progress.retarget(1., now);
+            }
+        }
+        if reduced {
+            glyph.progress.snap(1.);
+        }
+        let sample = glyph.progress.sample(now);
+        if sample.active {
+            window.request_animation_frame();
+        }
+        let progress = sample.value.clamp(0., 1.);
+        let from = glyph.from.clone();
+        let to = glyph.to.clone();
+        let mut stack = div().relative().w(px(SIZE)).h(px(SIZE));
+        if progress < 0.999 {
+            stack = stack.child(
+                div()
+                    .absolute()
+                    .left(px(0.))
+                    .top(px(0.))
+                    .w(px(SIZE))
+                    .h(px(SIZE))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .opacity(1. - progress)
+                    .debug_selector(|| "spotlight-glyph-from".to_owned())
+                    .child(self.glyph(&from, SIZE * (1. - 0.3 * progress), p)),
+            );
+        }
+        if progress > 0.001 {
+            stack = stack.child(
+                div()
+                    .absolute()
+                    .left(px(0.))
+                    .top(px(0.))
+                    .w(px(SIZE))
+                    .h(px(SIZE))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .opacity(progress)
+                    .debug_selector(|| "spotlight-glyph-to".to_owned())
+                    .child(self.glyph(&to, SIZE * (0.7 + 0.3 * progress), p)),
+            );
+        }
+        stack.into_any_element()
     }
     fn glyph_button(&self, id: &str, name: &str, action: Action, p: Palette) -> AnyElement {
         let host = self.host.clone();
@@ -1127,7 +1268,10 @@ impl ShellView {
     fn recent(&self, host: &ViewState, p: Palette, cx: &Context<Self>) -> AnyElement {
         let mut rows = div().flex().flex_col().gap_3();
         let mut filters = div().flex().gap_2();
-        for (i, label) in ["全部", "文本", "图片", "截图"].iter().enumerate() {
+        for (i, label) in ["全部", "文本", "图片", "截图", "文件"]
+            .iter()
+            .enumerate()
+        {
             filters = filters.child(
                 div()
                     .id(("recent-filter", i))
@@ -1186,10 +1330,18 @@ impl ShellView {
             if self.filter == 1 && !matches!(entry.kind, services::HistoryKind::Text) {
                 continue;
             }
-            if self.filter == 2 && matches!(entry.kind, services::HistoryKind::Text) {
+            if self.filter == 2
+                && !matches!(
+                    entry.kind,
+                    services::HistoryKind::Image | services::HistoryKind::Screenshot
+                )
+            {
                 continue;
             }
             if self.filter == 3 && !matches!(entry.kind, services::HistoryKind::Screenshot) {
+                continue;
+            }
+            if self.filter == 4 && !matches!(entry.kind, services::HistoryKind::Files) {
                 continue;
             }
             count += 1;
@@ -1197,6 +1349,7 @@ impl ShellView {
                 services::HistoryKind::Text => "文字",
                 services::HistoryKind::Image => "图片",
                 services::HistoryKind::Screenshot => "截图",
+                services::HistoryKind::Files => "文件",
             };
             let mut card = div()
                 .p_4()
@@ -1255,7 +1408,11 @@ impl ShellView {
             if let Some(path) = &entry.file_path {
                 actions = actions.child(self.button(
                     format!("open-{}", entry.id),
-                    "打开原图",
+                    if entry.kind == services::HistoryKind::Files {
+                        "打开"
+                    } else {
+                        "打开原图"
+                    },
                     Action::Backend(backend::Command::OpenPath(path.clone())),
                     p,
                 ));
@@ -1273,7 +1430,7 @@ impl ShellView {
             div()
                 .text_xs()
                 .text_color(p.muted)
-                .child("历史仅留在本次会话。清空或移除记录不会删除截图原件。"),
+                .child("记录保存在 ~/.local/state/clarion-shell。清空或移除记录不会删除截图原件。"),
         )
         .into_any_element()
     }
@@ -2052,6 +2209,8 @@ impl ShellView {
             // line, a round close control, then a hairline. The pill row rides
             // between two hairlines like the reference sheet, and the section
             // header carries the keyboard guide as its trailing note.
+            let glyph_path = self.palette_glyph_path();
+            let glyph = self.spotlight_glyph(glyph_path, host, window, p);
             body = body
                 .child(
                     div()
@@ -2059,7 +2218,7 @@ impl ShellView {
                         .items_center()
                         .gap(px(12.))
                         .font_weight(FontWeight::MEDIUM)
-                        .child(self.symbol("launchpad.svg", 30., p))
+                        .child(glyph)
                         .child(
                             div()
                                 .id("spotlight-search")
@@ -2071,7 +2230,13 @@ impl ShellView {
                             // The reference sheet's trailing control. It is a
                             // static mark for now; a later version wires it to
                             // "back to the main search field".
-                            self.symbol("wine.svg", 28., p),
+                            div()
+                                .debug_selector(|| "spotlight-header-help".to_owned())
+                                .child(self.glyph(
+                                    &self.themed_glyph_path("help-about-symbolic", "settings.svg"),
+                                    34.,
+                                    p,
+                                )),
                         ),
                 )
                 .child(
@@ -2484,7 +2649,7 @@ impl Render for ShellView {
                 }
                 if this.state.panel == Some(Panel::Spotlight) {
                     let host = this.state.clone();
-                    this.palette_activate(&host, cx);
+                    this.palette_activate(&host, false, cx);
                     return;
                 }
                 let id = match this.state.panel {
@@ -2498,6 +2663,17 @@ impl Render for ShellView {
                 };
                 if let Some(id) = id {
                     this.invoke(Action::Launch(id), cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ActivateKeepOpen, _, cx| {
+                if this.input.read(cx).has_preedit()
+                    || matches!(this.kind, Surface::LauncherMenu)
+                {
+                    return;
+                }
+                if this.state.panel == Some(Panel::Spotlight) {
+                    let host = this.state.clone();
+                    this.palette_activate(&host, true, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &PaletteSearch, _, cx| {
@@ -2514,12 +2690,37 @@ impl Render for ShellView {
                     this.palette_switch_mode(Mode::Apps, cx);
                 }
             }))
+            .on_action(cx.listener(|this, _: &PaletteClipboardText, _, cx| {
+                if !this.input.read(cx).has_preedit() {
+                    this.palette_clipboard_shortcut(spotlight::ClipboardFilter::Text, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PaletteClipboardImage, _, cx| {
+                if !this.input.read(cx).has_preedit() {
+                    this.palette_clipboard_shortcut(spotlight::ClipboardFilter::Image, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PaletteClipboardFiles, _, cx| {
+                if !this.input.read(cx).has_preedit() {
+                    this.palette_clipboard_shortcut(spotlight::ClipboardFilter::Files, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PaletteClipboardLayout, _, cx| {
+                if this.state.panel == Some(Panel::Spotlight)
+                    && this.palette.mode == Mode::Clipboard
+                    && !this.input.read(cx).has_preedit()
+                {
+                    let host = this.state.clone();
+                    this.palette_toggle_clipboard_layout(&host, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &Previous, window, cx| {
                 if !this.input.read(cx).has_preedit() {
                     this.selection = this.selection.saturating_sub(1);
                     if this.state.panel == Some(Panel::Apps) {
                         this.keyboard_selection_into_view(this.state.as_ref(), window);
                     } else if this.state.panel == Some(Panel::Spotlight) {
+                        this.palette_note_slash_navigation();
                         this.palette_selection_into_view(&this.state);
                     }
                     cx.notify();
@@ -2535,6 +2736,7 @@ impl Render for ShellView {
                     if this.state.panel == Some(Panel::Apps) {
                         this.keyboard_selection_into_view(this.state.as_ref(), window);
                     } else if this.state.panel == Some(Panel::Spotlight) {
+                        this.palette_note_slash_navigation();
                         this.palette_selection_into_view(&this.state);
                     }
                     cx.notify();
@@ -2955,6 +3157,11 @@ pub fn popup_region(
     }
     regions
 }
+/// The symbolic icon the palette header swaps to while the field routes a
+/// slash command. Themes name this mark differently — re-point this one
+/// constant to match the installed icon set.
+const SPOTLIGHT_COMMAND_GLYPH: &str = "explore-symbolic";
+
 /// The symbolic icon the desktop theme provides for a bundled glyph, or
 /// `None` when the glyph has no common theme counterpart and always draws
 /// from the bundled assets.

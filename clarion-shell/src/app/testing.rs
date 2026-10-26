@@ -166,6 +166,15 @@ pub(crate) fn capture_backend(
     received
 }
 
+pub(crate) fn capture_service(
+    host: &Entity<Host>,
+    cx: &mut App,
+) -> async_channel::Receiver<services::Command> {
+    let (service, received) = services::ServiceHandle::test_channel(32);
+    host.update(cx, |host, _| host.service = service);
+    received
+}
+
 pub(crate) fn age_launch(host: &Entity<Host>, id: &str, elapsed: Duration, cx: &mut App) {
     host.update(cx, |host, cx| {
         *host

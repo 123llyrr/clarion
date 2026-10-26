@@ -65,6 +65,13 @@ pub struct BackspaceAtStart;
 
 impl gpui::EventEmitter<BackspaceAtStart> for TextInput {}
 
+/// Delete arrived at the end of an empty field. The palette listens for this to
+/// drop the highlighted row instead of deleting a character that does not
+/// exist.
+pub struct DeleteAtEnd;
+
+impl gpui::EventEmitter<DeleteAtEnd> for TextInput {}
+
 #[derive(PartialEq)]
 struct ImeCoordinates {
     bounds: Bounds<Pixels>,
@@ -199,6 +206,12 @@ impl TextInput {
     }
 
     fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
+        if self.content.is_empty() && self.selected_range.is_empty() && self.marked_range.is_none() {
+            // Nothing to delete: the palette listens for this to drop the
+            // highlighted clipboard row instead.
+            cx.emit(DeleteAtEnd);
+            return;
+        }
         if self.selected_range.is_empty() {
             self.select_to(self.next_boundary(self.cursor_offset()), cx)
         }

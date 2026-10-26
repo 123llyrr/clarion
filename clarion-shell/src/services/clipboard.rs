@@ -90,9 +90,17 @@ impl State {
         self.bump();
         let source = manager.create_data_source(qh, payload.clone());
         source.offer(payload.mime.clone());
-        if payload.mime == "text/plain" {
-            source.offer("text/plain;charset=utf-8".into());
-            source.offer("UTF8_STRING".into());
+        match payload.mime.as_str() {
+            "text/plain" => {
+                source.offer("text/plain;charset=utf-8".into());
+                source.offer("UTF8_STRING".into());
+            }
+            // A file list is also useful as paths in a terminal or text field.
+            "text/uri-list" => {
+                source.offer("text/plain".into());
+                source.offer("text/plain;charset=utf-8".into());
+            }
+            _ => {}
         }
         source.offer(format!(
             "application/x-clarion-native-owner-{}",
@@ -189,9 +197,29 @@ pub(super) fn sensitive(mime: &str) -> bool {
 fn canonical(mime: &str) -> Option<&'static str> {
     match mime.to_ascii_lowercase().replace([' ', '\t'], "").as_str() {
         "image/png" => Some("image/png"),
+        "text/uri-list" => Some("text/uri-list"),
         "text/plain" | "text/plain;charset=utf-8" | "utf8_string" => Some("text/plain"),
         _ => None,
     }
+}
+
+/// The bytes to hand a consumer asking for `mime` out of this payload. A file
+/// list also answers as plain text, so terminals and text fields get the paths.
+fn payload_bytes(payload: &Payload, mime: &str) -> Option<Arc<Vec<u8>>> {
+    let wanted = canonical(mime)?;
+    if wanted == payload.mime {
+        return Some(payload.bytes.clone());
+    }
+    if payload.mime == "text/uri-list" && wanted == "text/plain" {
+        let list = std::str::from_utf8(&payload.bytes).ok()?;
+        let text = super::history::uri_paths(list)?
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Some(Arc::new(text.into_bytes()));
+    }
+    None
 }
 
 impl Dispatch<wl_registry::WlRegistry, ()> for State {
@@ -302,6 +330,12 @@ impl Dispatch<device::ExtDataControlDeviceV1, ()> for State {
                         offered
                             .mimes
                             .iter()
+                            .find(|mime| canonical(mime) == Some("text/uri-list"))
+                    })
+                    .or_else(|| {
+                        offered
+                            .mimes
+                            .iter()
                             .find(|mime| canonical(mime) == Some("text/plain"))
                     });
                 let Some(mime) = selected else {
@@ -399,13 +433,13 @@ impl Dispatch<source::ExtDataControlSourceV1, Payload> for State {
         _: &QueueHandle<Self>,
     ) {
         match event {
-            source::Event::Send { mime_type, fd }
-                if canonical(&mime_type) == Some(payload.mime.as_str()) =>
-            {
+            source::Event::Send { mime_type, fd } => {
+                let Some(bytes) = payload_bytes(payload, &mime_type) else {
+                    return;
+                };
                 if state.write_jobs.load(Ordering::Acquire) >= 8 {
                     return;
                 }
-                let bytes = payload.bytes.clone();
                 let jobs = state.write_jobs.clone();
                 jobs.fetch_add(1, Ordering::AcqRel);
                 std::thread::spawn(move || {
@@ -508,7 +542,7 @@ pub(super) fn run(events: Sender<Event>, commands: Receiver<Command>) -> Result<
     let (reads, completed) = mpsc::channel();
     let mut state = State {
         events,
-        history: History::new(),
+        history: History::with_state(super::history::state_dir()),
         manager: None,
         seat: None,
         device: None,
@@ -565,6 +599,32 @@ mod tests {
         assert!(sensitive("application/x-keepassxc"));
         assert!(!sensitive("text/plain"));
         assert_eq!(canonical("text/plain; charset=UTF-8"), Some("text/plain"));
+        assert_eq!(canonical("text/uri-list"), Some("text/uri-list"));
         assert_eq!(canonical("text/html"), None);
+    }
+
+    #[test]
+    fn file_lists_also_publish_their_paths_as_text() {
+        let payload = Payload {
+            mime: "text/uri-list".into(),
+            bytes: Arc::new(
+                b"file:///tmp/one%20two.txt\r\n# a comment\r\nfile://localhost/tmp/three.png\r\n"
+                    .to_vec(),
+            ),
+            screenshot: false,
+            file_path: None,
+        };
+        let bytes = payload_bytes(&payload, "text/plain").expect("paths for text consumers");
+        assert_eq!(
+            String::from_utf8(bytes.to_vec()).unwrap(),
+            "/tmp/one two.txt\n/tmp/three.png"
+        );
+        assert_eq!(
+            payload_bytes(&payload, "text/uri-list")
+                .expect("the original list")
+                .as_slice(),
+            payload.bytes.as_slice()
+        );
+        assert!(payload_bytes(&payload, "image/png").is_none());
     }
 }

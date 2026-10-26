@@ -22,6 +22,40 @@ fn settle_exit(visual: &mut VisualTestContext) {
     visual.run_until_parked();
 }
 
+/// The palette header's leading mark, by file name (the tests resolve theme
+/// icons, so this is the icon the header really paints).
+fn header_mark(view: &Entity<ShellView>, visual: &mut VisualTestContext) -> String {
+    view.read_with(visual, |view, _| {
+        view.palette_glyph_path()
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    })
+}
+
+/// One clipboard history entry for the palette tests: no thumbnail and plain
+/// text metadata, so the row layout is what the assertions see.
+fn clipboard_entry(
+    id: &str,
+    kind: crate::services::HistoryKind,
+    text: &str,
+    created_at: u64,
+) -> crate::services::HistoryEntry {
+    crate::services::HistoryEntry {
+        id: id.to_owned(),
+        kind,
+        text: text.to_owned(),
+        thumbnail_png: None,
+        pinned: false,
+        created_at,
+        file_path: None,
+        mime: "text/plain".into(),
+        bytes: text.len(),
+        width: None,
+        height: None,
+    }
+}
+
 struct Fixture {
     _root: tempfile::TempDir,
     catalog: clarion_launcher::catalog::AppCatalog,
@@ -394,6 +428,10 @@ fn image_cache_survives_unrelated_snapshots_and_replaces_only_changed_tray_pixel
                 pinned: false,
                 created_at: 1,
                 file_path: None,
+                mime: "image/png".into(),
+                bytes: 3,
+                width: Some(1920),
+                height: Some(1080),
             }];
             state.tray = vec![crate::services::TrayItem {
                 id: "native-tray".into(),
@@ -1100,6 +1138,475 @@ fn palette_enter_opens_the_selected_tile_after_hidden_category_apps(cx: &mut Tes
             "Enter must launch the highlighted tile, not a hidden Utility"
         );
     });
+}
+
+#[gpui::test]
+fn a_bare_slash_needs_navigation_before_enter_runs_a_command(cx: &mut TestAppContext) {
+    let (_fixture, _host, view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    visual.simulate_input("/");
+    visual.run_until_parked();
+
+    // Enter right after typing `/` explains the syntax instead of running the
+    // first row, so an accidental Enter never executes a command.
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    view.read_with(&visual, |view, _| {
+        assert!(view.palette_error.is_some());
+        assert_eq!(view.query, "/");
+    });
+
+    // Once the keyboard walked the list, Enter runs the highlighted row.
+    visual.simulate_keystrokes("down");
+    visual.run_until_parked();
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    view.read_with(&visual, |view, _| {
+        assert!(view.palette_error.is_none(), "the highlighted command ran");
+        assert_ne!(view.query, "/", "the command applied to the session");
+    });
+}
+
+#[gpui::test]
+fn slash_routes_swap_the_header_glyph(cx: &mut TestAppContext) {
+    let (_fixture, _host, view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    visual.run_until_parked();
+    assert_eq!(
+        header_mark(&view, &mut visual),
+        "software-store-symbolic.svg",
+        "the store mark rests"
+    );
+
+    visual.simulate_input("/lock");
+    visual.run_until_parked();
+    assert_eq!(
+        header_mark(&view, &mut visual),
+        "explore-symbolic.svg",
+        "a draft that composes a command takes the command mark"
+    );
+
+    for _ in 0..5 {
+        visual.simulate_keystrokes("backspace");
+    }
+    visual.run_until_parked();
+    assert_eq!(
+        header_mark(&view, &mut visual),
+        "software-store-symbolic.svg",
+        "the glyph rides back"
+    );
+}
+
+#[gpui::test]
+fn the_command_list_keeps_the_command_mark(cx: &mut TestAppContext) {
+    let (_fixture, _host, view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    visual.simulate_input("/command");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    assert_eq!(
+        header_mark(&view, &mut visual),
+        "layers-button-symbolic.svg",
+        "the command list leads with the mode's own mark, not the store mark"
+    );
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.query.clone()),
+        "",
+        "the mode switch consumed the draft"
+    );
+}
+
+#[gpui::test]
+fn the_header_mark_names_the_mode_not_the_selection(cx: &mut TestAppContext) {
+    let (_fixture, _host, view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    visual.simulate_input("/");
+    visual.run_until_parked();
+    assert_eq!(header_mark(&view, &mut visual), "explore-symbolic.svg");
+    // The completion list narrows to the clipboard command, but the header is
+    // about the mode the sheet is in, so the row under the keyboard does not
+    // move it.
+    visual.simulate_input("clipboard");
+    visual.run_until_parked();
+    assert_eq!(
+        header_mark(&view, &mut visual),
+        "explore-symbolic.svg",
+        "the selection does not move the header"
+    );
+
+    // Entering the clipboard mode does: the mark stays for as long as the user
+    // keeps searching there.
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    assert_eq!(
+        header_mark(&view, &mut visual),
+        "category-search-symbolic.svg",
+        "the clipboard mode takes its own mark"
+    );
+    visual.simulate_input("abc");
+    visual.run_until_parked();
+    assert_eq!(
+        header_mark(&view, &mut visual),
+        "category-search-symbolic.svg",
+        "and keeps it while the mode is searched"
+    );
+
+    // The applications grid is the store mark's home.
+    let (_fixture, _host, apps_view, mut apps_visual, _window) = panel(cx, Panel::Spotlight);
+    apps_visual.simulate_keystrokes("ctrl-1");
+    apps_visual.run_until_parked();
+    assert_eq!(
+        header_mark(&apps_view, &mut apps_visual),
+        "software-store-symbolic.svg",
+        "the application mode rests on the store mark"
+    );
+}
+
+#[test]
+fn clipboard_commands_lead_with_the_search_mark() {
+    assert_eq!(
+        crate::view::spotlight::command_symbol("shell.recent"),
+        Some("category-search-symbolic")
+    );
+    assert_eq!(
+        crate::view::spotlight::command_symbol("mode.clipboard"),
+        Some("category-search-symbolic")
+    );
+}
+
+#[gpui::test]
+fn the_clipboard_mode_copies_the_highlighted_entry(cx: &mut TestAppContext) {
+    use crate::services::{Command, HistoryKind};
+    let (_fixture, host, _view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    let received = cx.update(|cx| testing::capture_service(&host, cx));
+    host.update(cx, |host, cx| {
+        host.history = vec![
+            clipboard_entry("text:newer", HistoryKind::Text, "newer", 2),
+            clipboard_entry("text:older", HistoryKind::Text, "older", 1),
+        ];
+        host.clipboard_available = true;
+        host.changed(cx);
+    });
+
+    visual.simulate_input("/clipboard");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    assert!(
+        visual.debug_bounds("spotlight-clip-text:newer").is_some(),
+        "the clipboard mode paints its rows"
+    );
+
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    match received.try_recv().expect("the copy reaches the service") {
+        Command::Copy(id) => assert_eq!(id, "text:newer"),
+        other => panic!("expected a copy command, got {other:?}"),
+    }
+    settle_exit(&mut visual);
+    host.read_with(cx, |host, _| {
+        assert_eq!(host.panel, None, "a pick folds the sheet away");
+    });
+}
+
+#[gpui::test]
+fn shift_enter_copies_and_keeps_the_clipboard_open(cx: &mut TestAppContext) {
+    use crate::services::{Command, HistoryKind};
+    let (_fixture, host, _view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    let received = cx.update(|cx| testing::capture_service(&host, cx));
+    host.update(cx, |host, cx| {
+        host.history = vec![clipboard_entry("text:one", HistoryKind::Text, "one", 1)];
+        host.clipboard_available = true;
+        host.changed(cx);
+    });
+
+    visual.simulate_input("/clipboard");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    visual.simulate_keystrokes("shift-enter");
+    visual.run_until_parked();
+    assert!(matches!(received.try_recv(), Ok(Command::Copy(_))));
+    host.read_with(cx, |host, _| {
+        assert_eq!(
+            host.panel,
+            Some(Panel::Spotlight),
+            "Shift+Enter keeps the sheet up for the next pick"
+        );
+        assert!(!host.panel_exit);
+    });
+}
+
+#[gpui::test]
+fn delete_drops_the_highlighted_clipboard_row(cx: &mut TestAppContext) {
+    use crate::services::{Command, HistoryKind};
+    let (_fixture, host, view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    let received = cx.update(|cx| testing::capture_service(&host, cx));
+    host.update(cx, |host, cx| {
+        host.history = vec![
+            clipboard_entry("text:newer", HistoryKind::Text, "newer", 2),
+            clipboard_entry("text:older", HistoryKind::Text, "older", 1),
+        ];
+        host.clipboard_available = true;
+        host.changed(cx);
+    });
+
+    visual.simulate_input("/clipboard");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    visual.simulate_keystrokes("delete");
+    visual.run_until_parked();
+    match received.try_recv().expect("the delete reaches the service") {
+        Command::Delete(id) => assert_eq!(id, "text:newer"),
+        other => panic!("expected a delete command, got {other:?}"),
+    }
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.selection),
+        0,
+        "the keyboard lands on the neighbour"
+    );
+    host.read_with(cx, |host, _| {
+        assert_eq!(host.panel, Some(Panel::Spotlight), "Delete does not close");
+    });
+}
+
+#[gpui::test]
+fn the_clipboard_details_layout_previews_the_selected_entry(cx: &mut TestAppContext) {
+    use crate::services::HistoryKind;
+    let (_fixture, host, _view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    host.update(cx, |host, cx| {
+        host.history = vec![
+            clipboard_entry("text:newer", HistoryKind::Text, "newer", 2),
+            clipboard_entry("text:older", HistoryKind::Text, "older", 1),
+        ];
+        host.clipboard_available = true;
+        host.changed(cx);
+    });
+
+    visual.simulate_input("/clipboard");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    assert!(
+        visual.debug_bounds("spotlight-clipboard-list").is_none(),
+        "the compact layout keeps one column"
+    );
+
+    visual.simulate_input("/detail");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    assert!(
+        visual.debug_bounds("spotlight-clipboard-list").is_some(),
+        "the details layout adds the list column"
+    );
+    assert!(
+        visual.debug_bounds("spotlight-clipboard-text").is_some(),
+        "and previews the selected text entry"
+    );
+}
+
+#[gpui::test]
+fn the_clipboard_layout_chip_flips_the_columns(cx: &mut TestAppContext) {
+    use crate::services::HistoryKind;
+    let (_fixture, host, _view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    host.update(cx, |host, cx| {
+        host.history = vec![clipboard_entry("text:one", HistoryKind::Text, "one", 1)];
+        host.clipboard_available = true;
+        host.changed(cx);
+    });
+    visual.simulate_input("/clipboard");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    assert!(
+        visual.debug_bounds("spotlight-clipboard-list").is_none(),
+        "the clipboard starts on the compact layout"
+    );
+
+    // The chip next to the count is the clickable half of `/detail`: the
+    // override commands are not listable, so this is how the layout is found.
+    let chip = visual
+        .debug_bounds("spotlight-clipboard-layout")
+        .expect("the layout chip is painted");
+    visual.simulate_click(chip.center(), Modifiers::default());
+    visual.run_until_parked();
+    assert!(
+        visual.debug_bounds("spotlight-clipboard-list").is_some(),
+        "the chip opens the details columns"
+    );
+    assert!(
+        visual.debug_bounds("spotlight-clipboard-text").is_some(),
+        "and previews the selected entry"
+    );
+
+    let chip = visual
+        .debug_bounds("spotlight-clipboard-layout")
+        .expect("the chip stays painted in the details layout");
+    visual.simulate_click(chip.center(), Modifiers::default());
+    visual.run_until_parked();
+    assert!(
+        visual.debug_bounds("spotlight-clipboard-list").is_none(),
+        "a second click folds it back to the compact list"
+    );
+}
+
+#[gpui::test]
+fn clipboard_type_tags_filter_by_content_kind(cx: &mut TestAppContext) {
+    use crate::services::HistoryKind;
+    use crate::view::spotlight::ClipboardFilter;
+    let (_fixture, host, view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    host.update(cx, |host, cx| {
+        host.history = vec![
+            clipboard_entry("text:a", HistoryKind::Text, "alpha", 3),
+            clipboard_entry("image:b", HistoryKind::Image, "capture.png", 2),
+            clipboard_entry("files:c", HistoryKind::Files, "/tmp/c.txt", 1),
+        ];
+        host.clipboard_available = true;
+        host.changed(cx);
+    });
+
+    visual.simulate_input("/clipboard");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("spotlight-clip-text:a").is_some());
+    assert!(visual.debug_bounds("spotlight-clip-image:b").is_some());
+    assert!(visual.debug_bounds("spotlight-clip-files:c").is_some());
+    assert!(visual.debug_bounds("spotlight-clip-tag-text").is_some());
+    assert!(visual.debug_bounds("spotlight-clip-tag-image").is_some());
+    assert!(visual.debug_bounds("spotlight-clip-tag-files").is_some());
+
+    // Alt+T keeps only the text entries; the shortcut is the same switch the
+    // tag itself makes.
+    visual.simulate_keystrokes("alt-t");
+    visual.run_until_parked();
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.palette_clipboard_filter),
+        Some(ClipboardFilter::Text)
+    );
+    assert!(visual.debug_bounds("spotlight-clip-text:a").is_some());
+    assert!(
+        visual.debug_bounds("spotlight-clip-image:b").is_none(),
+        "the image row leaves the list"
+    );
+    assert!(visual.debug_bounds("spotlight-clip-files:c").is_none());
+
+    // A repeated shortcut clears the tag again.
+    visual.simulate_keystrokes("alt-t");
+    visual.run_until_parked();
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.palette_clipboard_filter),
+        None
+    );
+    assert!(visual.debug_bounds("spotlight-clip-image:b").is_some());
+
+    visual.simulate_keystrokes("alt-i");
+    visual.run_until_parked();
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.palette_clipboard_filter),
+        Some(ClipboardFilter::Image)
+    );
+    assert!(visual.debug_bounds("spotlight-clip-image:b").is_some());
+    assert!(visual.debug_bounds("spotlight-clip-text:a").is_none());
+
+    visual.simulate_keystrokes("alt-f");
+    visual.run_until_parked();
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.palette_clipboard_filter),
+        Some(ClipboardFilter::Files)
+    );
+    assert!(visual.debug_bounds("spotlight-clip-files:c").is_some());
+    assert!(visual.debug_bounds("spotlight-clip-image:b").is_none());
+
+    // The tag itself is clickable and toggles off.
+    let tag = visual
+        .debug_bounds("spotlight-clip-tag-files")
+        .expect("the files tag is painted");
+    visual.simulate_click(tag.center(), Modifiers::default());
+    visual.run_until_parked();
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.palette_clipboard_filter),
+        None,
+        "a second press on the tag shows every type"
+    );
+    assert!(visual.debug_bounds("spotlight-clip-text:a").is_some());
+}
+
+#[gpui::test]
+fn clipboard_shortcuts_only_apply_inside_the_clipboard_mode(cx: &mut TestAppContext) {
+    let (_fixture, _host, view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    visual.run_until_parked();
+    visual.simulate_keystrokes("alt-t");
+    visual.simulate_keystrokes("alt-d");
+    visual.run_until_parked();
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.palette_clipboard_filter),
+        None,
+        "the type shortcuts belong to the clipboard body"
+    );
+    assert_eq!(
+        view.read_with(&visual, |view, _| {
+            view.palette.effective("clipboardLayout", "default")
+        }),
+        "default",
+        "so does the layout switch"
+    );
+
+    // Typing the command is not entering the mode either.
+    visual.simulate_input("/clipboard");
+    visual.run_until_parked();
+    visual.simulate_keystrokes("alt-t");
+    visual.run_until_parked();
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.palette_clipboard_filter),
+        None,
+        "the slash body is still the search mode"
+    );
+}
+
+#[gpui::test]
+fn alt_d_flips_the_clipboard_layout(cx: &mut TestAppContext) {
+    use crate::services::HistoryKind;
+    let (_fixture, host, _view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    host.update(cx, |host, cx| {
+        host.history = vec![clipboard_entry("text:one", HistoryKind::Text, "one", 1)];
+        host.clipboard_available = true;
+        host.changed(cx);
+    });
+    visual.simulate_input("/clipboard");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("spotlight-clipboard-list").is_none());
+
+    visual.simulate_keystrokes("alt-d");
+    visual.run_until_parked();
+    assert!(
+        visual.debug_bounds("spotlight-clipboard-list").is_some(),
+        "Alt+D opens the details columns"
+    );
+    assert!(visual.debug_bounds("spotlight-clipboard-text").is_some());
+
+    visual.simulate_keystrokes("alt-d");
+    visual.run_until_parked();
+    assert!(
+        visual.debug_bounds("spotlight-clipboard-list").is_none(),
+        "and folds them away again"
+    );
+}
+
+#[gpui::test]
+fn ctrl_j_k_and_ctrl_n_p_walk_the_palette_lists(cx: &mut TestAppContext) {
+    let (_fixture, _host, view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    visual.simulate_keystrokes("ctrl-1");
+    visual.run_until_parked();
+    let selection = |visual: &mut VisualTestContext| {
+        view.read_with(visual, |view, _| view.selection)
+    };
+    assert_eq!(selection(&mut visual), 0);
+
+    visual.simulate_keystrokes("ctrl-j");
+    visual.run_until_parked();
+    assert_eq!(selection(&mut visual), 1, "Ctrl+J steps down like Down");
+    visual.simulate_keystrokes("ctrl-n");
+    visual.run_until_parked();
+    assert_eq!(selection(&mut visual), 2, "Ctrl+N steps down like Down");
+    visual.simulate_keystrokes("ctrl-k");
+    visual.run_until_parked();
+    assert_eq!(selection(&mut visual), 1, "Ctrl+K steps up like Up");
+    visual.simulate_keystrokes("ctrl-p");
+    visual.run_until_parked();
+    assert_eq!(selection(&mut visual), 0, "Ctrl+P steps up like Up");
 }
 
 #[gpui::test]

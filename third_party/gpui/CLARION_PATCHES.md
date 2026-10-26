@@ -13,6 +13,9 @@ Clarion additions:
 
 - `interactive.rs`: public `ExternalPaths::new` so embedders and tests can
   construct file-drop payloads without exposing GPUI internals.
+- `window.rs`: `Frame::clear` also drops the query-only `debug_bounds` map.
+  Frames are reused, so without this `VisualTestContext::debug_bounds` kept
+  reporting selectors from earlier frames after their element was removed.
 - `platform.rs`: public `WindowKind::LayerShell` and copyable role options.
 - `platform.rs` / `window.rs` / `platform/linux/wayland/window.rs`:
   `set_glass_region`, a frosted shape independent of the input region. `None`

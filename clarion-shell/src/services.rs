@@ -38,6 +38,8 @@ pub enum HistoryKind {
     Text,
     Image,
     Screenshot,
+    /// A `text/uri-list` capture whose entries are all local files.
+    Files,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,6 +51,13 @@ pub struct HistoryEntry {
     pub pinned: bool,
     pub created_at: u64,
     pub file_path: Option<std::path::PathBuf>,
+    /// The clipboard offer this entry came from, e.g. `text/plain`.
+    pub mime: String,
+    /// The payload size in bytes, before any thumbnail re-encoding.
+    pub bytes: usize,
+    /// Pixel size for image and screenshot entries, read while thumbnailing.
+    pub width: Option<u32>,
+    pub height: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -108,6 +117,14 @@ pub struct ServiceHandle {
 impl ServiceHandle {
     pub fn send(&self, command: Command) {
         let _ = self.commands.try_send(command);
+    }
+
+    /// Test-only: keep every command on a channel instead of starting the
+    /// native services, so a test can assert what the UI asked for.
+    #[cfg(test)]
+    pub fn test_channel(capacity: usize) -> (Self, Receiver<Command>) {
+        let (commands, receiver) = async_channel::bounded(capacity);
+        (Self { commands }, receiver)
     }
 }
 impl Drop for ServiceHandle {
