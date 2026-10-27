@@ -18,24 +18,31 @@ pub(super) fn backdrop_regions(width: f32, height: f32) -> Vec<Bounds<Pixels>> {
 }
 
 /// Few rows, many columns: one page of the fullscreen launcher.
-const LAUNCHPAD_MIN_COLUMNS: usize = 5;
+const LAUNCHPAD_MIN_COLUMNS: usize = 4;
 const LAUNCHPAD_MAX_COLUMNS: usize = 9;
-const LAUNCHPAD_MIN_ROWS: usize = 2;
-const LAUNCHPAD_MAX_ROWS: usize = 5;
-/// Tile height and the gutter between rows.
-const LAUNCHPAD_ROW_H: f32 = 128.;
-const LAUNCHPAD_ROW_GAP: f32 = 12.;
-const LAUNCHPAD_ROW_PITCH: f32 = LAUNCHPAD_ROW_H + LAUNCHPAD_ROW_GAP;
-/// The vertical budget around the grid: the search capsule, its gutter, the
-/// page dots and the bottom margin.
-const LAUNCHPAD_TOP: f32 = 34.;
+const LAUNCHPAD_MIN_ROWS: usize = 1;
+const LAUNCHPAD_MAX_ROWS: usize = 6;
+/// The output is split by proportion, not by fixed pixel chrome: the search
+/// capsule owns the top quarter and the Dock keeps the bottom fifth free.
+const LAUNCHPAD_SEARCH_SHARE: f32 = 0.25;
+const LAUNCHPAD_DOCK_SHARE: f32 = 0.20;
+/// Tile height and the smallest gutter between rows. Any spare middle height
+/// is distributed into that gutter so the grid fills its band.
+const LAUNCHPAD_ROW_H: f32 = 154.;
+const LAUNCHPAD_MIN_ROW_GAP: f32 = 12.;
+const LAUNCHPAD_ROW_PITCH: f32 = LAUNCHPAD_ROW_H + LAUNCHPAD_MIN_ROW_GAP;
+/// The search capsule and the page dots that close the middle band.
 const LAUNCHPAD_CAPSULE_H: f32 = 44.;
-const LAUNCHPAD_GRID_GAP: f32 = 26.;
 const LAUNCHPAD_DOTS_H: f32 = 10.;
-const LAUNCHPAD_BOTTOM: f32 = 26.;
-/// The arrows live in the margin the columns calculation reserves.
-const LAUNCHPAD_ARROW_SIZE: f32 = 44.;
-const LAUNCHPAD_ARROW_INSET: f32 = 18.;
+const LAUNCHPAD_DOTS_BOTTOM: f32 = 14.;
+const LAUNCHPAD_DOTS_GAP: f32 = 18.;
+/// One column pitch keeps a full-size icon plate and its breathing room.
+const LAUNCHPAD_COLUMN_PITCH: f32 = 130.;
+/// The arrows live in the margin the columns calculation reserves, with a
+/// deliberately roomy gutter between the button and the grid.
+const LAUNCHPAD_ARROW_SIZE: f32 = 46.;
+const LAUNCHPAD_ARROW_INSET: f32 = 30.;
+const LAUNCHPAD_ARROW_GAP: f32 = 24.;
 
 struct LaunchpadMetrics {
     /// The width the whole grid (and the search capsule) occupies.
@@ -43,6 +50,11 @@ struct LaunchpadMetrics {
     columns: usize,
     rows: usize,
     cell_width: f32,
+    /// The top and height of the middle band, where the grid lives.
+    grid_top: f32,
+    grid_height: f32,
+    /// The top of the reserved Dock band.
+    dock_top: f32,
 }
 
 impl LaunchpadMetrics {
@@ -51,34 +63,35 @@ impl LaunchpadMetrics {
     }
 }
 
-/// The grid shape for the room the output leaves once the Dock strip and the
-/// fixed chrome around it are taken off. The columns also leave the side
-/// margin the paging arrows sit in.
-fn launchpad_metrics(available_width: f32, available_height: f32) -> LaunchpadMetrics {
-    let width = (available_width - 120.).clamp(240., 1280.);
-    let columns =
-        ((width / 132.).floor() as usize).clamp(LAUNCHPAD_MIN_COLUMNS, LAUNCHPAD_MAX_COLUMNS);
-    let rows =
-        ((available_height / LAUNCHPAD_ROW_PITCH).floor() as usize).clamp(LAUNCHPAD_MIN_ROWS, LAUNCHPAD_MAX_ROWS);
+/// The grid shape for the room the output leaves once the three proportional
+/// bands and the fixed chrome inside the middle band are taken off. The
+/// columns also leave the side margin the paging arrows sit in.
+fn launchpad_metrics(width: f32, height: f32) -> LaunchpadMetrics {
+    let grid_top = height * LAUNCHPAD_SEARCH_SHARE;
+    let dock_top = height * (1. - LAUNCHPAD_DOCK_SHARE);
+    let dots_top = (dock_top - LAUNCHPAD_DOTS_BOTTOM - LAUNCHPAD_DOTS_H).max(grid_top);
+    let grid_height = (dots_top - LAUNCHPAD_DOTS_GAP - grid_top).max(LAUNCHPAD_ROW_H);
+    let side = (LAUNCHPAD_ARROW_INSET + LAUNCHPAD_ARROW_SIZE + LAUNCHPAD_ARROW_GAP)
+        .min(((width - 240.) / 2.).max(0.));
+    let width = (width - 2. * side).clamp(240., width.max(240.));
+    let columns = ((width / LAUNCHPAD_COLUMN_PITCH).floor() as usize)
+        .clamp(LAUNCHPAD_MIN_COLUMNS, LAUNCHPAD_MAX_COLUMNS);
+    let rows = (((grid_height + LAUNCHPAD_MIN_ROW_GAP) / LAUNCHPAD_ROW_PITCH).floor() as usize)
+        .clamp(LAUNCHPAD_MIN_ROWS, LAUNCHPAD_MAX_ROWS);
     LaunchpadMetrics {
         width,
         columns,
         rows,
         cell_width: width / columns as f32,
+        grid_top,
+        grid_height,
+        dock_top,
     }
 }
 
 fn grid_metrics(window: &Window) -> LaunchpadMetrics {
     let viewport = window.viewport_size();
-    let available_width = f32::from(viewport.width).max(1.);
-    let available_height = (f32::from(viewport.height)
-        - LAUNCHPAD_TOP
-        - LAUNCHPAD_CAPSULE_H
-        - LAUNCHPAD_GRID_GAP
-        - LAUNCHPAD_DOTS_H
-        - LAUNCHPAD_BOTTOM)
-        .max(1.);
-    launchpad_metrics(available_width, available_height)
+    launchpad_metrics(f32::from(viewport.width), f32::from(viewport.height))
 }
 
 /// The current page, the page count and the page size for this output size.
@@ -272,15 +285,15 @@ impl ShellView {
         let end = (start + per_page).min(found.len());
         let slice = &found[start.min(found.len())..end];
         let query = self.query.to_lowercase();
-        let icon_size = if metrics.width >= 900. { 72. } else { 64. };
+        let icon_size = if metrics.width >= 900. { 86. } else { 77. };
 
         let mut results = div()
             .w(px(metrics.width))
-            .flex_shrink_0()
+            .flex_1()
+            .min_h(px(0.))
             .flex()
             .flex_col()
-            .items_center()
-            .gap(px(LAUNCHPAD_ROW_GAP));
+            .items_center();
         let mut has_window_matches = false;
 
         // Window matches do not consume app indexes: Enter and the existing
@@ -339,19 +352,24 @@ impl ShellView {
                 );
             }
             if has_window_matches {
-                results = results.child(windows);
+                results = results.child(windows.mb(px(18.)));
             }
         }
 
-        // One page of rows, top-aligned in a box of the full page height so
-        // a short last page does not make the grid jump.
+        // One page of rows spread across the whole middle band: the spare
+        // height becomes gutter space instead of a block pinned to the top.
+        let row_count = slice.len().div_ceil(metrics.columns);
         let mut rows = div()
             .w(px(metrics.width))
-            .h(px(metrics.rows as f32 * LAUNCHPAD_ROW_PITCH))
-            .flex_shrink_0()
+            .flex_1()
+            .min_h(px(0.))
             .flex()
-            .flex_col()
-            .gap(px(LAUNCHPAD_ROW_GAP));
+            .flex_col();
+        rows = if row_count <= 1 {
+            rows.justify_center()
+        } else {
+            rows.justify_between()
+        };
         for (row_index, apps) in slice.chunks(metrics.columns).enumerate() {
             let mut row = div().w(px(metrics.width)).flex_shrink_0().flex();
             for (column, app) in apps.iter().enumerate() {
@@ -361,6 +379,7 @@ impl ShellView {
                 let context = id.clone();
                 let h = self.host.clone();
                 let selector = format!("launchpad-app-{id}");
+                let icon_selector = format!("launchpad-icon-{context}");
                 row = row.child(
                     div()
                         .id(SharedString::from(selector.clone()))
@@ -378,6 +397,7 @@ impl ShellView {
                         .child(
                             div()
                                 .id(SharedString::from(format!("launchpad-icon-{context}")))
+                                .debug_selector(move || icon_selector.clone())
                                 .size(px(icon_size + 12.))
                                 .flex_shrink_0()
                                 .rounded(px(18.))
@@ -435,12 +455,17 @@ impl ShellView {
             }
             rows = rows.child(row);
         }
-        results = results.child(rows);
+        if !slice.is_empty() {
+            results = results.child(rows);
+        }
 
         if found.is_empty() && !has_window_matches {
             results = results.child(
                 div()
-                    .mt(px(36.))
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .justify_center()
                     .text_size(px(15.))
                     .text_color(white.opacity(0.8))
                     .child(menu_text(
@@ -452,17 +477,18 @@ impl ShellView {
             );
         }
 
-        // The page area owns the arrows: they sit in the side margin, stay
-        // centred on the tiles and never take part in the row flow.
+        // The page area owns the arrows and fills the middle band: the grid
+        // spreads across its full height while the arrows sit outside it in
+        // the side margin.
         let mut page_area = div()
-            .w_full()
-            .flex_1()
-            .min_h(px(0.))
-            .relative()
+            .absolute()
+            .left(px(0.))
+            .right(px(0.))
+            .top(px(metrics.grid_top))
+            .h(px(metrics.grid_height))
             .flex()
             .flex_col()
-            .items_center()
-            .justify_center();
+            .items_center();
         page_area = page_area.child(results);
         if pages > 1 {
             let arrow = |forward: bool, enabled: bool, cx: &Context<Self>| {
@@ -515,24 +541,42 @@ impl ShellView {
             div().h(px(LAUNCHPAD_DOTS_H)).flex_shrink_0().into_any_element()
         };
 
+        let search_zone = div()
+            .absolute()
+            .left(px(0.))
+            .right(px(0.))
+            .top(px(0.))
+            .h(px(metrics.grid_top))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(search);
+
+        let dots_layer = div()
+            .absolute()
+            .left(px(0.))
+            .right(px(0.))
+            .top(px(
+                metrics.dock_top - LAUNCHPAD_DOTS_BOTTOM - LAUNCHPAD_DOTS_H,
+            ))
+            .h(px(LAUNCHPAD_DOTS_H))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(dots);
+
         let h = self.host.clone();
         let content = div()
             .id("macos-launchpad")
             .absolute()
             .inset_0()
-            .flex()
-            .flex_col()
-            .items_center()
-            .pt(px(LAUNCHPAD_TOP))
-            .pb(px(LAUNCHPAD_BOTTOM))
-            .gap(px(LAUNCHPAD_GRID_GAP))
             .text_color(white)
             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                 h.update(cx, |h, cx| h.handle(Action::Close, cx));
             })
-            .child(search)
+            .child(search_zone)
             .child(page_area)
-            .child(dots);
+            .child(dots_layer);
         let width = f32::from(window.viewport_size().width);
         let height = f32::from(window.viewport_size().height);
         let mut surface = div().relative().size_full();
