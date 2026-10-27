@@ -257,6 +257,47 @@ fn file_drag_over_an_app_keeps_the_hover_magnification(cx: &mut TestAppContext) 
 }
 
 #[gpui::test]
+fn the_fullscreen_launcher_hides_the_dock_surface(cx: &mut TestAppContext) {
+    let mut fixture = Fixture::new(cx, false);
+    let idle = fixture.bounds();
+    assert!(fixture.contains_input(idle.center()));
+
+    fixture.host.update(cx, |host, cx| {
+        host.panel = Some(Panel::Apps);
+        host.changed(cx);
+    });
+    fixture.visual.run_until_parked();
+
+    assert!(
+        fixture.visual.debug_bounds(APP_SELECTOR).is_none(),
+        "the Dock must not paint underneath the fullscreen launcher"
+    );
+    assert!(
+        fixture.glass_regions().is_empty(),
+        "a hidden Dock must not blur a strip of the launcher"
+    );
+    assert!(
+        !fixture.contains_input(idle.center()),
+        "a hidden Dock must not keep its click targets"
+    );
+
+    fixture.host.update(cx, |host, cx| {
+        host.panel = None;
+        host.changed(cx);
+    });
+    fixture.visual.run_until_parked();
+
+    assert!(
+        fixture.visual.debug_bounds(APP_SELECTOR).is_some(),
+        "closing the launcher brings the Dock back"
+    );
+    assert!(
+        fixture.contains_input(idle.center()),
+        "the restored Dock accepts pointer input again"
+    );
+}
+
+#[gpui::test]
 fn the_glass_region_frosts_only_the_resting_tray(cx: &mut TestAppContext) {
     let mut fixture = Fixture::new(cx, false);
     // Idle: the glass follows the tray, so it is non-empty and bounded.

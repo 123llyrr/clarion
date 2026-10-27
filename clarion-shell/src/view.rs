@@ -2581,7 +2581,7 @@ impl Render for ShellView {
                 (0., 0., width, height, 16.)
             };
             let mut regions = if is_apps {
-                macos_launchpad::backdrop_regions(host, width, height)
+                macos_launchpad::backdrop_regions(width, height)
             } else {
                 rounded_region(w, h, radius)
             };

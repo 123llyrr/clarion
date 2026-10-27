@@ -7,92 +7,14 @@
 //! magnifier, the shape the reference launcher uses on a full output.
 use super::*;
 
-/// Keep the application grid clear of the real Dock and its edge trigger.
-/// Auto-hide still reserves space because its edge trigger may reveal the Dock.
-pub(super) fn launchpad_insets(host: &ViewState) -> (f32, f32, f32) {
-    if host.prefs.dock_hidden {
-        return (0., 0., 0.);
-    }
-    let strip = (host.prefs.dock_size as f32 + 64.).max(112.);
-    match host.prefs.dock_position {
-        DockPosition::Bottom => (0., 0., strip),
-        DockPosition::Left => (strip, 0., 0.),
-        DockPosition::Right => (0., strip, 0.),
-    }
-}
-
-/// The resting tray rectangle in output coordinates, the shape the Launchpad
-/// leaves undimmed. Mirrors the Dock canvas so the cutout matches the tray
-/// instead of the larger layer-shell surface.
-pub(super) fn dock_cutout(host: &ViewState, width: f32, height: f32) -> Option<(f32, f32, f32, f32)> {
-    if host.prefs.dock_hidden {
-        return None;
-    }
-    let vertical = host.prefs.dock_position != DockPosition::Bottom;
-    let metrics = crate::dock_motion::DockMetrics::with_folders(
-        host.dock_apps().len(),
-        host.prefs.dock_size as f32,
-        host.prefs.magnification_scale as f32,
-        host.prefs.magnification && !host.prefs.reduce_motion,
-        host.prefs.show_launcher,
-        host.dock_folders.len(),
-        vertical,
-        width,
-        height,
-    );
-    let (x, y) = crate::app::panels::dock_surface_origin(host, &metrics, width, height);
-    if vertical {
-        let tray_x = if host.prefs.dock_position == DockPosition::Left {
-            x
-        } else {
-            x + metrics.surface_width - metrics.thickness
-        };
-        Some((
-            tray_x,
-            y + metrics.main_padding,
-            metrics.thickness,
-            metrics.length,
-        ))
-    } else {
-        Some((
-            x + metrics.main_padding,
-            y + metrics.cross_padding,
-            metrics.length,
-            metrics.thickness,
-        ))
-    }
-}
-
-/// Blur the whole backdrop, leaving a hole only for the actual Dock canvas.
-/// A full-width clear strip would leave a conspicuous seam in the wallpaper.
-pub(super) fn backdrop_regions(host: &ViewState, width: f32, height: f32) -> Vec<Bounds<Pixels>> {
-    // Punch the hole around the resting tray, not the whole surface. The
-    // surface reserves a transparent band for the hover tooltip, shadow and
-    // magnification; dimming around that band would show a rectangle.
-    let (tx, ty, tw, th) = match dock_cutout(host, width, height) {
-        Some(cutout) => cutout,
-        None => {
-            return vec![Bounds::new(
-                point(px(0.), px(0.)),
-                size(px(width), px(height)),
-            )];
-        }
-    };
-    let margin = 10.;
-    let left = (tx - margin).clamp(0., width);
-    let right = (tx + tw + margin).clamp(left, width);
-    let top = (ty - margin).clamp(0., height);
-    let bottom = (ty + th + margin).clamp(top, height);
-    [
-        (0., 0., width, top),
-        (0., bottom, width, height - bottom),
-        (0., top, left, bottom - top),
-        (right, top, width - right, bottom - top),
-    ]
-    .into_iter()
-    .filter(|(_, _, w, h)| *w > 0. && *h > 0.)
-    .map(|(x, y, w, h)| Bounds::new(point(px(x), px(y)), size(px(w), px(h))))
-    .collect()
+/// The fullscreen launcher owns the whole output. The Dock surface hides
+/// while this panel is open, so the backdrop is one unbroken scrim and there
+/// is no cutout to align with the tray or its animation band.
+pub(super) fn backdrop_regions(width: f32, height: f32) -> Vec<Bounds<Pixels>> {
+    vec![Bounds::new(
+        point(px(0.), px(0.)),
+        size(px(width), px(height)),
+    )]
 }
 
 /// Few rows, many columns: one page of the fullscreen launcher.
@@ -146,12 +68,10 @@ fn launchpad_metrics(available_width: f32, available_height: f32) -> LaunchpadMe
     }
 }
 
-fn grid_metrics(host: &ViewState, window: &Window) -> LaunchpadMetrics {
-    let (left, right, bottom) = launchpad_insets(host);
+fn grid_metrics(window: &Window) -> LaunchpadMetrics {
     let viewport = window.viewport_size();
-    let available_width = (f32::from(viewport.width) - left - right).max(1.);
+    let available_width = f32::from(viewport.width).max(1.);
     let available_height = (f32::from(viewport.height)
-        - bottom
         - LAUNCHPAD_TOP
         - LAUNCHPAD_CAPSULE_H
         - LAUNCHPAD_GRID_GAP
@@ -165,12 +85,11 @@ fn grid_metrics(host: &ViewState, window: &Window) -> LaunchpadMetrics {
 /// The tests also use it to know how a wide catalog pages; the renderer reads
 /// the same numbers instead of recomputing them from its own copy.
 pub(super) fn launchpad_page_count(
-    host: &ViewState,
     window: &Window,
     count: usize,
     selection: usize,
 ) -> (usize, usize, usize) {
-    let per_page = grid_metrics(host, window).per_page();
+    let per_page = grid_metrics(window).per_page();
     let (page, pages) = launchpad_page(selection, count, per_page);
     (page, pages, per_page)
 }
@@ -208,7 +127,7 @@ impl ShellView {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        let metrics = grid_metrics(host, window);
+        let metrics = grid_metrics(window);
         let count = host.catalog.search(&self.query).len();
         let (page, pages) = launchpad_page(self.selection, count, metrics.per_page());
         let next = if forward {
@@ -227,7 +146,7 @@ impl ShellView {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        let metrics = grid_metrics(host, window);
+        let metrics = grid_metrics(window);
         let count = host.catalog.search(&self.query).len();
         if count == 0 {
             return;
@@ -344,12 +263,11 @@ impl ShellView {
         window: &Window,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let (left, right, bottom) = launchpad_insets(host);
-        let metrics = grid_metrics(host, window);
+        let metrics = grid_metrics(window);
         let white: Hsla = rgb(0xffffff).into();
         let found = host.catalog.search(&self.query);
         let (page, pages, per_page) =
-            launchpad_page_count(host, window, found.len(), self.selection);
+            launchpad_page_count(window, found.len(), self.selection);
         let start = page * per_page;
         let end = (start + per_page).min(found.len());
         let slice = &found[start.min(found.len())..end];
@@ -601,10 +519,7 @@ impl ShellView {
         let content = div()
             .id("macos-launchpad")
             .absolute()
-            .left(px(left))
-            .right(px(right))
-            .top(px(0.))
-            .bottom(px(bottom))
+            .inset_0()
             .flex()
             .flex_col()
             .items_center()
@@ -621,7 +536,7 @@ impl ShellView {
         let width = f32::from(window.viewport_size().width);
         let height = f32::from(window.viewport_size().height);
         let mut surface = div().relative().size_full();
-        for (index, region) in backdrop_regions(host, width, height)
+        for (index, region) in backdrop_regions(width, height)
             .into_iter()
             .enumerate()
         {

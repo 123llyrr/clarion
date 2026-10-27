@@ -2221,6 +2221,21 @@ impl ShellView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        // The fullscreen launcher owns the output. Keeping the Dock surface
+        // painted would force the launcher to cut a rectangular hole through
+        // its scrim; hiding the surface instead leaves one clean backdrop.
+        if host.panel == Some(Panel::Apps) {
+            self.dock_motion.clear_hover();
+            #[cfg(test)]
+            {
+                self.dock_motion.input_regions.clear();
+                self.dock_motion.glass_regions.clear();
+                self.dock_motion.animation_active = false;
+            }
+            window.set_glass_region(Some(&[]));
+            window.set_input_region(Some(&[]));
+            return div().size_full().into_any_element();
+        }
         let mut frame = self.dock_frame(host, window, cx);
         let (content, icon_regions, extra_active) = self.dock_slots(host, &frame, p, cx);
         frame.active |= extra_active;
