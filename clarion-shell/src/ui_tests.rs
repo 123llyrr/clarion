@@ -173,10 +173,40 @@ pub(super) fn panel_with_apps(
     panel_with_fixture(cx, kind, Fixture::with_apps(apps))
 }
 
+pub(super) fn panel_with_apps_and_windows(
+    cx: &mut TestAppContext,
+    kind: Panel,
+    apps: &[(&str, &str, &str)],
+    windows: Vec<clarion_ipc::Window>,
+) -> (
+    Fixture,
+    Entity<Host>,
+    Entity<ShellView>,
+    VisualTestContext,
+    WindowHandle<ShellView>,
+) {
+    panel_with_fixture_and_windows(cx, kind, Fixture::with_apps(apps), windows)
+}
+
 fn panel_with_fixture(
     cx: &mut TestAppContext,
     kind: Panel,
     fixture: Fixture,
+) -> (
+    Fixture,
+    Entity<Host>,
+    Entity<ShellView>,
+    VisualTestContext,
+    WindowHandle<ShellView>,
+) {
+    panel_with_fixture_and_windows(cx, kind, fixture, Vec::new())
+}
+
+fn panel_with_fixture_and_windows(
+    cx: &mut TestAppContext,
+    kind: Panel,
+    fixture: Fixture,
+    windows: Vec<clarion_ipc::Window>,
 ) -> (
     Fixture,
     Entity<Host>,
@@ -190,6 +220,7 @@ fn panel_with_fixture(
     });
     let host = cx
         .update(|cx| testing::test_host(cx, fixture.catalog.clone(), fixture.environment.clone()));
+    host.update(cx, |host, _| host.desktop.windows = windows);
     let window = cx.update(|cx| testing::open_panel(&host, kind, cx));
     let view = window.root(cx).unwrap();
     let mut visual = VisualTestContext::from_window(*window, cx);
@@ -520,7 +551,7 @@ fn wallpaper_chooser_releases_the_exclusive_panel_before_requesting_a_dialog(
     );
 }
 
-fn dock_window(id: u64, app_id: &str, title: &str) -> clarion_ipc::Window {
+pub(super) fn dock_window(id: u64, app_id: &str, title: &str) -> clarion_ipc::Window {
     clarion_ipc::Window {
         id,
         title: Some(title.to_owned()),
@@ -808,6 +839,31 @@ fn a_bar_popup_lands_on_the_monitor_that_dispatched_the_click(cx: &mut TestAppCo
         secondary,
         "the tray menu belongs to the bar that was clicked, not to the focused output"
     );
+}
+
+#[gpui::test]
+fn the_launcher_records_the_monitor_that_opened_it(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let host = cx
+        .update(|cx| testing::test_host(cx, fixture.catalog.clone(), fixture.environment.clone()));
+    let primary = cx.update(|cx| {
+        testing::open_dock(&host, cx);
+        testing::output_name(&host, cx)
+    });
+    let secondary = format!("zz-{primary}");
+    cx.update(|cx| testing::register_output(&host, &secondary, cx));
+
+    cx.update(|cx| {
+        testing::dispatch_on_output(&host, &secondary, crate::app::Action::Panel(Panel::Apps), cx)
+    });
+
+    let state = cx.update(|cx| testing::snapshot(&host, cx));
+    assert_eq!(
+        state.panel_output.as_deref(),
+        Some(secondary.as_str()),
+        "the launcher records its own output so only that Dock can hide"
+    );
+    assert_eq!(state.panel, Some(Panel::Apps));
 }
 
 #[gpui::test]

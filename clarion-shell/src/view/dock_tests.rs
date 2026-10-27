@@ -257,13 +257,17 @@ fn file_drag_over_an_app_keeps_the_hover_magnification(cx: &mut TestAppContext) 
 }
 
 #[gpui::test]
-fn the_fullscreen_launcher_hides_the_dock_surface(cx: &mut TestAppContext) {
+fn the_fullscreen_launcher_hides_only_its_own_outputs_dock(cx: &mut TestAppContext) {
     let mut fixture = Fixture::new(cx, false);
     let idle = fixture.bounds();
+    let output = fixture
+        .view
+        .read_with(&fixture.visual, |view, _| view.output().to_owned());
     assert!(fixture.contains_input(idle.center()));
 
     fixture.host.update(cx, |host, cx| {
         host.panel = Some(Panel::Apps);
+        host.panel_output = Some(output.clone());
         host.changed(cx);
     });
     fixture.visual.run_until_parked();
@@ -283,6 +287,7 @@ fn the_fullscreen_launcher_hides_the_dock_surface(cx: &mut TestAppContext) {
 
     fixture.host.update(cx, |host, cx| {
         host.panel = None;
+        host.panel_output = None;
         host.changed(cx);
     });
     fixture.visual.run_until_parked();
@@ -294,6 +299,33 @@ fn the_fullscreen_launcher_hides_the_dock_surface(cx: &mut TestAppContext) {
     assert!(
         fixture.contains_input(idle.center()),
         "the restored Dock accepts pointer input again"
+    );
+}
+
+#[gpui::test]
+fn another_outputs_dock_stays_visible_when_the_launcher_opens(cx: &mut TestAppContext) {
+    let mut fixture = Fixture::new(cx, false);
+    let idle = fixture.bounds();
+    assert!(fixture.contains_input(idle.center()));
+
+    fixture.host.update(cx, |host, cx| {
+        host.panel = Some(Panel::Apps);
+        host.panel_output = Some("another-output".to_owned());
+        host.changed(cx);
+    });
+    fixture.visual.run_until_parked();
+
+    assert!(
+        fixture.visual.debug_bounds(APP_SELECTOR).is_some(),
+        "a launcher on one output must leave the other outputs' Docks painted"
+    );
+    assert!(
+        fixture.contains_input(idle.center()),
+        "another output's Dock keeps its click targets"
+    );
+    assert!(
+        !fixture.glass_regions().is_empty(),
+        "another output's Dock keeps its frosted tray"
     );
 }
 

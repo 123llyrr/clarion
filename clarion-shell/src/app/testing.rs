@@ -32,6 +32,7 @@ pub(crate) fn test_host(
         error: None,
         error_generation: 0,
         panel: None,
+        panel_output: None,
         anchored: None,
         panel_exit: false,
         preview: true,

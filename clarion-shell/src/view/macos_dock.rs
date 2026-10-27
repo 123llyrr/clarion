@@ -2221,10 +2221,14 @@ impl ShellView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        // The fullscreen launcher owns the output. Keeping the Dock surface
-        // painted would force the launcher to cut a rectangular hole through
-        // its scrim; hiding the surface instead leaves one clean backdrop.
-        if host.panel == Some(Panel::Apps) {
+        // The fullscreen launcher owns its output. Keeping the Dock surface
+        // painted there would force the launcher to cut a rectangular hole
+        // through its scrim; hiding the surface instead leaves one clean
+        // backdrop. A Dock on another output is not covered by the launcher
+        // and stays live.
+        if host.panel == Some(Panel::Apps)
+            && host.panel_output.as_deref() == Some(self.output.as_str())
+        {
             self.dock_motion.clear_hover();
             #[cfg(test)]
             {

@@ -194,6 +194,9 @@ pub struct ViewState {
     pub collapsing_menus: Vec<i32>,
     pub error: Option<String>,
     pub panel: Option<Panel>,
+    /// The output whose bar or Dock opened the current panel. The fullscreen
+    /// launcher hides only this output's Dock; other monitors keep theirs.
+    pub panel_output: Option<String>,
     pub dnd: bool,
     pub dock_revealed: bool,
     pub launches: HashMap<String, Instant>,
@@ -252,6 +255,9 @@ pub struct Host {
     /// release timer, and an older timer never erases a newer banner.
     pub error_generation: u64,
     pub panel: Option<Panel>,
+    /// The output that owns the open panel, so per-output chrome such as the
+    /// Dock can hide only where the launcher actually covers the screen.
+    pub panel_output: Option<String>,
     /// Bar-space x of the last anchored bar click; mirrored into snapshots so
     /// `placement` can drop its popup from the clicked icon.
     pub(crate) anchored: Option<f32>,
@@ -344,6 +350,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 error: None,
                 error_generation: 0,
                 panel: None,
+                panel_output: None,
                 anchored: None,
                 panel_exit: false,
                 preview,
@@ -493,6 +500,7 @@ impl Host {
             collapsing_menus: self.collapsing_menus.clone(),
             error: self.error.clone(),
             panel: self.panel.clone(),
+            panel_output: self.panel_output.clone(),
             dnd: self.dnd,
             dock_revealed: !self.auto_hidden,
             launches: self.launches.clone(),
@@ -1239,6 +1247,7 @@ impl Host {
         self.cancel_popup_exit(cx);
         let Some(window) = self.popup.take() else {
             self.panel = None;
+            self.panel_output = None;
             self.folder_drag_layer = false;
             self.tray_menu.clear();
             self.expanded_menus.clear();
@@ -1273,6 +1282,7 @@ impl Host {
         // The menu is a surface of its own; it never outlives its launcher.
         self.dismiss_menu(cx);
         self.panel = None;
+        self.panel_output = None;
         self.folder_drag_layer = false;
         self.tray_menu.clear();
         self.expanded_menus.clear();
@@ -1362,6 +1372,7 @@ impl Host {
         }
         self.panel_exit = false;
         self.panel = None;
+        self.panel_output = None;
         self.folder_drag_layer = false;
         self.tray_menu.clear();
         self.expanded_menus.clear();
@@ -1397,6 +1408,7 @@ impl Host {
             .clone()
             .filter(|output| self.outputs.contains_key(output))
             .unwrap_or_else(|| self.active_output());
+        self.panel_output = Some(output.clone());
         let view = self.outputs.get(&output);
         let display = view.map(|v| v.display);
         let (w, h) = view.map(|v| (v.width, v.height)).unwrap_or((1200., 800.));
@@ -1467,6 +1479,7 @@ impl Host {
             Err(error) => {
                 self.show_error(format!("无法打开面板：{error}"), cx);
                 self.panel = None;
+                self.panel_output = None;
             }
         }
     }

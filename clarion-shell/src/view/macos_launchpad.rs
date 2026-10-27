@@ -26,8 +26,9 @@ const LAUNCHPAD_MAX_ROWS: usize = 6;
 /// capsule owns the top quarter and the Dock keeps the bottom fifth free.
 const LAUNCHPAD_SEARCH_SHARE: f32 = 0.25;
 const LAUNCHPAD_DOCK_SHARE: f32 = 0.20;
-/// Tile height and the steady gutter between rows. The grid keeps this pitch
-/// instead of stretching spare height into the gaps.
+/// Tile height and the smallest gutter between rows. A full page distributes
+/// any spare middle height into that gutter, while a short page keeps the
+/// same pitch instead of stretching its few rows apart.
 const LAUNCHPAD_ROW_H: f32 = 154.;
 const LAUNCHPAD_ROW_GAP: f32 = 20.;
 const LAUNCHPAD_ROW_PITCH: f32 = LAUNCHPAD_ROW_H + LAUNCHPAD_ROW_GAP;
@@ -36,27 +37,31 @@ const LAUNCHPAD_CAPSULE_H: f32 = 44.;
 const LAUNCHPAD_DOTS_H: f32 = 10.;
 const LAUNCHPAD_DOTS_BOTTOM: f32 = 14.;
 const LAUNCHPAD_DOTS_GAP: f32 = 36.;
-/// One fixed column pitch keeps a full-size icon plate and its breathing room
-/// whether the page is full or only has a few tiles.
-const LAUNCHPAD_COLUMN_PITCH: f32 = 130.;
+/// A page never squeezes columns below this pitch. Once the columns fill the
+/// space the extra width is shared evenly, so a full page reaches both paging
+/// bands instead of stopping short on the right.
+const LAUNCHPAD_MIN_COLUMN_PITCH: f32 = 130.;
 /// The arrows sit in a band twice as wide as their old margin; the button is
 /// centred in it so both the edge and the grid keep room.
 const LAUNCHPAD_ARROW_BAND: f32 = 200.;
 const LAUNCHPAD_ARROW_SIZE: f32 = 46.;
 
 struct LaunchpadMetrics {
-    /// The width the grid's fixed columns occupy.
+    /// The width a full page occupies between the two paging bands.
     width: f32,
     columns: usize,
     rows: usize,
-    /// One fixed column pitch, never stretched to use spare width.
+    /// The even column pitch a full page earns from that width.
     cell_width: f32,
+    /// The even row pitch a full page earns from the middle band.
+    row_gap: f32,
     /// The reserved paging band on each side of the grid.
     side: f32,
     /// The top and natural height of the grid inside the middle band.
     grid_top: f32,
     grid_height: f32,
-    /// The top of the page dot row, right below the grid.
+    /// The top of the page dot row. It stays fixed above the Dock band on
+    /// every page, whether or not the page has fewer rows.
     dots_top: f32,
     /// The top of the reserved Dock band. Geometry tests read it; the
     /// renderer stops the content above it by construction.
@@ -74,30 +79,38 @@ impl LaunchpadMetrics {
     }
 }
 
-/// The grid shape for the room the output leaves once the three proportional
-/// bands and the fixed chrome inside the middle band are taken off. Columns
-/// keep a fixed pitch and start at the left edge of the paging band.
+/// The full page's geometry for the room the output leaves once the three
+/// proportional bands and the fixed chrome inside the middle band are taken
+/// off. A full page shares the middle band's spare height between its rows
+/// and the page width between its columns; a short page reuses the same pitch
+/// rather than redistributing the space over fewer tiles.
 fn launchpad_metrics(width: f32, height: f32) -> LaunchpadMetrics {
     let grid_top = height * LAUNCHPAD_SEARCH_SHARE;
     let dock_top = height * (1. - LAUNCHPAD_DOCK_SHARE);
     let band_bottom = (dock_top - LAUNCHPAD_DOTS_BOTTOM - LAUNCHPAD_DOTS_H).max(grid_top);
-    let available = (band_bottom - grid_top - LAUNCHPAD_DOTS_GAP).max(0.);
-    let min_grid = LAUNCHPAD_MIN_COLUMNS as f32 * LAUNCHPAD_COLUMN_PITCH;
+    let available_height = (band_bottom - grid_top - LAUNCHPAD_DOTS_GAP).max(LAUNCHPAD_ROW_H);
+    let min_grid = LAUNCHPAD_MIN_COLUMNS as f32 * LAUNCHPAD_MIN_COLUMN_PITCH;
     let side = LAUNCHPAD_ARROW_BAND
         .min(((width - min_grid) / 2.).max(LAUNCHPAD_ARROW_SIZE / 2.));
-    let available_width = (width - 2. * side).max(LAUNCHPAD_COLUMN_PITCH);
-    let columns = ((available_width / LAUNCHPAD_COLUMN_PITCH).floor() as usize)
+    let page_width = (width - 2. * side).max(LAUNCHPAD_MIN_COLUMN_PITCH);
+    let columns = ((page_width / LAUNCHPAD_MIN_COLUMN_PITCH).floor() as usize)
         .clamp(LAUNCHPAD_MIN_COLUMNS, LAUNCHPAD_MAX_COLUMNS);
-    let rows = ((available + LAUNCHPAD_ROW_GAP) / LAUNCHPAD_ROW_PITCH).floor() as usize;
+    let rows = ((available_height + LAUNCHPAD_ROW_GAP) / LAUNCHPAD_ROW_PITCH).floor() as usize;
     let rows = rows.clamp(LAUNCHPAD_MIN_ROWS, LAUNCHPAD_MAX_ROWS);
+    let row_gap = if rows > 1 {
+        (available_height - rows as f32 * LAUNCHPAD_ROW_H) / (rows - 1) as f32
+    } else {
+        LAUNCHPAD_ROW_GAP
+    };
     let grid_height =
-        rows as f32 * LAUNCHPAD_ROW_H + (rows.saturating_sub(1)) as f32 * LAUNCHPAD_ROW_GAP;
+        rows as f32 * LAUNCHPAD_ROW_H + (rows.saturating_sub(1)) as f32 * row_gap;
     let dots_top = grid_top + grid_height + LAUNCHPAD_DOTS_GAP;
     LaunchpadMetrics {
-        width: columns as f32 * LAUNCHPAD_COLUMN_PITCH,
+        width: page_width,
         columns,
         rows,
-        cell_width: LAUNCHPAD_COLUMN_PITCH,
+        cell_width: page_width / columns as f32,
+        row_gap,
         side,
         grid_top,
         grid_height,
@@ -301,7 +314,6 @@ impl ShellView {
         let start = page * per_page;
         let end = (start + per_page).min(found.len());
         let slice = &found[start.min(found.len())..end];
-        let query = self.query.to_lowercase();
         let icon_size = if f32::from(window.viewport_size().width) >= 900. {
             86.
         } else {
@@ -314,67 +326,6 @@ impl ShellView {
             .flex()
             .flex_col()
             .items_start();
-        let mut has_window_matches = false;
-
-        // Window matches do not consume app indexes: Enter and the existing
-        // keyboard selection still address catalog.search(query) exactly.
-        if !query.is_empty() {
-            let mut windows = div()
-                .w(px(metrics.width.min(680.)))
-                .flex_shrink_0()
-                .flex()
-                .flex_col()
-                .gap(px(6.));
-            for window in host
-                .desktop
-                .windows
-                .iter()
-                .filter(|window| {
-                    window
-                        .title
-                        .as_deref()
-                        .unwrap_or_default()
-                        .to_lowercase()
-                        .contains(&query)
-                })
-                .take(2)
-            {
-                has_window_matches = true;
-                let h = self.host.clone();
-                let id = window.id;
-                windows = windows.child(
-                    div()
-                        .id(SharedString::from(format!("launchpad-window-{id}")))
-                        .px(px(14.))
-                        .py(px(10.))
-                        .rounded(px(10.))
-                        .bg(rgba(0xffffff18))
-                        .text_size(px(13.))
-                        .text_color(white)
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .cursor_pointer()
-                        .hover(|s| s.bg(rgba(0xffffff29)))
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .child(menu_text(
-                            format!(
-                                "切换窗口 · {}",
-                                window.title.as_deref().unwrap_or("未命名窗口")
-                            ),
-                            FontWeight::NORMAL,
-                            white,
-                            cx,
-                        ))
-                        .on_click(move |_, _, cx| {
-                            cx.stop_propagation();
-                            h.update(cx, |h, cx| h.handle(Action::Focus(id), cx));
-                        }),
-                );
-            }
-            if has_window_matches {
-                results = results.child(windows.mb(px(18.)));
-            }
-        }
 
         // One page of rows kept at their natural height. The spare middle
         // band stays empty below; stretching it would turn a short page into
@@ -384,7 +335,7 @@ impl ShellView {
             .flex_shrink_0()
             .flex()
             .flex_col()
-            .gap(px(LAUNCHPAD_ROW_GAP));
+            .gap(px(metrics.row_gap));
         for (row_index, apps) in slice.chunks(metrics.columns).enumerate() {
             let mut row = div().w(px(metrics.width)).flex_shrink_0().flex();
             for (column, app) in apps.iter().enumerate() {
@@ -474,7 +425,7 @@ impl ShellView {
             results = results.child(rows);
         }
 
-        if found.is_empty() && !has_window_matches {
+        if found.is_empty() {
             results = results.child(
                 div()
                     .flex_1()
