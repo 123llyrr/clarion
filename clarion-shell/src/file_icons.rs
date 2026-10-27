@@ -44,6 +44,10 @@ const CACHE_LIMIT: usize = 512;
 const RETRY_AFTER: Duration = Duration::from_secs(30);
 /// Preview cards keep a 4:3 ratio, whatever the source frame was.
 const PREVIEW_ASPECT: f32 = 4. / 3.;
+/// How much larger than the icon box a preview card is drawn. The card is 4:3,
+/// so letting it spill a little sideways keeps its visual weight level with
+/// the square type marks around it.
+const PREVIEW_SCALE: f32 = 1.1;
 /// Corner radius of a preview card, as a fraction of its short side.
 const PREVIEW_RADIUS: f32 = 0.11;
 /// How much of the icon box a document page fills. The theme's own type marks
@@ -243,18 +247,36 @@ pub(crate) fn icon(
         None => FileKind::Folder,
     };
     let (key, bytes, preview) = artwork(path, kind);
-    let artwork = rotated_image(&key, bytes, angle);
+    let artwork = rotated_artwork(&key, bytes, angle);
+    // The rotation canvas is larger than the card so tilting never clips its
+    // corners; scale it so the card itself keeps the size the surface asked
+    // for.
+    let card_width = if preview { size * PREVIEW_SCALE } else { size };
+    let scale = if artwork.source.0 > 0 {
+        card_width / artwork.source.0 as f32
+    } else {
+        1.
+    };
+    let draw_width = artwork.canvas.0 as f32 * scale;
+    let draw_height = artwork.canvas.1 as f32 * scale;
     // A preview card is 4:3, so its lower edge sits above the square's.
-    let card_height = if preview { size * 3. / 4. } else { size };
+    let card_height = if preview {
+        card_width * 3. / 4.
+    } else {
+        size
+    };
     let card_bottom = (size - card_height) / 2.;
     let mut stack = div()
         .relative()
         .w(px(size))
         .h(px(size))
         .child(
-            img(artwork)
-                .w(px(size))
-                .h(px(size))
+            img(artwork.image)
+                .absolute()
+                .left(px((size - draw_width) / 2.))
+                .top(px((size - draw_height) / 2.))
+                .w(px(draw_width))
+                .h(px(draw_height))
                 .object_fit(ObjectFit::Contain)
                 .with_fallback(move || {
                     desktop_icons::icon(fallback(kind), size * 0.86)
@@ -319,7 +341,8 @@ fn artwork(path: Option<&Path>, kind: FileKind) -> (String, Arc<Vec<u8>>, bool) 
         }
     }
     let name = icon_name(kind);
-    let key = format!("theme:{name}");
+    let theme = crate::view::current_icon_theme();
+    let key = format!("theme:{theme}:{name}");
     let bytes = cached_bytes(&key, || {
         resolve(name).and_then(|path| rasterize(&path))
     })
@@ -591,8 +614,8 @@ fn md5(input: &[u8]) -> [u8; 16] {
 type ArtworkCache = Mutex<HashMap<String, (Option<Arc<Vec<u8>>>, Instant)>>;
 /// The icon name to the theme file it resolves to.
 type PathCache = Mutex<HashMap<String, Option<PathBuf>>>;
-/// Rasterized artwork by key and rotation (tenths of a degree).
-type RotationCache = Mutex<HashMap<(String, i16), Arc<Image>>>;
+/// Rasterized artwork by key and rotation (whole degrees).
+type RotationCache = Mutex<HashMap<(String, i16), Rotated>>;
 /// Bundled PNG bytes, decoded once per coarse kind.
 type EmbeddedCache = Mutex<HashMap<DesktopIconKind, Arc<Vec<u8>>>>;
 
@@ -615,12 +638,14 @@ fn cached_bytes(key: &str, load: impl FnOnce() -> Option<Vec<u8>>) -> Option<Arc
 
 fn resolve(name: &str) -> Option<PathBuf> {
     static PATHS: OnceLock<PathCache> = OnceLock::new();
+    let theme = crate::view::current_icon_theme();
+    let key = format!("{theme}:{name}");
     let cache = PATHS.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(cached) = cache.lock().unwrap().get(name) {
+    if let Some(cached) = cache.lock().unwrap().get(&key) {
         return cached.clone();
     }
     let resolved = crate::view::resolve_theme_icon(name);
-    cache.lock().unwrap().insert(name.to_owned(), resolved.clone());
+    cache.lock().unwrap().insert(key, resolved.clone());
     resolved
 }
 
@@ -662,29 +687,123 @@ fn render_svg(bytes: &[u8]) -> Option<Vec<u8>> {
     pixmap.encode_png().ok()
 }
 
-/// The decoded artwork for one key at one angle, cached. Rotation happens on
-/// the PNG bytes, so the fan's tilted cards keep whatever artwork the surface
-/// resolved — theme mark, file preview or bundled fallback.
-fn rotated_image(key: &str, bytes: Arc<Vec<u8>>, angle: f32) -> Arc<Image> {
+/// One piece of artwork ready to paint: the encoded canvas, the card size it
+/// was made from, and the canvas it now occupies.
+#[derive(Clone)]
+struct Rotated {
+    image: Arc<Image>,
+    /// Pixel size of the card before rotation.
+    source: (u32, u32),
+    /// Pixel size of the canvas after rotation.
+    canvas: (u32, u32),
+}
+
+/// The artwork for one key at one angle, cached. Rotation happens on the PNG
+/// bytes inside a canvas large enough for the tilted card, so the corners are
+/// never cut off; angles are quantized to whole degrees because the surfaces
+/// animate the tilt continuously.
+fn rotated_artwork(key: &str, bytes: Arc<Vec<u8>>, angle: f32) -> Rotated {
     static CACHE: OnceLock<RotationCache> = OnceLock::new();
-    let tenths = (angle * 10.).round() as i16;
-    let cache_key = (key.to_owned(), tenths);
+    let degrees = angle.round() as i16;
+    let cache_key = (key.to_owned(), degrees);
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(cached) = cache.lock().unwrap().get(&cache_key).cloned() {
         return cached;
     }
-    let encoded = if tenths == 0 {
-        bytes.as_ref().clone()
-    } else {
-        desktop_icons::rotate_png(&bytes, angle)
+    let source = png_size(&bytes).unwrap_or((RASTER as u32, RASTER as u32));
+    let (image, canvas) = match rotate_expanded(&bytes, degrees as f32) {
+        Some((png, canvas)) => (
+            Arc::new(Image::from_bytes(ImageFormat::Png, png)),
+            canvas,
+        ),
+        None => (
+            Arc::new(Image::from_bytes(ImageFormat::Png, bytes.as_ref().clone())),
+            source,
+        ),
     };
-    let image = Arc::new(Image::from_bytes(ImageFormat::Png, encoded));
+    let rotated = Rotated {
+        image,
+        source,
+        canvas,
+    };
     let mut cache = cache.lock().unwrap();
     if cache.len() >= CACHE_LIMIT {
         cache.clear();
     }
-    cache.insert(cache_key, image.clone());
-    image
+    cache.insert(cache_key, rotated.clone());
+    rotated
+}
+
+/// The pixel size recorded in a PNG header.
+fn png_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 24 || &bytes[..8] != b"\x89PNG\r\n\x1a\n" || &bytes[12..16] != b"IHDR" {
+        return None;
+    }
+    let width = u32::from_be_bytes(bytes[16..20].try_into().ok()?);
+    let height = u32::from_be_bytes(bytes[20..24].try_into().ok()?);
+    Some((width, height))
+}
+
+/// Rotate a PNG into a canvas that fits the whole tilted card, with a pixel of
+/// breathing room. Returns the encoded PNG and its size.
+fn rotate_expanded(bytes: &[u8], degrees: f32) -> Option<(Vec<u8>, (u32, u32))> {
+    if degrees == 0. {
+        return None;
+    }
+    let source = ::image::load_from_memory_with_format(bytes, ::image::ImageFormat::Png)
+        .ok()?
+        .to_rgba8();
+    let (width, height) = source.dimensions();
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let radians = degrees.to_radians();
+    let (sin, cos) = radians.sin_cos();
+    let (sin, cos) = (sin.abs(), cos.abs());
+    let canvas_width = (width as f32 * cos + height as f32 * sin).ceil() as u32 + 2;
+    let canvas_height = (width as f32 * sin + height as f32 * cos).ceil() as u32 + 2;
+    let mut canvas = ::image::RgbaImage::new(canvas_width, canvas_height);
+    let center_x = canvas_width as f32 / 2.;
+    let center_y = canvas_height as f32 / 2.;
+    let source_x = width as f32 / 2.;
+    let source_y = height as f32 / 2.;
+    for y in 0..canvas_height {
+        let dy = y as f32 + 0.5 - center_y;
+        for x in 0..canvas_width {
+            let dx = x as f32 + 0.5 - center_x;
+            let sx = cos * dx + sin * dy + source_x;
+            let sy = -sin * dx + cos * dy + source_y;
+            canvas.put_pixel(x, y, sample(&source, sx, sy));
+        }
+    }
+    let mut encoded = Cursor::new(Vec::new());
+    canvas.write_to(&mut encoded, ::image::ImageFormat::Png).ok()?;
+    Some((encoded.into_inner(), (canvas_width, canvas_height)))
+}
+
+/// Bilinear sample, transparent outside the source.
+fn sample(source: &::image::RgbaImage, x: f32, y: f32) -> ::image::Rgba<u8> {
+    let (width, height) = source.dimensions();
+    if x < 0. || y < 0. || x >= width as f32 || y >= height as f32 {
+        return ::image::Rgba([0, 0, 0, 0]);
+    }
+    let x0 = x.floor() as u32;
+    let y0 = y.floor() as u32;
+    let x1 = (x0 + 1).min(width.saturating_sub(1));
+    let y1 = (y0 + 1).min(height.saturating_sub(1));
+    let fx = x - x0 as f32;
+    let fy = y - y0 as f32;
+    let p00 = source.get_pixel(x0, y0).0;
+    let p10 = source.get_pixel(x1, y0).0;
+    let p01 = source.get_pixel(x0, y1).0;
+    let p11 = source.get_pixel(x1, y1).0;
+    let mut out = [0u8; 4];
+    for channel in 0..4 {
+        let top = p00[channel] as f32 * (1. - fx) + p10[channel] as f32 * fx;
+        let bottom = p01[channel] as f32 * (1. - fx) + p11[channel] as f32 * fx;
+        out[channel] = (top * (1. - fy) + bottom * fy).round() as u8;
+    }
+    ::image::Rgba(out)
 }
 
 #[cfg(test)]
@@ -735,6 +854,37 @@ mod tests {
         let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><rect width="24" height="24" fill="#ff0000"/></svg>"##;
         let png = render_svg(svg).expect("resvg renders a plain svg");
         assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+    }
+
+    #[test]
+    fn rotation_keeps_the_whole_card_so_no_octagon_appears() {
+        // An opaque 4:3 card: rotating it in a same-size canvas would shave the
+        // corners off (the octagon), so the canvas has to grow with the tilt.
+        let card = ::image::RgbaImage::from_pixel(64, 48, ::image::Rgba([200, 100, 50, 255]));
+        let mut encoded = Cursor::new(Vec::new());
+        card.write_to(&mut encoded, ::image::ImageFormat::Png).unwrap();
+        let degrees = 16.;
+        let (png, (canvas_width, canvas_height)) =
+            rotate_expanded(&encoded.into_inner(), degrees).expect("the card rotates");
+        assert!(canvas_width > 64 && canvas_height > 48);
+        let rotated = ::image::load_from_memory_with_format(&png, ::image::ImageFormat::Png)
+            .unwrap()
+            .to_rgba8();
+        // Where the card's own top-left corner lands in the bigger canvas.
+        let radians = degrees.to_radians();
+        let (sin, cos) = radians.sin_cos();
+        let corner_x = canvas_width as f32 / 2. - 32. * cos + 24. * sin;
+        let corner_y = canvas_height as f32 / 2. - 32. * sin - 24. * cos;
+        let ink_near_corner = (0..3).any(|dx| {
+            (0..3).any(|dy| {
+                rotated
+                    .get_pixel(corner_x as u32 + dx, corner_y as u32 + dy)
+                    .0[3]
+                    > 0
+            })
+        });
+        assert!(ink_near_corner, "the card's corner survives the rotation");
+        assert_eq!(rotated.get_pixel(0, 0).0[3], 0, "the canvas corner stays empty");
     }
 
     #[test]

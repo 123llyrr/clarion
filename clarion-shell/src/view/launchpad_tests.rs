@@ -261,7 +261,7 @@ fn a_partial_page_keeps_the_full_page_pitch(cx: &mut TestAppContext) {
         .iter()
         .map(|name| (name.as_str(), name.as_str(), ""))
         .collect();
-    let (_fixture, host, _view, mut visual, _window) =
+    let (_fixture, host, view, mut visual, _window) =
         crate::view::ui_tests::panel_with_apps(cx, Panel::Apps, &apps);
     let state = cx.update(|cx| crate::app::testing::snapshot(&host, cx));
     let order: Vec<String> = state
@@ -279,6 +279,7 @@ fn a_partial_page_keeps_the_full_page_pitch(cx: &mut TestAppContext) {
         .expect("the last page dot is painted");
     visual.simulate_click(last_dot.center(), Modifiers::default());
     visual.run_until_parked();
+    settle_slide(&mut visual, &view);
 
     let start = (pages - 1) * per_page;
     let remaining = order.len() - start;
@@ -339,7 +340,7 @@ fn a_short_last_page_keeps_the_dots_at_their_fixed_place(cx: &mut TestAppContext
         .iter()
         .map(|name| (name.as_str(), name.as_str(), ""))
         .collect();
-    let (_fixture, host, _view, mut visual, _window) =
+    let (_fixture, host, view, mut visual, _window) =
         crate::view::ui_tests::panel_with_apps(cx, Panel::Apps, &apps);
     let state = cx.update(|cx| crate::app::testing::snapshot(&host, cx));
     let order: Vec<String> = state
@@ -356,6 +357,7 @@ fn a_short_last_page_keeps_the_dots_at_their_fixed_place(cx: &mut TestAppContext
         .expect("the last page dot is painted");
     visual.simulate_click(last_dot.center(), Modifiers::default());
     visual.run_until_parked();
+    settle_slide(&mut visual, &view);
 
     let start = (pages - 1) * per_page;
     let remaining = order.len() - start;
@@ -487,6 +489,91 @@ fn leaked(text: String) -> &'static str {
     Box::leak(text.into_boxed_str())
 }
 
+/// A page step rides a real-time spring, and the test clock does not advance
+/// it. Geometry tests jump the ride to its end so they read the settled page,
+/// exactly what a user sees once the slide lands.
+fn settle_slide(visual: &mut VisualTestContext, view: &gpui::Entity<super::ShellView>) {
+    visual.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            if let Some(slide) = view.launchpad_slide.as_mut() {
+                slide.started = std::time::Instant::now() - std::time::Duration::from_secs(1);
+            }
+            cx.notify();
+        });
+    });
+    visual.run_until_parked();
+}
+
+#[gpui::test]
+fn a_page_step_slides_the_pages_past_each_other(cx: &mut TestAppContext) {
+    let names: Vec<String> = (0..48).map(|index| format!("App {index:02}")).collect();
+    let apps: Vec<(&str, &str, &str)> = names
+        .iter()
+        .map(|name| (name.as_str(), name.as_str(), ""))
+        .collect();
+    let (_fixture, host, view, mut visual, _window) =
+        crate::view::ui_tests::panel_with_apps(cx, Panel::Apps, &apps);
+    let state = cx.update(|cx| crate::app::testing::snapshot(&host, cx));
+    let order: Vec<String> = state
+        .catalog
+        .search("")
+        .iter()
+        .map(|app| app.id.clone())
+        .collect();
+    let count = order.len();
+    let (_, pages, per_page) =
+        visual.update(|window, _| super::launchpad_page_count(window, count, 0));
+    assert!(pages > 1, "the fixture needs more than one page");
+
+    // A page step remembers both pages, so the renderer can carry one out
+    // while the other follows it in.
+    visual.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            // The selection has already landed on the new page; the ride is
+            // what the user still sees.
+            view.selection = per_page;
+            view.launchpad_start_slide(0, 1);
+            assert_eq!(
+                view.launchpad_slide
+                    .as_ref()
+                    .map(|slide| (slide.from, slide.to)),
+                Some((0, 1))
+            );
+            cx.notify();
+        })
+    });
+    visual.run_until_parked();
+    let first_page = leaked(format!("launchpad-app-{}", order[0]));
+    let second_page = leaked(format!("launchpad-app-{}", order[per_page]));
+    assert!(
+        visual.debug_bounds(first_page).is_some() && visual.debug_bounds(second_page).is_some(),
+        "both pages are painted while they trade places"
+    );
+
+    // Once the spring settles the outgoing page is gone and the ride releases.
+    settle_slide(&mut visual, &view);
+    assert!(
+        view.read_with(&visual, |view, _| view.launchpad_slide.is_none()),
+        "the slide releases once the pages have traded places"
+    );
+    assert!(
+        visual.debug_bounds(first_page).is_none() && visual.debug_bounds(second_page).is_some(),
+        "only the new page remains once the slide lands"
+    );
+
+    // Reduced motion changes pages without any ride at all.
+    visual.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            let mut state = (*view.state).clone();
+            state.prefs.reduce_motion = true;
+            view.state = std::sync::Arc::new(state);
+            view.launchpad_start_slide(1, 0);
+            assert!(view.launchpad_slide.is_none());
+            cx.notify();
+        })
+    });
+}
+
 #[gpui::test]
 fn the_launchpad_pages_a_wide_grid_with_arrows_and_dots(cx: &mut TestAppContext) {
     let names: Vec<String> = (0..48).map(|index| format!("App {index:02}")).collect();
@@ -494,7 +581,7 @@ fn the_launchpad_pages_a_wide_grid_with_arrows_and_dots(cx: &mut TestAppContext)
         .iter()
         .map(|name| (name.as_str(), name.as_str(), ""))
         .collect();
-    let (_fixture, host, _view, mut visual, _window) =
+    let (_fixture, host, view, mut visual, _window) =
         crate::view::ui_tests::panel_with_apps(cx, Panel::Apps, &apps);
     let state = cx.update(|cx| crate::app::testing::snapshot(&host, cx));
     let order: Vec<String> = state
@@ -537,6 +624,7 @@ fn the_launchpad_pages_a_wide_grid_with_arrows_and_dots(cx: &mut TestAppContext)
     let next = visual.debug_bounds("launchpad-next").unwrap();
     visual.simulate_click(next.center(), Modifiers::default());
     visual.run_until_parked();
+    settle_slide(&mut visual, &view);
     assert!(
         visual
             .debug_bounds(leaked(format!("launchpad-app-{}", order[0])))
@@ -555,6 +643,7 @@ fn the_launchpad_pages_a_wide_grid_with_arrows_and_dots(cx: &mut TestAppContext)
         .unwrap();
     visual.simulate_click(last.center(), Modifiers::default());
     visual.run_until_parked();
+    settle_slide(&mut visual, &view);
     let last_page_first = leaked(format!(
         "launchpad-app-{}",
         order[((pages - 1) * per_page).min(order.len() - 1)]

@@ -156,33 +156,57 @@ fn folder_tile_icon(
         // tags on the corner.
         return crate::file_icons::icon(None, true, &tags, size, 0.);
     }
+    let picked = folder_preview_entries(entries);
     let mut stack = div().relative().w(px(size)).h(px(size));
-    let mut picked = folder_preview_entries(entries);
-    picked.reverse();
-    let artwork_size = size;
-    for (layer, entry) in picked.into_iter().enumerate() {
-        let offset = layer as f32 * 0.03;
+    for card in folder_stack_layout(picked.len(), size) {
+        let entry = picked[card.entry];
         let is_dir = entry.kind == crate::dock_folder::FolderEntryKind::Directory;
-        let angle = match layer {
-            0 => -16.,
-            1 => 8.,
-            _ => 14.,
-        };
         stack = stack.child(
             div()
                 .absolute()
-                .left(px(size * offset))
-                .top(px(size * offset))
+                .left(px(card.left))
+                .top(px(card.top))
                 .child(crate::file_icons::icon(
                     Some(&entry.path),
                     is_dir,
                     &entry.tags,
-                    artwork_size,
-                    angle,
+                    card.size,
+                    card.angle,
                 )),
         );
     }
     stack.into_any_element()
+}
+
+/// One card of the folded stack, painted back to front.
+pub(super) struct StackCard {
+    /// Index into the preview list; the first entry ends up on top.
+    pub entry: usize,
+    pub angle: f32,
+    pub left: f32,
+    pub top: f32,
+    pub size: f32,
+}
+
+/// A small deck, not a spiral: up to three cards fanned evenly around upright
+/// (`-9°`, `0°`, `+9°`), each one behind riding up and to the right of the one
+/// in front, like the reference Dock.
+pub(super) fn folder_stack_layout(count: usize, size: f32) -> Vec<StackCard> {
+    let count = count.min(3);
+    let card = size * 0.85;
+    let mut cards = Vec::with_capacity(count);
+    for index in (0..count).rev() {
+        let depth = index as f32;
+        let spread = depth - (count.saturating_sub(1) as f32) / 2.;
+        cards.push(StackCard {
+            entry: index,
+            angle: spread * 9.,
+            left: (size - card) / 2. + depth * size * 0.03,
+            top: (size - card) / 2. - depth * size * 0.045,
+            size: card,
+        });
+    }
+    cards
 }
 
 fn dock_separator(vertical: bool, dark: bool) -> Div {

@@ -722,7 +722,16 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
             // on the button that opened it; the clamp pulls the rectangle
             // back inside the output when the click sits near an edge.
             let ceiling = available.min(h * BAR_POPUP_MAX_HEIGHT_SHARE);
-            let (width, height) = (320f32.min(w - 24.), 424f32.min(ceiling));
+            // The battery card lives only on machines that have one; the
+            // dialog grows by exactly that card rather than leaving a gap on
+            // desktops. The second tile row carries the appearance and
+            // launcher switches.
+            let natural: f32 = if state.system.battery.is_some() {
+                590.
+            } else {
+                510.
+            };
+            let (width, height): (f32, f32) = (320f32.min(w - 24.), natural.min(ceiling));
             let x = state.anchored.map_or(w - width - 12., |x| {
                 (x - width / 2.).clamp(8., (w - width - 8.).max(8.))
             });
@@ -835,7 +844,7 @@ fn entry_height(item: &services::MenuItem, depth: usize, expanded: &[i32]) -> f3
 pub(crate) fn popup_exit_panel(panel: &Panel) -> bool {
     matches!(
         panel,
-        Panel::Tray(_) | Panel::Controls | Panel::Recent | Panel::Spotlight
+        Panel::Tray(_) | Panel::Controls | Panel::Recent | Panel::Spotlight | Panel::Apps
     )
 }
 

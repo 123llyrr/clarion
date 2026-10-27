@@ -3,6 +3,7 @@
 use crate::{
     app::{Action, DockApp, Host, Panel, SystemAction, ViewState},
     backend,
+    battery,
     input::{BackspaceAtStart, DeleteAtEnd, QueryChanged, TextInput},
     preferences::{
         DockPosition, LauncherLayout, LauncherPresentation, MAX_SURFACE_OPACITY,
@@ -125,8 +126,12 @@ pub struct ShellView {
     /// Whether the last `panel()` render used the fan layout.
     folder_fan_active: bool,
     /// The appear/disappear ride for a bar popup: `None` snaps, `Some` tracks
-    /// the fade between 0 (closed) and 1 (open) at the shared response.
+    /// the fade between 0 (closed) and 1 (open) at the shared response. The
+    /// fullscreen launcher rides the same motion.
     popup_motion: Option<crate::dock_motion::Motion>,
+    /// The launcher page slide in flight: the page that is leaving and the
+    /// spring that carries the incoming page past it.
+    launchpad_slide: Option<LaunchpadSlide>,
     /// The palette header glyph's cross-fade: the mark on screen, the one it is
     /// trading places with, and the spring between them. A slash route leads
     /// with the command under the keyboard, so either side is an arbitrary
@@ -149,7 +154,7 @@ pub struct ShellView {
     tray_image_hashes: std::collections::HashMap<String, [u8; 32]>,
     /// Resolved freedesktop icon names, cached per view so the bar and the
     /// tray menus never walk the theme directories twice for one name.
-    theme_icons: std::cell::RefCell<HashMap<String, Option<PathBuf>>>,
+    theme_icons: std::cell::RefCell<HashMap<(String, String), Option<PathBuf>>>,
     /// The open/close fade of one submenu card, keyed by its menu item id.
     /// The card itself renders at the sampled opacity; the host releases the
     /// collapsed id once its fade has run out.
@@ -163,6 +168,15 @@ pub struct ShellView {
     launcher_menu: Option<LauncherMenu>,
     cached_snapshot: std::sync::Weak<ViewState>,
 }
+/// A launcher page slide: the page that was on screen, the one replacing it,
+/// and the spring between the two. `started` is the clock the spring samples.
+struct LaunchpadSlide {
+    from: usize,
+    to: usize,
+    progress: crate::dock_motion::Motion,
+    started: std::time::Instant,
+}
+
 /// A launcher tile whose context menu is open.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LauncherMenu {
@@ -282,6 +296,66 @@ impl Palette {
         self.frost > 0.01
     }
 }
+
+/// Icon tint for a battery state. Only the charge bar changes colour; the
+/// outline keeps the foreground so the mark reads on both themes.
+fn battery_color(tone: battery::BatteryTone, p: Palette) -> Hsla {
+    match tone {
+        battery::BatteryTone::Normal => p.fg,
+        battery::BatteryTone::Charging => rgb(0x30d158).into(),
+        battery::BatteryTone::Low => rgb(0xff9f0a).into(),
+        battery::BatteryTone::Critical => rgb(0xff453a).into(),
+        battery::BatteryTone::Muted => p.muted,
+    }
+}
+
+/// A two-tone battery mark. Symbolic theme icons are single-colour by
+/// design, so tinting one would paint the outline and the charge the same
+/// green; drawing the shell lets the outline stay in the foreground colour
+/// while the bar inside carries the charge and the state colour.
+fn battery_mark(percent: f64, fill: Hsla, outline: Hsla, size: f32) -> AnyElement {
+    let percent = percent.clamp(0., 1.) as f32;
+    let height = (size * 0.54).max(8.);
+    let border = (size * 0.07).clamp(1., 1.6);
+    let inset = (border * 0.5).max(0.5);
+    let inner_width = (size - 2. * (border + inset)).max(0.);
+    let inner_height = (height - 2. * (border + inset)).max(1.);
+    let radius = (height * 0.28).max(2.);
+    let tip_width = (size * 0.09).clamp(1.5, 3.);
+    let tip_height = (height * 0.34).max(3.);
+    div()
+        .h(px(height))
+        .flex()
+        .items_center()
+        .gap(px(1.))
+        .child(
+            div()
+                .w(px(size))
+                .h(px(height))
+                .rounded(px(radius))
+                .border(px(border))
+                .border_color(outline)
+                .p(px(inset))
+                .flex()
+                .items_center()
+                .child(
+                    div()
+                        .h_full()
+                        .w(px(inner_width * percent))
+                        .rounded(px((inner_height * 0.35).max(1.)))
+                        .bg(fill),
+                ),
+        )
+        .child(
+            div()
+                .w(px(tip_width))
+                .h(px(tip_height))
+                .rounded(px(tip_width / 2.))
+                .bg(outline),
+        )
+        .into_any_element()
+}
+
 #[derive(Default)]
 struct SliderGesture {
     dragging: bool,
@@ -364,6 +438,9 @@ impl ShellView {
         });
         cx.subscribe(&input, |this, _, QueryChanged(query), cx| {
             this.query = query.clone();
+            // A page slide describes the old result set; a new query starts
+            // its pages from a clean slate.
+            this.launchpad_slide = None;
             // Every edit starts the slash completion over: Enter only runs the
             // highlighted row once the keyboard has actually moved in it.
             this.palette_slash_picked = false;
@@ -426,6 +503,7 @@ impl ShellView {
             folder_fan_closed: false,
             folder_fan_active: false,
             popup_motion: None,
+            launchpad_slide: None,
             palette_glyph: None,
             popup_epoch: std::time::Instant::now(),
             folder_drag_layer: false,
@@ -795,6 +873,38 @@ impl ShellView {
                 .into_any_element()
         }
     }
+    /// The current theme's battery artwork. `img` keeps the SVG's own colours
+    /// (green charge, amber/red low levels) instead of the monochrome tint the
+    /// `svg` element would apply; the active theme already carries the light
+    /// or dark outline chosen by `set_icon_theme`.
+    fn battery_icon(
+        &self,
+        name: &str,
+        percent: f64,
+        tone: battery::BatteryTone,
+        size: f32,
+        p: Palette,
+    ) -> AnyElement {
+        let path = {
+            let mut cache = self.theme_icons.borrow_mut();
+            let mut path = theme_icon(name, &mut cache);
+            if path.is_none() && name.ends_with("-100-charging-symbolic") {
+                // Sets that stop the charging family at 90 still have the
+                // charged mark at 100; a full battery must look full.
+                path = theme_icon("battery-level-100-charged-symbolic", &mut cache);
+            }
+            path.or_else(|| theme_icon("battery-symbolic", &mut cache))
+        };
+        match path {
+            Some(path) => img(path)
+                .size(px(size))
+                .object_fit(ObjectFit::Contain)
+                .into_any_element(),
+            // A theme with no battery artwork at all still gets a readable
+            // two-tone mark instead of a hole in the status row.
+            None => battery_mark(percent, battery_color(tone, p), p.fg, size),
+        }
+    }
     /// The palette header's leading mark. `path` is the mark the body on screen
     /// calls for — the store mark for applications, the selected command's own
     /// icon for the command bodies. One spring swaps them: the outgoing mark
@@ -1101,54 +1211,52 @@ impl ShellView {
         }
         if width > 800. {
             if let Some(battery) = host.system.battery {
-                let fill = div()
-                    .w(px((19. * scale) * battery.clamp(0., 1.) as f32))
-                    .h(px(7. * scale))
-                    .rounded(px(1. * scale))
-                    .bg(if host.system.charging {
-                        rgb(0x30d158).into()
-                    } else {
-                        p.fg
-                    });
+                let state = battery::state(
+                    host.system.battery,
+                    host.system.battery_status,
+                    host.system.ac_online,
+                );
+                let tone = battery::tone(state);
+                let icon = battery::icon(state, host.system.battery);
+                // The indicator is also the fastest way into the control
+                // center: it carries the same anchored click as the buttons.
+                let h = self.host.clone();
+                let bar_output = self.output.clone();
                 let mut indicator = div()
                     .id("menu-battery")
+                    .debug_selector(|| "menu-battery".into())
                     .h_full()
                     .px(px(6. * scale))
                     .flex()
                     .items_center()
-                    .gap(px(5. * scale));
-                if host.prefs.show_battery_percentage {
-                    indicator = indicator.child(
-                        div()
-                            .text_size(px(12. * scale))
-                            .child(format!("{}%", (battery * 100.).round())),
-                    );
-                }
-                row = row.child(
-                    indicator.child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(1.5 * scale))
-                            .child(
-                                div()
-                                    .w(px(23. * scale))
-                                    .h(px(11. * scale))
-                                    .p(px(1. * scale))
-                                    .border_1()
-                                    .border_color(p.fg.opacity(0.65))
-                                    .rounded(px(2.5 * scale))
-                                    .child(fill),
+                    .gap(px(5. * scale))
+                    .rounded(px(4.))
+                    .cursor_pointer()
+                    .hover(move |s| s.bg(p.line))
+                    .on_click(move |event: &ClickEvent, _, cx| {
+                        let x = f32::from(event.position().x);
+                        h.update(cx, |h, cx| {
+                            h.handle(
+                                Action::on_output(
+                                    bar_output.clone(),
+                                    Action::AnchoredPanel(Panel::Controls, x),
+                                ),
+                                cx,
                             )
-                            .child(
-                                div()
-                                    .w(px(1.5 * scale))
-                                    .h(px(4. * scale))
-                                    .rounded(px(0.75 * scale))
-                                    .bg(p.fg.opacity(0.65)),
-                            ),
-                    ),
-                );
+                        });
+                    })
+                    .child(self.battery_icon(
+                        &icon,
+                        battery,
+                        tone,
+                        (status_glyph * 1.5).round().clamp(16., 28.),
+                        p,
+                    ));
+                if host.prefs.show_battery_percentage {
+                    indicator = indicator
+                        .child(div().text_size(px(text)).child(battery::percent_text(battery)));
+                }
+                row = row.child(indicator);
             }
         }
         row = row.child(self.anchored_status_button(
@@ -2730,9 +2838,11 @@ impl Render for ShellView {
                     this.palette_toggle_clipboard_layout(&host, cx);
                 }
             }))
-            .on_action(cx.listener(|this, _: &Previous, _window, cx| {
+            .on_action(cx.listener(|this, _: &Previous, window, cx| {
                 if !this.input.read(cx).has_preedit() {
+                    let before = this.selection;
                     this.selection = this.selection.saturating_sub(1);
+                    this.launchpad_note_page_change(before, window);
                     if this.state.panel == Some(Panel::Spotlight) {
                         this.palette_note_slash_navigation();
                         this.palette_selection_into_view(&this.state);
@@ -2740,13 +2850,15 @@ impl Render for ShellView {
                     cx.notify();
                 }
             }))
-            .on_action(cx.listener(|this, _: &Next, _window, cx| {
+            .on_action(cx.listener(|this, _: &Next, window, cx| {
                 if !this.input.read(cx).has_preedit() {
                     let count = match this.state.panel {
                         Some(Panel::Spotlight) => this.palette_row_count(&this.state),
                         _ => this.state.catalog.search(&this.query).len(),
                     };
+                    let before = this.selection;
                     this.selection = (this.selection + 1).min(count.saturating_sub(1));
+                    this.launchpad_note_page_change(before, window);
                     if this.state.panel == Some(Panel::Spotlight) {
                         this.palette_note_slash_navigation();
                         this.palette_selection_into_view(&this.state);
@@ -3222,18 +3334,19 @@ fn collect_menu_icons(items: &[services::MenuItem], out: &mut Vec<Vec<u8>>) {
 /// Resolve a freedesktop icon name to a real file on the theme paths. Device,
 /// signal and battery icons ship in the system themes; the shell only needs a
 /// small, ordered probe over the common sizes and categories.
-fn theme_icon(name: &str, cache: &mut HashMap<String, Option<PathBuf>>) -> Option<PathBuf> {
-    if let Some(cached) = cache.get(name) {
+fn theme_icon(name: &str, cache: &mut HashMap<(String, String), Option<PathBuf>>) -> Option<PathBuf> {
+    let key = (current_icon_theme(), name.to_owned());
+    if let Some(cached) = cache.get(&key) {
         return cached.clone();
     }
     let resolved = resolve_theme_icon(name);
-    cache.insert(name.to_owned(), resolved.clone());
+    cache.insert(key, resolved.clone());
     resolved
 }
 
 /// The icon theme the desktop currently selected: the GTK settings (both
 /// majors) first, then KDE's kdeglobals, then the spec fallback theme.
-fn current_icon_theme() -> String {
+fn configured_icon_theme() -> String {
     if let Ok(home) = std::env::var("HOME") {
         let config = PathBuf::from(&home).join(".config");
         for file in ["gtk-4.0/settings.ini", "gtk-3.0/settings.ini"] {
@@ -3250,6 +3363,72 @@ fn current_icon_theme() -> String {
         }
     }
     "hicolor".to_owned()
+}
+
+/// The icon theme every resolution uses right now. The shell switches the
+/// light/dark *variant* here once, when its appearance changes, so the icon
+/// resolvers never have to reason about the appearance themselves.
+static ACTIVE_ICON_THEME: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+pub(crate) fn current_icon_theme() -> String {
+    ACTIVE_ICON_THEME
+        .read()
+        .ok()
+        .and_then(|theme| theme.clone())
+        .unwrap_or_else(configured_icon_theme)
+}
+
+/// Point icon resolution at the light or dark variant of the desktop's icon
+/// theme. Called when the shell appearance changes and once at startup.
+pub(crate) fn set_icon_theme(dark: bool) {
+    let base = configured_icon_theme();
+    let theme = icon_theme_variant(&base, dark, icon_theme_installed);
+    if let Ok(mut active) = ACTIVE_ICON_THEME.write() {
+        if active.as_deref() != Some(theme.as_str()) {
+            *active = Some(theme);
+        }
+    }
+}
+
+/// The light/dark counterpart of a theme name. Light themes get a `-dark`
+/// suffix; a dark theme chosen in the desktop settings strips it again.
+/// The `exists` probe keeps a missing variant from blanking the icons.
+fn icon_theme_variant(base: &str, dark: bool, exists: impl Fn(&str) -> bool) -> String {
+    if dark {
+        for suffix in ["-dark", "-Dark"] {
+            if !base.ends_with(suffix) {
+                let candidate = format!("{base}{suffix}");
+                if exists(&candidate) {
+                    return candidate;
+                }
+            }
+        }
+        base.to_owned()
+    } else {
+        for suffix in ["-dark", "-Dark"] {
+            if let Some(light) = base.strip_suffix(suffix) {
+                if exists(light) {
+                    return light.to_owned();
+                }
+            }
+        }
+        base.to_owned()
+    }
+}
+
+fn icon_theme_installed(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let home = std::env::var("HOME").ok().map(PathBuf::from);
+    let mut roots = vec![PathBuf::from("/usr/share/icons")];
+    if let Some(home) = home {
+        roots.push(home.join(".icons"));
+        roots.push(home.join(".local/share/icons"));
+    }
+    roots
+        .into_iter()
+        .any(|root| root.join(name).join("index.theme").is_file())
 }
 
 /// One `key = value` pair out of an ini-style settings file.
@@ -3443,6 +3622,45 @@ mod tests {
                 .iter()
                 .all(|r| f32::from(r.size.width) >= 0. && f32::from(r.size.height) >= 0.));
         }
+    }
+
+    #[::core::prelude::v1::test]
+    fn icon_theme_variant_follows_the_shell_appearance() {
+        let installed = |name: &str| {
+            matches!(
+                name,
+                "MacTahoe" | "MacTahoe-dark" | "Papirus" | "Papirus-Dark"
+            )
+        };
+        assert_eq!(
+            icon_theme_variant("MacTahoe", true, installed),
+            "MacTahoe-dark"
+        );
+        assert_eq!(
+            icon_theme_variant("MacTahoe", false, installed),
+            "MacTahoe"
+        );
+        // A desktop that already selected the dark variant comes back to the
+        // light one when the shell switches appearance.
+        assert_eq!(
+            icon_theme_variant("MacTahoe-dark", false, installed),
+            "MacTahoe"
+        );
+        assert_eq!(
+            icon_theme_variant("MacTahoe-dark", true, installed),
+            "MacTahoe-dark"
+        );
+        // Both common spellings of the dark suffix are understood.
+        assert_eq!(
+            icon_theme_variant("Papirus", true, installed),
+            "Papirus-Dark"
+        );
+        assert_eq!(
+            icon_theme_variant("Papirus-Dark", false, installed),
+            "Papirus"
+        );
+        // A theme without a dark variant is used exactly as installed.
+        assert_eq!(icon_theme_variant("Adwaita", true, |_| false), "Adwaita");
     }
 
     #[::core::prelude::v1::test]

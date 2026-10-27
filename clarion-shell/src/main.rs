@@ -2,6 +2,7 @@
 //! One native desktop, one visual language, one GPUI event loop.
 mod app;
 mod backend;
+mod battery;
 mod desktop;
 mod desktop_icons;
 mod file_icons;

@@ -489,6 +489,26 @@ fn auto_hide_slides_the_same_surface_outside_input_and_reveals_it_again(cx: &mut
 }
 
 #[test]
+fn a_folder_stack_fans_its_cards_instead_of_twisting() {
+    let cards = super::macos_dock::folder_stack_layout(3, 100.);
+    let angles = cards
+        .iter()
+        .map(|card| card.angle)
+        .collect::<Vec<_>>();
+    // Painted back to front, so the deck reads +9, 0, -9 like a small fan.
+    assert_eq!(angles, vec![9., 0., -9.]);
+    // The back card rides up and to the right; the front card is centred.
+    assert!(cards[0].left > cards[2].left);
+    assert!(cards[0].top < cards[2].top);
+    assert!(cards[0].size < 100.);
+    assert_eq!(cards[2].left, (100. - cards[2].size) / 2.);
+    // A folder with one item is not tilted at all.
+    let single = super::macos_dock::folder_stack_layout(1, 100.);
+    assert_eq!(single.len(), 1);
+    assert_eq!(single[0].angle, 0.);
+}
+
+#[test]
 fn folder_stack_preview_puts_files_on_top_and_folders_at_the_back() {
     use crate::dock_folder::{FolderEntry, FolderEntryKind};
     let entry = |name: &str, kind: FolderEntryKind| FolderEntry {

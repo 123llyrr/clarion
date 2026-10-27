@@ -301,6 +301,7 @@ fn preedit_enter_arrows_and_escape_never_launch_or_dismiss(cx: &mut TestAppConte
         input.update(cx, |input, cx| input.unmark_text(window, cx));
     });
     visual.simulate_keystrokes("escape");
+    settle_exit(&mut visual);
     host.read_with(cx, |host, _| assert!(host.panel.is_none()));
 }
 
@@ -393,6 +394,33 @@ fn preferences_wm_close_clears_host_and_one_real_bar_click_opens_it_again(cx: &m
         .windows()
         .iter()
         .any(|handle| handle.window_id() != bar.window_id())));
+}
+
+#[gpui::test]
+fn the_bar_battery_indicator_opens_the_control_center(cx: &mut TestAppContext) {
+    let (_fixture, host, view, _visual, _window) = panel(cx, Panel::Preferences);
+    host.update(cx, |host, cx| {
+        host.system.battery = Some(0.42);
+        host.system.battery_status = crate::backend::BatteryStatus::Discharging;
+        host.system.battery_health = Some(0.5);
+        host.system.ac_online = false;
+        host.changed(cx);
+    });
+    let state = view.read_with(cx, |view, _| view.state.clone());
+    let bar = cx.add_window(|window, cx| {
+        window.resize(gpui::size(px(1000.), px(24.)));
+        ShellView::new(host.clone(), super::Surface::Bar, "test".into(), state, cx)
+    });
+    let mut bar_visual = VisualTestContext::from_window(*bar, cx);
+    bar_visual.run_until_parked();
+    let battery = bar_visual
+        .debug_bounds("menu-battery")
+        .expect("a laptop bar carries the battery indicator");
+    bar_visual.simulate_click(battery.center(), Modifiers::default());
+    bar_visual.run_until_parked();
+    host.read_with(cx, |host, _| {
+        assert_eq!(host.panel, Some(Panel::Controls));
+    });
 }
 
 #[gpui::test]
@@ -2040,9 +2068,13 @@ fn right_clicking_a_launchpad_tile_keeps_the_launchpad_closeable(cx: &mut TestAp
     menu_visual.run_until_parked();
     assert!(host.read_with(cx, |host, _| host.menu.is_none()));
     host.read_with(cx, |host, _| assert_eq!(host.panel, Some(Panel::Apps)));
-    // ...so the next escape can still close the launcher.
+    // ...so the next escape can still close the launcher. The surface rides
+    // its fade out, so the panel stays visible until the Host releases it.
     visual.simulate_keystrokes("escape");
     visual.run_until_parked();
-    host.read_with(cx, |host, _| assert_eq!(host.panel, None));
+    host.read_with(cx, |host, _| {
+        assert!(host.panel_exit, "the launchpad rides its fade out");
+        assert_eq!(host.panel, Some(Panel::Apps));
+    });
 }
 

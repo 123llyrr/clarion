@@ -67,6 +67,8 @@ struct LaunchpadMetrics {
     /// renderer stops the content above it by construction.
     #[allow(dead_code)]
     dock_top: f32,
+    /// The launcher's app icon size for this output width.
+    icon_size: f32,
 }
 
 impl LaunchpadMetrics {
@@ -116,6 +118,7 @@ fn launchpad_metrics(width: f32, height: f32) -> LaunchpadMetrics {
         grid_height,
         dots_top,
         dock_top,
+        icon_size: if width >= 900. { 86. } else { 77. },
     }
 }
 
@@ -195,13 +198,47 @@ impl ShellView {
             return;
         }
         let per_page = metrics.per_page();
-        let (_, pages) = launchpad_page(self.selection, count, per_page);
+        let (from, pages) = launchpad_page(self.selection, count, per_page);
         let page = page.min(pages - 1);
         let target = (page * per_page).min(count - 1);
         if target != self.selection {
             self.selection = target;
+            let (to, _) = launchpad_page(target, count, per_page);
+            self.launchpad_start_slide(from, to);
             cx.notify();
         }
+    }
+
+    /// Slide from one page to another. Reduced motion snaps, so the caller
+    /// still lands on the same selection without a ride.
+    pub(super) fn launchpad_start_slide(&mut self, from: usize, to: usize) {
+        if from == to {
+            return;
+        }
+        if self.state.prefs.reduce_motion {
+            self.launchpad_slide = None;
+            return;
+        }
+        let mut progress = crate::dock_motion::Motion::new(0.);
+        progress.retarget(1., std::time::Duration::ZERO);
+        self.launchpad_slide = Some(LaunchpadSlide {
+            from,
+            to,
+            progress,
+            started: std::time::Instant::now(),
+        });
+    }
+
+    /// Note a keyboard move. Anything that crosses a page boundary earns the
+    /// same two-page slide the arrows and dots play.
+    pub(super) fn launchpad_note_page_change(&mut self, before: usize, window: &Window) {
+        if self.state.panel != Some(Panel::Apps) || before == self.selection {
+            return;
+        }
+        let count = self.state.catalog.search(&self.query).len();
+        let (from, _, _) = launchpad_page_count(window, count, before);
+        let (to, _, _) = launchpad_page_count(window, count, self.selection);
+        self.launchpad_start_slide(from, to);
     }
 
     fn launchpad_arrow(
@@ -299,27 +336,21 @@ impl ShellView {
         dots.into_any_element()
     }
 
-    pub(super) fn macos_launchpad(
+    /// One page of the launcher grid: the tiles that page holds, at their
+    /// natural height.
+    fn launchpad_page_grid(
         &self,
-        host: &ViewState,
+        found: &[&clarion_launcher::catalog::DesktopApp],
+        page: usize,
+        per_page: usize,
+        metrics: &LaunchpadMetrics,
         p: Palette,
-        window: &Window,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let metrics = grid_metrics(window);
-        let white: Hsla = rgb(0xffffff).into();
-        let found = host.catalog.search(&self.query);
-        let (page, pages, per_page) =
-            launchpad_page_count(window, found.len(), self.selection);
         let start = page * per_page;
         let end = (start + per_page).min(found.len());
         let slice = &found[start.min(found.len())..end];
-        let icon_size = if f32::from(window.viewport_size().width) >= 900. {
-            86.
-        } else {
-            77.
-        };
-
+        let white: Hsla = rgb(0xffffff).into();
         let mut results = div()
             .w_full()
             .h_full()
@@ -364,7 +395,7 @@ impl ShellView {
                             div()
                                 .id(SharedString::from(format!("launchpad-icon-{context}")))
                                 .debug_selector(move || icon_selector.clone())
-                                .size(px(icon_size + 12.))
+                                .size(px(metrics.icon_size + 12.))
                                 .flex_shrink_0()
                                 .rounded(px(18.))
                                 .flex()
@@ -376,7 +407,7 @@ impl ShellView {
                                     rgba(0xffffff00)
                                 })
                                 .hover(|s| s.bg(rgba(0xffffff26)))
-                                .child(self.icon(app.icon_path.clone(), icon_size, p)),
+                                .child(self.icon(app.icon_path.clone(), metrics.icon_size, p)),
                         )
                         .child(
                             div()
@@ -443,6 +474,105 @@ impl ShellView {
             );
         }
 
+        results.into_any_element()
+    }
+
+    pub(super) fn macos_launchpad(
+        &mut self,
+        host: &ViewState,
+        p: Palette,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let metrics = grid_metrics(window);
+        let white: Hsla = rgb(0xffffff).into();
+        let found = host.catalog.search(&self.query);
+        let (page, pages, per_page) =
+            launchpad_page_count(window, found.len(), self.selection);
+        // The launcher fades in as one surface. Closing is the same ride
+        // backwards: the Host keeps the window alive for the other half and
+        // frees it once the motion settles.
+        let now = self.popup_epoch.elapsed();
+        let motion = self.popup_motion.get_or_insert_with(|| {
+            let mut motion = crate::dock_motion::Motion::new(0.);
+            if host.prefs.reduce_motion {
+                motion.snap(1.);
+            } else {
+                motion.retarget(1., now);
+            }
+            motion
+        });
+        if host.panel_exit {
+            if host.prefs.reduce_motion {
+                motion.snap(0.);
+            } else if motion.target() != 0. {
+                motion.retarget(0., now);
+            }
+        }
+        let sampled = motion.sample(now);
+        if sampled.active {
+            window.request_animation_frame();
+        }
+        let ride = sampled.value.clamp(0., 1.);
+        // A page step slides the outgoing page out and the incoming one in;
+        // both are built for the length of the ride, then only one remains.
+        let mut slide: Option<(usize, usize, f32)> = None;
+        if let Some(state) = self.launchpad_slide.as_mut() {
+            let sample = state.progress.sample(state.started.elapsed());
+            if sample.active {
+                window.request_animation_frame();
+                slide = Some((state.from, state.to, sample.value.clamp(0., 1.)));
+            }
+        }
+        if slide.is_none() {
+            self.launchpad_slide = None;
+        }
+        let current =
+            self.launchpad_page_grid(&found, page, per_page, &metrics, p, cx);
+        let grid: AnyElement = match slide {
+            Some((from, to, t)) if from != to && to == page && from < pages => {
+                let leaving =
+                    self.launchpad_page_grid(&found, from, per_page, &metrics, p, cx);
+                // Forward steps move the old page left; backward steps move it
+                // right and the incoming page follows from the other side.
+                let direction = if to > from { -1. } else { 1. };
+                div()
+                    .absolute()
+                    .left(px(metrics.side))
+                    .top(px(0.))
+                    .w(px(metrics.width))
+                    .h_full()
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(direction * t * metrics.width))
+                            .top(px(0.))
+                            .w(px(metrics.width))
+                            .h_full()
+                            .child(leaving),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(-direction * (1. - t) * metrics.width))
+                            .top(px(0.))
+                            .w(px(metrics.width))
+                            .h_full()
+                            .child(current),
+                    )
+                    .into_any_element()
+            }
+            _ => div()
+                .absolute()
+                .left(px(metrics.side))
+                .top(px(0.))
+                .w(px(metrics.width))
+                .h_full()
+                .child(current)
+                .into_any_element(),
+        };
+
         // The page area owns the arrows and fills the middle band. The grid
         // itself starts at the left edge of the paging band and keeps its
         // natural height; the arrows sit centred in the wider side bands.
@@ -452,17 +582,7 @@ impl ShellView {
             .right(px(0.))
             .top(px(metrics.grid_top))
             .h(px(metrics.grid_height));
-        let grid_area = div()
-            .absolute()
-            .left(px(metrics.side))
-            .top(px(0.))
-            .w(px(metrics.width))
-            .h_full()
-            .flex()
-            .flex_col()
-            .items_start()
-            .child(results);
-        page_area = page_area.child(grid_area);
+        page_area = page_area.child(grid);
         if pages > 1 {
             let arrow = |forward: bool, enabled: bool, cx: &Context<Self>| {
                 let mut layer = div()
@@ -550,7 +670,7 @@ impl ShellView {
             .child(dots_layer);
         let width = f32::from(window.viewport_size().width);
         let height = f32::from(window.viewport_size().height);
-        let mut surface = div().relative().size_full();
+        let mut surface = div().relative().size_full().opacity(ride);
         for (index, region) in backdrop_regions(width, height)
             .into_iter()
             .enumerate()
