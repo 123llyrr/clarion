@@ -43,7 +43,7 @@ pub(crate) struct CapturePermit(Arc<AtomicUsize>);
 impl CaptureSlots {
     pub(crate) fn acquire(&self) -> anyhow::Result<CapturePermit> {
         self.0
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                 (count < MAX_SCREENSHOTS).then_some(count + 1)
             })
             .map_err(|_| anyhow::anyhow!("two screenshots are still being processed"))?;

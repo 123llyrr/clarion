@@ -62,7 +62,7 @@ impl TaskPool {
 
     pub(crate) fn reserve(&self) -> Result<TaskPermit, String> {
         self.slots
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                 (n < OUTSTANDING).then_some(n + 1)
             })
             .map_err(|_| "owned-data worker capacity reached".to_owned())?;

@@ -37,7 +37,7 @@ static NEXT_IDENTITY: AtomicU64 = AtomicU64::new(1);
 
 fn next_identity() -> u64 {
     NEXT_IDENTITY
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
             let next = id.checked_add(1)?;
             // Legacy v1 identities have only 32 bits; zero is reserved there
             // too. Skipping it also keeps the v3 64-bit identities unique.

@@ -238,7 +238,7 @@ impl<W: Send + 'static, R: Send + 'static> Endpoint<W, R> {
         if self
             .shared
             .slots
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |slots| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |slots| {
                 (slots < CAPACITY).then_some(slots + 1)
             })
             .is_err()

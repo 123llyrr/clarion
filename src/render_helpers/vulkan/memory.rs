@@ -35,7 +35,7 @@ impl ReadbackPermit {
             return Err(vk::Result::ERROR_INITIALIZATION_FAILED);
         }
         READBACK_JOBS
-            .fetch_update(Ordering::AcqRel, Ordering::Relaxed, |jobs| {
+            .try_update(Ordering::AcqRel, Ordering::Relaxed, |jobs| {
                 (jobs < MAX_READBACK_JOBS).then_some(jobs + 1)
             })
             .map_err(|_| vk::Result::ERROR_OUT_OF_HOST_MEMORY)?;
@@ -52,7 +52,7 @@ impl ReadbackPermit {
             return Ok(());
         }
         READBACK_BYTES
-            .fetch_update(Ordering::AcqRel, Ordering::Relaxed, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Relaxed, |current| {
                 current
                     .checked_add(additional)
                     .filter(|total| *total <= MAX_READBACK_BYTES)
