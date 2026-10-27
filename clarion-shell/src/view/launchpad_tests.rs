@@ -65,7 +65,7 @@ fn the_launcher_grid_icons_grow_by_a_fifth(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn the_bottom_fifth_stays_empty_and_only_dots_close_the_middle_band(cx: &mut TestAppContext) {
+fn the_bottom_fifth_stays_empty_and_the_dots_follow_the_grid(cx: &mut TestAppContext) {
     let names: Vec<String> = (0..48).map(|index| format!("App {index:02}")).collect();
     let apps: Vec<(&str, &str, &str)> = names
         .iter()
@@ -85,20 +85,22 @@ fn the_bottom_fifth_stays_empty_and_only_dots_close_the_middle_band(cx: &mut Tes
     let dots = visual
         .debug_bounds("launchpad-page-0")
         .expect("the page dot row is painted");
+    let last = visual
+        .debug_bounds(leaked(format!("launchpad-app-{}", order[per_page - 1])))
+        .expect("the last app on the first page is painted");
     let viewport = visual.update(|window, _| window.viewport_size());
     let height = f32::from(viewport.height);
-    let dock_top = height * (1. - LAUNCHPAD_DOCK_SHARE);
-    let dock_top = px(dock_top);
+    let dock_top = px(height * (1. - LAUNCHPAD_DOCK_SHARE));
 
     assert!(
-        dots.bottom() <= dock_top,
-        "the dots must stay inside the middle band: dots bottom {:?}, dock top {:?}",
-        dots.bottom(),
-        dock_top
+        (f32::from(dots.top()) - f32::from(last.bottom()) - LAUNCHPAD_DOTS_GAP).abs() <= 2.,
+        "the dots keep the widened gap under the grid: grid bottom {:?}, dots top {:?}",
+        last.bottom(),
+        dots.top()
     );
     assert!(
-        (dots.bottom() - (dock_top - px(LAUNCHPAD_DOTS_BOTTOM))).abs() <= px(1.),
-        "the dots close the middle band just above the reserved dock: dots bottom {:?}, dock top {:?}",
+        dots.bottom() <= dock_top - px(LAUNCHPAD_DOTS_BOTTOM) + px(1.),
+        "the dots leave the bottom margin above the reserved dock: dots bottom {:?}, dock top {:?}",
         dots.bottom(),
         dock_top
     );
@@ -124,7 +126,7 @@ fn the_bottom_fifth_stays_empty_and_only_dots_close_the_middle_band(cx: &mut Tes
 }
 
 #[gpui::test]
-fn the_grid_fills_the_middle_band_with_spacing(cx: &mut TestAppContext) {
+fn the_grid_packs_from_the_top_left_with_steady_spacing(cx: &mut TestAppContext) {
     let names: Vec<String> = (0..48).map(|index| format!("App {index:02}")).collect();
     let apps: Vec<(&str, &str, &str)> = names
         .iter()
@@ -157,19 +159,34 @@ fn the_grid_fills_the_middle_band_with_spacing(cx: &mut TestAppContext) {
         metrics.grid_top
     );
     assert!(
+        (f32::from(first.origin.x) - metrics.side).abs() <= 1.,
+        "the grid starts at the left edge of the paging band: first {:?}, side {}",
+        first,
+        metrics.side
+    );
+    assert!(
         (f32::from(last.bottom()) - (metrics.grid_top + metrics.grid_height)).abs() <= 1.,
-        "the grid fills the middle band down to the dots: last bottom {:?}, band bottom {}",
+        "the grid keeps its natural height: last bottom {:?}, grid bottom {}",
         last.bottom(),
         metrics.grid_top + metrics.grid_height
     );
 
-    let second = visual
+    let second_row = visual
         .debug_bounds(leaked(format!("launchpad-app-{}", order[metrics.columns])))
         .expect("the second row is painted");
-    let row_gap = f32::from(second.origin.y) - f32::from(first.bottom());
+    let row_gap = f32::from(second_row.origin.y) - f32::from(first.bottom());
     assert!(
-        row_gap > LAUNCHPAD_MIN_ROW_GAP,
-        "the spare middle height becomes row spacing instead of a block at the top: gap {row_gap}"
+        (row_gap - LAUNCHPAD_ROW_GAP).abs() <= 1.,
+        "rows keep one steady gap: {row_gap}, expected {LAUNCHPAD_ROW_GAP}"
+    );
+    let second_column = visual
+        .debug_bounds(leaked(format!("launchpad-app-{}", order[1])))
+        .expect("the second column is painted");
+    let column_pitch = f32::from(second_column.origin.x) - f32::from(first.origin.x);
+    assert!(
+        (column_pitch - metrics.cell_width).abs() <= 1.,
+        "columns keep one steady pitch: {column_pitch}, expected {}",
+        metrics.cell_width
     );
 
     let prev = visual
@@ -178,16 +195,15 @@ fn the_grid_fills_the_middle_band_with_spacing(cx: &mut TestAppContext) {
     let next = visual
         .debug_bounds("launchpad-next")
         .expect("the next arrow is painted");
-    let grid_left = f32::from(first.origin.x);
-    let grid_right = f32::from(first.origin.x) + metrics.width;
     assert!(
-        grid_left - f32::from(prev.right()) >= LAUNCHPAD_ARROW_GAP - 1.,
-        "the arrows keep a roomy gap from the grid: prev {:?}, grid left {grid_left}",
+        f32::from(prev.right()) + metrics.arrow_inset() <= f32::from(first.origin.x) + 1.,
+        "the previous arrow keeps its doubled band clear of the grid: prev {:?}",
         prev
     );
+    let grid_right = metrics.side + metrics.width;
     assert!(
-        f32::from(next.origin.x) - grid_right >= LAUNCHPAD_ARROW_GAP - 1.,
-        "the arrows keep a roomy gap from the grid: next {:?}, grid right {grid_right}",
+        f32::from(next.origin.x) >= grid_right + metrics.arrow_inset() - 1.,
+        "the next arrow keeps its doubled band clear of the grid: next {:?}, grid right {grid_right}",
         next
     );
 }
@@ -216,16 +232,33 @@ fn the_launcher_backdrop_is_one_full_output_without_a_dock_hole() {
 #[test]
 fn the_grid_spends_the_screen_on_columns_and_pages_sideways() {
     let wide = launchpad_metrics(1920., 1080.);
-    assert_eq!(wide.columns, 9, "a wide output gets the full column count");
+    assert_eq!(wide.columns, 11, "fixed columns fill the roomy output");
     assert_eq!(wide.rows, 3, "the middle band fits three rows");
-    assert_eq!(wide.per_page(), 27);
+    assert_eq!(wide.per_page(), 33);
+    assert_eq!(wide.side, LAUNCHPAD_ARROW_BAND);
+    assert_eq!(wide.cell_width, LAUNCHPAD_COLUMN_PITCH);
+    assert_eq!(
+        wide.width,
+        wide.columns as f32 * LAUNCHPAD_COLUMN_PITCH
+    );
+    assert_eq!(
+        wide.grid_height,
+        wide.rows as f32 * LAUNCHPAD_ROW_H + (wide.rows - 1) as f32 * LAUNCHPAD_ROW_GAP
+    );
     assert!((wide.grid_top - 1080. * LAUNCHPAD_SEARCH_SHARE).abs() < 0.01);
     assert!((wide.dock_top - 1080. * (1. - LAUNCHPAD_DOCK_SHARE)).abs() < 0.01);
-    assert!((wide.cell_width - wide.width / 9.).abs() < f32::EPSILON);
+    assert!(
+        (wide.dots_top - (wide.grid_top + wide.grid_height) - LAUNCHPAD_DOTS_GAP).abs() < 0.01,
+        "the dots keep the widened gap under the grid"
+    );
+    assert!(
+        wide.dots_top + LAUNCHPAD_DOTS_H + LAUNCHPAD_DOTS_BOTTOM <= wide.dock_top + 0.01,
+        "the dots stay above the reserved dock band"
+    );
 
     // A small output keeps the minimum shape instead of dropping to one tile.
     let small = launchpad_metrics(640., 480.);
-    assert!(small.columns >= LAUNCHPAD_MIN_COLUMNS);
+    assert_eq!(small.columns, LAUNCHPAD_MIN_COLUMNS);
     assert!(small.rows >= LAUNCHPAD_MIN_ROWS);
     assert!(
         small.per_page() < wide.per_page(),
@@ -233,6 +266,7 @@ fn the_grid_spends_the_screen_on_columns_and_pages_sideways() {
         small.per_page(),
         wide.per_page()
     );
+    assert!(small.side < wide.side);
     assert!(small.width <= 640.);
 
     // Pages clamp both ends.
