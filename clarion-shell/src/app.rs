@@ -1205,15 +1205,29 @@ impl Host {
             .map(|view| (view.width, view.height))
             .unwrap_or((1200., 800.));
         let geometry = panels::placement(&self.snapshot(), &Panel::Preferences, w, h).bounds;
+        let centre = (
+            f64::from(f32::from(geometry.origin.x)),
+            f64::from(f32::from(geometry.origin.y)),
+        );
+        let width = f32::from(geometry.size.width).round() as i32;
+        let height = f32::from(geometry.size.height).round() as i32;
+        // A floating window rule opens this surface at its natural size in the
+        // middle of the working area, which already reads as centred. Only
+        // correct a window that landed somewhere else: a tiled first
+        // configure, a rule-positioned corner, or another output.
+        if preferences_window_is_placed(window, centre, (width, height)) {
+            self.preferences_placed = Some(id);
+            return;
+        }
         // xdg_toplevel's initial bounds are only a request on Wayland. Place
         // this one owned window explicitly, without changing any client rule.
         if self
             .backend
             .send(backend::Command::PlacePreferences {
                 id,
-                width: f32::from(geometry.size.width).round() as i32,
-                height: f32::from(geometry.size.height).round() as i32,
-                x: f64::from(f32::from(geometry.origin.x))
+                width,
+                height,
+                x: centre.0
                     - if self.prefs.dock_position == DockPosition::Left
                         && !self.prefs.dock_hidden
                         && !self.prefs.dock_auto_hide
@@ -1222,7 +1236,7 @@ impl Host {
                     } else {
                         0.
                     },
-                y: f64::from(f32::from(geometry.origin.y)) - self.prefs.bar_height,
+                y: centre.1 - self.prefs.bar_height,
             })
             .is_ok()
         {
@@ -2327,6 +2341,31 @@ fn output_dimensions(
         .unwrap_or((f32::from(fallback.width), f32::from(fallback.height)))
 }
 
+/// How far a preferences window may sit from the requested output centre and
+/// still count as already placed. A new floating window is centred in the
+/// working area, which differs from the output centre by about half the gap
+/// between the top and bottom reserved zones: a few points, never a real jump.
+const PREFERENCES_PLACEMENT_SLACK: f64 = 64.;
+
+/// Whether the compositor already opened the preferences window floating at
+/// its natural size near the requested centre. Moving such a window would
+/// animate a visible drift after it appeared.
+fn preferences_window_is_placed(
+    window: &clarion_ipc::Window,
+    centre: (f64, f64),
+    size: (i32, i32),
+) -> bool {
+    window.is_floating
+        && window.layout.window_size == size
+        && window
+            .layout
+            .tile_pos_in_workspace_view
+            .is_some_and(|(x, y)| {
+                (x - centre.0).abs() <= PREFERENCES_PLACEMENT_SLACK
+                    && (y - centre.1).abs() <= PREFERENCES_PLACEMENT_SLACK
+            })
+}
+
 // Mirror the layer-shell role declaration at each call site.
 #[allow(clippy::too_many_arguments)]
 fn window_options(
@@ -2761,3 +2800,73 @@ mod error_banner_tests {
     }
 }
 
+#[cfg(test)]
+mod preferences_placement_tests {
+    use ::core::prelude::v1::test;
+
+    use super::*;
+
+    fn preferences_window(
+        floating: bool,
+        size: (i32, i32),
+        pos: Option<(f64, f64)>,
+    ) -> clarion_ipc::Window {
+        clarion_ipc::Window {
+            id: 7,
+            title: Some("桌面与程序坞".into()),
+            app_id: Some("io.github.clarion.DesktopPreferences".into()),
+            pid: Some(std::process::id() as i32),
+            gtk_app_menu: None,
+            app_menu: None,
+            workspace_id: Some(1),
+            is_focused: true,
+            is_minimized: false,
+            is_floating: floating,
+            is_urgent: false,
+            focus_timestamp: None,
+            layout: clarion_ipc::WindowLayout {
+                pos_in_scrolling_layout: None,
+                tile_size: (f64::from(size.0), f64::from(size.1)),
+                window_size: size,
+                tile_pos_in_workspace_view: pos,
+                window_offset_in_tile: (0., 0.),
+            },
+        }
+    }
+
+    #[test]
+    fn a_window_already_centred_by_the_compositor_is_left_alone() {
+        let centre = (640., 280.);
+        for pos in [(640., 264.), (640., 280.), (628., 296.)] {
+            assert!(
+                preferences_window_is_placed(
+                    &preferences_window(true, (640, 520), Some(pos)),
+                    centre,
+                    (640, 520),
+                ),
+                "{pos:?} is already centred"
+            );
+        }
+    }
+
+    #[test]
+    fn a_tiled_or_off_centre_window_is_placed_explicitly() {
+        let centre = (640., 280.);
+        for (floating, size, pos) in [
+            (true, (640, 520), None),
+            (false, (640, 520), Some((640., 280.))),
+            (true, (2183, 1296), Some((189., 42.))),
+            (true, (640, 520), Some((640., 480.))),
+            (true, (640, 520), Some((0., 200.))),
+        ] {
+            assert!(
+                !preferences_window_is_placed(
+                    &preferences_window(floating, size, pos),
+                    centre,
+                    (640, 520),
+                ),
+                "{floating} {size:?} {pos:?} still needs placing"
+            );
+        }
+    }
+}
