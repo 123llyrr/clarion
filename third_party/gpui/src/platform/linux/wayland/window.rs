@@ -393,6 +393,12 @@ impl WaylandWindow {
                 .wm_base
                 .get_xdg_surface(&surface, &globals.qh, surface.id());
             let toplevel = xdg_surface.get_toplevel(&globals.qh, surface.id());
+            // Announce the application id before the initial commit below, so
+            // the compositor's initial configure already sees it and applies
+            // window rules for the surface instead of tiling it first.
+            if let Some(app_id) = params.app_id.as_deref() {
+                toplevel.set_app_id(app_id.to_owned());
+            }
             if params.kind == WindowKind::Floating {
                 toplevel.set_parent(parent.as_ref());
             }

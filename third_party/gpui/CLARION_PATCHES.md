@@ -31,6 +31,12 @@ Clarion additions:
 - `platform/linux/wayland/window.rs`: mutually exclusive xdg/layer roles,
   layer configuration acknowledgement and resize, authoritative close, ordered
   destruction, and guarded xdg-only operations. Drawing waits for configure.
+- `platform.rs` / `window.rs` / `platform/linux/wayland/window.rs`:
+  `WindowParams::app_id` carries `WindowOptions::app_id` into window creation and
+  the Wayland window sets it on the toplevel before its first surface commit.
+  The initial configure therefore already carries the application id, so
+  compositor window rules (for example, open-floating) apply to the first frame
+  instead of the window being tiled once and resized afterwards.
 - `platform/mac/window.rs`: exhaustive matching of the new kind as a normal
   window; the Clarion launcher itself requires Wayland.
 - Both manifests: optional `wayland-protocols-wlr` client dependency in `wayland`.

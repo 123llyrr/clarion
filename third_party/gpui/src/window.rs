@@ -975,6 +975,7 @@ impl Window {
                 show,
                 display_id,
                 window_min_size,
+                app_id: app_id.clone(),
                 #[cfg(target_os = "macos")]
                 tabbing_identifier,
             },
