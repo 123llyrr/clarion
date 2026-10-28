@@ -73,6 +73,9 @@ pub struct SystemSnapshot {
     pub trash_full: bool,
     pub clock: String,
     pub date: String,
+    /// The local calendar day, so the notification center's month grid does
+    /// not have to parse the localized `date` label back into numbers.
+    pub today: Option<chrono::NaiveDate>,
 }
 
 /// The kernel's `POWER_SUPPLY_STATUS`, reduced to the values the UI uses.
@@ -930,6 +933,7 @@ fn system_worker(options: Options, events: Sender<Event>, alive: Arc<AtomicBool>
         let weekday = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
             [chrono::Datelike::weekday(&now).num_days_from_monday() as usize];
         hardware.date = format!("{} {weekday}", now.format("%m月%d日"));
+        hardware.today = Some(now.date_naive());
         emit(&events, Event::System(hardware.clone()), &alive);
         wait_alive(&alive, Duration::from_secs(1));
     }

@@ -48,8 +48,10 @@ const PREVIEW_ASPECT: f32 = 4. / 3.;
 /// so letting it spill a little sideways keeps its visual weight level with
 /// the square type marks around it.
 const PREVIEW_SCALE: f32 = 1.1;
-/// Corner radius of a preview card, as a fraction of its short side.
-const PREVIEW_RADIUS: f32 = 0.11;
+/// Corner radius of a preview card, as a fraction of its short side. Kept
+/// small so a Dock-sized card (roughly 48 points before the stack shrinks it)
+/// paints about two points of rounding, not a pill.
+const PREVIEW_RADIUS: f32 = 0.06;
 /// How much of the icon box a document page fills. The theme's own type marks
 /// leave a similar margin, so a page preview keeps their visual weight.
 const PAGE_FILL: f32 = 0.90;
@@ -911,6 +913,16 @@ mod tests {
             "the page still fills the box, got {opaque_rows}"
         );
         assert_eq!(decoded.get_pixel(0, 0).0[3], 0);
+    }
+
+    #[test]
+    fn previews_read_about_two_points_of_rounding_on_a_dock_card() {
+        // The folder stack draws a probe at 0.85 of the 48-point Dock icon,
+        // and previews spill 1.1x past that box.
+        let card_width = 48. * 0.85 * PREVIEW_SCALE;
+        let raster_radius = RASTER * 3. / 4. * PREVIEW_RADIUS;
+        let screen_radius = raster_radius * card_width / RASTER;
+        assert!((screen_radius - 2.).abs() < 0.2, "{screen_radius}");
     }
 
     #[test]

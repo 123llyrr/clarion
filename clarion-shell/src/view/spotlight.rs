@@ -40,6 +40,12 @@ const GRID_PLATE: f32 = 92.;
 const CLIPBOARD_LIST_W: f32 = 292.;
 const CLIPBOARD_LIST_H: f32 = 486.;
 
+/// The mark that names the `/actions` category. The command row, the header's
+/// animated prefix and the actions page's shared fallback all resolve through
+/// this pair, so entering the category never swaps the icon.
+const ACTIONS_SYMBOL: &str = "dialog-rows-and-columns-symbolic";
+const ACTIONS_FALLBACK: &str = "activity-monitor.svg";
+
 /// The content-type tags above the clipboard body. `Image` covers screenshots
 /// too, the way the Recent panel groups them; `Text` is only text, so a file
 /// list (which also answers `text/plain`) does not drown the text tag.
@@ -409,6 +415,8 @@ pub(crate) fn command_symbol(id: &str) -> Option<&'static str> {
         "settings.reduce-motion" => "blur-symbolic",
         "settings.launcher.fullscreen" => "move-symbolic",
         "settings.launcher.palette" => "window-new-symbolic",
+        "tool.web" => "web-browser-symbolic",
+        "tool.actions" => ACTIONS_SYMBOL,
         "mode.clipboard" | "shell.recent" => "category-search-symbolic",
         _ => return None,
     })
@@ -416,9 +424,10 @@ pub(crate) fn command_symbol(id: &str) -> Option<&'static str> {
 
 /// The leading glyph for a command. Entries with a close visual match get
 /// their own icon; the rest fall back to the command's kind so every row has
-/// the same visual anchor as an application row.
-fn command_icon(command: &Command) -> &'static str {
-    match command.id {
+/// the same visual anchor as an application row. `None` means the action kind
+/// shares the generic catalog mark instead of a bundled glyph.
+fn command_icon(command: &Command) -> Option<&'static str> {
+    Some(match command.id {
         "mode.search" => "launchpad.svg",
         "mode.apps" => "grid.svg",
         "mode.wallpapers" => "wallpaper.svg",
@@ -439,7 +448,7 @@ fn command_icon(command: &Command) -> &'static str {
         "tool.web" => "safari.svg",
         "tool.calculator" | "tool.currency" => "calculator.svg",
         "tool.time" => "calendar.svg",
-        "tool.actions" => "scan.svg",
+        "tool.actions" => ACTIONS_FALLBACK,
         "apps.grid" => "grid.svg",
         "apps.list" | "apps.smart" | "apps.most-used" | "apps.recent" | "apps.name" => {
             "sliders.svg"
@@ -447,9 +456,27 @@ fn command_icon(command: &Command) -> &'static str {
         _ => match command.kind {
             CommandKind::Mode => "launchpad.svg",
             CommandKind::Tool => "scan.svg",
-            CommandKind::Action => "settings.svg",
+            // Actions without a close visual match keep the shared catalog
+            // mark, so their rows still carry the same anchor as the action
+            // catalog.
+            CommandKind::Action => return None,
             CommandKind::Override => "sliders.svg",
         },
+    })
+}
+
+/// The web page's leading mark. Named engines get their product icons; every
+/// other engine and literal URLs share the browser mark.
+fn web_symbol(entry: &web::WebSearch) -> &'static str {
+    if entry.literal {
+        return "web-browser-symbolic";
+    }
+    match entry.engine.id {
+        "google" => "goa-account-google-symbolic",
+        "github" => "github-desktop-symbolic",
+        "wikipedia" => "budgie-wsw-symbolic",
+        "bing" => "search-symbolic",
+        _ => "web-browser-symbolic",
     }
 }
 
@@ -473,6 +500,12 @@ pub(super) fn palette_apps<'a>(
 }
 
 impl ShellView {
+    /// The `/actions` category mark, shared by the header animation, the
+    /// command row that opens the page and the page's own fallback rows.
+    fn actions_glyph_path(&self) -> PathBuf {
+        self.themed_glyph_path(ACTIONS_SYMBOL, ACTIONS_FALLBACK)
+    }
+
     fn palette_body(&self) -> PaletteBody {
         // A slash draft always opens the completion, whatever mode it was
         // typed in, so `/detail` and friends stay reachable from the clipboard.
@@ -503,7 +536,7 @@ impl ShellView {
     /// stands in; the selection never moves the header.
     pub(super) fn palette_glyph_path(&self) -> PathBuf {
         if self.palette.tool == Some(Tool::Actions) {
-            return self.themed_glyph_path("system-run-symbolic", "activity-monitor.svg");
+            return self.actions_glyph_path();
         }
         if self.palette.tool == Some(Tool::Web) {
             return self.themed_glyph_path("web-browser-symbolic", "safari.svg");
@@ -2197,7 +2230,8 @@ impl ShellView {
 
     /// The leading path for a command row: the theme's own icon when the user
     /// named one, else the bundled glyph through its theme alias, else the
-    /// bundled file itself.
+    /// bundled file itself. Actions resolve through the same table as the
+    /// surfaces they open, so a row and its destination share one mark.
     fn command_glyph_path(&self, command: &Command) -> PathBuf {
         let mut cache = self.theme_icons.borrow_mut();
         if let Some(symbol) = command_symbol(command.id) {
@@ -2205,10 +2239,23 @@ impl ShellView {
                 return path;
             }
         }
-        let asset = command_icon(command);
-        symbolic_name(asset)
-            .and_then(|alias| theme_icon(alias, &mut cache))
-            .unwrap_or_else(|| icon_path(asset))
+        match command_icon(command) {
+            Some(asset) => symbolic_name(asset)
+                .and_then(|alias| theme_icon(alias, &mut cache))
+                .unwrap_or_else(|| icon_path(asset)),
+            // Actions without a close visual match share the catalog mark.
+            None => theme_icon("dialog-rows-and-columns-symbolic", &mut cache)
+                .unwrap_or_else(|| icon_path("activity-monitor.svg")),
+        }
+    }
+
+    /// The row mark for one web search, falling back to the browser glyph when
+    /// the theme lacks the engine's own icon.
+    fn web_glyph(&self, entry: &web::WebSearch) -> PathBuf {
+        let mut cache = self.theme_icons.borrow_mut();
+        theme_icon(web_symbol(entry), &mut cache)
+            .or_else(|| theme_icon("web-browser-symbolic", &mut cache))
+            .unwrap_or_else(|| icon_path("safari.svg"))
     }
 
     fn spotlight_commands(&self, p: Palette, cx: &Context<Self>) -> AnyElement {
@@ -2321,7 +2368,6 @@ impl ShellView {
         if found.is_empty() {
             return palette_empty("没有可用的搜索引擎", "输入 /web 重试", p, cx);
         }
-        let icon = self.themed_glyph_path("web-browser-symbolic", "safari.svg");
         let mut list = div().flex().flex_col().gap(px(LIST_GAP)).pb(px(2.));
         for (index, entry) in found.iter().enumerate() {
             let selected = index == self.selection;
@@ -2329,7 +2375,7 @@ impl ShellView {
             let title = entry.title();
             let subtitle = entry.subtitle();
             let url = entry.url.clone();
-            let glyph = icon.clone();
+            let glyph = self.web_glyph(entry);
             let row_selector = format!("spotlight-web-{row_id}");
             let icon_selector = format!("spotlight-web-icon-{row_id}");
             let subtitle_selector = format!("spotlight-web-subtitle-{row_id}");
@@ -2435,14 +2481,20 @@ impl ShellView {
                 cx,
             );
         }
-        let icon = self.themed_glyph_path("system-run-symbolic", "activity-monitor.svg");
+        let fallback = self.actions_glyph_path();
         let mut list = div().flex().flex_col().gap(px(LIST_GAP)).pb(px(2.));
         for (index, entry) in found.iter().enumerate() {
             let selected = index == self.selection;
             let id = entry.id;
             let title = entry.title;
             let group = entry.group;
-            let glyph = icon.clone();
+            // Entries that also live in the command table lead with the same
+            // glyph as their command row; compositor-only actions keep the
+            // shared catalog mark.
+            let glyph = commands::by_id(entry.id)
+                .filter(|command| command.kind == CommandKind::Action)
+                .map(|command| self.command_glyph_path(command))
+                .unwrap_or_else(|| fallback.clone());
             let row_selector = format!("spotlight-action-{id}");
             let icon_selector = format!("spotlight-action-icon-{id}");
             let group_selector = format!("spotlight-action-group-{id}");
@@ -2554,4 +2606,57 @@ fn palette_empty(
                 .child(menu_text(hint.into(), FontWeight::MEDIUM, p.muted, cx)),
         )
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use ::core::prelude::v1::test;
+
+    use super::*;
+
+    #[test]
+    fn every_action_command_resolves_to_its_own_mark() {
+        for command in commands::ENTRIES
+            .iter()
+            .filter(|command| command.kind == CommandKind::Action && action_ready(command.id))
+        {
+            assert!(
+                command_symbol(command.id).is_some() || command_icon(command).is_some(),
+                "{} has no leading mark of its own",
+                command.id
+            );
+        }
+    }
+
+    #[test]
+    fn the_actions_category_uses_one_mark() {
+        let command = commands::by_id("tool.actions").expect("the /actions command exists");
+        assert_eq!(command_symbol(command.id), Some(ACTIONS_SYMBOL));
+        assert_eq!(command_icon(command), Some(ACTIONS_FALLBACK));
+        assert_eq!(ACTIONS_SYMBOL, "dialog-rows-and-columns-symbolic");
+        assert_eq!(ACTIONS_FALLBACK, "activity-monitor.svg");
+    }
+
+    #[test]
+    fn web_rows_use_the_named_engine_marks_and_a_browser_default() {
+        let rows = web::searches("");
+        let mark = |id: &str| {
+            rows.iter()
+                .find(|row| row.id() == id)
+                .map(web_symbol)
+                .unwrap_or_else(|| panic!("missing web row {id}"))
+        };
+        assert_eq!(mark("google"), "goa-account-google-symbolic");
+        assert_eq!(mark("github"), "github-desktop-symbolic");
+        assert_eq!(mark("wikipedia"), "budgie-wsw-symbolic");
+        assert_eq!(mark("bing"), "search-symbolic");
+        assert_eq!(mark("duckduckgo"), "web-browser-symbolic");
+        assert_eq!(mark("youtube"), "web-browser-symbolic");
+        let literal = web::searches("https://example.com");
+        assert!(literal.iter().any(|row| row.literal));
+        assert!(literal
+            .iter()
+            .filter(|row| row.literal)
+            .all(|row| web_symbol(row) == "web-browser-symbolic"));
+    }
 }

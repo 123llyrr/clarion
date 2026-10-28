@@ -166,6 +166,7 @@ fn folder_tile_icon(
                 .absolute()
                 .left(px(card.left))
                 .top(px(card.top))
+                .opacity(card.opacity)
                 .child(crate::file_icons::icon(
                     Some(&entry.path),
                     is_dir,
@@ -186,24 +187,35 @@ pub(super) struct StackCard {
     pub left: f32,
     pub top: f32,
     pub size: f32,
+    /// How solid the card paints; cards further back fade into the pile.
+    pub opacity: f32,
 }
 
-/// A small deck, not a spiral: up to three cards fanned evenly around upright
-/// (`-9°`, `0°`, `+9°`), each one behind riding up and to the right of the one
-/// in front, like the reference Dock.
+/// The three depths of the folded deck, front to back. Each card is a little
+/// smaller, dimmer and more turned than the one in front, so the pile reads as
+/// receding towards an upper-right vanishing point. The front stays upright.
+const STACK_SCALES: [f32; 3] = [0.85, 0.78, 0.71];
+const STACK_ANGLES: [f32; 3] = [0., -20., -40.];
+const STACK_OPACITY: [f32; 3] = [1., 0.86, 0.70];
+
+/// A small deck, not a spiral: up to three cards at `0°`, `-20°` and `-40°`,
+/// each one behind riding up and to the right while shrinking and fading, like
+/// a hand of cards seen in perspective.
 pub(super) fn folder_stack_layout(count: usize, size: f32) -> Vec<StackCard> {
     let count = count.min(3);
-    let card = size * 0.85;
     let mut cards = Vec::with_capacity(count);
+    // Paint the deepest card first; the front card is the last child.
     for index in (0..count).rev() {
         let depth = index as f32;
-        let spread = depth - (count.saturating_sub(1) as f32) / 2.;
+        let card = size * STACK_SCALES[index];
+        let shift = depth * size * 0.055;
         cards.push(StackCard {
             entry: index,
-            angle: spread * 9.,
-            left: (size - card) / 2. + depth * size * 0.03,
-            top: (size - card) / 2. - depth * size * 0.045,
+            angle: STACK_ANGLES[index],
+            left: (size - card) / 2. + shift,
+            top: (size - card) / 2. - shift,
             size: card,
+            opacity: STACK_OPACITY[index],
         });
     }
     cards

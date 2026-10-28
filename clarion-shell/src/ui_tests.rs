@@ -424,6 +424,26 @@ fn the_bar_battery_indicator_opens_the_control_center(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_bar_spotlight_button_opens_the_popup_launcher(cx: &mut TestAppContext) {
+    let (_fixture, host, view, _visual, _window) = panel(cx, Panel::Preferences);
+    let state = view.read_with(cx, |view, _| view.state.clone());
+    let bar = cx.add_window(|window, cx| {
+        window.resize(gpui::size(px(1000.), px(24.)));
+        ShellView::new(host.clone(), super::Surface::Bar, "test".into(), state, cx)
+    });
+    let mut bar_visual = VisualTestContext::from_window(*bar, cx);
+    bar_visual.run_until_parked();
+    let button = bar_visual
+        .debug_bounds("menu-spotlight")
+        .expect("the bar carries the launcher search button");
+    bar_visual.simulate_click(button.center(), Modifiers::default());
+    bar_visual.run_until_parked();
+    host.read_with(cx, |host, _| {
+        assert_eq!(host.panel, Some(Panel::Spotlight));
+    });
+}
+
+#[gpui::test]
 fn delayed_old_preferences_wm_close_cannot_dismiss_a_replacement_panel(cx: &mut TestAppContext) {
     let (_fixture, host, _view, mut visual, _old) = panel(cx, Panel::Preferences);
     assert!(!visual.simulate_close());

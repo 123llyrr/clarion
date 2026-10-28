@@ -13,11 +13,18 @@ use async_channel::{Receiver, Sender};
 pub struct Notification {
     pub id: u32,
     pub app: String,
+    /// The icon the application offered in `Notify`: an absolute path or a
+    /// freedesktop icon name. `None` means the card falls back to the app's
+    /// catalog artwork, then to a generic bell.
+    pub icon: Option<String>,
     pub title: String,
     pub body: String,
     pub actions: Vec<(String, String)>,
     pub created_at: u64,
     pub unread: bool,
+    /// Pinned notifications stay in the center and are never expired by the
+    /// service; the card shows the pin state in its header.
+    pub pinned: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -109,6 +116,9 @@ pub enum Command {
     MenuClick { id: String, item: i32 },
     NotificationAction { id: u32, action: String },
     DismissNotification(u32),
+    /// Pin or unpin one notification. Pinned entries stop expiring and sort
+    /// before the live feed.
+    PinNotification { id: u32, pinned: bool },
     MarkRead,
     Dnd(bool),
     Shutdown,

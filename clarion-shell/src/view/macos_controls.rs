@@ -29,9 +29,17 @@ fn text(text: impl Into<String>, size: f32, weight: FontWeight, color: Hsla) -> 
     }
 }
 
+/// The control center's inner cards step down from the popup radius so the
+/// nested surfaces share one silhouette.
+const CONTROL_CARD_RADIUS: f32 = 16.;
+
 pub(super) fn card(p: Palette) -> Div {
+    rounded_card(p, 11.)
+}
+
+fn rounded_card(p: Palette, radius: f32) -> Div {
     div()
-        .rounded(px(11.))
+        .rounded(px(radius))
         .border_1()
         .border_color(p.line.opacity(0.7))
         .bg(linear_gradient(
@@ -45,6 +53,12 @@ pub(super) fn card(p: Palette) -> Div {
             blur_radius: px(3.),
             spread_radius: px(0.),
         }])
+}
+
+/// The control center's own card recipe: the shared fill with the larger
+/// radius that matches the popup.
+fn control_card(p: Palette) -> Div {
+    rounded_card(p, CONTROL_CARD_RADIUS)
 }
 
 fn percentage(value: Option<f64>) -> String {
@@ -78,7 +92,7 @@ impl ShellView {
             .and_then(|output| output.hdr_brightness)
             .map(|value| f64::from(value) / 100.)
             .or(host.system.brightness);
-        let mut footer = card(p).w_full().p(px(4.)).flex().flex_col();
+        let mut footer = control_card(p).w_full().p(px(4.)).flex().flex_col();
         for (index, (id, label, icon, action)) in [
             (
                 "controls-desktop",
@@ -246,7 +260,7 @@ impl ShellView {
             ),
             None => crate::battery::label(state).to_owned(),
         };
-        card(p)
+        control_card(p)
             .id("controls-battery")
             .debug_selector(|| "controls-battery".into())
             .w_full()
@@ -309,7 +323,7 @@ impl ShellView {
         let keyboard_host = self.host.clone();
         let keyboard_action = action.clone();
         let icon_color = if selected { rgb(0xffffff).into() } else { p.fg };
-        card(p)
+        control_card(p)
             .id(id)
             .flex_1()
             .min_w_0()
@@ -392,7 +406,7 @@ impl ShellView {
             .id(id)
             .h(px(31.))
             .px(px(8.))
-            .rounded(px(7.))
+            .rounded(px(10.))
             .flex()
             .items_center()
             .gap(px(9.))
@@ -489,7 +503,7 @@ impl ShellView {
                     }),
             );
         }
-        let body = card(p)
+        let body = control_card(p)
             .h(px(86.))
             .w_full()
             .px(px(12.))

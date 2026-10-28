@@ -15,7 +15,8 @@ use clarion_launcher::catalog::AppCategory;
 use clarion_launcher::session::{BackspaceState, Mode, Session};
 use gpui::{prelude::*, *};
 use std::{
-    collections::HashMap,
+    cell::RefCell,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -88,6 +89,14 @@ struct PaletteGlyph {
     to: PathBuf,
     progress: crate::dock_motion::Motion,
 }
+/// A notification card being dragged towards dismissal: the pointer origin
+/// and the live offset, so the card follows the finger until the release.
+struct NotificationDrag {
+    id: u32,
+    start: Point<Pixels>,
+    dx: f32,
+    dy: f32,
+}
 pub struct ShellView {
     pub host: Entity<Host>,
     pub state: Arc<ViewState>,
@@ -146,6 +155,24 @@ pub struct ShellView {
     folder_drag_layer: bool,
     /// Whether this Dock window itself received the current drag events.
     pub(crate) dock_drag_seen: bool,
+    /// The notification card currently following the pointer in a dismiss
+    /// drag, if any.
+    notification_drag: Option<NotificationDrag>,
+    /// Per-application expansion progress for folded notification stacks.
+    notification_stacks: RefCell<HashMap<String, crate::dock_motion::Elastic>>,
+    /// Applications whose stacks the user unfolded in this surface.
+    notification_expanded: RefCell<HashSet<String>>,
+    /// Measured natural heights of notification cards, keyed by notification
+    /// id. Cards size to their content, so the folded stack reads the real
+    /// layout height instead of a table of section sizes.
+    notification_heights: std::rc::Rc<RefCell<HashMap<u32, f32>>>,
+    /// Set when a drag dismissed a card, so the release is not also a click
+    /// that toggles its stack.
+    notification_drag_dismissed: std::cell::Cell<bool>,
+    /// The month the notification calendar displays; `None` follows today.
+    calendar_month: std::cell::Cell<Option<(i32, u32)>>,
+    /// The day the calendar highlights, or `None` after browsing away.
+    calendar_day: std::cell::Cell<Option<chrono::NaiveDate>>,
     #[cfg(test)]
     notification_regions: std::rc::Rc<std::cell::RefCell<Vec<Bounds<Pixels>>>>,
     focus: FocusHandle,
@@ -508,6 +535,13 @@ impl ShellView {
             popup_epoch: std::time::Instant::now(),
             folder_drag_layer: false,
             dock_drag_seen: false,
+            notification_drag: None,
+            notification_stacks: Default::default(),
+            notification_expanded: Default::default(),
+            notification_heights: Default::default(),
+            notification_drag_dismissed: Default::default(),
+            calendar_month: Default::default(),
+            calendar_day: Default::default(),
             #[cfg(test)]
             notification_regions: Default::default(),
             focus: cx.focus_handle(),
@@ -1259,6 +1293,27 @@ impl ShellView {
                 row = row.child(indicator);
             }
         }
+        // The launcher lives next to the control center, within reach of the
+        // status row: one click opens the palette. It is deliberately the
+        // popup launcher, not whatever the fullscreen preference says.
+        let h = self.host.clone();
+        let bar_output = self.output.clone();
+        row = row.child(
+            self.status_button_base("spotlight", "search", p, tile, status_glyph)
+                .debug_selector(|| "menu-spotlight".into())
+                .on_click(move |_, _, cx| {
+                    h.update(cx, |h, cx| {
+                        h.handle(
+                            Action::on_output(
+                                bar_output.clone(),
+                                Action::Panel(Panel::Spotlight),
+                            ),
+                            cx,
+                        )
+                    });
+                })
+                .into_any_element(),
+        );
         row = row.child(self.anchored_status_button(
             "controls",
             "control-center",
@@ -2212,6 +2267,8 @@ impl ShellView {
         // a bigger radius; the rest keep their proven values.
         let popup_radius = if panel == Panel::Spotlight {
             crate::app::panels::SPOTLIGHT_RADIUS
+        } else if panel == Panel::Controls {
+            crate::app::panels::CONTROLS_RADIUS
         } else if menu {
             12.
         } else {
@@ -2662,6 +2719,8 @@ impl Render for ShellView {
                     // region lets the blur poke past the rounded corners.
                     let radius = if matches!(panel, Panel::Spotlight) {
                         crate::app::panels::SPOTLIGHT_RADIUS
+                    } else if matches!(panel, Panel::Controls) {
+                        crate::app::panels::CONTROLS_RADIUS
                     } else {
                         POPUP_RADIUS
                     };
@@ -2719,11 +2778,30 @@ impl Render for ShellView {
                 if this.folder_drag_layer {
                     this.forward_drag_move(event.position, event.modifiers, window, cx);
                 }
+                if let Some(drag) = this.notification_drag.as_mut() {
+                    drag.dx = f32::from(event.position.x - drag.start.x);
+                    drag.dy = f32::from(event.position.y - drag.start.y);
+                    cx.notify();
+                }
             }))
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseUpEvent, window, cx| {
                     this.finish_folder_drag_layer(event.position, event.modifiers, window, cx);
+                    if let Some(drag) = this.notification_drag.take() {
+                        let dismissed = drag.dx.abs().max(drag.dy.abs())
+                            >= macos_notifications::DISMISS_DRAG;
+                        this.notification_drag_dismissed.set(dismissed);
+                        if dismissed {
+                            this.invoke(
+                                Action::Service(services::Command::DismissNotification(
+                                    drag.id,
+                                )),
+                                cx,
+                            );
+                        }
+                        cx.notify();
+                    }
                 }),
             )
             .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
@@ -3305,6 +3383,7 @@ fn symbolic_name(asset: &str) -> Option<&'static str> {
         "sliders.svg" => "sliders-symbolic",
         "settings.svg" => "settings-symbolic",
         "clipboard.svg" => "edit-paste-symbolic",
+        "search.svg" => "system-search-symbolic",
         "display.svg" => "display-symbolic",
         "home.svg" => "user-home-symbolic",
         "downloads.svg" => "folder-download-symbolic",

@@ -48,6 +48,9 @@ pub(crate) const DOCK_MENU_WIDTH: f32 = 250.;
 /// must use the same value, or the blur pokes out past the rounded corners as
 /// square patches.
 pub(crate) const SPOTLIGHT_RADIUS: f32 = 31.;
+/// The control center's painted corner radius. Its inner cards step down from
+/// this value so the nested surfaces read as one family.
+pub(crate) const CONTROLS_RADIUS: f32 = 24.;
 /// The launcher sheet's resting size. The extra six points on each axis
 /// offset the six-point increase in the inner body padding, so the content
 /// area keeps the same width and height.
@@ -731,7 +734,7 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
             } else {
                 510.
             };
-            let (width, height): (f32, f32) = (320f32.min(w - 24.), natural.min(ceiling));
+            let (width, height): (f32, f32) = (360f32.min(w - 24.), natural.min(ceiling));
             let x = state.anchored.map_or(w - width - 12., |x| {
                 (x - width / 2.).clamp(8., (w - width - 8.).max(8.))
             });
@@ -758,11 +761,12 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
             return modal_popup(w, h, x, top, width, height);
         }
         Panel::Notifications => {
-            anchor.top = true;
-            anchor.right = true;
-            margins.top = top.round() as i32;
-            margins.right = 12;
-            (368., available.min(1800.), w - 368. - 12., top)
+            // A full-output catcher lets a click anywhere outside the column
+            // dismiss the center; only the column itself is visible. The
+            // column covers most of the output but keeps a visible margin at
+            // the bottom instead of running edge to edge.
+            let height = (h * 0.90).min(available).min(1800.);
+            return modal_popup(w, h, w - 368. - 12., top, 368., height);
         }
     };
     Placement {
@@ -844,7 +848,12 @@ fn entry_height(item: &services::MenuItem, depth: usize, expanded: &[i32]) -> f3
 pub(crate) fn popup_exit_panel(panel: &Panel) -> bool {
     matches!(
         panel,
-        Panel::Tray(_) | Panel::Controls | Panel::Recent | Panel::Spotlight | Panel::Apps
+        Panel::Tray(_)
+            | Panel::Controls
+            | Panel::Recent
+            | Panel::Spotlight
+            | Panel::Apps
+            | Panel::Notifications
     )
 }
 
@@ -911,7 +920,7 @@ mod tests {
             Bounds::new(point(px(0.), px(0.)), size(px(1440.), px(900.)))
         );
         let popup = controls.popup.expect("the control center reports its popup");
-        assert_eq!(f32::from(popup.origin.x), 1440. - 320. - 12.);
+        assert_eq!(f32::from(popup.origin.x), 1440. - 360. - 12.);
         assert_eq!(f32::from(popup.origin.y), state.prefs.bar_height as f32 + 8.);
         assert!(controls.anchor.top && controls.anchor.right);
         let capture = placement(&state, &Panel::Screenshot, 1440., 900.);
@@ -922,8 +931,16 @@ mod tests {
         assert_eq!(prefs.bounds.size, size(px(640.), px(520.)));
         for output_height in [2160., 4320.] {
             let notifications = placement(&state, &Panel::Notifications, 3840., output_height);
-            assert!(notifications.bounds.size.height <= px(1800.));
+            let popup = notifications
+                .popup
+                .expect("the notification center reports its column");
+            assert!(popup.size.height <= px(1800.));
         }
+        // The notification column keeps a bottom margin: 90% of the output,
+        // clamped to the room below the menu bar.
+        let notifications = placement(&state, &Panel::Notifications, 1920., 1080.);
+        let popup = notifications.popup.expect("the column rectangle");
+        assert_eq!(popup.size.height, px(1080. * 0.90));
         for panel in [
             Panel::Controls,
             Panel::Notifications,

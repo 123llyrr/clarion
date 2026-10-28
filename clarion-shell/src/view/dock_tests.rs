@@ -495,17 +495,22 @@ fn a_folder_stack_fans_its_cards_instead_of_twisting() {
         .iter()
         .map(|card| card.angle)
         .collect::<Vec<_>>();
-    // Painted back to front, so the deck reads +9, 0, -9 like a small fan.
-    assert_eq!(angles, vec![9., 0., -9.]);
-    // The back card rides up and to the right; the front card is centred.
+    // Painted back to front: -40°, -20°, then the upright front card. Every
+    // card turns the same way, so the deck recedes instead of fanning out.
+    assert_eq!(angles, vec![-40., -20., 0.]);
+    // The back card rides up and to the right, smaller and dimmer.
     assert!(cards[0].left > cards[2].left);
     assert!(cards[0].top < cards[2].top);
+    assert!(cards[0].size < cards[2].size);
+    assert!(cards[0].opacity < cards[2].opacity);
+    assert_eq!(cards[2].opacity, 1.);
     assert!(cards[0].size < 100.);
     assert_eq!(cards[2].left, (100. - cards[2].size) / 2.);
-    // A folder with one item is not tilted at all.
+    // A folder with one item is not tilted or dimmed at all.
     let single = super::macos_dock::folder_stack_layout(1, 100.);
     assert_eq!(single.len(), 1);
     assert_eq!(single[0].angle, 0.);
+    assert_eq!(single[0].opacity, 1.);
 }
 
 #[test]

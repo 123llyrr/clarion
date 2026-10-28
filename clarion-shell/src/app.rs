@@ -2716,11 +2716,13 @@ mod notification_lifecycle_tests {
         services::Notification {
             id,
             app: "Notification fixture".into(),
+            icon: None,
             title: "通知标题".into(),
             body: "通知正文".into(),
             actions: Vec::new(),
             created_at: u64::from(id),
             unread: true,
+            pinned: false,
         }
     }
 
