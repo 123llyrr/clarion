@@ -1,5 +1,5 @@
 [workspace]
-exclude = ["third_party/smithay", "third_party/gpui"]
+exclude = ["third_party/smithay", "third_party/gpui", "third_party/blade-graphics"]
 members = [
     "clarion-core",
     "clarion-motion",
@@ -232,3 +232,6 @@ smithay = { path = "third_party/smithay" }
 
 [patch.crates-io]
 gpui = { path = "third_party/gpui" }
+# Some Vulkan drivers (NVIDIA Wayland WSI) return SUBOPTIMAL_KHR from a
+# successful swapchain creation; stock 0.7.1 unwraps it and aborts the shell.
+blade-graphics = { path = "third_party/blade-graphics" }
