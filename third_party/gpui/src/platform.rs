@@ -876,6 +876,7 @@ impl PlatformInputHandler {
         Self { cx, handler }
     }
 
+    #[cfg_attr(any(target_os = "linux", target_os = "freebsd"), allow(dead_code))]
     fn selected_text_range(&mut self, ignore_disabled_input: bool) -> Option<UTF16Selection> {
         self.cx
             .update(|window, cx| {

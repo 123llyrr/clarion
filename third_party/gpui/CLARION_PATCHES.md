@@ -39,7 +39,15 @@ Clarion additions:
   instead of the window being tiled once and resized afterwards.
 - `platform/mac/window.rs`: exhaustive matching of the new kind as a normal
   window; the Clarion launcher itself requires Wayland.
+- `platform.rs`: `PlatformInputHandler::selected_text_range` is marked
+  `dead_code` on Linux/FreeBSD. Only the X11, macOS and Windows backends query
+  it; the Wayland backend never does, so a Wayland-only build warned about it.
 - Both manifests: optional `wayland-protocols-wlr` client dependency in `wayland`.
+- Manifest: `stacksafe` moves from `0.1` to `1.0`. The `0.1` macro pulled
+  `proc-macro-error2`, whose private `proc_macro` re-export is a future
+  incompatibility (`E0365`) reported on every build; `1.0.3` drops it. `StackSafe`
+  and the `#[stacksafe]` attribute keep the same API, and the layout tests that
+  exercise the recursion guards pass.
 
 The fixed-size launcher uses no edge anchors, Overlay, exclusive zone -1,
 and exclusive keyboard focus. Blur is still owned by the Flutter Shell.
