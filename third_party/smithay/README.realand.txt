@@ -28,5 +28,9 @@ an independent per-pixel coverage oracle. Native GPU tests verify unchanged
 24-window capture reuse, rounded backdrop pixels, alpha, privacy, scale,
 rotation and immutable snapshots.
 
+Upstream status: fixed upstream on 2026-10-18 in commit 2923f22485
+("fix Rectangle::subtract_rects_many_in_place skip"). No pull request is
+needed; drop the local patch when the pinned revision includes that commit.
+
 When updating Smithay, test whether upstream has fixed the loop. Remove the
 patch and local dependency only after these regressions pass without it.

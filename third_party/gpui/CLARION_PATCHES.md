@@ -49,6 +49,13 @@ Clarion additions:
   and the `#[stacksafe]` attribute keep the same API, and the layout tests that
   exercise the recursion guards pass.
 
+Upstream status: none of these patches are submitted to
+`zed-industries/zed`. The layer-shell window kind, glass regions,
+`keep_alive` policy and the Clarion-specific window roles are product
+requirements of this desktop and stay a downstream fork. The `app_id`
+ordering fix and the `debug_bounds` reset are small general bug fixes and
+remain candidates for an upstream PR.
+
 The fixed-size launcher uses no edge anchors, Overlay, exclusive zone -1,
 and exclusive keyboard focus. Blur is still owned by the Flutter Shell.
 There is no silent xdg fallback when layer-shell is unavailable.

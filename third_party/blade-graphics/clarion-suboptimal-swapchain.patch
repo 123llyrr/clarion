@@ -1,0 +1,42 @@
+diff --git a/src/vulkan/surface.rs b/src/vulkan/surface.rs
+index c16c29f..28bb2a6 100644
+--- a/src/vulkan/surface.rs
++++ b/src/vulkan/surface.rs
+@@ -341,7 +341,36 @@ impl super::Context {
+                 config.allow_exclusive_full_screen
+             );
+         }
+-        let raw_swapchain = unsafe { surface.device.create_swapchain(&create_info, None).unwrap() };
++        // `vkCreateSwapchainKHR` may succeed with a suboptimal swapchain, and
++        // some drivers (notably NVIDIA's Wayland WSI) do exactly that when the
++        // requested extent does not match the surface's current buffer. The
++        // swapchain is valid and presentation still succeeds, possibly scaled;
++        // GPUI reconfigures it on the next drawable-size change. Unwrapping
++        // here aborted the whole shell on that transient condition, so call
++        // the entry point directly to keep the handle that `ash` discards when
++        // it treats this success code as an error.
++        let mut raw_swapchain = vk::SwapchainKHR::null();
++        let create_result = unsafe {
++            (surface.device.fp().create_swapchain_khr)(
++                surface.device.device(),
++                &create_info,
++                core::ptr::null(),
++                &mut raw_swapchain,
++            )
++        };
++        match create_result {
++            vk::Result::SUCCESS => {}
++            vk::Result::SUBOPTIMAL_KHR => {
++                eprintln!(
++                    "blade: swapchain created suboptimal at {}x{}; presenting with scaling until the next resize",
++                    config.size.width, config.size.height
++                );
++            }
++            error => panic!("Failed to create swapchain: {error:?}"),
++        }
++        if raw_swapchain == vk::SwapchainKHR::null() {
++            panic!("Swapchain creation reported {create_result:?} without returning a handle");
++        }
+ 
+         unsafe {
+             surface.deinit_swapchain(&self.device.core);

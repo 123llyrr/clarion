@@ -179,6 +179,8 @@ install -Dm644 -t %{buildroot}%{zsh_completions_dir} ./_clarion
 %license LICENSE
 %license THIRD_PARTY_NOTICES.md
 %license third_party/gpui/LICENSE-APACHE
+%license third_party/smithay/LICENSE.txt
+%license third_party/blade-graphics/LICENSE
 %doc README.md
 %doc resources/default-config.kdl
 %doc docs/wiki
