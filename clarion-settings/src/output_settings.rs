@@ -33,6 +33,9 @@ pub struct OutputSettings {
     /// None uses the compositor's automatic scale.
     pub scale: Option<f64>,
     pub transform: Transform,
+    /// Explicit position in the compositor's logical coordinate space. None
+    /// lets the compositor place the output automatically.
+    pub position: Option<(i32, i32)>,
     /// None inherits the native defaults (100%, 203 nits and EDID peak).
     pub hdr_brightness: Option<f64>,
     pub sdr_white_level: Option<f64>,
@@ -61,6 +64,7 @@ impl OutputSettings {
             mode: output.mode.map(|mode| mode.mode),
             scale: output.scale.map(|value| value.0),
             transform: output.transform,
+            position: output.position.map(|position| (position.x, position.y)),
             hdr_brightness: output.hdr_brightness.map(|value| value.0),
             sdr_white_level: output.sdr_white_level.map(|value| value.0),
             hdr_peak_luminance: output.hdr_peak_luminance.map(|value| value.0),
@@ -168,6 +172,39 @@ impl OutputSettings {
         manager.set_raw_content(candidate_source);
         Ok(())
     }
+
+    /// Writes explicit positions for a whole arrangement.
+    ///
+    /// Every active output is pinned, not only the one the user moved: an
+    /// output without a configured position is placed automatically after the
+    /// configured ones, which would silently move it out of the arrangement.
+    /// Blocks whose position already matches are left byte-identical.
+    pub fn apply_positions(
+        manager: &mut ConfigManager,
+        positions: &[(OutputName, (i32, i32))],
+    ) -> Result<()> {
+        if positions.is_empty() {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            manager.config_path() == manager.root_path(),
+            "显示器控件需要编辑主配置文件，请返回主配置后重试"
+        );
+        for (target, position) in positions {
+            anyhow::ensure!(
+                !target.connector.is_empty(),
+                "显示器连接器名称为空，未修改配置"
+            );
+            let before = Self::read(manager, target)?;
+            if before.position == Some(*position) {
+                continue;
+            }
+            let mut after = before.clone();
+            after.position = Some(*position);
+            Self::apply(manager, target, &before, &after)?;
+        }
+        Ok(())
+    }
 }
 
 fn changed_output(
@@ -242,6 +279,11 @@ fn changed_output(
     }
     if changed!(transform) {
         desired.transform = after.transform;
+    }
+    if changed!(position) {
+        desired.position = after
+            .position
+            .map(|(x, y)| clarion_config::output::Position { x, y });
     }
     macro_rules! number {
         ($field:ident, $minimum:literal, $maximum:literal) => {
@@ -325,6 +367,9 @@ fn patch_block(
             &["output", "transform"],
             &serde_json::to_string(value)?,
         )?;
+    }
+    if before.position != after.position {
+        result = set_position(&result, after.position)?;
     }
     for (name, previous, next) in [
         (
@@ -487,6 +532,16 @@ fn set_optional(source: &str, name: &str, value: Option<f64>) -> Result<String> 
     match value {
         Some(value) => set_argument(source, &["output", name], &value.to_string()),
         None => remove(source, name),
+    }
+}
+
+fn set_position(source: &str, position: Option<(i32, i32)>) -> Result<String> {
+    match position {
+        Some((x, y)) => {
+            let result = set_property(source, "position", "x", &x.to_string())?;
+            set_property(&result, "position", "y", &y.to_string())
+        }
+        None => remove(source, "position"),
     }
 }
 

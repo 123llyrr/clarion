@@ -339,7 +339,15 @@ fn explicit_display_save_commits_numeric_text_after_deferring_pending_preview() 
         assert!(app.config_mgr.preview_pending());
         assert!(app.display.owns_preview());
         assert_eq!(
-            app.display.retry.as_ref().unwrap().2.sdr_white_level,
+            app.display
+                .retry
+                .as_ref()
+                .unwrap()
+                .target
+                .as_ref()
+                .unwrap()
+                .2
+                .sdr_white_level,
             Some(250.)
         );
         assert_eq!(
@@ -402,6 +410,106 @@ fn the_last_active_display_cannot_be_disabled_by_the_direct_preview_path() {
         .unwrap()
         .iter()
         .any(|r| matches!(r, clarion_ipc::Request::PreviewOutputConfig { .. })));
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join("config.kdl")).unwrap(),
+        SOURCE
+    );
+}
+
+fn drag(app: &mut ClarionSettingsApp, context: &egui::Context, from: Pos2, to: Pos2) {
+    // The first small move starts the drag; the remaining move must then
+    // follow the pointer without jumping.
+    let near = from + (to - from) * 0.1;
+    frame(app, context, vec![Event::PointerMoved(from)]);
+    frame(app, context, vec![pointer(from, true)]);
+    frame(app, context, vec![Event::PointerMoved(near)]);
+    frame(app, context, vec![Event::PointerMoved(to)]);
+    frame(app, context, vec![Event::PointerMoved(to)]);
+    frame(app, context, vec![pointer(to, false)]);
+}
+
+#[test]
+fn dragging_a_monitor_changes_only_the_arrangement_draft() {
+    let (directory, mut app, context) = fixture();
+    script(&mut app, false);
+    app.output_section = 1;
+    frame(&mut app, &context, vec![]);
+    let output = frame(&mut app, &context, vec![]);
+    let from = text(&output, "DP-QA-2")
+        .into_iter()
+        .max_by(|a, b| a.center().y.total_cmp(&b.center().y))
+        .unwrap()
+        .center();
+    drag(
+        &mut app,
+        &context,
+        from,
+        from + egui::vec2(80., 0.),
+    );
+    assert!(app.display.arrangement_pending());
+    assert!(!app.display.settings_pending());
+    assert!(app.display.due.is_some());
+    assert!(!app.display.owns_preview());
+    assert!(!app.config_mgr.is_dirty());
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join("config.kdl")).unwrap(),
+        SOURCE
+    );
+}
+
+#[test]
+fn scale_change_reflows_the_arrangement_and_pins_every_output() {
+    let (_directory, mut app, context) = fixture();
+    script(&mut app, false);
+    frame(&mut app, &context, vec![]);
+    app.display.settings.as_mut().unwrap().scale = Some(1.5);
+    app.start_display_controls_preview();
+    assert!(app.display.owns_preview());
+    let first = OutputSettings::read(
+        &app.config_mgr,
+        &OutputName::from_ipc_output(&app.cached_outputs[0]),
+    )
+    .unwrap();
+    let second = OutputSettings::read(
+        &app.config_mgr,
+        &OutputName::from_ipc_output(&app.cached_outputs[1]),
+    )
+    .unwrap();
+    assert_eq!(first.scale, Some(1.5));
+    assert_eq!(first.position, Some((0, 0)));
+    // 1920 / 1.5 = 1280 logical pixels, placed immediately after the scaled
+    // first monitor instead of keeping the old overlapping position.
+    assert_eq!(second.position, Some((1280, 0)));
+    assert!(app.display.arrangement_pending());
+    assert_eq!(
+        std::fs::read_to_string(_directory.path().join("config.kdl")).unwrap(),
+        SOURCE
+    );
+}
+
+#[test]
+fn a_dragged_arrangement_enters_the_guarded_preview_without_touching_the_file() {
+    let (directory, mut app, context) = fixture();
+    script(&mut app, false);
+    app.output_section = 1;
+    frame(&mut app, &context, vec![]);
+    let output = frame(&mut app, &context, vec![]);
+    let from = text(&output, "DP-QA-2")
+        .into_iter()
+        .max_by(|a, b| a.center().y.total_cmp(&b.center().y))
+        .unwrap()
+        .center();
+    drag(&mut app, &context, from, from + egui::vec2(80., 0.));
+    app.display.due = Some(Instant::now());
+    frame(&mut app, &context, vec![]);
+    assert!(app.display.owns_preview());
+    assert!(app.config_mgr.preview_pending());
+    let second = OutputSettings::read(
+        &app.config_mgr,
+        &OutputName::from_ipc_output(&app.cached_outputs[1]),
+    )
+    .unwrap();
+    assert_ne!(second.position, Some((1920, 0)));
     assert_eq!(
         std::fs::read_to_string(directory.path().join("config.kdl")).unwrap(),
         SOURCE

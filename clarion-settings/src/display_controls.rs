@@ -12,7 +12,14 @@ use anyhow::Context;
 use clarion_config::output::OutputName;
 
 use super::*;
+use crate::arrangement::{changed_size, Arrangement, PlacementSeed};
 use crate::output_settings::OutputSettings;
+
+#[derive(Clone, Debug, Default)]
+struct DisplayRequest {
+    target: Option<(OutputName, OutputSettings, OutputSettings)>,
+    positions: Vec<(OutputName, (i32, i32))>,
+}
 
 #[derive(Default)]
 pub(super) struct DisplayControls {
@@ -22,7 +29,8 @@ pub(super) struct DisplayControls {
     source: Option<(PathBuf, String, String)>,
     due: Option<Instant>,
     original: Option<String>,
-    retry: Option<(OutputName, OutputSettings, OutputSettings)>,
+    retry: Option<DisplayRequest>,
+    pub(super) arrangement: Option<Arrangement>,
     status: DisplayStatus,
     pub(super) confirm_close: bool,
 }
@@ -39,8 +47,24 @@ enum DisplayStatus {
 }
 
 impl DisplayControls {
-    pub(super) fn pending(&self) -> bool {
+    fn settings_pending(&self) -> bool {
         self.settings != self.baseline
+    }
+
+    /// Dragging is independent of the single-output controls so a pending
+    /// scale or rotation change cannot be mixed with a new arrangement.
+    pub(super) fn arrangement_editable(&self, available: bool) -> bool {
+        available && !self.settings_pending() && self.retry.is_none() && !self.owns_preview()
+    }
+
+    pub(super) fn arrangement_pending(&self) -> bool {
+        self.arrangement
+            .as_ref()
+            .is_some_and(Arrangement::dirty)
+    }
+
+    pub(super) fn pending(&self) -> bool {
+        self.settings_pending() || self.arrangement_pending()
     }
 
     pub(super) fn owns_preview(&self) -> bool {
@@ -103,6 +127,7 @@ impl ClarionSettingsApp {
         match self.config_mgr.reload_from_disk() {
             Ok(()) => {
                 self.display.source = None;
+                self.display.arrangement = None;
                 self.common.source = None;
                 self.full_config = Default::default();
                 if matches!(self.display.status, DisplayStatus::Error(_)) {
@@ -111,6 +136,68 @@ impl ClarionSettingsApp {
             }
             Err(error) => {
                 self.display.status = DisplayStatus::Error(format!("无法刷新显示配置：{error:#}"));
+            }
+        }
+    }
+
+    pub(super) fn display_controls_available(&self) -> bool {
+        let manual = (self.config_mgr.is_dirty() && !self.display.owns_preview())
+            || self.full_config.has_pending();
+        !manual
+            && self.connection_error.is_none()
+            && !self.config_mgr.preview_pending()
+            && !self.common.pending()
+            && self.common.retry.is_none()
+            && !self.common.worker.is_busy()
+    }
+
+    /// Rebuilds the arrangement draft from the outputs the compositor reports.
+    ///
+    /// Sizes and positions come from IPC rather than the configuration file:
+    /// the compositor may have fallen back from an overlapping configured
+    /// position, and the arrangement must show what is actually on screen.
+    pub(super) fn ensure_arrangement(&mut self) {
+        if self.display.owns_preview() {
+            return;
+        }
+        let seeds: Vec<PlacementSeed> = self
+            .cached_outputs
+            .iter()
+            .filter_map(|output| {
+                let logical = output.logical.as_ref()?;
+                Some(PlacementSeed {
+                    name: OutputName::from_ipc_output(output),
+                    size: (logical.width as i32, logical.height as i32),
+                    actual: (logical.x, logical.y),
+                })
+            })
+            .collect();
+        let keep = self
+            .display
+            .arrangement
+            .as_ref()
+            .is_some_and(|arrangement| arrangement.same_outputs(&seeds));
+        if keep {
+            if let Some(arrangement) = &mut self.display.arrangement {
+                if !arrangement.dirty() && !arrangement.dragging() {
+                    arrangement.refresh(&seeds);
+                }
+            }
+        } else {
+            self.display.arrangement = Some(Arrangement::new(seeds));
+        }
+    }
+
+    /// Schedules the arrangement preview after a drag has settled.
+    pub(super) fn mark_arrangement_changed(&mut self) {
+        if self.display.arrangement_pending() {
+            self.display.retry = None;
+            self.display.due = Some(Instant::now() + Duration::from_secs(1));
+            self.display.status = DisplayStatus::Pending;
+        } else {
+            self.display.due = None;
+            if matches!(self.display.status, DisplayStatus::Pending) {
+                self.display.status = DisplayStatus::Ready;
             }
         }
     }
@@ -150,12 +237,7 @@ impl ClarionSettingsApp {
             }
             ui.add_space(12.);
         }
-        let enabled = !manual
-            && self.connection_error.is_none()
-            && !self.config_mgr.preview_pending()
-            && !self.common.pending()
-            && self.common.retry.is_none()
-            && !self.common.worker.is_busy();
+        let enabled = self.display_controls_available() && !self.display.arrangement_pending();
         let active = self
             .cached_outputs
             .iter()
@@ -210,6 +292,7 @@ impl ClarionSettingsApp {
                 }
                 if ui.button("放弃这次修改").clicked() {
                     self.display.retry = None;
+                    self.display.arrangement = None;
                     self.display.status = DisplayStatus::Ready;
                 }
             }
@@ -221,20 +304,45 @@ impl ClarionSettingsApp {
             return;
         }
         let request = if self.display.pending() {
-            self.display
-                .target
-                .clone()
-                .zip(self.display.baseline.clone())
-                .zip(self.display.settings.clone())
-                .map(|((target, before), after)| (target, before, after))
+            self.ensure_arrangement();
+            let target = if self.display.settings_pending() {
+                self.display
+                    .target
+                    .clone()
+                    .zip(self.display.baseline.clone())
+                    .zip(self.display.settings.clone())
+                    .map(|((target, before), after)| (target, before, after))
+            } else {
+                None
+            };
+            let resize = target.as_ref().and_then(|(name, before, after)| {
+                let output = self
+                    .cached_outputs
+                    .iter()
+                    .find(|output| output.name == name.connector)?;
+                Some((name.clone(), changed_size(output, before, after)?))
+            });
+            let arrangement_dirty = self.display.arrangement_pending();
+            let mut positions = Vec::new();
+            if let Some(arrangement) = &mut self.display.arrangement {
+                if resize.is_some() || arrangement_dirty {
+                    positions = arrangement.reflow_for(
+                        resize
+                            .as_ref()
+                            .map(|(name, size)| (name, *size)),
+                    );
+                }
+            }
+            DisplayRequest { target, positions }
         } else {
-            self.display.retry.clone()
+            self.display.retry.clone().unwrap_or_default()
         };
-        let Some((target, before, after)) = request else {
+        if request.target.is_none() && request.positions.is_empty() {
+            self.display.due = None;
             return;
-        };
+        }
         self.display.due = None;
-        self.display.retry = Some((target.clone(), before.clone(), after.clone()));
+        self.display.retry = Some(request.clone());
         let original = self.config_mgr.raw_content().to_owned();
         let clean_before = !self.config_mgr.is_dirty() && !self.full_config.has_pending();
         let result = (|| -> anyhow::Result<()> {
@@ -252,35 +360,38 @@ impl ClarionSettingsApp {
                 self.connection_error.is_none(),
                 "Clarion 尚未连接，未修改配置文件"
             );
-            let output = self
-                .cached_outputs
-                .iter()
-                .find(|o| o.name == target.connector)
-                .context("目标显示器已断开连接，请重新选择")?;
-            anyhow::ensure!(
-                format!("{:?}", OutputName::from_ipc_output(output)) == format!("{target:?}"),
-                "目标显示器已改变，请重新选择"
-            );
-            let active = self
-                .cached_outputs
-                .iter()
-                .filter(|o| o.logical.is_some())
-                .count();
-            anyhow::ensure!(
-                after.enabled || output.logical.is_none() || active > 1,
-                "请至少保留一个活动显示器"
-            );
-            anyhow::ensure!(
-                before.hdr || !after.hdr || output.hdr_supported,
-                "此显示器当前不支持 HDR"
-            );
-            anyhow::ensure!(
-                before.vrr != crate::output_settings::VrrMode::Off
-                    || after.vrr == crate::output_settings::VrrMode::Off
-                    || output.vrr_supported,
-                "此显示器当前不支持可变刷新率"
-            );
-            OutputSettings::apply(&mut self.config_mgr, &target, &before, &after)?;
+            if let Some((target, before, after)) = &request.target {
+                let output = self
+                    .cached_outputs
+                    .iter()
+                    .find(|o| o.name == target.connector)
+                    .context("目标显示器已断开连接，请重新选择")?;
+                anyhow::ensure!(
+                    format!("{:?}", OutputName::from_ipc_output(output)) == format!("{target:?}"),
+                    "目标显示器已改变，请重新选择"
+                );
+                let active = self
+                    .cached_outputs
+                    .iter()
+                    .filter(|o| o.logical.is_some())
+                    .count();
+                anyhow::ensure!(
+                    after.enabled || output.logical.is_none() || active > 1,
+                    "请至少保留一个活动显示器"
+                );
+                anyhow::ensure!(
+                    before.hdr || !after.hdr || output.hdr_supported,
+                    "此显示器当前不支持 HDR"
+                );
+                anyhow::ensure!(
+                    before.vrr != crate::output_settings::VrrMode::Off
+                        || after.vrr == crate::output_settings::VrrMode::Off
+                        || output.vrr_supported,
+                    "此显示器当前不支持可变刷新率"
+                );
+                OutputSettings::apply(&mut self.config_mgr, target, before, after)?;
+            }
+            OutputSettings::apply_positions(&mut self.config_mgr, &request.positions)?;
             self.config_mgr.begin_output_preview(&self.ipc)
         })();
         match result {
@@ -301,6 +412,7 @@ impl ClarionSettingsApp {
                 self.display.settings = None;
                 self.display.baseline = None;
                 self.display.source = None;
+                self.display.arrangement = None;
                 self.display.status = DisplayStatus::Error(format!("{error:#}"));
                 self.close_after_preview = false;
             }
@@ -340,13 +452,19 @@ impl ClarionSettingsApp {
                     .display
                     .retry
                     .as_ref()
-                    .is_some_and(|(target, _, after)| {
-                        OutputSettings::read(&self.config_mgr, target)
-                            .is_ok_and(|actual| &actual == after)
+                    .is_some_and(|request| {
+                        request.target.as_ref().is_some_and(|(target, _, after)| {
+                            OutputSettings::read(&self.config_mgr, target).is_ok_and(|mut actual| {
+                                // Arrangement positions are written separately.
+                                actual.position = after.position;
+                                &actual == after
+                            })
+                        })
                     });
             self.display.settings = None;
             self.display.baseline = None;
             self.display.source = None;
+            self.display.arrangement = None;
             self.display.due = None;
             self.common.source = None;
             self.full_config = Default::default();
@@ -397,6 +515,7 @@ impl ClarionSettingsApp {
                     if ui.button("关闭").clicked() {
                         self.display.confirm_close = false;
                         self.display.retry = None;
+                        self.display.arrangement = None;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                     if ui.button("继续编辑").clicked() {
