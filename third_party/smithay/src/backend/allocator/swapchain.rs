@@ -204,9 +204,10 @@ where
         slot.0.age.store(1, Ordering::SeqCst);
         for other_slot in &mut self.slots {
             if !Arc::ptr_eq(other_slot, &slot.0) && other_slot.buffer.is_some() {
+                #[allow(deprecated, reason = "our MSRV is 1.87 but try_update() was added in 1.95")]
                 let res = other_slot
                     .age
-                    .try_update(Ordering::SeqCst, Ordering::SeqCst, |age| {
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |age| {
                         if age > 0 { age.checked_add(1) } else { Some(0) }
                     });
                 // If the age overflows the slot was not used for a long time. Lets clear it

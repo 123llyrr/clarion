@@ -507,7 +507,7 @@ impl State {
         let mod_key = self.backend.mod_key(&self.clarion.config.borrow());
 
         let serial = SERIAL_COUNTER.next_serial();
-        let time = Event::time_msec(&event);
+        let time = Event::time(&event);
         let pressed = event.state() == KeyState::Pressed;
 
         // Releasing an older held shortcut must not cancel the newer one.
@@ -527,7 +527,7 @@ impl State {
         #[cfg(feature = "dbus")]
         let block = {
             let block = self.a11y_process_key(
-                Duration::from_millis(u64::from(time)),
+                Duration::from_micros(time.micros()),
                 event.key_code(),
                 event.state(),
             );
@@ -3199,7 +3199,7 @@ impl State {
                     &RelativeMotionEvent {
                         delta: event.delta(),
                         delta_unaccel: event.delta_unaccel(),
-                        utime: event.time(),
+                        time: event.time(),
                     },
                 );
 
@@ -3319,7 +3319,7 @@ impl State {
                     &RelativeMotionEvent {
                         delta: event.delta(),
                         delta_unaccel: event.delta_unaccel(),
-                        utime: event.time(),
+                        time: event.time(),
                     },
                 );
 
@@ -3339,7 +3339,7 @@ impl State {
             &MotionEvent {
                 location: new_pos,
                 serial,
-                time: event.time_msec(),
+                time: event.time(),
             },
         );
 
@@ -3349,7 +3349,7 @@ impl State {
             &RelativeMotionEvent {
                 delta: event.delta(),
                 delta_unaccel: event.delta_unaccel(),
-                utime: event.time(),
+                time: event.time(),
             },
         );
 
@@ -3427,7 +3427,7 @@ impl State {
             &MotionEvent {
                 location: pos,
                 serial,
-                time: event.time_msec(),
+                time: event.time(),
             },
         );
 
@@ -3483,10 +3483,13 @@ impl State {
             .seat
             .get_touch()
             .is_some_and(|touch| touch.is_grabbed());
-        let mut tablet_grabbed = false;
-        self.clarion.seat.tablet_seat().with_tools(|tools| {
-            tablet_grabbed = tools.values().any(|tool| tool.is_grabbed());
-        });
+        let tablet_grabbed = self
+            .clarion
+            .seat
+            .tablet_seat()
+            .get_tools()
+            .values()
+            .any(|tool| tool.is_grabbed());
         let allowed = pointer.current_focus().is_none()
             && !touch_grabbed
             && !tablet_grabbed
@@ -3535,7 +3538,7 @@ impl State {
         let Some(surface) = window.toplevel().map(|top| top.wl_surface().clone()) else {
             return;
         };
-        let time = get_monotonic_time().as_millis() as u32;
+        let time = crate::utils::input_time();
         if let Some(pointer) = self.clarion.seat.get_pointer() {
             let targets_window =
                 pointer.current_focus().as_ref().is_some_and(|focused| {
@@ -3569,11 +3572,13 @@ impl State {
                 touch.cancel(self);
             }
         }
-        let mut tools = Vec::new();
-        self.clarion
+        let tools: Vec<_> = self
+            .clarion
             .seat
             .tablet_seat()
-            .with_tools(|map| tools = map.values().cloned().collect());
+            .get_tools()
+            .into_values()
+            .collect();
         for tool in tools {
             let targets_window = tool
                 .with_grab(|_, grab| {
@@ -3603,7 +3608,7 @@ impl State {
     /// Call after capturing the visible frame and before changing overview mode.
     pub(crate) fn cancel_overview_grabs(&mut self) {
         self.cancel_layout_gestures();
-        let time = get_monotonic_time().as_millis() as u32;
+        let time = crate::utils::input_time();
         if let Some(pointer) = self.clarion.seat.get_pointer() {
             let compositor_grab = pointer
                 .with_grab(|_, grab| {
@@ -3630,10 +3635,13 @@ impl State {
                 touch.cancel(self);
             }
         }
-        let mut tools = Vec::new();
-        self.clarion.seat.tablet_seat().with_tools(|map| {
-            tools = map.values().cloned().collect();
-        });
+        let tools: Vec<_> = self
+            .clarion
+            .seat
+            .tablet_seat()
+            .get_tools()
+            .into_values()
+            .collect();
         for tool in tools {
             let compositor_grab = tool
                 .with_grab(|_, grab| {
@@ -3673,7 +3681,7 @@ impl State {
     /// A lock request owns input immediately, including the surface-wait phase.
     pub(crate) fn cancel_grabs_for_lock(&mut self) {
         self.cancel_layout_gestures();
-        let time = get_monotonic_time().as_millis() as u32;
+        let time = crate::utils::input_time();
         if let Some(pointer) = self.clarion.seat.get_pointer() {
             pointer.unset_grab(self, SERIAL_COUNTER.next_serial(), time);
         }
@@ -3682,10 +3690,13 @@ impl State {
                 touch.cancel(self);
             }
         }
-        let mut tools = Vec::new();
-        self.clarion.seat.tablet_seat().with_tools(|map| {
-            tools = map.values().cloned().collect();
-        });
+        let tools: Vec<_> = self
+            .clarion
+            .seat
+            .tablet_seat()
+            .get_tools()
+            .into_values()
+            .collect();
         for tool in tools {
             tool.unset_grab(self, SERIAL_COUNTER.next_serial(), time);
         }
@@ -4085,7 +4096,7 @@ impl State {
                 button: button_code,
                 state: button_state,
                 serial,
-                time: event.time_msec(),
+                time: event.time(),
             },
         );
         pointer.frame(self);
@@ -4104,7 +4115,7 @@ impl State {
         self.clarion.pointer_visibility = PointerVisibility::Visible;
         self.clarion.tablet_cursor_location = None;
 
-        let timestamp = Duration::from_micros(event.time());
+        let timestamp = Duration::from_micros(event.time().micros());
 
         let horizontal_amount_v120 = event.amount_v120(Axis::Horizontal);
         let vertical_amount_v120 = event.amount_v120(Axis::Vertical);
@@ -4626,7 +4637,7 @@ impl State {
         let horizontal_amount_v120 = horizontal_amount_v120.map(|x| x * horizontal_factor);
         let vertical_amount_v120 = vertical_amount_v120.map(|x| x * vertical_factor);
 
-        let mut frame = AxisFrame::new(event.time_msec()).source(source);
+        let mut frame = AxisFrame::new(event.time()).source(source);
         if horizontal_amount != 0.0 {
             frame = frame
                 .relative_direction(Axis::Horizontal, event.relative_direction(Axis::Horizontal));
@@ -4689,7 +4700,7 @@ impl State {
         let tablet_seat = self.clarion.seat.tablet_seat();
         let tool = tablet_seat.get_tool(&event.tool());
         if let Some(tool) = tool {
-            let time = event.time_msec();
+            let time = event.time();
 
             let frame = tablet::tool::AxisFrame {
                 pressure: event.pressure_has_changed().then(|| event.pressure()),
@@ -4733,7 +4744,7 @@ impl State {
         let tip_state = event.tip_state();
 
         let serial = SERIAL_COUNTER.next_serial();
-        let time = event.time_msec();
+        let time = event.time();
 
         match tip_state {
             TabletToolTipState::Down => {
@@ -4816,7 +4827,7 @@ impl State {
                                 location: pos,
                             };
                             let start_data = AnyStartData::TabletTool(start_data);
-                            let start_timestamp = Duration::from_micros(event.time());
+                            let start_timestamp = Duration::from_micros(event.time().micros());
                             let grab = TouchOverviewGrab::new(
                                 start_data,
                                 start_timestamp,
@@ -4899,7 +4910,7 @@ impl State {
         let tablet = tablet_seat.get_tablet(&TabletDescriptor::from(&event.device()));
         if let Some(tablet) = tablet {
             let serial = SERIAL_COUNTER.next_serial();
-            let time = event.time_msec();
+            let time = event.time();
 
             match event.state() {
                 ProximityState::In => {
@@ -5006,7 +5017,7 @@ impl State {
                 }
             }
 
-            let time = event.time_msec();
+            let time = event.time();
 
             tool.button(
                 self,
@@ -5062,7 +5073,7 @@ impl State {
             self,
             &GestureSwipeBeginEvent {
                 serial,
-                time: event.time_msec(),
+                time: event.time(),
                 fingers: event.fingers(),
             },
         );
@@ -5164,7 +5175,7 @@ impl State {
             }
         }
 
-        let timestamp = Duration::from_micros(event.time());
+        let timestamp = Duration::from_micros(event.time().micros());
 
         let mut handled = false;
         let res = self
@@ -5210,7 +5221,7 @@ impl State {
         pointer.gesture_swipe_update(
             self,
             &GestureSwipeUpdateEvent {
-                time: event.time_msec(),
+                time: event.time(),
                 delta: event.delta(),
             },
         );
@@ -5266,7 +5277,7 @@ impl State {
             self,
             &GestureSwipeEndEvent {
                 serial,
-                time: event.time_msec(),
+                time: event.time(),
                 cancelled: event.cancelled(),
             },
         );
@@ -5291,7 +5302,7 @@ impl State {
             self,
             &GesturePinchBeginEvent {
                 serial,
-                time: event.time_msec(),
+                time: event.time(),
                 fingers: event.fingers(),
             },
         );
@@ -5312,7 +5323,7 @@ impl State {
         pointer.gesture_pinch_update(
             self,
             &GesturePinchUpdateEvent {
-                time: event.time_msec(),
+                time: event.time(),
                 delta: event.delta(),
                 scale: event.scale(),
                 rotation: event.rotation(),
@@ -5341,7 +5352,7 @@ impl State {
             self,
             &GesturePinchEndEvent {
                 serial,
-                time: event.time_msec(),
+                time: event.time(),
                 cancelled: event.cancelled(),
             },
         );
@@ -5359,7 +5370,7 @@ impl State {
             self,
             &GestureHoldBeginEvent {
                 serial,
-                time: event.time_msec(),
+                time: event.time(),
                 fingers: event.fingers(),
             },
         );
@@ -5377,7 +5388,7 @@ impl State {
             self,
             &GestureHoldEndEvent {
                 serial,
-                time: event.time_msec(),
+                time: event.time(),
                 cancelled: event.cancelled(),
             },
         );
@@ -5496,7 +5507,7 @@ impl State {
                     location: pos,
                 };
                 let start_data = AnyStartData::Touch(start_data);
-                let start_timestamp = Duration::from_micros(evt.time());
+                let start_timestamp = Duration::from_micros(evt.time().micros());
                 let grab = TouchOverviewGrab::new(
                     start_data,
                     start_timestamp,
@@ -5543,7 +5554,7 @@ impl State {
                 slot,
                 location: pos,
                 serial,
-                time: evt.time_msec(),
+                time: evt.time(),
             },
         );
 
@@ -5570,7 +5581,7 @@ impl State {
             &UpEvent {
                 slot,
                 serial,
-                time: evt.time_msec(),
+                time: evt.time(),
             },
         )
     }
@@ -5602,7 +5613,7 @@ impl State {
             &TouchMotionEvent {
                 slot,
                 location: pos,
-                time: evt.time_msec(),
+                time: evt.time(),
             },
         );
 
@@ -6552,7 +6563,7 @@ mod tests {
                 KeyState::Released
             },
             SERIAL_COUNTER.next_serial(),
-            0,
+            smithay::backend::input::InputTime::from_millis(0),
             |_, _, _| FilterResult::Intercept(()),
         );
     }

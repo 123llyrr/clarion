@@ -182,6 +182,14 @@ pub fn get_monotonic_time() -> Duration {
     Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
 }
 
+/// Current monotonic time as an input timestamp.
+///
+/// Used for compositor-initiated input, such as warping the pointer or
+/// cancelling a grab, where no backend event supplies `InputTime`.
+pub fn input_time() -> smithay::backend::input::InputTime {
+    smithay::backend::input::InputTime::from_micros(get_monotonic_time().as_micros() as u64)
+}
+
 pub fn center(rect: Rectangle<i32, Logical>) -> Point<i32, Logical> {
     rect.loc + rect.size.downscale(2).to_point()
 }

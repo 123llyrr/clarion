@@ -7,9 +7,10 @@ use winit::{
 
 use crate::backend::input::{
     self, AbsolutePositionEvent, Axis, AxisRelativeDirection, AxisSource, ButtonState, Device,
-    DeviceCapability, Event, InputBackend, KeyState, KeyboardKeyEvent, Keycode, PointerAxisEvent,
-    PointerButtonEvent, PointerMotionAbsoluteEvent, TouchCancelEvent, TouchDownEvent, TouchEvent,
-    TouchMotionEvent, TouchSlot, TouchUpEvent, UnusedEvent,
+    DeviceCapability, Event, GestureBeginEvent, GestureEndEvent, GestureHoldBeginEvent, GestureHoldEndEvent,
+    GesturePinchBeginEvent, GesturePinchEndEvent, GesturePinchUpdateEvent, InputBackend, InputTime, KeyState,
+    KeyboardKeyEvent, Keycode, PointerAxisEvent, PointerButtonEvent, PointerMotionAbsoluteEvent,
+    TouchCancelEvent, TouchDownEvent, TouchEvent, TouchMotionEvent, TouchSlot, TouchUpEvent, UnusedEvent,
 };
 
 /// Marker used to define the `InputBackend` types for the winit backend.
@@ -32,7 +33,10 @@ impl Device for WinitVirtualDevice {
     fn has_capability(&self, capability: DeviceCapability) -> bool {
         matches!(
             capability,
-            DeviceCapability::Keyboard | DeviceCapability::Pointer | DeviceCapability::Touch
+            DeviceCapability::Keyboard
+                | DeviceCapability::Pointer
+                | DeviceCapability::Touch
+                | DeviceCapability::Gesture
         )
     }
 
@@ -48,14 +52,14 @@ impl Device for WinitVirtualDevice {
 /// Winit-Backend internal event wrapping `winit`'s types into a [`KeyboardKeyEvent`]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WinitKeyboardInputEvent {
-    pub(crate) time: u64,
+    pub(crate) time: InputTime,
     pub(crate) key: u32,
     pub(crate) count: u32,
     pub(crate) state: ElementState,
 }
 
 impl Event<WinitInput> for WinitKeyboardInputEvent {
-    fn time(&self) -> u64 {
+    fn time(&self) -> InputTime {
         self.time
     }
 
@@ -81,13 +85,13 @@ impl KeyboardKeyEvent<WinitInput> for WinitKeyboardInputEvent {
 /// Winit-Backend internal event wrapping `winit`'s types into a [`PointerMotionAbsoluteEvent`]
 #[derive(Debug, Clone)]
 pub struct WinitMouseMovedEvent {
-    pub(crate) time: u64,
+    pub(crate) time: InputTime,
     pub(crate) position: RelativePosition,
     pub(crate) global_position: PhysicalPosition<f64>,
 }
 
 impl Event<WinitInput> for WinitMouseMovedEvent {
-    fn time(&self) -> u64 {
+    fn time(&self) -> InputTime {
         self.time
     }
 
@@ -118,12 +122,12 @@ impl AbsolutePositionEvent<WinitInput> for WinitMouseMovedEvent {
 /// Winit-Backend internal event wrapping `winit`'s types into a [`PointerAxisEvent`]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WinitMouseWheelEvent {
-    pub(crate) time: u64,
+    pub(crate) time: InputTime,
     pub(crate) delta: MouseScrollDelta,
 }
 
 impl Event<WinitInput> for WinitMouseWheelEvent {
-    fn time(&self) -> u64 {
+    fn time(&self) -> InputTime {
         self.time
     }
 
@@ -167,14 +171,14 @@ impl PointerAxisEvent<WinitInput> for WinitMouseWheelEvent {
 /// Winit-Backend internal event wrapping `winit`'s types into a [`PointerButtonEvent`]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WinitMouseInputEvent {
-    pub(crate) time: u64,
+    pub(crate) time: InputTime,
     pub(crate) button: WinitMouseButton,
     pub(crate) state: ElementState,
     pub(crate) is_x11: bool,
 }
 
 impl Event<WinitInput> for WinitMouseInputEvent {
-    fn time(&self) -> u64 {
+    fn time(&self) -> InputTime {
         self.time
     }
 
@@ -209,14 +213,14 @@ impl PointerButtonEvent<WinitInput> for WinitMouseInputEvent {
 /// Winit-Backend internal event wrapping `winit`'s types into a [`TouchDownEvent`]
 #[derive(Debug, Clone)]
 pub struct WinitTouchStartedEvent {
-    pub(crate) time: u64,
+    pub(crate) time: InputTime,
     pub(crate) position: RelativePosition,
     pub(crate) global_position: PhysicalPosition<f64>,
     pub(crate) id: u64,
 }
 
 impl Event<WinitInput> for WinitTouchStartedEvent {
-    fn time(&self) -> u64 {
+    fn time(&self) -> InputTime {
         self.time
     }
 
@@ -254,14 +258,14 @@ impl AbsolutePositionEvent<WinitInput> for WinitTouchStartedEvent {
 /// Winit-Backend internal event wrapping `winit`'s types into a [`TouchMotionEvent`]
 #[derive(Debug, Clone)]
 pub struct WinitTouchMovedEvent {
-    pub(crate) time: u64,
+    pub(crate) time: InputTime,
     pub(crate) position: RelativePosition,
     pub(crate) global_position: PhysicalPosition<f64>,
     pub(crate) id: u64,
 }
 
 impl Event<WinitInput> for WinitTouchMovedEvent {
-    fn time(&self) -> u64 {
+    fn time(&self) -> InputTime {
         self.time
     }
 
@@ -296,15 +300,15 @@ impl AbsolutePositionEvent<WinitInput> for WinitTouchMovedEvent {
     }
 }
 
-/// Winit-Backend internal event wrapping `winit`'s types into a `TouchUpEvent`
+/// Winit-Backend internal event wrapping `winit`'s types into a [`TouchUpEvent`]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WinitTouchEndedEvent {
-    pub(crate) time: u64,
+    pub(crate) time: InputTime,
     pub(crate) id: u64,
 }
 
 impl Event<WinitInput> for WinitTouchEndedEvent {
-    fn time(&self) -> u64 {
+    fn time(&self) -> InputTime {
         self.time
     }
 
@@ -324,12 +328,12 @@ impl TouchEvent<WinitInput> for WinitTouchEndedEvent {
 /// Winit-Backend internal event wrapping `winit`'s types into a [`TouchCancelEvent`]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WinitTouchCancelledEvent {
-    pub(crate) time: u64,
+    pub(crate) time: InputTime,
     pub(crate) id: u64,
 }
 
 impl Event<WinitInput> for WinitTouchCancelledEvent {
-    fn time(&self) -> u64 {
+    fn time(&self) -> InputTime {
         self.time
     }
 
@@ -345,6 +349,144 @@ impl TouchEvent<WinitInput> for WinitTouchCancelledEvent {
         Some(self.id as u32).into()
     }
 }
+
+/// Winit-Backend internal event wrapping `winit`'s types into a [`GesturePinchBeginEvent`]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WinitGesturePinchBeginEvent {
+    pub(crate) time: InputTime,
+}
+
+impl Event<WinitInput> for WinitGesturePinchBeginEvent {
+    fn time(&self) -> InputTime {
+        self.time
+    }
+
+    fn device(&self) -> WinitVirtualDevice {
+        WinitVirtualDevice
+    }
+}
+
+impl GestureBeginEvent<WinitInput> for WinitGesturePinchBeginEvent {
+    fn fingers(&self) -> u32 {
+        // Libinput only reports pinch gestures with 2 fingers, and winit-wayland also filters fingers != 2.
+        2
+    }
+}
+
+impl GesturePinchBeginEvent<WinitInput> for WinitGesturePinchBeginEvent {}
+
+/// Winit-Backend internal event wrapping `winit`'s types into a [`GesturePinchUpdateEvent`]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WinitGesturePinchUpdateEvent {
+    pub(crate) time: InputTime,
+    pub(crate) scale: f64,
+    pub(crate) rotation: f64,
+    pub(crate) delta_x: f64,
+    pub(crate) delta_y: f64,
+}
+
+impl Event<WinitInput> for WinitGesturePinchUpdateEvent {
+    fn time(&self) -> InputTime {
+        self.time
+    }
+
+    fn device(&self) -> WinitVirtualDevice {
+        WinitVirtualDevice
+    }
+}
+
+impl GesturePinchUpdateEvent<WinitInput> for WinitGesturePinchUpdateEvent {
+    fn scale(&self) -> f64 {
+        self.scale
+    }
+
+    fn delta_x(&self) -> f64 {
+        self.delta_x
+    }
+
+    fn delta_y(&self) -> f64 {
+        self.delta_y
+    }
+
+    fn rotation(&self) -> f64 {
+        self.rotation
+    }
+}
+
+/// Winit-Backend internal event wrapping `winit`'s types into a [`GesturePinchEndEvent`]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WinitGesturePinchEndEvent {
+    pub(crate) time: InputTime,
+    pub(crate) cancelled: bool,
+}
+
+impl Event<WinitInput> for WinitGesturePinchEndEvent {
+    fn time(&self) -> InputTime {
+        self.time
+    }
+
+    fn device(&self) -> WinitVirtualDevice {
+        WinitVirtualDevice
+    }
+}
+
+impl GestureEndEvent<WinitInput> for WinitGesturePinchEndEvent {
+    fn cancelled(&self) -> bool {
+        self.cancelled
+    }
+}
+
+impl GesturePinchEndEvent<WinitInput> for WinitGesturePinchEndEvent {}
+
+/// Winit-Backend internal event wrapping `winit`'s types into a [`GestureHoldBeginEvent`]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WinitGestureHoldBeginEvent {
+    pub(crate) time: InputTime,
+}
+
+impl Event<WinitInput> for WinitGestureHoldBeginEvent {
+    fn time(&self) -> InputTime {
+        self.time
+    }
+
+    fn device(&self) -> WinitVirtualDevice {
+        WinitVirtualDevice
+    }
+}
+
+impl GestureBeginEvent<WinitInput> for WinitGestureHoldBeginEvent {
+    fn fingers(&self) -> u32 {
+        // winit's HoldGesture carries no finger count; winit-wayland drops 1-finger holds, so every hold observed here has ≥ 2 fingers.
+        2
+    }
+}
+
+impl GestureHoldBeginEvent<WinitInput> for WinitGestureHoldBeginEvent {}
+
+/// Winit-Backend internal event wrapping `winit`'s types into a [`GestureHoldEndEvent`]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WinitGestureHoldEndEvent {
+    pub(crate) time: InputTime,
+    pub(crate) cancelled: bool,
+}
+
+impl Event<WinitInput> for WinitGestureHoldEndEvent {
+    fn time(&self) -> InputTime {
+        self.time
+    }
+
+    fn device(&self) -> WinitVirtualDevice {
+        WinitVirtualDevice
+    }
+}
+
+impl GestureEndEvent<WinitInput> for WinitGestureHoldEndEvent {
+    fn cancelled(&self) -> bool {
+        self.cancelled
+    }
+}
+
+impl GestureHoldEndEvent<WinitInput> for WinitGestureHoldEndEvent {}
 
 impl From<ElementState> for KeyState {
     #[inline]
@@ -393,11 +535,11 @@ impl InputBackend for WinitInput {
     type GestureSwipeBeginEvent = UnusedEvent;
     type GestureSwipeUpdateEvent = UnusedEvent;
     type GestureSwipeEndEvent = UnusedEvent;
-    type GesturePinchBeginEvent = UnusedEvent;
-    type GesturePinchUpdateEvent = UnusedEvent;
-    type GesturePinchEndEvent = UnusedEvent;
-    type GestureHoldBeginEvent = UnusedEvent;
-    type GestureHoldEndEvent = UnusedEvent;
+    type GesturePinchBeginEvent = WinitGesturePinchBeginEvent;
+    type GesturePinchUpdateEvent = WinitGesturePinchUpdateEvent;
+    type GesturePinchEndEvent = WinitGesturePinchEndEvent;
+    type GestureHoldBeginEvent = WinitGestureHoldBeginEvent;
+    type GestureHoldEndEvent = WinitGestureHoldEndEvent;
 
     type TouchDownEvent = WinitTouchStartedEvent;
     type TouchUpEvent = WinitTouchEndedEvent;

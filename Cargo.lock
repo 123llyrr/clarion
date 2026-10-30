@@ -7634,7 +7634,7 @@ dependencies = [
  "reis",
  "rustix 1.1.4",
  "scopeguard",
- "sha2 0.10.9",
+ "siphasher",
  "smallvec",
  "tempfile",
  "thiserror 2.0.20",
@@ -7745,7 +7745,7 @@ dependencies = [
 [[package]]
 name = "smithay-drm-extras"
 version = "0.1.0"
-source = "git+https://github.com/Smithay/smithay.git?rev=4cf0b62028039661477d482ec4758b687d8f4392#4cf0b62028039661477d482ec4758b687d8f4392"
+source = "git+https://github.com/Smithay/smithay.git?rev=2923f2248508307687de4e1d84e4d208b937ad42#2923f2248508307687de4e1d84e4d208b937ad42"
 dependencies = [
  "drm",
  "libdisplay-info",

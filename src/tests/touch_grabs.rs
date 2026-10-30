@@ -66,7 +66,7 @@ fn setup() -> (Fixture, ClientId, WlSurface, Window, TouchHandle<State>) {
                 slot: Some(slot).into(),
                 location: START.into(),
                 serial: SERIAL_COUNTER.next_serial(),
-                time: 10,
+                time: smithay::backend::input::InputTime::from_millis(10),
             },
         );
     }
@@ -89,7 +89,7 @@ fn motion(f: &mut Fixture, touch: &TouchHandle<State>, slot: u32, location: (f64
         &MotionEvent {
             slot: Some(slot).into(),
             location: location.into(),
-            time: 20,
+            time: smithay::backend::input::InputTime::from_millis(20),
         },
     );
 }
@@ -100,7 +100,7 @@ fn up(f: &mut Fixture, touch: &TouchHandle<State>, slot: u32) {
         &UpEvent {
             slot: Some(slot).into(),
             serial: SERIAL_COUNTER.next_serial(),
-            time: 21,
+            time: smithay::backend::input::InputTime::from_millis(21),
         },
     );
 }
@@ -172,14 +172,14 @@ fn overview_tablet_release_and_proximity_out_have_distinct_semantics() {
                 location: START.into(),
                 axis: None,
                 serial: SERIAL_COUNTER.next_serial(),
-                time: 9,
+                time: smithay::backend::input::InputTime::from_millis(9),
             },
         );
         pen.down(
             f.clarion_state(),
             &tool::DownEvent {
                 serial: SERIAL_COUNTER.next_serial(),
-                time: 10,
+                time: smithay::backend::input::InputTime::from_millis(10),
             },
         );
         let grab = overview_grab(
@@ -194,12 +194,12 @@ fn overview_tablet_release_and_proximity_out_have_distinct_semantics() {
         pen.set_grab(
             f.clarion_state(),
             grab,
-            10,
+            smithay::backend::input::InputTime::from_millis(10),
             SERIAL_COUNTER.next_serial(),
             Focus::Clear,
         );
         assert!(pen.is_grabbed());
-        pen.frame(f.clarion_state(), 10);
+        pen.frame(f.clarion_state(), smithay::backend::input::InputTime::from_millis(10));
         if hold {
             dispatch_for(&mut f, Duration::from_millis(550));
             let output = f.clarion_output(1);
@@ -214,7 +214,7 @@ fn overview_tablet_release_and_proximity_out_have_distinct_semantics() {
             &tool::MotionEvent {
                 location: target.into(),
                 serial: SERIAL_COUNTER.next_serial(),
-                time: 20,
+                time: smithay::backend::input::InputTime::from_millis(20),
             },
         );
         if proximity_out {
@@ -222,7 +222,7 @@ fn overview_tablet_release_and_proximity_out_have_distinct_semantics() {
                 f.clarion_state(),
                 &tool::ProximityOutEvent {
                     serial: SERIAL_COUNTER.next_serial(),
-                    time: 21,
+                    time: smithay::backend::input::InputTime::from_millis(21),
                 },
             );
         } else {
@@ -230,13 +230,13 @@ fn overview_tablet_release_and_proximity_out_have_distinct_semantics() {
                 f.clarion_state(),
                 &tool::UpEvent {
                     serial: SERIAL_COUNTER.next_serial(),
-                    time: 21,
+                    time: smithay::backend::input::InputTime::from_millis(21),
                 },
             );
         }
         assert!(!pen.is_grabbed());
         assert_eq!(f.clarion().layout.is_overview_open(), stays_open);
-        pen.frame(f.clarion_state(), 21);
+        pen.frame(f.clarion_state(), smithay::backend::input::InputTime::from_millis(21));
         assert_eq!(f.clarion().layout.is_overview_open(), stays_open);
     }
 }
@@ -275,14 +275,14 @@ fn overview_tablet_release_after_completed_mode_switch_does_not_commit_old_tap()
             location: START.into(),
             axis: None,
             serial: SERIAL_COUNTER.next_serial(),
-            time: 9,
+            time: smithay::backend::input::InputTime::from_millis(9),
         },
     );
     pen.down(
         f.clarion_state(),
         &tool::DownEvent {
             serial: SERIAL_COUNTER.next_serial(),
-            time: 10,
+            time: smithay::backend::input::InputTime::from_millis(10),
         },
     );
     let grab = overview_grab(
@@ -298,7 +298,7 @@ fn overview_tablet_release_after_completed_mode_switch_does_not_commit_old_tap()
     pen.set_grab(
         f.clarion_state(),
         grab,
-        10,
+        smithay::backend::input::InputTime::from_millis(10),
         SERIAL_COUNTER.next_serial(),
         Focus::Clear,
     );
@@ -312,7 +312,7 @@ fn overview_tablet_release_after_completed_mode_switch_does_not_commit_old_tap()
         f.clarion_state(),
         &tool::UpEvent {
             serial: SERIAL_COUNTER.next_serial(),
-            time: 21,
+            time: smithay::backend::input::InputTime::from_millis(21),
         },
     );
     assert!(!pen.is_grabbed());
@@ -325,7 +325,7 @@ fn overview_tablet_release_after_completed_mode_switch_does_not_commit_old_tap()
         f.clarion().layout.active_workspace().unwrap().id(),
         workspace
     );
-    pen.frame(f.clarion_state(), 21);
+    pen.frame(f.clarion_state(), smithay::backend::input::InputTime::from_millis(21));
     assert!(f.clarion().layout.is_overview_open());
 }
 
@@ -486,7 +486,7 @@ fn overview_move_release_keeps_the_last_position() {
             &MotionEvent {
                 slot: Some(1).into(),
                 location: (260., 260.).into(),
-                time: 520,
+                time: smithay::backend::input::InputTime::from_millis(520),
             },
         );
         touch.frame(f.clarion_state());
@@ -496,7 +496,7 @@ fn overview_move_release_keeps_the_last_position() {
             &MotionEvent {
                 slot: Some(1).into(),
                 location: (320., 300.).into(),
-                time: 530,
+                time: smithay::backend::input::InputTime::from_millis(530),
             },
         );
         if frame_before_release {
@@ -507,7 +507,7 @@ fn overview_move_release_keeps_the_last_position() {
             &UpEvent {
                 slot: Some(1).into(),
                 serial: SERIAL_COUNTER.next_serial(),
-                time: 531,
+                time: smithay::backend::input::InputTime::from_millis(531),
             },
         );
         assert!(!touch.is_grabbed());

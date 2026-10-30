@@ -6,7 +6,7 @@ use std::{
     collections::{HashMap, hash_map},
     ops,
     sync::{
-        Mutex,
+        Mutex, Weak,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -23,12 +23,24 @@ use wayland_server::{
 
 use super::compositor::{self, RegionAttributes};
 use crate::{
-    input::{SeatHandler, pointer::PointerHandle},
+    input::{
+        SeatHandler,
+        pointer::{PointerHandle, PointerRc},
+    },
     utils::{Logical, Point},
     wayland::{Dispatch2, GlobalData, GlobalDispatch2, seat::PointerUserData},
 };
 
 const VERSION: u32 = 1;
+
+/// Reason for Constraint remove
+#[derive(Debug)]
+pub enum ConstraintRemove {
+    /// Client call destroy
+    Destroyed(PointerConstraint),
+    /// Compositor pointer leave surface
+    PointerLeave(Option<RegionAttributes>),
+}
 
 /// Handler for pointer constraints
 pub trait PointerConstraintsHandler: SeatHandler {
@@ -39,12 +51,12 @@ pub trait PointerConstraintsHandler: SeatHandler {
 
     /// Pointer constraint removed for `pointer` on `surface`
     ///
-    /// Don't use [`with_pointer_constraint`] to access the constraint
+    /// Use [`with_pointer_constraint`] to access the constraint.
     fn remove_constraint(
         &mut self,
         _surface: &WlSurface,
         _pointer: &PointerHandle<Self>,
-        _constraint: Option<&PointerConstraint>,
+        _constraint_remove: ConstraintRemove,
     ) {
     }
 
@@ -154,7 +166,7 @@ impl<D: SeatHandler + PointerConstraintsHandler + 'static> PointerConstraintRef<
     ///
     /// This is sent automatically when the surface loses pointer focus, but
     /// may also be invoked while the surface is focused.
-    pub fn deactivate(self, state: &mut D, surface: &WlSurface, pointer: &PointerHandle<D>) {
+    pub fn deactivate(self) {
         let deactivated = match self.entry.get() {
             PointerConstraint::Confined(confined) => {
                 if confined.active.swap(false, Ordering::SeqCst) {
@@ -173,11 +185,6 @@ impl<D: SeatHandler + PointerConstraintsHandler + 'static> PointerConstraintRef<
                 }
             }
         };
-
-        if deactivated {
-            let constraint = self.entry.get();
-            state.remove_constraint(surface, pointer, Some(constraint));
-        }
 
         if deactivated && self.lifetime() == WEnum::Value(Lifetime::Oneshot) {
             self.entry.remove_entry();
@@ -259,7 +266,7 @@ impl PointerConstraintsState {
 #[derive(Debug)]
 pub struct PointerConstraintUserData<D: SeatHandler> {
     surface: WlSurface,
-    pointer: Option<PointerHandle<D>>,
+    arc: Weak<PointerRc<D>>,
 }
 
 struct PointerConstraintData<D: SeatHandler + 'static> {
@@ -366,19 +373,17 @@ fn remove_constraint<D: SeatHandler + PointerConstraintsHandler + 'static>(
     surface: &WlSurface,
     pointer: &PointerHandle<D>,
 ) {
-    let (is_removed, constraint) = with_constraint_data::<D, _, _>(surface, |data| {
+    let is_removed = with_constraint_data::<D, _, _>(surface, |data| {
         if let Some(data) = data {
             if let Some(constraint) = data.constraints.remove(pointer) {
-                return (true, Some(constraint));
+                return Some(constraint);
             }
         }
-        (false, None)
+        None
     });
 
-    if is_removed {
-        if let Some(constraint) = constraint {
-            state.remove_constraint(surface, pointer, Some(&constraint));
-        }
+    if let Some(constraint) = is_removed {
+        state.remove_constraint(surface, pointer, ConstraintRemove::Destroyed(constraint));
     }
 }
 
@@ -408,15 +413,16 @@ where
                 lifetime,
             } => {
                 let region = region.as_ref().map(compositor::get_region_attributes);
-                let pointer = pointer.data::<PointerUserData<D>>().unwrap().handle.clone();
+                let arc = pointer.data::<PointerUserData<D>>().unwrap().arc.clone();
                 let handle = data_init.init(
                     id,
                     PointerConstraintUserData {
                         surface: surface.clone(),
-                        pointer: pointer.clone(),
+                        arc: arc.clone(),
                     },
                 );
-                if let Some(pointer) = pointer {
+                if let Some(arc) = arc.upgrade() {
+                    let pointer = PointerHandle { arc };
                     add_constraint(
                         pointer_constraints,
                         &surface,
@@ -442,15 +448,16 @@ where
                 lifetime,
             } => {
                 let region = region.as_ref().map(compositor::get_region_attributes);
-                let pointer = pointer.data::<PointerUserData<D>>().unwrap().handle.clone();
+                let arc = pointer.data::<PointerUserData<D>>().unwrap().arc.clone();
                 let handle = data_init.init(
                     id,
                     PointerConstraintUserData {
                         surface: surface.clone(),
-                        pointer: pointer.clone(),
+                        arc: arc.clone(),
                     },
                 );
-                if let Some(pointer) = pointer {
+                if let Some(arc) = arc.upgrade() {
+                    let pointer = PointerHandle { arc };
                     add_constraint(
                         pointer_constraints,
                         &surface,
@@ -503,7 +510,7 @@ where
         _dh: &DisplayHandle,
         _data_init: &mut wayland_server::DataInit<'_, D>,
     ) {
-        let Some(pointer) = &self.pointer else {
+        let Some(pointer) = &self.arc.upgrade().map(|arc| PointerHandle { arc }) else {
             return;
         };
 
@@ -528,7 +535,7 @@ where
         _client: wayland_server::backend::ClientId,
         _resource: &ZwpConfinedPointerV1,
     ) {
-        let Some(pointer) = &self.pointer else {
+        let Some(pointer) = &self.arc.upgrade().map(|arc| PointerHandle { arc }) else {
             return;
         };
 
@@ -551,7 +558,7 @@ where
         _dh: &DisplayHandle,
         _data_init: &mut wayland_server::DataInit<'_, D>,
     ) {
-        let Some(pointer) = &self.pointer else {
+        let Some(pointer) = &self.arc.upgrade().map(|arc| PointerHandle { arc }) else {
             return;
         };
 
@@ -581,7 +588,7 @@ where
         _client: wayland_server::backend::ClientId,
         _resource: &ZwpLockedPointerV1,
     ) {
-        let Some(pointer) = &self.pointer else {
+        let Some(pointer) = &self.arc.upgrade().map(|arc| PointerHandle { arc }) else {
             return;
         };
 

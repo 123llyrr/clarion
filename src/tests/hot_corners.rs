@@ -66,7 +66,7 @@ pub(super) fn motion(f: &mut Fixture, pos: (f64, f64)) {
         &MotionEvent {
             location: pos,
             serial: SERIAL_COUNTER.next_serial(),
-            time: 1,
+            time: smithay::backend::input::InputTime::from_millis(1),
         },
     );
     pointer.frame(f.clarion_state());
@@ -139,7 +139,7 @@ fn blocked_grabs_and_modal_ui_do_not_trigger_hot_corners() {
     motion(&mut f, (1276., 4.));
     assert!(!f.clarion().layout.is_overview_open());
     assert!(f.clarion().hot_corner_latch().is_none());
-    pointer.unset_grab(f.clarion_state(), SERIAL_COUNTER.next_serial(), 1);
+    pointer.unset_grab(f.clarion_state(), SERIAL_COUNTER.next_serial(), smithay::backend::input::InputTime::from_millis(1));
     assert!(f.clarion().exit_confirm_dialog.show());
     motion(&mut f, (1276., 4.));
     assert!(!f.clarion().layout.is_overview_open());
@@ -174,7 +174,7 @@ fn an_already_moving_compositor_window_keeps_hot_corner_input_priority() {
             button: 0x110,
             state: ButtonState::Pressed,
             serial: SERIAL_COUNTER.next_serial(),
-            time: 10,
+            time: smithay::backend::input::InputTime::from_millis(10),
         },
     );
     let grab = MoveGrab::new(
@@ -203,7 +203,7 @@ fn an_already_moving_compositor_window_keeps_hot_corner_input_priority() {
     assert!(!f.clarion().layout.is_overview_open());
     assert!(f.clarion().hot_corner_latch().is_none());
     assert!(pointer.is_grabbed());
-    pointer.unset_grab(f.clarion_state(), SERIAL_COUNTER.next_serial(), 30);
+    pointer.unset_grab(f.clarion_state(), SERIAL_COUNTER.next_serial(), smithay::backend::input::InputTime::from_millis(30));
 }
 
 #[test]
@@ -229,7 +229,7 @@ fn touch_and_tablet_compositor_grabs_block_pointer_hot_corners() {
             slot: Some(1).into(),
             location: position,
             serial: SERIAL_COUNTER.next_serial(),
-            time: 10,
+            time: smithay::backend::input::InputTime::from_millis(10),
         },
     );
     let grab = TouchOverviewGrab::new(
@@ -273,14 +273,14 @@ fn touch_and_tablet_compositor_grabs_block_pointer_hot_corners() {
             location: position,
             axis: None,
             serial: SERIAL_COUNTER.next_serial(),
-            time: 10,
+            time: smithay::backend::input::InputTime::from_millis(10),
         },
     );
     pen.down(
         f.clarion_state(),
         &tool::DownEvent {
             serial: SERIAL_COUNTER.next_serial(),
-            time: 10,
+            time: smithay::backend::input::InputTime::from_millis(10),
         },
     );
     let grab = TouchOverviewGrab::new(
@@ -300,7 +300,7 @@ fn touch_and_tablet_compositor_grabs_block_pointer_hot_corners() {
     pen.set_grab(
         f.clarion_state(),
         grab,
-        10,
+        smithay::backend::input::InputTime::from_millis(10),
         SERIAL_COUNTER.next_serial(),
         Focus::Clear,
     );
@@ -308,7 +308,7 @@ fn touch_and_tablet_compositor_grabs_block_pointer_hot_corners() {
     assert!(!f.clarion().layout.is_overview_open());
     assert!(f.clarion().hot_corner_latch().is_none());
     assert!(pen.is_grabbed());
-    pen.unset_grab(f.clarion_state(), SERIAL_COUNTER.next_serial(), 30);
+    pen.unset_grab(f.clarion_state(), SERIAL_COUNTER.next_serial(), smithay::backend::input::InputTime::from_millis(30));
 }
 
 impl Dispatch<ZwlrVirtualPointerManagerV1, ()> for super::client::State {

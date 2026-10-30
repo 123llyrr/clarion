@@ -59,6 +59,7 @@ Rust.
 - [Local Desktop](https://github.com/localdesktop/localdesktop): An Android app for running GUI Linux via PRoot and Wayland.
 - [Otto](https://github.com/nongio/otto): A gesture-driven stacking compositor.
 - [DriftWM](https://github.com/malbiruk/driftwm): A trackpad-first infinite canvas Wayland compositor.
+- [Denial](https://github.com/denialwm/denial): A stacking, tiling, and scrolling-tiling Wayland compositor with a Flutter-based shell.
 
 ## System Dependencies
 
@@ -71,6 +72,9 @@ Rust.
 - `libgbm`
 - [`libseat`](https://git.sr.ht/~kennylevinsen/seatd)
 - `xwayland`
+- `libEGL`
+- `libpixman`
+- `libdisplay-info`
 
 ## Contact us
 

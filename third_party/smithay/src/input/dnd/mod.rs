@@ -11,6 +11,7 @@ use wayland_server::DisplayHandle;
 #[cfg(feature = "xwayland")]
 use crate::wayland::seat::WaylandFocus;
 use crate::{
+    backend::input::InputTime,
     input::{Seat, SeatHandler},
     utils::{IsAlive, Logical, Point, Serial},
 };
@@ -63,6 +64,15 @@ pub trait Source: IsAlive + Send + Sync + 'static {
     ///
     /// If this returns `None` the source is not managed by smithay (e.g. client_local)
     fn metadata(&self) -> Option<SourceMetadata>;
+    /// The target accepted a mime-type, or rejected the offer when `None`
+    ///
+    /// Proxying implementations, such as a nested compositor forwarding a
+    /// drag to its own clients, need this to relay the target's choice to
+    /// the upstream source. Sources that originate their own data can
+    /// ignore it.
+    fn accepted(&self, mime_type: Option<String>) {
+        let _ = mime_type;
+    }
     /// An action was selected by the target
     fn choose_action(&self, action: DndAction);
     /// The target requests data to be transferred to the given file descriptor for the given mime-type
@@ -114,7 +124,7 @@ pub trait DndFocus<D: SeatHandler>: WaylandFocus + IsAlive + PartialEq {
         offer: Option<&mut Self::OfferData<S>>,
         seat: &Seat<D>,
         location: Point<f64, Logical>,
-        time: u32,
+        time: InputTime,
     );
 
     /// An active Drag'n'Drop operation, which has previously
@@ -152,7 +162,7 @@ pub trait DndFocus<D: SeatHandler>: IsAlive + PartialEq {
         offer: Option<&mut Self::OfferData<S>>,
         seat: &Seat<D>,
         location: Point<f64, Logical>,
-        time: u32,
+        time: InputTime,
     );
 
     /// An active Drag'n'Drop operation, which has previously

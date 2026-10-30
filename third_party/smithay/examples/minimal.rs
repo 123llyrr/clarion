@@ -3,7 +3,7 @@ use std::sync::Arc;
 use ::winit::event_loop::pump_events::PumpStatus;
 use smithay::{
     backend::{
-        input::{InputEvent, KeyboardKeyEvent},
+        input::{InputEvent, InputTime, KeyboardKeyEvent},
         renderer::{
             Color32F, Frame, Renderer,
             element::{
@@ -181,7 +181,7 @@ pub fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
                         event.key_code(),
                         event.state(),
                         0.into(),
-                        0,
+                        InputTime::now(),
                         |_, _, _| {
                             //
                             FilterResult::Forward
@@ -237,7 +237,7 @@ pub fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             if let Some(stream) = listener.accept()? {
-                println!("Got a client: {:?}", stream);
+                tracing::info!("Got a client: {:?}", stream);
 
                 let client = display
                     .handle()
@@ -284,11 +284,11 @@ struct ClientState {
 }
 impl ClientData for ClientState {
     fn initialized(&self, _client_id: ClientId) {
-        println!("initialized");
+        tracing::info!("initialized");
     }
 
     fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {
-        println!("disconnected");
+        tracing::info!("disconnected");
     }
 }
 

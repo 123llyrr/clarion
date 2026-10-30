@@ -1,17 +1,8 @@
 diff --git a/src/backend/allocator/swapchain.rs b/src/backend/allocator/swapchain.rs
-index c1ffc8d..c9ca0e2 100644
+index 5dfb277..fa2753f 100644
 --- a/src/backend/allocator/swapchain.rs
 +++ b/src/backend/allocator/swapchain.rs
-@@ -206,7 +206,7 @@ where
-             if !Arc::ptr_eq(other_slot, &slot.0) && other_slot.buffer.is_some() {
-                 let res = other_slot
-                     .age
--                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |age| {
-+                    .try_update(Ordering::SeqCst, Ordering::SeqCst, |age| {
-                         if age > 0 { age.checked_add(1) } else { Some(0) }
-                     });
-                 // If the age overflows the slot was not used for a long time. Lets clear it
-@@ -242,11 +242,11 @@ where
+@@ -243,11 +243,11 @@ where
      /// Resetting the buffer age will discard all damage information and force a
      /// full redraw for the next frame.
      pub fn reset_buffer_ages(&mut self) {
@@ -66,7 +57,7 @@ index 3f471cf..fe9f955 100644
      ///
      /// *Note*: Needs to be called, after the vblank event of the matching [`DrmDevice`](super::DrmDevice)
 diff --git a/src/backend/drm/surface/atomic.rs b/src/backend/drm/surface/atomic.rs
-index e63f0ef..07299cf 100644
+index e7e1739..6293aac 100644
 --- a/src/backend/drm/surface/atomic.rs
 +++ b/src/backend/drm/surface/atomic.rs
 @@ -44,6 +44,15 @@ pub struct State {
@@ -269,7 +260,7 @@ index e63f0ef..07299cf 100644
      fd: Arc<DrmDeviceInternal>,
      db: DumbBuffer,
 diff --git a/src/backend/drm/surface/mod.rs b/src/backend/drm/surface/mod.rs
-index 70c1f73..9e4f178 100644
+index 677fa13..be41a78 100644
 --- a/src/backend/drm/surface/mod.rs
 +++ b/src/backend/drm/surface/mod.rs
 @@ -1,10 +1,10 @@
@@ -285,7 +276,7 @@ index 70c1f73..9e4f178 100644
  
  use libc::dev_t;
  
-@@ -343,6 +343,63 @@ impl DrmSurface {
+@@ -351,6 +351,63 @@ impl DrmSurface {
          }
      }
  
@@ -350,7 +341,7 @@ index 70c1f73..9e4f178 100644
      ///
      /// Errors if the plane is not supported by this crtc or if the underlying
 diff --git a/src/backend/renderer/mod.rs b/src/backend/renderer/mod.rs
-index 578d14f..f58dc79 100644
+index 2efa08c..e512442 100644
 --- a/src/backend/renderer/mod.rs
 +++ b/src/backend/renderer/mod.rs
 @@ -436,6 +436,17 @@ pub trait Renderer: RendererSuper {
@@ -537,71 +528,3 @@ index 0000000..2896dae
 +        );
 +    }
 +}
-diff --git a/src/backend/winit/input.rs b/src/backend/winit/input.rs
-index 3262630..14d8fce 100644
---- a/src/backend/winit/input.rs
-+++ b/src/backend/winit/input.rs
-@@ -137,6 +137,7 @@ impl PointerAxisEvent<WinitInput> for WinitMouseWheelEvent {
-         match self.delta {
-             MouseScrollDelta::LineDelta(_, _) => AxisSource::Wheel,
-             MouseScrollDelta::PixelDelta(_) => AxisSource::Continuous,
-+            _ => AxisSource::Continuous,
-         }
-     }
- 
-@@ -144,7 +145,7 @@ impl PointerAxisEvent<WinitInput> for WinitMouseWheelEvent {
-         match (axis, self.delta) {
-             (Axis::Horizontal, MouseScrollDelta::PixelDelta(delta)) => Some(-delta.x),
-             (Axis::Vertical, MouseScrollDelta::PixelDelta(delta)) => Some(-delta.y),
--            (_, MouseScrollDelta::LineDelta(_, _)) => None,
-+            _ => None,
-         }
-     }
- 
-@@ -153,7 +154,7 @@ impl PointerAxisEvent<WinitInput> for WinitMouseWheelEvent {
-         match (axis, self.delta) {
-             (Axis::Horizontal, MouseScrollDelta::LineDelta(x, _)) => Some(-x as f64 * 120.),
-             (Axis::Vertical, MouseScrollDelta::LineDelta(_, y)) => Some(-y as f64 * 120.),
--            (_, MouseScrollDelta::PixelDelta(_)) => None,
-+            _ => None,
-         }
-     }
- 
-diff --git a/src/backend/winit/mod.rs b/src/backend/winit/mod.rs
-index 1c3729b..74ce4ef 100644
---- a/src/backend/winit/mod.rs
-+++ b/src/backend/winit/mod.rs
-@@ -558,7 +558,7 @@ impl<F: FnMut(WinitEvent)> ApplicationHandler for WinitEventLoopApp<'_, F> {
-                     }
-                     // TODO Handle tablet events
-                     PointerSource::TabletTool { .. } => {}
--                    PointerSource::Unknown => {}
-+                    _ => (),
-                 }
-             }
-             WindowEvent::MouseWheel { delta, .. } => {
-@@ -630,7 +630,7 @@ impl<F: FnMut(WinitEvent)> ApplicationHandler for WinitEventLoopApp<'_, F> {
-                     },
-                     // TODO Handle tablet events
-                     ButtonSource::TabletTool { .. } => {}
--                    ButtonSource::Unknown(_) => {}
-+                    _ => {}
-                 }
-             }
-             WindowEvent::PointerLeft {
-@@ -653,7 +653,6 @@ impl<F: FnMut(WinitEvent)> ApplicationHandler for WinitEventLoopApp<'_, F> {
-             | WindowEvent::KeyboardInput { .. }
-             | WindowEvent::DragEntered { .. }
-             | WindowEvent::DragLeft { .. }
--            | WindowEvent::DragMoved { .. }
-             | WindowEvent::Ime(_)
-             | WindowEvent::Moved(_)
-             | WindowEvent::Occluded(_)
-@@ -664,6 +663,7 @@ impl<F: FnMut(WinitEvent)> ApplicationHandler for WinitEventLoopApp<'_, F> {
-             | WindowEvent::RotationGesture { .. }
-             | WindowEvent::PanGesture { .. }
-             | WindowEvent::ActivationTokenDone { .. } => (),
-+            _ => (),
-         }
-     }
- }

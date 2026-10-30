@@ -181,8 +181,8 @@ use x11rb::{
             AtomEnum, CONFIGURE_NOTIFY_EVENT, ChangeWindowAttributesAux, Colormap, ColormapAlloc,
             ConfigWindow, ConfigureNotifyEvent, ConfigureWindowAux, ConnectionExt, CreateGCAux,
             CreateWindowAux, CursorWrapper, EventMask, FontWrapper, GcontextWrapper, ImageFormat, InputFocus,
-            NotifyDetail, PixmapWrapper, PropMode, Property, QueryExtensionReply, Screen, StackMode,
-            Visualid, WindowClass,
+            NotifyDetail, NotifyMode, PixmapWrapper, PropMode, Property, QueryExtensionReply, Screen,
+            StackMode, Visualid, WindowClass,
         },
     },
     rust_connection::{ConnectionError, DefaultStream, RustConnection},
@@ -1048,12 +1048,14 @@ impl X11Wm {
             span,
         };
 
-        let event_handle = handle.clone();
+        let event_handle = handle.downgrade();
         let dh = dh.clone();
         handle.insert_source(source, move |event, _, data| match event {
             calloop::channel::Event::Msg(event) => {
-                if let Err(err) = handle_event(&event_handle, &dh, data, id, event) {
-                    warn!(id = id.0, err = ?err, "Failed to handle X11 event");
+                if let Some(event_handle) = event_handle.upgrade() {
+                    if let Err(err) = handle_event(&event_handle, &dh, data, id, event) {
+                        warn!(id = id.0, err = ?err, "Failed to handle X11 event");
+                    }
                 }
             }
             calloop::channel::Event::Closed => {
@@ -2071,12 +2073,12 @@ where
                         .reply_unchecked()?
                     {
                         let type_ = prop.type_;
-                        transfer.read_selection_prop(prop);
                         if type_ == xwm.atoms.INCR {
                             transfer.incr = true;
                             return Ok(());
-                        } else if let Some(token) = transfer.token.as_ref() {
-                            let _ = loop_handle.enable(token);
+                        } else if transfer.token.is_some() {
+                            transfer.read_selection_prop(prop);
+                            let _ = loop_handle.enable(transfer.token.as_ref().unwrap());
                         } else {
                             selection.incoming.remove(&n.requestor);
                         }
@@ -2400,7 +2402,22 @@ where
                 }
             }
         }
-        Event::FocusIn(n) => {
+        Event::FocusIn(n)
+            if n.event == xwm.screen.root
+                && matches!(n.detail, NotifyDetail::NONE | NotifyDetail::POINTER_ROOT) =>
+        {
+            conn.change_property32(
+                PropMode::REPLACE,
+                xwm.screen.root,
+                xwm.atoms._NET_ACTIVE_WINDOW,
+                AtomEnum::WINDOW,
+                &[x11rb::NONE],
+            )?;
+        }
+        Event::FocusIn(n)
+            if n.detail != NotifyDetail::POINTER
+                && !matches!(n.mode, NotifyMode::GRAB | NotifyMode::UNGRAB) =>
+        {
             if xwm.windows.iter().any(|x| x.window_id() == n.event) {
                 conn.change_property32(
                     PropMode::REPLACE,
@@ -2408,17 +2425,6 @@ where
                     xwm.atoms._NET_ACTIVE_WINDOW,
                     AtomEnum::WINDOW,
                     &[n.event],
-                )?;
-            }
-        }
-        Event::FocusOut(n) if n.detail == NotifyDetail::NONE => {
-            if xwm.windows.iter().any(|x| x.window_id() == n.event) {
-                conn.change_property32(
-                    PropMode::REPLACE,
-                    xwm.screen.root,
-                    xwm.atoms._NET_ACTIVE_WINDOW,
-                    AtomEnum::WINDOW,
-                    &[x11rb::NONE],
                 )?;
             }
         }

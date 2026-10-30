@@ -6,10 +6,10 @@ use std::{
 };
 
 use crate::{
-    backend::input::{Axis, AxisRelativeDirection, AxisSource, ButtonState},
+    backend::input::{Axis, AxisRelativeDirection, AxisSource, ButtonState, InputTime},
     input::{GrabStatus, Seat, SeatHandler},
     utils::Serial,
-    utils::{Clock, IsAlive, Logical, Monotonic, Point},
+    utils::{IsAlive, Logical, Point},
 };
 
 mod cursor_image;
@@ -31,13 +31,17 @@ use tracing::{info_span, instrument};
 /// When sending events using this handle, they will be intercepted by a pointer
 /// grab if any is active. See the [`PointerGrab`] trait for details.
 pub struct PointerHandle<D: SeatHandler> {
-    pub(crate) inner: Arc<Mutex<PointerInternal<D>>>,
+    pub(crate) arc: Arc<PointerRc<D>>,
+}
+
+pub(crate) struct PointerRc<D: SeatHandler> {
+    pub(crate) inner: Mutex<PointerInternal<D>>,
     #[cfg(feature = "wayland_frontend")]
-    pub(crate) wl_pointer: Arc<crate::wayland::seat::pointer::WlPointerHandle>,
+    pub(crate) wl_pointer: crate::wayland::seat::pointer::WlPointerHandle,
     #[cfg(feature = "wayland_frontend")]
-    pub(crate) wp_pointer_gestures: Arc<crate::wayland::pointer_gestures::WpPointerGesturePointerHandle>,
+    pub(crate) wp_pointer_gestures: crate::wayland::pointer_gestures::WpPointerGesturePointerHandle,
     #[cfg(feature = "wayland_frontend")]
-    pub(crate) wp_relative: Arc<crate::wayland::relative_pointer::WpRelativePointerHandle>,
+    pub(crate) wp_relative: crate::wayland::relative_pointer::WpRelativePointerHandle,
     pub(crate) span: tracing::Span,
 }
 
@@ -45,7 +49,7 @@ pub struct PointerHandle<D: SeatHandler> {
 impl<D: SeatHandler> fmt::Debug for PointerHandle<D> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PointerHandle")
-            .field("inner", &self.inner)
+            .field("inner", &self.arc.inner)
             .finish()
     }
 }
@@ -54,10 +58,10 @@ impl<D: SeatHandler> fmt::Debug for PointerHandle<D> {
 impl<D: SeatHandler> fmt::Debug for PointerHandle<D> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PointerHandle")
-            .field("inner", &self.inner)
-            .field("wl_seat", &self.wl_pointer)
-            .field("wp_pointer_gestures", &self.wp_pointer_gestures)
-            .field("wp_relative", &self.wp_relative)
+            .field("inner", &self.arc.inner)
+            .field("wl_seat", &self.arc.wl_pointer)
+            .field("wp_pointer_gestures", &self.arc.wp_pointer_gestures)
+            .field("wp_relative", &self.arc.wp_relative)
             .finish()
     }
 }
@@ -66,14 +70,7 @@ impl<D: SeatHandler> Clone for PointerHandle<D> {
     #[inline]
     fn clone(&self) -> Self {
         Self {
-            inner: self.inner.clone(),
-            #[cfg(feature = "wayland_frontend")]
-            wl_pointer: self.wl_pointer.clone(),
-            #[cfg(feature = "wayland_frontend")]
-            wp_pointer_gestures: self.wp_pointer_gestures.clone(),
-            #[cfg(feature = "wayland_frontend")]
-            wp_relative: self.wp_relative.clone(),
-            span: self.span.clone(),
+            arc: self.arc.clone(),
         }
     }
 }
@@ -81,14 +78,14 @@ impl<D: SeatHandler> Clone for PointerHandle<D> {
 impl<D: SeatHandler> std::hash::Hash for PointerHandle<D> {
     #[inline]
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        Arc::as_ptr(&self.inner).hash(state)
+        Arc::as_ptr(&self.arc).hash(state)
     }
 }
 
 impl<D: SeatHandler> std::cmp::PartialEq for PointerHandle<D> {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.inner, &other.inner)
+        Arc::ptr_eq(&self.arc, &other.arc)
     }
 }
 
@@ -128,7 +125,7 @@ where
     /// A pointer of a given seat ended a hold gesture
     fn gesture_hold_end(&self, seat: &Seat<D>, data: &mut D, event: &GestureHoldEndEvent);
     /// A pointer of a given seat left this handler
-    fn leave(&self, seat: &Seat<D>, data: &mut D, serial: Serial, time: u32);
+    fn leave(&self, seat: &Seat<D>, data: &mut D, serial: Serial, time: InputTime);
     /// A pointer of a given seat moved from another handler to this handler
     fn replace(
         &self,
@@ -146,16 +143,17 @@ where
 impl<D: SeatHandler + 'static> PointerHandle<D> {
     pub(crate) fn new() -> PointerHandle<D> {
         PointerHandle {
-            inner: Arc::new(Mutex::new(PointerInternal::new())),
-            #[cfg(feature = "wayland_frontend")]
-            wl_pointer: Arc::new(crate::wayland::seat::pointer::WlPointerHandle::default()),
-            #[cfg(feature = "wayland_frontend")]
-            wp_pointer_gestures: Arc::new(
-                crate::wayland::pointer_gestures::WpPointerGesturePointerHandle::default(),
-            ),
-            #[cfg(feature = "wayland_frontend")]
-            wp_relative: Arc::new(crate::wayland::relative_pointer::WpRelativePointerHandle::default()),
-            span: info_span!("input_pointer"),
+            arc: Arc::new(PointerRc {
+                inner: Mutex::new(PointerInternal::new()),
+                #[cfg(feature = "wayland_frontend")]
+                wl_pointer: crate::wayland::seat::pointer::WlPointerHandle::default(),
+                #[cfg(feature = "wayland_frontend")]
+                wp_pointer_gestures: crate::wayland::pointer_gestures::WpPointerGesturePointerHandle::default(
+                ),
+                #[cfg(feature = "wayland_frontend")]
+                wp_relative: crate::wayland::relative_pointer::WpRelativePointerHandle::default(),
+                span: info_span!("input_pointer"),
+            }),
         }
     }
 
@@ -164,20 +162,22 @@ impl<D: SeatHandler + 'static> PointerHandle<D> {
     /// If focus is set to [`Focus::Clear`] any currently focused surface will be unfocused.
     ///
     /// Overwrites any current grab.
-    #[instrument(level = "debug", parent = &self.span, skip(self, data, grab))]
+    #[instrument(level = "debug", parent = &self.arc.span, skip(self, data, grab))]
     pub fn set_grab<G: PointerGrab<D> + 'static>(&self, data: &mut D, grab: G, serial: Serial, focus: Focus) {
         let seat = self.get_seat(data);
-        self.inner
+        self.arc
+            .inner
             .lock()
             .unwrap()
             .set_grab(data, &seat, serial, grab, focus);
     }
 
     /// Remove any current grab on this pointer, resetting it to the default behavior
-    #[instrument(level = "debug", parent = &self.span, skip(self, data))]
-    pub fn unset_grab(&self, data: &mut D, serial: Serial, time: u32) {
+    #[instrument(level = "debug", parent = &self.arc.span, skip(self, data))]
+    pub fn unset_grab(&self, data: &mut D, serial: Serial, time: InputTime) {
         let seat = self.get_seat(data);
-        self.inner
+        self.arc
+            .inner
             .lock()
             .unwrap()
             .unset_grab(data, &seat, serial, time, true);
@@ -185,31 +185,23 @@ impl<D: SeatHandler + 'static> PointerHandle<D> {
 
     /// Check if this pointer is currently grabbed with this serial
     pub fn has_grab(&self, serial: Serial) -> bool {
-        let guard = self.inner.lock().unwrap();
-        match guard.grab {
-            GrabStatus::Active(s, _) => s == serial,
-            _ => false,
-        }
+        self.with_grab(|s, _| s == serial).unwrap_or(false)
     }
 
     /// Check if this pointer is currently being grabbed
     pub fn is_grabbed(&self) -> bool {
-        let guard = self.inner.lock().unwrap();
+        let guard = self.arc.inner.lock().unwrap();
         !matches!(guard.grab, GrabStatus::None)
     }
 
     /// Returns the start data for the grab, if any.
     pub fn grab_start_data(&self) -> Option<GrabStartData<D>> {
-        let guard = self.inner.lock().unwrap();
-        match &guard.grab {
-            GrabStatus::Active(_, g) => Some(g.start_data().clone()),
-            _ => None,
-        }
+        self.with_grab(|_, g| g.start_data().clone())
     }
 
     /// Calls `f` with the active grab, if any.
     pub fn with_grab<T>(&self, f: impl FnOnce(Serial, &dyn PointerGrab<D>) -> T) -> Option<T> {
-        let guard = self.inner.lock().unwrap();
+        let guard = self.arc.inner.lock().unwrap();
         if let GrabStatus::Active(s, g) = &guard.grab {
             Some(f(*s, &**g))
         } else {
@@ -228,14 +220,14 @@ impl<D: SeatHandler + 'static> PointerHandle<D> {
     ///
     /// This will internally take care of notifying the appropriate client objects
     /// of enter/motion/leave events.
-    #[instrument(level = "trace", parent = &self.span, skip(self, data, focus), fields(focus = ?focus.as_ref().map(|(_, loc)| ("...", loc))))]
+    #[instrument(level = "trace", parent = &self.arc.span, skip(self, data, focus), fields(focus = ?focus.as_ref().map(|(_, loc)| ("...", loc))))]
     pub fn motion(
         &self,
         data: &mut D,
         focus: Option<(<D as SeatHandler>::PointerFocus, Point<f64, Logical>)>,
         event: &MotionEvent,
     ) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.arc.inner.lock().unwrap();
         inner.pending_focus.clone_from(&focus);
         let seat = self.get_seat(data);
         inner.with_grab(data, &seat, |data, handle, grab| {
@@ -248,14 +240,14 @@ impl<D: SeatHandler + 'static> PointerHandle<D> {
     /// This will internally send the appropriate button event to the client
     /// objects matching with the currently focused surface, if the client uses
     /// the relative pointer protocol.
-    #[instrument(level = "trace", parent = &self.span, skip(self, data, focus), fields(focus = ?focus.as_ref().map(|(_, loc)| ("...", loc))))]
+    #[instrument(level = "trace", parent = &self.arc.span, skip(self, data, focus), fields(focus = ?focus.as_ref().map(|(_, loc)| ("...", loc))))]
     pub fn relative_motion(
         &self,
         data: &mut D,
         focus: Option<(<D as SeatHandler>::PointerFocus, Point<f64, Logical>)>,
         event: &RelativeMotionEvent,
     ) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.arc.inner.lock().unwrap();
         inner.pending_focus.clone_from(&focus);
         let seat = self.get_seat(data);
         inner.with_grab(data, &seat, |data, handle, grab| {
@@ -267,9 +259,9 @@ impl<D: SeatHandler + 'static> PointerHandle<D> {
     ///
     /// This will internally send the appropriate button event to the client
     /// objects matching with the currently focused surface.
-    #[instrument(level = "trace", parent = &self.span, skip(self, data))]
+    #[instrument(level = "trace", parent = &self.arc.span, skip(self, data))]
     pub fn button(&self, data: &mut D, event: &ButtonEvent) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.arc.inner.lock().unwrap();
         match event.state {
             ButtonState::Pressed => {
                 inner.pressed_buttons.push(event.button);
@@ -287,10 +279,11 @@ impl<D: SeatHandler + 'static> PointerHandle<D> {
     /// Start an axis frame
     ///
     /// A single frame will group multiple scroll events as if they happened in the same instance.
-    #[instrument(level = "trace", parent = &self.span, skip(self, data))]
+    #[instrument(level = "trace", parent = &self.arc.span, skip(self, data))]
     pub fn axis(&self, data: &mut D, details: AxisFrame) {
         let seat = self.get_seat(data);
-        self.inner
+        self.arc
+            .inner
             .lock()
             .unwrap()
             .with_grab(data, &seat, |data, handle, grab| {
@@ -301,10 +294,11 @@ impl<D: SeatHandler + 'static> PointerHandle<D> {
     /// End of a pointer frame
     ///
     /// A frame groups associated events. This terminates the frame.
-    #[instrument(level = "trace", parent = &self.span, skip(self, data))]
+    #[instrument(level = "trace", parent = &self.arc.span, skip(self, data))]
     pub fn frame(&self, data: &mut D) {
         let seat = self.get_seat(data);
-        self.inner
+        self.arc
+            .inner
             .lock()
             .unwrap()
             .with_grab(data, &seat, |data, handle, grab| {
@@ -317,10 +311,11 @@ impl<D: SeatHandler + 'static> PointerHandle<D> {
     /// This will internally send the appropriate event to the client
     /// objects matching with the currently focused surface, if the client uses
     /// the pointer gestures protocol.
-    #[instrument(level = "trace", parent = &self.span, skip(self, data))]
+    #[instrument(level = "trace", parent = &self.arc.span, skip(self, data))]
     pub fn gesture_swipe_begin(&self, data: &mut D, event: &GestureSwipeBeginEvent) {
         let seat = self.get_seat(data);
-        self.inner
+        self.arc
+            .inner
             .lock()
             .unwrap()
             .with_grab(data, &seat, |data, handle, grab| {
@@ -333,10 +328,11 @@ impl<D: SeatHandler + 'static> PointerHandle<D> {
     /// This will internally send the appropriate event to the client
     /// objects matching with the currently focused surface, if the client uses
     /// the pointer gestures protocol.
-    #[instrument(level = "trace", parent = &self.span, skip(self, data))]
+    #[instrument(level = "trace", parent = &self.arc.span, skip(self, data))]
     pub fn gesture_swipe_update(&self, data: &mut D, event: &GestureSwipeUpdateEvent) {
         let seat = self.get_seat(data);
-        self.inner
+        self.arc
+            .inner
             .lock()
             .unwrap()
             .with_grab(data, &seat, |data, handle, grab| {
@@ -349,10 +345,11 @@ impl<D: SeatHandler + 'static> PointerHandle<D> {
     /// This will internally send the appropriate event to the client
     /// objects matching with the currently focused surface, if the client uses
     /// the pointer gestures protocol.
-    #[instrument(level = "trace", parent = &self.span, skip(self, data))]
+    #[instrument(level = "trace", parent = &self.arc.span, skip(self, data))]
     pub fn gesture_swipe_end(&self, data: &mut D, event: &GestureSwipeEndEvent) {
         let seat = self.get_seat(data);
-        self.inner
+        self.arc
+            .inner
             .lock()
             .unwrap()
             .with_grab(data, &seat, |data, handle, grab| {
@@ -365,10 +362,11 @@ impl<D: SeatHandler + 'static> PointerHandle<D> {
     /// This will internally send the appropriate event to the client
     /// objects matching with the currently focused surface, if the client uses
     /// the pointer gestures protocol.
-    #[instrument(level = "trace", parent = &self.span, skip(self, data))]
+    #[instrument(level = "trace", parent = &self.arc.span, skip(self, data))]
     pub fn gesture_pinch_begin(&self, data: &mut D, event: &GesturePinchBeginEvent) {
         let seat = self.get_seat(data);
-        self.inner
+        self.arc
+            .inner
             .lock()
             .unwrap()
             .with_grab(data, &seat, |data, handle, grab| {
@@ -381,10 +379,11 @@ impl<D: SeatHandler + 'static> PointerHandle<D> {
     /// This will internally send the appropriate event to the client
     /// objects matching with the currently focused surface, if the client uses
     /// the pointer gestures protocol.
-    #[instrument(level = "trace", parent = &self.span, skip(self, data))]
+    #[instrument(level = "trace", parent = &self.arc.span, skip(self, data))]
     pub fn gesture_pinch_update(&self, data: &mut D, event: &GesturePinchUpdateEvent) {
         let seat = self.get_seat(data);
-        self.inner
+        self.arc
+            .inner
             .lock()
             .unwrap()
             .with_grab(data, &seat, |data, handle, grab| {
@@ -397,10 +396,11 @@ impl<D: SeatHandler + 'static> PointerHandle<D> {
     /// This will internally send the appropriate event to the client
     /// objects matching with the currently focused surface, if the client uses
     /// the pointer gestures protocol.
-    #[instrument(level = "trace", parent = &self.span, skip(self, data))]
+    #[instrument(level = "trace", parent = &self.arc.span, skip(self, data))]
     pub fn gesture_pinch_end(&self, data: &mut D, event: &GesturePinchEndEvent) {
         let seat = self.get_seat(data);
-        self.inner
+        self.arc
+            .inner
             .lock()
             .unwrap()
             .with_grab(data, &seat, |data, handle, grab| {
@@ -413,10 +413,11 @@ impl<D: SeatHandler + 'static> PointerHandle<D> {
     /// This will internally send the appropriate event to the client
     /// objects matching with the currently focused surface, if the client uses
     /// the pointer gestures protocol.
-    #[instrument(level = "trace", parent = &self.span, skip(self, data))]
+    #[instrument(level = "trace", parent = &self.arc.span, skip(self, data))]
     pub fn gesture_hold_begin(&self, data: &mut D, event: &GestureHoldBeginEvent) {
         let seat = self.get_seat(data);
-        self.inner
+        self.arc
+            .inner
             .lock()
             .unwrap()
             .with_grab(data, &seat, |data, handle, grab| {
@@ -429,10 +430,11 @@ impl<D: SeatHandler + 'static> PointerHandle<D> {
     /// This will internally send the appropriate event to the client
     /// objects matching with the currently focused surface, if the client uses
     /// the pointer gestures protocol.
-    #[instrument(level = "trace", parent = &self.span, skip(self, data))]
+    #[instrument(level = "trace", parent = &self.arc.span, skip(self, data))]
     pub fn gesture_hold_end(&self, data: &mut D, event: &GestureHoldEndEvent) {
         let seat = self.get_seat(data);
-        self.inner
+        self.arc
+            .inner
             .lock()
             .unwrap()
             .with_grab(data, &seat, |data, handle, grab| {
@@ -442,7 +444,7 @@ impl<D: SeatHandler + 'static> PointerHandle<D> {
 
     /// Access the current location of this pointer in the global space
     pub fn current_location(&self) -> Point<f64, Logical> {
-        self.inner.lock().unwrap().location
+        self.arc.inner.lock().unwrap().location
     }
 
     /// Update the current location of this pointer in the global space,
@@ -462,7 +464,7 @@ impl<D: SeatHandler + 'static> PointerHandle<D> {
     /// updated accordingly as if this function was never called.
     /// Clients will never be notified of a location hint.
     pub fn set_location(&self, location: Point<f64, Logical>) {
-        self.inner.lock().unwrap().location = location;
+        self.arc.inner.lock().unwrap().location = location;
     }
 
     /// Access the [`Serial`] of the last `pointer_enter` event, if that focus is still active.
@@ -470,7 +472,7 @@ impl<D: SeatHandler + 'static> PointerHandle<D> {
     /// In other words this will return `None` again, once a `pointer_leave` event occurred.
     #[cfg(feature = "wayland_frontend")]
     pub fn last_enter(&self) -> Option<Serial> {
-        *self.wl_pointer.last_enter.lock().unwrap()
+        *self.arc.wl_pointer.last_enter.lock().unwrap()
     }
 
     fn get_seat(&self, data: &mut D) -> Seat<D> {
@@ -491,7 +493,13 @@ where
 {
     /// Retrieve the current pointer focus
     pub fn current_focus(&self) -> Option<<D as SeatHandler>::PointerFocus> {
-        self.inner.lock().unwrap().focus.clone().map(|(focus, _)| focus)
+        self.arc
+            .inner
+            .lock()
+            .unwrap()
+            .focus
+            .clone()
+            .map(|(focus, _)| focus)
     }
 }
 
@@ -536,7 +544,7 @@ impl<D: SeatHandler + 'static> PointerInnerHandle<'_, D> {
         handler: &mut dyn PointerGrab<D>,
         data: &mut D,
         serial: Serial,
-        time: u32,
+        time: InputTime,
         restore_focus: bool,
     ) {
         handler.unset(data);
@@ -754,13 +762,20 @@ impl<D: SeatHandler + 'static> PointerInternal<D> {
                 &MotionEvent {
                     location,
                     serial,
-                    time: Clock::<Monotonic>::new().now().as_millis(),
+                    time: InputTime::now(),
                 },
             );
         }
     }
 
-    fn unset_grab(&mut self, data: &mut D, seat: &Seat<D>, serial: Serial, time: u32, restore_focus: bool) {
+    fn unset_grab(
+        &mut self,
+        data: &mut D,
+        seat: &Seat<D>,
+        serial: Serial,
+        time: InputTime,
+        restore_focus: bool,
+    ) {
         if let GrabStatus::Active(_, handler) = &mut self.grab {
             handler.unset(data);
         }
@@ -936,8 +951,8 @@ pub struct MotionEvent {
     pub location: Point<f64, Logical>,
     /// Serial of the event
     pub serial: Serial,
-    /// Timestamp of the event, with millisecond granularity
-    pub time: u32,
+    /// Timestamp of the event, with microsecond granularity
+    pub time: InputTime,
 }
 
 /// Relative pointer motion event
@@ -948,7 +963,7 @@ pub struct RelativeMotionEvent {
     /// Unaccelerated motion vector
     pub delta_unaccel: Point<f64, Logical>,
     /// Timestamp in microseconds
-    pub utime: u64,
+    pub time: InputTime,
 }
 
 /// Pointer button event
@@ -959,8 +974,8 @@ pub struct RelativeMotionEvent {
 pub struct ButtonEvent {
     /// Serial of the event
     pub serial: Serial,
-    /// Timestamp with millisecond granularity, with an undefined base.
-    pub time: u32,
+    /// Timestamp with microsecond granularity, with an undefined base.
+    pub time: InputTime,
     /// Button that produced the event
     ///
     /// The button is a button code as defined in the
@@ -992,7 +1007,7 @@ pub struct AxisFrame {
     /// Direction of the physical motion that caused axis event
     pub relative_direction: (AxisRelativeDirection, AxisRelativeDirection),
     /// Time of the axis event
-    pub time: u32,
+    pub time: InputTime,
     /// Raw scroll value per axis of the event
     pub axis: (f64, f64),
     /// Discrete representation of scroll value per axis, if available
@@ -1008,8 +1023,8 @@ pub struct AxisFrame {
 pub struct GestureSwipeBeginEvent {
     /// Serial of the event
     pub serial: Serial,
-    /// Timestamp of the event, with millisecond granularity
-    pub time: u32,
+    /// Timestamp of the event, with microsecond granularity
+    pub time: InputTime,
     /// Number of fingers of the event
     pub fingers: u32,
 }
@@ -1017,8 +1032,8 @@ pub struct GestureSwipeBeginEvent {
 /// Gesture swipe update event
 #[derive(Debug, Clone)]
 pub struct GestureSwipeUpdateEvent {
-    /// Timestamp of the event, with millisecond granularity
-    pub time: u32,
+    /// Timestamp of the event, with microsecond granularity
+    pub time: InputTime,
     /// Offset of the logical center of the gesture relative to the previous event
     pub delta: Point<f64, Logical>,
 }
@@ -1028,8 +1043,8 @@ pub struct GestureSwipeUpdateEvent {
 pub struct GestureSwipeEndEvent {
     /// Serial of the event
     pub serial: Serial,
-    /// Timestamp of the event, with millisecond granularity
-    pub time: u32,
+    /// Timestamp of the event, with microsecond granularity
+    pub time: InputTime,
     /// Whether the gesture was cancelled
     pub cancelled: bool,
 }
@@ -1039,8 +1054,8 @@ pub struct GestureSwipeEndEvent {
 pub struct GesturePinchBeginEvent {
     /// Serial of the event
     pub serial: Serial,
-    /// Timestamp of the event, with millisecond granularity
-    pub time: u32,
+    /// Timestamp of the event, with microsecond granularity
+    pub time: InputTime,
     /// Number of fingers of the event
     pub fingers: u32,
 }
@@ -1048,8 +1063,8 @@ pub struct GesturePinchBeginEvent {
 /// Gesture pinch update event
 #[derive(Debug, Clone)]
 pub struct GesturePinchUpdateEvent {
-    /// Timestamp of the event, with millisecond granularity
-    pub time: u32,
+    /// Timestamp of the event, with microsecond granularity
+    pub time: InputTime,
     /// Offset of the logical center of the gesture relative to the previous event
     pub delta: Point<f64, Logical>,
     /// Absolute scale compared to the begin event
@@ -1063,8 +1078,8 @@ pub struct GesturePinchUpdateEvent {
 pub struct GesturePinchEndEvent {
     /// Serial of the event
     pub serial: Serial,
-    /// Timestamp of the event, with millisecond granularity
-    pub time: u32,
+    /// Timestamp of the event, with microsecond granularity
+    pub time: InputTime,
     /// Whether the gesture was cancelled
     pub cancelled: bool,
 }
@@ -1074,8 +1089,8 @@ pub struct GesturePinchEndEvent {
 pub struct GestureHoldBeginEvent {
     /// Serial of the event
     pub serial: Serial,
-    /// Timestamp of the event, with millisecond granularity
-    pub time: u32,
+    /// Timestamp of the event, with microsecond granularity
+    pub time: InputTime,
     /// Number of fingers of the event
     pub fingers: u32,
 }
@@ -1085,15 +1100,15 @@ pub struct GestureHoldBeginEvent {
 pub struct GestureHoldEndEvent {
     /// Serial of the event
     pub serial: Serial,
-    /// Timestamp of the event, with millisecond granularity
-    pub time: u32,
+    /// Timestamp of the event, with microsecond granularity
+    pub time: InputTime,
     /// Whether the gesture was cancelled
     pub cancelled: bool,
 }
 
 impl AxisFrame {
     /// Create a new frame of axis events
-    pub fn new(time: u32) -> Self {
+    pub fn new(time: InputTime) -> Self {
         AxisFrame {
             source: None,
             relative_direction: (AxisRelativeDirection::Identical, AxisRelativeDirection::Identical),

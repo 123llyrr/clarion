@@ -41,7 +41,7 @@ use smithay::wayland::keyboard_shortcuts_inhibit::{
 };
 use smithay::wayland::output::OutputHandler;
 use smithay::wayland::pointer_constraints::{
-    with_pointer_constraint, PointerConstraint, PointerConstraintsHandler,
+    with_pointer_constraint, ConstraintRemove, PointerConstraintsHandler,
 };
 use smithay::wayland::security_context::{
     SecurityContext, SecurityContextHandler, SecurityContextListenerSource,
@@ -62,6 +62,8 @@ use smithay::wayland::selection::{SelectionHandler, SelectionTarget};
 use smithay::wayland::session_lock::{
     LockSurface, SessionLockHandler, SessionLockManagerState, SessionLocker,
 };
+use smithay::wayland::text_input::TextInputActivation;
+use smithay::wayland::virtual_keyboard::{VirtualKeyboardBackend, VirtualKeyboardHandler};
 use smithay::wayland::xdg_activation::{
     XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
 };
@@ -245,7 +247,7 @@ impl PointerConstraintsHandler for State {
         &mut self,
         _surface: &WlSurface,
         pointer: &PointerHandle<Self>,
-        _constraint: Option<&PointerConstraint>,
+        _constraint: ConstraintRemove,
     ) {
         // Since a pointer constraint is broken when a surface loses pointer focus, and one surface
         // can only have a single pointer constraint at once, assume there can be only one
@@ -935,3 +937,11 @@ impl OutputManagementHandler for State {
 }
 
 impl MutterX11InteropHandler for State {}
+
+impl TextInputActivation for State {}
+
+impl VirtualKeyboardHandler for State {
+    fn process_virtual_keyboard_event(&mut self, event: InputEvent<VirtualKeyboardBackend>) {
+        self.process_input_event(event);
+    }
+}
