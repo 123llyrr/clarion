@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::drm::DrmNode;
-use smithay::backend::input::{InputEvent, TabletToolDescriptor};
+use smithay::backend::input::{Event as _, InputEvent, KeyboardKeyEvent, TabletToolDescriptor};
 use smithay::desktop::{layer_map_for_output, utils, PopupKind, PopupManager, WindowSurfaceType};
 use smithay::input::dnd::{self, DnDGrab, DndGrabHandler, DndTarget};
 use smithay::input::pointer::{self, CursorIcon, CursorImageStatus, Focus, PointerHandle};
@@ -25,7 +25,7 @@ use smithay::reexports::wayland_protocols_wlr::screencopy::v1::server::zwlr_scre
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource;
-use smithay::utils::{Logical, Point, Rectangle, Serial};
+use smithay::utils::{Logical, Point, Rectangle, Serial, SERIAL_COUNTER};
 use smithay::wayland::compositor::{get_parent, with_states};
 use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier};
 use smithay::wayland::drm_lease::{
@@ -35,7 +35,7 @@ use smithay::wayland::drm_syncobj::{DrmSyncobjHandler, DrmSyncobjState};
 use smithay::wayland::fractional_scale::FractionalScaleHandler;
 use smithay::wayland::idle_inhibit::IdleInhibitHandler;
 use smithay::wayland::idle_notify::{IdleNotifierHandler, IdleNotifierState};
-use smithay::wayland::input_method::{InputMethodHandler, PopupSurface};
+use smithay::wayland::input_method::{InputMethodHandler, InputMethodSeat, PopupSurface};
 use smithay::wayland::keyboard_shortcuts_inhibit::{
     KeyboardShortcutsInhibitHandler, KeyboardShortcutsInhibitState, KeyboardShortcutsInhibitor,
 };
@@ -942,6 +942,26 @@ impl TextInputActivation for State {}
 
 impl VirtualKeyboardHandler for State {
     fn process_virtual_keyboard_event(&mut self, event: InputEvent<VirtualKeyboardBackend>) {
+        // IMEs such as fcitx5 grab the keyboard and forward the keys they did
+        // not consume through their own virtual keyboard. Re-entering the grab
+        // would hand those keys back to the IME (or loop forever), so deliver
+        // them straight to the focused client when the device belongs to the
+        // client that owns the grab.
+        if let InputEvent::Keyboard { event } = &event {
+            let grab_client = self.clarion.seat.input_method().keyboard_grab_client();
+            if grab_client.is_some() && grab_client == event.device().client() {
+                let keyboard = self.clarion.seat.get_keyboard().unwrap();
+                keyboard.input_forward_bypassing_grab(
+                    self,
+                    event.key_code(),
+                    event.state(),
+                    SERIAL_COUNTER.next_serial(),
+                    event.time(),
+                    true,
+                );
+                return;
+            }
+        }
         self.process_input_event(event);
     }
 }
