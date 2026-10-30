@@ -668,7 +668,20 @@ impl Host {
                     }
                 }
             }
-            services::Event::Tray(items) => self.tray = items,
+            services::Event::Tray(items) => {
+                // A tray owner that exits (often from its own Quit row) takes
+                // its bar icon with it. The popup belongs to that icon, so a
+                // stale menu must not linger over the vanished anchor; drop it
+                // at once instead of riding the usual closing fade.
+                let owner_gone = match &self.panel {
+                    Some(Panel::Tray(id)) => !items.iter().any(|item| &item.id == id),
+                    _ => false,
+                };
+                self.tray = items;
+                if owner_gone {
+                    self.discard(cx);
+                }
+            }
             services::Event::History {
                 entries,
                 paused,
@@ -2763,6 +2776,56 @@ mod notification_lifecycle_tests {
             assert_eq!(host.notifications.len(), 2);
             assert_eq!(host.panel, Some(Panel::Notifications));
         });
+    }
+}
+
+#[cfg(test)]
+mod tray_lifecycle_tests {
+    use ::core::prelude::v1::test;
+
+    use super::*;
+
+    fn tray_item(id: &str) -> services::TrayItem {
+        services::TrayItem {
+            id: id.into(),
+            owner: ":1.42".into(),
+            path: "/StatusNotifierItem".into(),
+            title: "Tray fixture".into(),
+            icon_name: String::new(),
+            icon_png: None,
+            status: "Active".into(),
+            menu_path: Some("/Menu".into()),
+            item_is_menu: true,
+        }
+    }
+
+    #[gpui::test]
+    fn a_tray_popup_closes_immediately_when_its_owner_exits(cx: &mut TestAppContext) {
+        let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
+        host.update(cx, |host, _| host.tray = vec![tray_item("fixture")]);
+        let popup = cx.update(|cx| {
+            testing::open_panel(&host, Panel::Tray("fixture".into()), cx)
+        });
+        host.read_with(cx, |host, _| {
+            assert_eq!(host.panel, Some(Panel::Tray("fixture".into())));
+        });
+
+        // The application exited from its own menu: its StatusNotifierItem is
+        // gone, so the popup anchored to that icon must go with it.
+        host.update(cx, |host, cx| {
+            host.service_event(services::Event::Tray(Vec::new()), cx)
+        });
+        host.read_with(cx, |host, _| {
+            assert!(host.panel.is_none());
+            assert!(host.tray.is_empty());
+            assert!(host.tray_menu.is_empty());
+            assert!(host.expanded_menus.is_empty());
+        });
+        cx.run_until_parked();
+        assert!(
+            popup.update(cx, |_, _, _| ()).is_err(),
+            "the tray surface is removed instead of lingering for a fade"
+        );
     }
 }
 
