@@ -942,29 +942,29 @@ impl TextInputActivation for State {}
 
 impl VirtualKeyboardHandler for State {
     fn process_virtual_keyboard_event(&mut self, event: InputEvent<VirtualKeyboardBackend>) {
-        // IMEs such as fcitx5 grab the keyboard and forward the keys they did
-        // not consume through their own virtual keyboard. Re-entering the grab
-        // would hand those keys back to the IME (or loop forever), so deliver
-        // them straight to the focused client when the device belongs to the
-        // client that owns the grab.
-        //
-        // Remember the grabbing client beyond the grab's lifetime: when an IME
-        // deactivates it first drops the grab and then releases every key it
-        // forwarded. Those releases must stay out of the seat's XKB state, or a
-        // physically held Super would be released by the synthetic event.
-        if let InputEvent::Keyboard { event } = &event {
-            let grab_client = self.clarion.seat.input_method().keyboard_grab_client();
-            if let Some(client) = &grab_client {
-                self.clarion
-                    .ime_virtual_keyboard_clients
-                    .insert(client.id());
+        if let InputEvent::Keyboard { event } = event {
+            let device = event.device();
+            let source = device.source();
+
+            // Identify the virtual keyboards owned by the input method that
+            // currently holds the keyboard grab. Track the device's source
+            // rather than its client: when fcitx5 deactivates it drops the grab
+            // first and only then destroys its virtual keyboard, and the
+            // synthetic releases Smithay emits for keys still down at that
+            // point come from an already inert object whose `client()` is
+            // `None`. The source stays unique to that device for its lifetime.
+            if let Some(grab_client) = self.clarion.seat.input_method().keyboard_grab_client() {
+                if device.client().as_ref() == Some(&grab_client) {
+                    self.clarion.ime_virtual_keyboards.insert(source);
+                }
             }
-            let from_ime = event.device().client().is_some_and(|client| {
-                self.clarion
-                    .ime_virtual_keyboard_clients
-                    .contains(&client.id())
-            });
-            if from_ime {
+
+            if self.clarion.ime_virtual_keyboards.contains(&source) {
+                // IMEs forward the keys they did not consume through their own
+                // virtual keyboard. Sending those back through
+                // KeyboardHandle::input would feed them to the IME grab again
+                // (or loop forever), and would let the synthetic releases for
+                // keys the IME never released clear physically held modifiers.
                 let keyboard = self.clarion.seat.get_keyboard().unwrap();
                 keyboard.input_forward_bypassing_grab(
                     self,
@@ -976,6 +976,19 @@ impl VirtualKeyboardHandler for State {
                 );
                 return;
             }
+
+            // Ordinary virtual keyboards are regular input sources. Attribute
+            // their keys to the device's own source so a synthetic release
+            // can't release a key that is still held on the physical keyboard.
+            self.process_input_event_from_source::<VirtualKeyboardBackend>(
+                InputEvent::Keyboard { event },
+                source,
+            );
+            return;
+        }
+
+        if let InputEvent::DeviceRemoved { device } = &event {
+            self.clarion.ime_virtual_keyboards.remove(&device.source());
         }
         self.process_input_event(event);
     }

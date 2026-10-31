@@ -43,7 +43,7 @@ use smithay::desktop::{
     find_popup_root_surface, layer_map_for_output, LayerSurface, PopupGrab, PopupManager,
     PopupUngrabStrategy, Space, Window, WindowSurfaceType,
 };
-use smithay::input::keyboard::{Layout as KeyboardLayout, XkbConfig};
+use smithay::input::keyboard::{KeyboardSource, Layout as KeyboardLayout, XkbConfig};
 use smithay::input::pointer::{
     CursorIcon, CursorImageStatus, CursorImageSurfaceData, Focus,
     GrabStartData as PointerGrabStartData, MotionEvent,
@@ -353,12 +353,19 @@ pub struct Clarion {
     pub bind_cooldown_timers: HashMap<Key, RegistrationToken>,
     pub bind_repeat_timer: Option<crate::input::BindRepeat>,
     pub keyboard_focus: KeyboardFocus,
-    /// Clients whose virtual keyboards belong to an input method.
+    /// Keyboard sources of virtual keyboards owned by an input method.
     ///
-    /// IMEs release every key they forwarded when they deactivate. Those
-    /// synthetic releases must not reach the seat's XKB state, or they would
-    /// release physically held modifiers behind the user's back.
-    pub(crate) ime_virtual_keyboard_clients: HashSet<ClientId>,
+    /// IMEs forward the keys they do not consume through their own virtual
+    /// keyboard. Those events must bypass the IME grab (otherwise they loop
+    /// back into it), and their synthetic releases must stay out of the seat's
+    /// XKB state, or they would release physically held modifiers behind the
+    /// user's back.
+    ///
+    /// Sources are tracked instead of clients because the virtual keyboard is
+    /// already dead when Smithay releases its still-pressed keys: at that point
+    /// `VirtualKeyboardDevice::client` returns `None`, while the source is
+    /// still unique to the device.
+    pub(crate) ime_virtual_keyboards: HashSet<KeyboardSource>,
     pub layer_shell_on_demand_focus: Option<LayerSurface>,
     pub idle_inhibiting_surfaces: HashSet<WlSurface>,
     pub is_fdo_idle_inhibited: Arc<AtomicBool>,
@@ -3242,7 +3249,7 @@ impl Clarion {
 
             seat,
             keyboard_focus: KeyboardFocus::Layout { surface: None },
-            ime_virtual_keyboard_clients: HashSet::new(),
+            ime_virtual_keyboards: HashSet::new(),
             layer_shell_on_demand_focus: None,
             idle_inhibiting_surfaces: HashSet::new(),
             is_fdo_idle_inhibited: Arc::new(AtomicBool::new(false)),

@@ -19,7 +19,9 @@ use smithay::backend::input::{
 };
 use smithay::backend::libinput::LibinputInputBackend;
 use smithay::input::dnd::DnDGrab;
-use smithay::input::keyboard::{keysyms, FilterResult, Keysym, Layout, ModifiersState};
+use smithay::input::keyboard::{
+    keysyms, FilterResult, KeyboardSource, Keysym, Layout, ModifiersState,
+};
 use smithay::input::pointer::{
     AxisFrame, ButtonEvent, CursorIcon, CursorImageStatus, Focus, GestureHoldBeginEvent,
     GestureHoldEndEvent, GesturePinchBeginEvent, GesturePinchEndEvent, GesturePinchUpdateEvent,
@@ -147,6 +149,23 @@ impl State {
     where
         I::Device: 'static, // Needed for downcasting.
     {
+        self.process_input_event_from_source(event, KeyboardSource::MAIN);
+    }
+
+    /// Like [`State::process_input_event`], but attributes keyboard events to
+    /// the given [`KeyboardSource`].
+    ///
+    /// Virtual keyboards pass their own source so that synthetic keys can't
+    /// release a key that is still held on the physical keyboard, including the
+    /// releases Smithay emits when a virtual keyboard with pressed keys goes
+    /// away.
+    pub fn process_input_event_from_source<I: InputBackend + 'static>(
+        &mut self,
+        event: InputEvent<I>,
+        source: KeyboardSource,
+    ) where
+        I::Device: 'static, // Needed for downcasting.
+    {
         let _span = clarion_tracy_span!("process_input_event");
 
         // Discrete events observe all motion before them. Continuous pointer packets
@@ -193,6 +212,7 @@ impl State {
             DeviceRemoved { device } => self.on_device_removed(device),
             Keyboard { event } => self.on_keyboard::<I>(
                 event,
+                source,
                 &mut consumed_by_a11y,
                 &mut consumed_by_hotkey_overlay,
             ),
@@ -501,6 +521,7 @@ impl State {
     fn on_keyboard<I: InputBackend>(
         &mut self,
         event: I::KeyboardKeyEvent,
+        source: KeyboardSource,
         consumed_by_a11y: &mut bool,
         consumed_by_hotkey_overlay: &mut bool,
     ) {
@@ -544,7 +565,8 @@ impl State {
         #[cfg(not(feature = "dbus"))]
         let _ = consumed_by_a11y;
 
-        let Some(Some(bind)) = self.clarion.seat.get_keyboard().unwrap().input(
+        let Some(Some(bind)) = self.clarion.seat.get_keyboard().unwrap().input_from_source(
+            source,
             self,
             event.key_code(),
             event.state(),
