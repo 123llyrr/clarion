@@ -1118,7 +1118,7 @@ impl ShellView {
                 break;
             };
             let beyond = (stack_head + (depth - 1) as f32 * stack_pacing) / step;
-            let (center, _) = terminal(beyond);
+            let (center, angle) = terminal(beyond);
             let scale = 0.94_f32.powi(depth as i32);
             // A steady fade to nothing: the deepest layer is a whisper on the
             // tangent line rather than a second stack of icons.
@@ -1139,7 +1139,7 @@ impl ShellView {
                     entry.kind,
                     &entry.tags,
                     glyph,
-                    0.,
+                    angle,
                 ));
             overlay = overlay.child(layer);
         }
@@ -1325,47 +1325,11 @@ impl ShellView {
                 );
             }
         }
-        // The back button is anchored to the folder tile, not to the fan
-        // geometry: navigating into deeper folders changes the fan contents
-        // and therefore the fan bounds, so deriving the button from them made
-        // it drift around. It rides on the fan-facing side of the tile but is
-        // raised above the Dock row so it never covers the Dock icons.
-        let fan_bend = fan_direction(host.prefs.dock_position, anchor, viewport);
-        let (back_x, back_y) = match host.prefs.dock_position {
-            DockPosition::Bottom => {
-                (
-                    if fan_bend < 0. {
-                        anchor_x - icon_size / 2. - 70.
-                    } else {
-                        anchor_x + icon_size / 2. + 8.
-                    },
-                    anchor_y - icon_size / 2. - 68.,
-                )
-            }
-            DockPosition::Left => (
-                anchor_x + icon_size / 2. + 8.,
-                anchor_y - icon_size / 2. - 68.,
-            ),
-            DockPosition::Right => (
-                anchor_x - icon_size / 2. - 70.,
-                anchor_y - icon_size / 2. - 68.,
-            ),
-        };
-        let back_left = anchor_x + (back_x - anchor_x) * fan_open;
-        let back_top = anchor_y + (back_y - anchor_y) * fan_open;
-        if !navigation.history.is_empty() {
-            let back = self.button("folder-fan-back", "返回", Action::FolderBack, p);
-            overlay = overlay.child(
-                div()
-                    .absolute()
-                    .left(px(back_left.clamp(8., (width - 90.).max(8.))))
-                    .top(px(back_top.clamp(8., (height - 40.).max(8.))))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
-                    .child(back),
-            );
-        }
-        let reveal_size = icon_size * 0.72;
+        // The terminal card doubles as the folder action: at the root it
+        // reveals the current folder, and after entering a subfolder it turns
+        // into the back control. Keeping both roles on one card leaves the
+        // fan free of any separate floating button beside the Dock tile.
+        let reveal_size = icon_size * 0.9;
         let (reveal_center, reveal_angle) = terminal(if has_more {
             // Clear the whole pile: its outermost edge plus the button's own
             // radius and a breathing gap.
@@ -1378,7 +1342,17 @@ impl ShellView {
         } else {
             1.0
         });
-        let label_w = FAN_LABEL_W + 36.;
+        let can_go_back = !navigation.history.is_empty();
+        let reveal_label = if can_go_back {
+            "返回"
+        } else {
+            "在文件管理器中显示"
+        };
+        let label_w = if can_go_back {
+            (label_text_width(reveal_label) + 24.).clamp(64., FAN_LABEL_W)
+        } else {
+            FAN_LABEL_W + 36.
+        };
         let reveal_side = match host.prefs.dock_position {
             DockPosition::Bottom => {
                 if labels_left {
@@ -1447,10 +1421,16 @@ impl ShellView {
         let label_current = current.clone();
         // clavis attaches its terminal action the same way: the round mark is
         // a card's icon slot, not a separate floating pill, so the button and
-        // its name plate read as one terminal card. The glyph is the
-        // open-in-new mark the shell ships, not a text arrow, so the terminal
-        // stays in the same visual family as the file icons beside it.
+        // its name plate read as one terminal card. At the root the glyph is
+        // the open-in-new mark; after navigating into a subfolder the same
+        // card becomes the back arrow instead of growing a second control.
         let reveal_glyph = (reveal_size * 0.5).max(14.);
+        let reveal_icon = if can_go_back {
+            let path = self.themed_glyph_path("go-previous-symbolic", "chevron-left.svg");
+            self.glyph(&path, reveal_glyph, p)
+        } else {
+            self.symbol("external-link", reveal_glyph, p)
+        };
         overlay = overlay.child(
             div()
                 .id("folder-fan-reveal")
@@ -1476,18 +1456,24 @@ impl ShellView {
                 .hover(move |style| style.bg(p.panel.blend(p.panel).blend(p.line)))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
-                .child(self.symbol("external-link", reveal_glyph, p))
+                .child(reveal_icon)
                 .on_click(move |_, _, cx| {
                     if closing {
                         return;
                     }
                     reveal_host.update(cx, |host, cx| {
-                        host.handle(
-                            Action::Backend(backend::Command::OpenPath(current.clone())),
-                            cx,
-                        )
+                        if can_go_back {
+                            host.handle(Action::FolderBack, cx);
+                        } else {
+                            host.handle(
+                                Action::Backend(backend::Command::OpenPath(current.clone())),
+                                cx,
+                            );
+                        }
                     });
-                    reveal_view.update(cx, |this, cx| this.dismiss_folder_fan(cx));
+                    if !can_go_back {
+                        reveal_view.update(cx, |this, cx| this.dismiss_folder_fan(cx));
+                    }
                 }),
         );
         let label_left = label_center.0 - label_w / 2.;
@@ -1515,7 +1501,7 @@ impl ShellView {
                         .text_color(p.fg)
                         .text_size(px(12.))
                         .whitespace_nowrap()
-                        .child("在文件管理器中显示")
+                        .child(reveal_label)
                         .into_any_element(),
                     reveal_label_center,
                     reveal_label_angle,
@@ -1525,12 +1511,20 @@ impl ShellView {
                         return;
                     }
                     label_host.update(cx, |host, cx| {
-                        host.handle(
-                            Action::Backend(backend::Command::OpenPath(label_current.clone())),
-                            cx,
-                        )
+                        if can_go_back {
+                            host.handle(Action::FolderBack, cx);
+                        } else {
+                            host.handle(
+                                Action::Backend(backend::Command::OpenPath(
+                                    label_current.clone(),
+                                )),
+                                cx,
+                            );
+                        }
                     });
-                    reveal_label_view.update(cx, |this, cx| this.dismiss_folder_fan(cx));
+                    if !can_go_back {
+                        reveal_label_view.update(cx, |this, cx| this.dismiss_folder_fan(cx));
+                    }
                 }),
         );
         // The fan's own glass: without this the surface keeps the empty frost

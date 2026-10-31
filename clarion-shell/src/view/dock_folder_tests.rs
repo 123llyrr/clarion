@@ -1032,7 +1032,7 @@ fn terminal_reveal_button_and_label_rotate_as_one_group(cx: &mut TestAppContext)
     let dy = f32::from(label.center().y - button.center().y);
     let distance = (dx * dx + dy * dy).sqrt();
     assert!(
-        (distance - 99.28).abs() < 1.,
+        (distance - 103.6).abs() < 1.,
         "the terminal pair must stay rigid, got {distance}"
     );
     assert!(
@@ -1079,6 +1079,62 @@ fn clicking_a_fan_file_opens_it(cx: &mut TestAppContext) {
         opened |= matches!(command, crate::backend::Command::OpenPath(_));
     }
     assert!(opened, "clicking the fan item opens its file");
+}
+
+#[gpui::test]
+fn clicking_a_list_or_grid_file_opens_it_with_its_default_app(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let note = root.path().join("note.txt");
+    std::fs::write(&note, b"x").unwrap();
+    let root = root.path().canonicalize().unwrap();
+    let note = root.join("note.txt");
+    let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
+    host.update(cx, |host, cx| {
+        host.handle(Action::PinFolder(root.clone()), cx);
+    });
+    cx.run_until_parked();
+    for layout in [FolderLayout::List, FolderLayout::Grid] {
+        host.update(cx, |host, cx| {
+            host.handle(Action::SetFolderLayout(root.clone(), layout), cx);
+        });
+        cx.run_until_parked();
+        let commands = cx.update(|cx| testing::capture_backend(&host, cx));
+        let window = cx.update(|cx| testing::open_folder(&host, root.clone(), cx));
+        let view = window.root(cx).unwrap();
+        let mut visual = VisualTestContext::from_window(*window, cx);
+        visual.update(|window, cx| {
+            view.read(cx).focus(window, cx);
+            window.refresh();
+        });
+        visual.run_until_parked();
+        let item = visual
+            .debug_bounds("folder-entry-0")
+            .unwrap_or_else(|| panic!("the {layout:?} entry is painted"));
+        visual.simulate_mouse_move(item.center(), None, gpui::Modifiers::default());
+        visual.simulate_mouse_down(
+            item.center(),
+            gpui::MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+        visual.run_until_parked();
+        visual.simulate_mouse_up(
+            item.center(),
+            gpui::MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+        visual.run_until_parked();
+        let mut opened = None;
+        while let Ok(command) = commands.try_recv() {
+            if let crate::backend::Command::OpenPath(path) = command {
+                opened = Some(path);
+            }
+        }
+        assert_eq!(
+            opened.as_deref(),
+            Some(note.as_path()),
+            "{layout:?} click must open the file itself, not its folder"
+        );
+    }
 }
 
 #[gpui::test]
@@ -1556,7 +1612,7 @@ fn list_and_grid_render_entries_without_wrapping_long_names(cx: &mut TestAppCont
 }
 
 #[gpui::test]
-fn the_fan_back_button_holds_its_spot_while_navigating_deeper(cx: &mut TestAppContext) {
+fn the_terminal_card_becomes_the_back_button_inside_a_subfolder(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     let sub = root.path().join("Sub");
     let deep = sub.join("Deep");
@@ -1573,7 +1629,7 @@ fn the_fan_back_button_holds_its_spot_while_navigating_deeper(cx: &mut TestAppCo
         );
     });
     cx.run_until_parked();
-    let window = cx.update(|cx| testing::open_folder(&host, root, cx));
+    let window = cx.update(|cx| testing::open_folder(&host, root.clone(), cx));
     let view = window.root(cx).unwrap();
     let mut visual = VisualTestContext::from_window(*window, cx);
     visual.update(|window, cx| {
@@ -1582,25 +1638,129 @@ fn the_fan_back_button_holds_its_spot_while_navigating_deeper(cx: &mut TestAppCo
     });
     visual.run_until_parked();
     // The root owns only the Sub directory, so fan item 0 enters the level
-    // below and the back button appears.
+    // below. The terminal card itself turns into the back control, so no
+    // separate back button appears beside the Dock tile.
     let item = visual.debug_bounds("folder-fan-0").unwrap();
     visual.simulate_mouse_move(item.center(), None, gpui::Modifiers::default());
     visual.simulate_mouse_down(item.center(), gpui::MouseButton::Left, gpui::Modifiers::default());
     visual.run_until_parked();
     visual.simulate_mouse_up(item.center(), gpui::MouseButton::Left, gpui::Modifiers::default());
     visual.run_until_parked();
-    let back = visual
-        .debug_bounds("folder-fan-back")
-        .expect("the fan shows the back button after entering a folder");
+    assert!(
+        visual.debug_bounds("folder-fan-back").is_none(),
+        "the fan must not paint a separate back button"
+    );
+    let reveal = visual
+        .debug_bounds("folder-fan-reveal")
+        .expect("the terminal card is the back control");
+    assert!(
+        reveal.size.width >= px(40.),
+        "the terminal action is enlarged: {reveal:?}"
+    );
+    visual.simulate_mouse_move(reveal.center(), None, gpui::Modifiers::default());
+    visual.simulate_mouse_down(
+        reveal.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    visual.run_until_parked();
+    visual.simulate_mouse_up(
+        reveal.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    visual.run_until_parked();
+    let current = view.read_with(&visual, |view, _| {
+        view.state
+            .folder_navigation
+            .as_ref()
+            .map(|navigation| navigation.current.clone())
+    });
+    assert_eq!(current.as_deref(), Some(root.as_path()), "the terminal card went back");
+    host.read_with(&visual, |host, _| {
+        assert!(host.panel.is_some(), "going back keeps the fan open");
+    });
+    // A deeper level backs out one folder at a time from the same card.
     host.update(cx, |host, cx| {
+        host.handle(Action::NavigateFolder(sub.clone()), cx);
         host.handle(Action::NavigateFolder(deep.clone()), cx);
     });
     visual.run_until_parked();
-    let back_deeper = visual
-        .debug_bounds("folder-fan-back")
-        .expect("the back button survives deeper navigation");
-    assert_eq!(
-        back_deeper, back,
-        "the back button holds a fixed spot beside the Dock icon"
+    let reveal = visual.debug_bounds("folder-fan-reveal").unwrap();
+    visual.simulate_mouse_down(
+        reveal.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
     );
+    visual.run_until_parked();
+    visual.simulate_mouse_up(
+        reveal.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    visual.run_until_parked();
+    let current = view.read_with(&visual, |view, _| {
+        view.state
+            .folder_navigation
+            .as_ref()
+            .map(|navigation| navigation.current.clone())
+    });
+    assert_eq!(
+        current.as_deref(),
+        Some(sub.as_path()),
+        "deep navigation backs out one level"
+    );
+}
+
+#[gpui::test]
+fn clicking_the_terminal_card_at_the_root_reveals_the_folder(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("note.txt"), b"x").unwrap();
+    let root = root.path().canonicalize().unwrap();
+    let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
+    host.update(cx, |host, cx| {
+        host.handle(Action::PinFolder(root.clone()), cx);
+        host.handle(
+            Action::SetFolderLayout(root.clone(), FolderLayout::Fan),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    let commands = cx.update(|cx| testing::capture_backend(&host, cx));
+    let window = cx.update(|cx| testing::open_folder(&host, root.clone(), cx));
+    let view = window.root(cx).unwrap();
+    let mut visual = VisualTestContext::from_window(*window, cx);
+    visual.update(|window, cx| {
+        view.read(cx).focus(window, cx);
+        window.refresh();
+    });
+    visual.run_until_parked();
+    let reveal = visual.debug_bounds("folder-fan-reveal").unwrap();
+    visual.simulate_mouse_move(reveal.center(), None, gpui::Modifiers::default());
+    visual.simulate_mouse_down(
+        reveal.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    visual.run_until_parked();
+    visual.simulate_mouse_up(
+        reveal.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    visual.run_until_parked();
+    let mut opened = None;
+    while let Ok(command) = commands.try_recv() {
+        if let crate::backend::Command::OpenPath(path) = command {
+            opened = Some(path);
+        }
+    }
+    assert_eq!(
+        opened.as_deref(),
+        Some(root.as_path()),
+        "at the root the terminal card opens the folder in the file manager"
+    );
+    host.read_with(&visual, |host, _| {
+        assert!(host.panel.is_none(), "revealing the folder closes the fan");
+    });
 }
