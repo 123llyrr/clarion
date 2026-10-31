@@ -947,9 +947,24 @@ impl VirtualKeyboardHandler for State {
         // would hand those keys back to the IME (or loop forever), so deliver
         // them straight to the focused client when the device belongs to the
         // client that owns the grab.
+        //
+        // Remember the grabbing client beyond the grab's lifetime: when an IME
+        // deactivates it first drops the grab and then releases every key it
+        // forwarded. Those releases must stay out of the seat's XKB state, or a
+        // physically held Super would be released by the synthetic event.
         if let InputEvent::Keyboard { event } = &event {
             let grab_client = self.clarion.seat.input_method().keyboard_grab_client();
-            if grab_client.is_some() && grab_client == event.device().client() {
+            if let Some(client) = &grab_client {
+                self.clarion
+                    .ime_virtual_keyboard_clients
+                    .insert(client.id());
+            }
+            let from_ime = event.device().client().is_some_and(|client| {
+                self.clarion
+                    .ime_virtual_keyboard_clients
+                    .contains(&client.id())
+            });
+            if from_ime {
                 let keyboard = self.clarion.seat.get_keyboard().unwrap();
                 keyboard.input_forward_bypassing_grab(
                     self,

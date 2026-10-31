@@ -353,6 +353,12 @@ pub struct Clarion {
     pub bind_cooldown_timers: HashMap<Key, RegistrationToken>,
     pub bind_repeat_timer: Option<crate::input::BindRepeat>,
     pub keyboard_focus: KeyboardFocus,
+    /// Clients whose virtual keyboards belong to an input method.
+    ///
+    /// IMEs release every key they forwarded when they deactivate. Those
+    /// synthetic releases must not reach the seat's XKB state, or they would
+    /// release physically held modifiers behind the user's back.
+    pub(crate) ime_virtual_keyboard_clients: HashSet<ClientId>,
     pub layer_shell_on_demand_focus: Option<LayerSurface>,
     pub idle_inhibiting_surfaces: HashSet<WlSurface>,
     pub is_fdo_idle_inhibited: Arc<AtomicBool>,
@@ -3236,6 +3242,7 @@ impl Clarion {
 
             seat,
             keyboard_focus: KeyboardFocus::Layout { surface: None },
+            ime_virtual_keyboard_clients: HashSet::new(),
             layer_shell_on_demand_focus: None,
             idle_inhibiting_surfaces: HashSet::new(),
             is_fdo_idle_inhibited: Arc::new(AtomicBool::new(false)),
