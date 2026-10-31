@@ -13,21 +13,48 @@ Clarion additions:
 
 - `interactive.rs`: public `ExternalPaths::new` so embedders and tests can
   construct file-drop payloads without exposing GPUI internals.
+- `window.rs`: `Frame::clear` also drops the query-only `debug_bounds` map.
+  Frames are reused, so without this `VisualTestContext::debug_bounds` kept
+  reporting selectors from earlier frames after their element was removed.
 - `platform.rs`: public `WindowKind::LayerShell` and copyable role options.
 - `platform.rs` / `window.rs` / `platform/linux/wayland/window.rs`:
   `set_glass_region`, a frosted shape independent of the input region. `None`
   falls back to the input region, so callers that only set one shape are
   unchanged. The Dock frosts only its resting tray while lifted icons stay
-  clickable outside it.
+  clickable outside it. Region requests keep every rectangle up to the protocol
+  encoder's bound: scanline masks (one row per rectangle for a tilted Dock
+  label) reach a few hundred rectangles, and a tighter cap silently starves the
+  shapes reported last.
 - `platform/linux/wayland/client.rs`: optional layer-shell global, role event
   dispatch, output resolution, optional xdg parent selection, and an opt-in
   keep-alive policy for applications reopening windows after IPC commands.
 - `platform/linux/wayland/window.rs`: mutually exclusive xdg/layer roles,
   layer configuration acknowledgement and resize, authoritative close, ordered
   destruction, and guarded xdg-only operations. Drawing waits for configure.
+- `platform.rs` / `window.rs` / `platform/linux/wayland/window.rs`:
+  `WindowParams::app_id` carries `WindowOptions::app_id` into window creation and
+  the Wayland window sets it on the toplevel before its first surface commit.
+  The initial configure therefore already carries the application id, so
+  compositor window rules (for example, open-floating) apply to the first frame
+  instead of the window being tiled once and resized afterwards.
 - `platform/mac/window.rs`: exhaustive matching of the new kind as a normal
   window; the Clarion launcher itself requires Wayland.
+- `platform.rs`: `PlatformInputHandler::selected_text_range` is marked
+  `dead_code` on Linux/FreeBSD. Only the X11, macOS and Windows backends query
+  it; the Wayland backend never does, so a Wayland-only build warned about it.
 - Both manifests: optional `wayland-protocols-wlr` client dependency in `wayland`.
+- Manifest: `stacksafe` moves from `0.1` to `1.0`. The `0.1` macro pulled
+  `proc-macro-error2`, whose private `proc_macro` re-export is a future
+  incompatibility (`E0365`) reported on every build; `1.0.3` drops it. `StackSafe`
+  and the `#[stacksafe]` attribute keep the same API, and the layout tests that
+  exercise the recursion guards pass.
+
+Upstream status: none of these patches are submitted to
+`zed-industries/zed`. The layer-shell window kind, glass regions,
+`keep_alive` policy and the Clarion-specific window roles are product
+requirements of this desktop and stay a downstream fork. The `app_id`
+ordering fix and the `debug_bounds` reset are small general bug fixes and
+remain candidates for an upstream PR.
 
 The fixed-size launcher uses no edge anchors, Overlay, exclusive zone -1,
 and exclusive keyboard focus. Blur is still owned by the Flutter Shell.

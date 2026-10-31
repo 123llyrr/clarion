@@ -9,8 +9,8 @@ use calloop::generic::Generic;
 use calloop::{EventSource, Interest, Mode, PostAction, Readiness, Token, TokenFactory};
 use smithay::backend::input::{
     AbsolutePositionEvent, Axis, AxisRelativeDirection, AxisSource, ButtonState, Device,
-    DeviceCapability, Event, InputBackend, InputEvent, KeyState, KeyboardKeyEvent, Keycode,
-    PointerAxisEvent, PointerButtonEvent, PointerMotionAbsoluteEvent, TouchCancelEvent,
+    DeviceCapability, Event, InputBackend, InputEvent, InputTime, KeyState, KeyboardKeyEvent,
+    Keycode, PointerAxisEvent, PointerButtonEvent, PointerMotionAbsoluteEvent, TouchCancelEvent,
     TouchDownEvent, TouchEvent, TouchFrameEvent, TouchMotionEvent, TouchSlot, TouchUpEvent,
     UnusedEvent,
 };
@@ -100,8 +100,8 @@ pub struct TouchFrame {
 macro_rules! input_event {
     ($ty:ty) => {
         impl Event<NativeInput> for $ty {
-            fn time(&self) -> u64 {
-                self.time
+            fn time(&self) -> InputTime {
+                InputTime::from_micros(self.time)
             }
             fn device(&self) -> NativeDevice {
                 NativeDevice
@@ -165,6 +165,7 @@ impl PointerAxisEvent<NativeInput> for WheelEvent {
         match self.delta {
             MouseScrollDelta::LineDelta(..) => AxisSource::Wheel,
             MouseScrollDelta::PixelDelta(..) => AxisSource::Continuous,
+            _ => AxisSource::Continuous,
         }
     }
     fn relative_direction(&self, _: Axis) -> AxisRelativeDirection {
@@ -582,11 +583,11 @@ mod tests {
                     panic!("unexpected window event");
                 };
                 delivered.push(match event {
-                    InputEvent::TouchDown { event } => ("down", event.time()),
-                    InputEvent::TouchMotion { event } => ("motion", event.time()),
-                    InputEvent::TouchUp { event } => ("up", event.time()),
-                    InputEvent::TouchFrame { event } => ("frame", event.time()),
-                    InputEvent::TouchCancel { event } => ("cancel", event.time()),
+                    InputEvent::TouchDown { event } => ("down", event.time().micros()),
+                    InputEvent::TouchMotion { event } => ("motion", event.time().micros()),
+                    InputEvent::TouchUp { event } => ("up", event.time().micros()),
+                    InputEvent::TouchFrame { event } => ("frame", event.time().micros()),
+                    InputEvent::TouchCancel { event } => ("cancel", event.time().micros()),
                     _ => panic!("unexpected input event"),
                 });
             },

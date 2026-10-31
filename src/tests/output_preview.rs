@@ -201,7 +201,7 @@ fn output_reload_still_cancels_an_active_touch_sequence() {
             slot: Some(0).into(),
             location: (10.0, 10.0).into(),
             serial: SERIAL_COUNTER.next_serial(),
-            time: 0,
+            time: smithay::backend::input::InputTime::from_millis(0),
         },
     );
     assert!(touch.is_grabbed());
@@ -214,7 +214,7 @@ fn output_reload_still_cancels_an_active_touch_sequence() {
             slot: Some(0).into(),
             location: (10.0, 10.0).into(),
             serial: SERIAL_COUNTER.next_serial(),
-            time: 1,
+            time: smithay::backend::input::InputTime::from_millis(1),
         },
     );
     f.clarion_state()

@@ -20,7 +20,7 @@
 //! extern crate smithay;
 //!
 //! use smithay::wayland::pointer_gestures::PointerGesturesState;
-//! # use smithay::backend::input::KeyState;
+//! # use smithay::backend::input::{InputTime, KeyState};
 //! # use smithay::input::{
 //! #   pointer::{PointerTarget, AxisFrame, MotionEvent, ButtonEvent, RelativeMotionEvent,
 //! #             GestureSwipeBeginEvent, GestureSwipeUpdateEvent, GestureSwipeEndEvent,
@@ -44,7 +44,7 @@
 //! #   fn button(&self, seat: &Seat<State>, data: &mut State, event: &ButtonEvent) {}
 //! #   fn axis(&self, seat: &Seat<State>, data: &mut State, frame: AxisFrame) {}
 //! #   fn frame(&self, seat: &Seat<State>, data: &mut State) {}
-//! #   fn leave(&self, seat: &Seat<State>, data: &mut State, serial: Serial, time: u32) {}
+//! #   fn leave(&self, seat: &Seat<State>, data: &mut State, serial: Serial, time: InputTime) {}
 //! #   fn gesture_swipe_begin(&self, seat: &Seat<State>, data: &mut State, event: &GestureSwipeBeginEvent) {}
 //! #   fn gesture_swipe_update(&self, seat: &Seat<State>, data: &mut State, event: &GestureSwipeUpdateEvent) {}
 //! #   fn gesture_swipe_end(&self, seat: &Seat<State>, data: &mut State, event: &GestureSwipeEndEvent) {}
@@ -64,7 +64,7 @@
 //! #       key: KeysymHandle<'_>,
 //! #       state: KeyState,
 //! #       serial: Serial,
-//! #       time: u32,
+//! #       time: InputTime,
 //! #   ) {}
 //! #   fn modifiers(&self, seat: &Seat<State>, data: &mut State, modifiers: ModifiersState, serial: Serial) {}
 //! # }
@@ -96,7 +96,7 @@
 //! smithay::delegate_dispatch2!(State);
 //! ```
 
-use std::sync::{Arc, Mutex, atomic::Ordering};
+use std::sync::{Arc, Mutex, Weak, atomic::Ordering};
 
 use portable_atomic::AtomicF64;
 use wayland_protocols::wp::pointer_gestures::zv1::server::{
@@ -111,13 +111,16 @@ use wayland_server::{
     protocol::wl_surface::WlSurface,
 };
 
+#[cfg(doc)]
+use crate::input::pointer::PointerHandle;
 use crate::{
+    backend::input::InputTime,
     input::{
         SeatHandler,
         pointer::{
             GestureHoldBeginEvent, GestureHoldEndEvent, GesturePinchBeginEvent, GesturePinchEndEvent,
             GesturePinchUpdateEvent, GestureSwipeBeginEvent, GestureSwipeEndEvent, GestureSwipeUpdateEvent,
-            PointerHandle,
+            PointerRc,
         },
     },
     utils::{SERIAL_COUNTER, Serial},
@@ -146,13 +149,18 @@ impl WpPointerGesturePointerHandle {
         self.known_hold_gestures.lock().unwrap().push(gesture);
     }
 
-    pub(super) fn leave<D: SeatHandler + 'static>(&self, surface: &WlSurface, serial: Serial, time: u32) {
+    pub(super) fn leave<D: SeatHandler + 'static>(
+        &self,
+        surface: &WlSurface,
+        serial: Serial,
+        time: InputTime,
+    ) {
         self.for_each_focused_swipe_gesture(surface, |gesture| {
             let data = gesture.data::<PointerGestureUserData<D>>().unwrap();
             let ongoing = data.in_progress_on.lock().unwrap().take();
             if ongoing.is_some() {
                 // Cancel the ongoing gesture.
-                gesture.end(serial.into(), time, 1);
+                gesture.end(serial.into(), time.millis(), 1);
             }
         });
         self.for_each_focused_pinch_gesture(surface, |gesture| {
@@ -160,7 +168,7 @@ impl WpPointerGesturePointerHandle {
             let ongoing = data.in_progress_on.lock().unwrap().take();
             if ongoing.is_some() {
                 // Cancel the ongoing gesture.
-                gesture.end(serial.into(), time, 1);
+                gesture.end(serial.into(), time.millis(), 1);
             }
         });
         self.for_each_focused_hold_gesture(surface, |gesture| {
@@ -168,7 +176,7 @@ impl WpPointerGesturePointerHandle {
             let ongoing = data.in_progress_on.lock().unwrap().take();
             if ongoing.is_some() {
                 // Cancel the ongoing gesture.
-                gesture.end(serial.into(), time, 1);
+                gesture.end(serial.into(), time.millis(), 1);
             }
         });
     }
@@ -183,9 +191,9 @@ impl WpPointerGesturePointerHandle {
             let ongoing = data.in_progress_on.lock().unwrap().replace(surface.clone());
             if ongoing.is_some() {
                 // Cancel an ongoing gesture for a different surface.
-                gesture.end(event.serial.into(), event.time, 1);
+                gesture.end(event.serial.into(), event.time.millis(), 1);
             }
-            gesture.begin(event.serial.into(), event.time, surface, event.fingers);
+            gesture.begin(event.serial.into(), event.time.millis(), surface, event.fingers);
         });
     }
 
@@ -201,10 +209,10 @@ impl WpPointerGesturePointerHandle {
             if ongoing.as_ref() == Some(surface) {
                 let client_scale = data.client_scale.load(Ordering::Acquire);
                 let delta = event.delta.to_client(client_scale);
-                gesture.update(event.time, delta.x, delta.y);
+                gesture.update(event.time.millis(), delta.x, delta.y);
             } else if ongoing.take().is_some() {
                 // If it was for a different surface, cancel it.
-                gesture.end(SERIAL_COUNTER.next_serial().into(), event.time, 1);
+                gesture.end(SERIAL_COUNTER.next_serial().into(), event.time.millis(), 1);
             }
         });
     }
@@ -225,7 +233,7 @@ impl WpPointerGesturePointerHandle {
                     // If the gesture was ongoing for any other surface then cancel it.
                     true
                 };
-                gesture.end(event.serial.into(), event.time, cancelled.into());
+                gesture.end(event.serial.into(), event.time.millis(), cancelled.into());
             }
         });
     }
@@ -240,9 +248,9 @@ impl WpPointerGesturePointerHandle {
             let ongoing = data.in_progress_on.lock().unwrap().replace(surface.clone());
             if ongoing.is_some() {
                 // Cancel an ongoing gesture for a different surface.
-                gesture.end(event.serial.into(), event.time, 1);
+                gesture.end(event.serial.into(), event.time.millis(), 1);
             }
-            gesture.begin(event.serial.into(), event.time, surface, event.fingers);
+            gesture.begin(event.serial.into(), event.time.millis(), surface, event.fingers);
         });
     }
 
@@ -258,10 +266,10 @@ impl WpPointerGesturePointerHandle {
             if ongoing.as_ref() == Some(surface) {
                 let client_scale = data.client_scale.load(Ordering::Acquire);
                 let delta = event.delta.to_client(client_scale);
-                gesture.update(event.time, delta.x, delta.y, event.scale, event.rotation);
+                gesture.update(event.time.millis(), delta.x, delta.y, event.scale, event.rotation);
             } else if ongoing.take().is_some() {
                 // If it was for a different surface, cancel it.
-                gesture.end(SERIAL_COUNTER.next_serial().into(), event.time, 1);
+                gesture.end(SERIAL_COUNTER.next_serial().into(), event.time.millis(), 1);
             }
         });
     }
@@ -282,7 +290,7 @@ impl WpPointerGesturePointerHandle {
                     // If the gesture was ongoing for any other surface then cancel it.
                     true
                 };
-                gesture.end(event.serial.into(), event.time, cancelled.into());
+                gesture.end(event.serial.into(), event.time.millis(), cancelled.into());
             }
         });
     }
@@ -297,9 +305,9 @@ impl WpPointerGesturePointerHandle {
             let ongoing = data.in_progress_on.lock().unwrap().replace(surface.clone());
             if ongoing.is_some() {
                 // Cancel an ongoing gesture for a different surface.
-                gesture.end(event.serial.into(), event.time, 1);
+                gesture.end(event.serial.into(), event.time.millis(), 1);
             }
-            gesture.begin(event.serial.into(), event.time, surface, event.fingers);
+            gesture.begin(event.serial.into(), event.time.millis(), surface, event.fingers);
         });
     }
 
@@ -319,7 +327,7 @@ impl WpPointerGesturePointerHandle {
                     // If the gesture was ongoing for any other surface then cancel it.
                     true
                 };
-                gesture.end(event.serial.into(), event.time, cancelled.into());
+                gesture.end(event.serial.into(), event.time.millis(), cancelled.into());
             }
         });
     }
@@ -363,7 +371,7 @@ impl WpPointerGesturePointerHandle {
 /// User data of ZwpPointerGesture*V1 objects
 #[derive(Debug)]
 pub struct PointerGestureUserData<D: SeatHandler> {
-    handle: Option<PointerHandle<D>>,
+    arc: Weak<PointerRc<D>>,
     /// This gesture is in the middle between its begin() and end() on this surface.
     pub(crate) in_progress_on: Mutex<Option<WlSurface>>,
     client_scale: Arc<AtomicF64>,
@@ -419,37 +427,37 @@ where
             zwp_pointer_gestures_v1::Request::GetSwipeGesture { id, pointer } => {
                 let data = pointer.data::<PointerUserData<D>>().unwrap();
                 let user_data = PointerGestureUserData {
-                    handle: data.handle.clone(),
+                    arc: data.arc.clone(),
                     in_progress_on: Mutex::new(None),
                     client_scale: data.client_scale.clone(),
                 };
                 let gesture = data_init.init(id, user_data);
-                if let Some(handle) = &data.handle {
-                    handle.wp_pointer_gestures.new_swipe_gesture(gesture);
+                if let Some(arc) = data.arc.upgrade() {
+                    arc.wp_pointer_gestures.new_swipe_gesture(gesture);
                 }
             }
             zwp_pointer_gestures_v1::Request::GetPinchGesture { id, pointer } => {
                 let data = pointer.data::<PointerUserData<D>>().unwrap();
                 let user_data = PointerGestureUserData {
-                    handle: data.handle.clone(),
+                    arc: data.arc.clone(),
                     in_progress_on: Mutex::new(None),
                     client_scale: data.client_scale.clone(),
                 };
                 let gesture = data_init.init(id, user_data);
-                if let Some(handle) = &data.handle {
-                    handle.wp_pointer_gestures.new_pinch_gesture(gesture);
+                if let Some(arc) = data.arc.upgrade() {
+                    arc.wp_pointer_gestures.new_pinch_gesture(gesture);
                 }
             }
             zwp_pointer_gestures_v1::Request::GetHoldGesture { id, pointer } => {
                 let data = pointer.data::<PointerUserData<D>>().unwrap();
                 let user_data = PointerGestureUserData {
-                    handle: data.handle.clone(),
+                    arc: data.arc.clone(),
                     in_progress_on: Mutex::new(None),
                     client_scale: data.client_scale.clone(),
                 };
                 let gesture = data_init.init(id, user_data);
-                if let Some(handle) = &data.handle {
-                    handle.wp_pointer_gestures.new_hold_gesture(gesture);
+                if let Some(arc) = data.arc.upgrade() {
+                    arc.wp_pointer_gestures.new_hold_gesture(gesture);
                 }
             }
             zwp_pointer_gestures_v1::Request::Release => {}
@@ -495,9 +503,8 @@ where
     }
 
     fn destroyed(&self, _state: &mut D, _: ClientId, object: &ZwpPointerGestureSwipeV1) {
-        if let Some(ref handle) = self.handle {
-            handle
-                .wp_pointer_gestures
+        if let Some(arc) = self.arc.upgrade() {
+            arc.wp_pointer_gestures
                 .known_swipe_gestures
                 .lock()
                 .unwrap()
@@ -527,9 +534,8 @@ where
     }
 
     fn destroyed(&self, _state: &mut D, _: ClientId, object: &ZwpPointerGesturePinchV1) {
-        if let Some(ref handle) = self.handle {
-            handle
-                .wp_pointer_gestures
+        if let Some(arc) = self.arc.upgrade() {
+            arc.wp_pointer_gestures
                 .known_pinch_gestures
                 .lock()
                 .unwrap()
@@ -559,9 +565,8 @@ where
     }
 
     fn destroyed(&self, _state: &mut D, _: ClientId, object: &ZwpPointerGestureHoldV1) {
-        if let Some(ref handle) = self.handle {
-            handle
-                .wp_pointer_gestures
+        if let Some(arc) = self.arc.upgrade() {
+            arc.wp_pointer_gestures
                 .known_hold_gestures
                 .lock()
                 .unwrap()

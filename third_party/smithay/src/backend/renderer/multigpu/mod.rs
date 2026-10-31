@@ -249,6 +249,37 @@ impl<A: GraphicsApi> GpuManager<A> {
         Ok(self.devices.iter_mut())
     }
 
+    /// Clean up the texture caches of every device enumerated by the API.
+    ///
+    /// See [`Renderer::cleanup_texture_cache`]. Cleanup is best-effort: every device is attempted
+    /// even if one of them fails, every failure is logged, and the first error is returned.
+    #[profiling::function]
+    pub fn cleanup_texture_cache(&mut self) -> Result<(), Error<A, A>> {
+        let mut result = Ok(());
+        for device in self.devices_mut().map_err(Error::RenderApiError)? {
+            result = result.and(cleanup_device_texture_cache(device).map_err(Error::Render));
+        }
+        result
+    }
+
+    /// Drop all caches held by this manager and by every device enumerated by the API.
+    ///
+    /// See [`Renderer::invalidate_caches`]. Beyond the per-device caches this also drops the
+    /// buffers cached for copying between a render- and a target-node.
+    ///
+    /// Invalidation is best-effort: every device is attempted even if one of them fails, every
+    /// failure is logged, and the first error is returned.
+    #[profiling::function]
+    pub fn invalidate_caches(&mut self) -> Result<(), Error<A, A>> {
+        self.dmabuf_cache.clear();
+
+        let mut result = Ok(());
+        for device in self.devices_mut().map_err(Error::RenderApiError)? {
+            result = result.and(invalidate_device_caches(device).map_err(Error::Render));
+        }
+        result
+    }
+
     /// Create a [`MultiRenderer`] from a single device.
     ///
     /// This a convenience function to deal with the same types even, if you only need one device.
@@ -787,6 +818,11 @@ impl<'render, 'target, R: GraphicsApi, T: GraphicsApi> MultiRenderer<'render, 't
     /// if it diverges from the render-device.
     pub fn target_as_mut(&mut self) -> Option<&mut <T::Device as ApiDevice>::Renderer> {
         self.target.as_mut().map(|data| data.device.renderer_mut())
+    }
+
+    /// The devices of the render-api, starting with the render-device.
+    fn render_devices(&mut self) -> impl Iterator<Item = &mut R::Device> {
+        std::iter::once(&mut *self.render).chain(self.other_renderers.iter_mut().map(|dev| &mut **dev))
     }
 
     /// Converts this `MultiRenderer` into a `single_renderer` for the provided target device.
@@ -1348,19 +1384,54 @@ where
 
     #[profiling::function]
     fn cleanup_texture_cache(&mut self) -> Result<(), Self::Error> {
-        if let Some(target) = self.target.as_mut() {
-            target
-                .device
-                .renderer_mut()
-                .cleanup_texture_cache()
-                .map_err(Error::Target)?;
+        let mut result = Ok(());
+        for device in self.render_devices() {
+            result = result.and(cleanup_device_texture_cache(device).map_err(Error::Render));
         }
-        self.render
-            .renderer_mut()
-            .cleanup_texture_cache()
-            .map_err(Error::Render)?;
-        Ok(())
+        if let Some(target) = self.target.as_mut() {
+            result = result.and(cleanup_device_texture_cache(&mut *target.device).map_err(Error::Target));
+        }
+        result
     }
+
+    #[profiling::function]
+    fn invalidate_caches(&mut self) -> Result<(), Self::Error> {
+        let mut result = Ok(());
+        for device in self.render_devices() {
+            result = result.and(invalidate_device_caches(device).map_err(Error::Render));
+        }
+        if let Some(target) = self.target.as_mut() {
+            *target.cached_buffer = None;
+            result = result.and(invalidate_device_caches(&mut *target.device).map_err(Error::Target));
+        }
+        result
+    }
+}
+
+/// Invalidate a single device's caches, logging a failure against the node it happened on.
+///
+/// Callers keep only the first error, so the log is what identifies any device failing after it.
+fn invalidate_device_caches<D: ApiDevice>(
+    device: &mut D,
+) -> Result<(), <D::Renderer as RendererSuper>::Error> {
+    let node = *device.node();
+    device
+        .renderer_mut()
+        .invalidate_caches()
+        .inspect_err(|err| warn!("Error invalidating caches of {}: {}", node, err))
+}
+
+/// Clean up a single device's texture cache, logging a failure against the node it happened on.
+///
+/// See [`invalidate_device_caches`] for why the error is logged as well as returned.
+fn cleanup_device_texture_cache<D: ApiDevice>(
+    device: &mut D,
+) -> Result<(), <D::Renderer as RendererSuper>::Error> {
+    let node = *device.node();
+    device
+        .renderer_mut()
+        .cleanup_texture_cache()
+        .inspect_err(|err| warn!("Error cleaning up texture cache of {}: {}", node, err))
 }
 
 fn create_shared_dma_framebuffer<R, T: GraphicsApi>(
@@ -3483,6 +3554,10 @@ where
 
     fn cleanup_texture_cache(&mut self) -> Result<(), Self::Error> {
         self.guard.as_mut().cleanup_texture_cache().map_err(Error::Render)
+    }
+
+    fn invalidate_caches(&mut self) -> Result<(), Self::Error> {
+        self.guard.as_mut().invalidate_caches().map_err(Error::Render)
     }
 }
 

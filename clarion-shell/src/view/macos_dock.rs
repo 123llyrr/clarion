@@ -115,10 +115,10 @@ fn folder_tile_icon(
     open: bool,
     p: Palette,
 ) -> AnyElement {
-    use crate::desktop_icons::{icon, rotated_icon, DesktopIconKind};
     let Some(folder) = folder else {
-        return icon(DesktopIconKind::Folder, size);
+        return crate::file_icons::icon(None, true, &[], size, 0.);
     };
+    let tags = crate::file_icons::tags(&folder.path);
     let entries = folder
         .snapshot
         .as_ref()
@@ -152,34 +152,73 @@ fn folder_tile_icon(
             .into_any_element();
     }
     if folder.display == crate::preferences::FolderDisplay::Folder || entries.is_empty() {
-        return icon(DesktopIconKind::Folder, size);
+        // The pinned folder itself always reads as a folder, with its own
+        // tags on the corner.
+        return crate::file_icons::icon(None, true, &tags, size, 0.);
     }
+    let picked = folder_preview_entries(entries);
     let mut stack = div().relative().w(px(size)).h(px(size));
-    let mut picked = folder_preview_entries(entries);
-    picked.reverse();
-    let artwork_size = size;
-    for (layer, entry) in picked.into_iter().enumerate() {
-        let offset = layer as f32 * 0.03;
-        let kind = match entry.kind {
-            crate::dock_folder::FolderEntryKind::Directory => DesktopIconKind::Folder,
-            crate::dock_folder::FolderEntryKind::Application => DesktopIconKind::Application,
-            crate::dock_folder::FolderEntryKind::Image => DesktopIconKind::Image,
-            crate::dock_folder::FolderEntryKind::Document => DesktopIconKind::Document,
-        };
-        let angle = match layer {
-            0 => -16.,
-            1 => 8.,
-            _ => 14.,
-        };
+    for card in folder_stack_layout(picked.len(), size) {
+        let entry = picked[card.entry];
+        let is_dir = entry.kind == crate::dock_folder::FolderEntryKind::Directory;
         stack = stack.child(
             div()
                 .absolute()
-                .left(px(size * offset))
-                .top(px(size * offset))
-                .child(rotated_icon(kind, angle, artwork_size)),
+                .left(px(card.left))
+                .top(px(card.top))
+                .opacity(card.opacity)
+                .child(crate::file_icons::icon(
+                    Some(&entry.path),
+                    is_dir,
+                    &entry.tags,
+                    card.size,
+                    card.angle,
+                )),
         );
     }
     stack.into_any_element()
+}
+
+/// One card of the folded stack, painted back to front.
+pub(super) struct StackCard {
+    /// Index into the preview list; the first entry ends up on top.
+    pub entry: usize,
+    pub angle: f32,
+    pub left: f32,
+    pub top: f32,
+    pub size: f32,
+    /// How solid the card paints; cards further back fade into the pile.
+    pub opacity: f32,
+}
+
+/// The three depths of the folded deck, front to back. Each card is a little
+/// smaller, dimmer and more turned than the one in front, so the pile reads as
+/// receding towards an upper-right vanishing point. The front stays upright.
+const STACK_SCALES: [f32; 3] = [0.85, 0.78, 0.71];
+const STACK_ANGLES: [f32; 3] = [0., -20., -40.];
+const STACK_OPACITY: [f32; 3] = [1., 0.86, 0.70];
+
+/// A small deck, not a spiral: up to three cards at `0°`, `-20°` and `-40°`,
+/// each one behind riding up and to the right while shrinking and fading, like
+/// a hand of cards seen in perspective.
+pub(super) fn folder_stack_layout(count: usize, size: f32) -> Vec<StackCard> {
+    let count = count.min(3);
+    let mut cards = Vec::with_capacity(count);
+    // Paint the deepest card first; the front card is the last child.
+    for index in (0..count).rev() {
+        let depth = index as f32;
+        let card = size * STACK_SCALES[index];
+        let shift = depth * size * 0.055;
+        cards.push(StackCard {
+            entry: index,
+            angle: STACK_ANGLES[index],
+            left: (size - card) / 2. + shift,
+            top: (size - card) / 2. - shift,
+            size: card,
+            opacity: STACK_OPACITY[index],
+        });
+    }
+    cards
 }
 
 fn dock_separator(vertical: bool, dark: bool) -> Div {
@@ -312,6 +351,10 @@ pub(super) struct DockViewMotion {
     /// seeds the snapshot: without this gate a shell restart would replay a
     /// batch of false arrivals for folders that were already pinned.
     pub(super) folders_seeded: bool,
+    /// The folder whose fan panel was open as the previous render saw it. When
+    /// the fan finishes retracting and the panel closes, the tile replays its
+    /// grow-in so the icon does not pop in on the frame the panel disappears.
+    pub(super) folder_fan_root: Option<std::path::PathBuf>,
     /// Resting slot layout fingerprints. The idle geometry (used for the
     /// strip bounds and drawer mapping) only changes with the metrics; every
     /// magnification frame reuses the cached sample instead of re-running the
@@ -444,6 +487,7 @@ impl DockViewMotion {
             folder_exiting: Vec::new(),
             folders_snapshot: Vec::new(),
             folders_seeded: false,
+            folder_fan_root: None,
             idle_fingerprint: None,
             idle_slots: std::rc::Rc::new(Vec::new()),
             hover_pulse: std::time::Instant::now(),
@@ -1002,6 +1046,26 @@ impl ShellView {
                     }
                 }
             }
+            // The fan folds back into its tile and the panel closes. Let the
+            // folder artwork grow back from the placeholder shape instead of
+            // swapping in from the open control on a single frame.
+            let fan_root = match host.panel.as_ref() {
+                Some(Panel::DockFolder { root }) => Some(root.clone()),
+                _ => None,
+            };
+            if let Some(closed) = motion.folder_fan_root.take() {
+                if fan_root.as_ref() != Some(&closed)
+                    && !host.prefs.reduce_motion
+                    && host.dock_folders.iter().any(|folder| folder.path == closed)
+                {
+                    motion
+                        .folder_appear
+                        .entry(closed.to_string_lossy().into_owned())
+                        .or_insert_with(|| crate::dock_motion::Motion::new(0.))
+                        .retarget(1., now);
+                }
+            }
+            motion.folder_fan_root = fan_root;
             motion.folders_seeded = true;
             motion.folders_snapshot = host.dock_folders.clone();
         }
@@ -1719,15 +1783,19 @@ impl ShellView {
                 }
                 let h = self.host.clone();
                 let ids = hidden.clone();
+                let surface_output = self.output.clone();
                 let icon_size = slot.size.round() as u16;
                 tile = tile
                     .on_click(move |_, _, cx| {
                         h.update(cx, |h, cx| {
                             h.handle(
-                                Action::Panel(Panel::DockOverflow {
-                                    ids: ids.clone(),
-                                    icon_size,
-                                }),
+                                Action::on_output(
+                                    surface_output.clone(),
+                                    Action::Panel(Panel::DockOverflow {
+                                        ids: ids.clone(),
+                                        icon_size,
+                                    }),
+                                ),
                                 cx,
                             )
                         })
@@ -1771,6 +1839,7 @@ impl ShellView {
                     let path = folder.path.clone();
                     let context = folder.path.clone();
                     let context_host = self.host.clone();
+                    let context_output = self.output.clone();
                     tile = tile
                         .on_mouse_down(
                             MouseButton::Left,
@@ -1799,17 +1868,27 @@ impl ShellView {
                                 }
                                 let h = this.host.clone();
                                 let path = path.clone();
+                                let surface_output = this.output.clone();
                                 h.update(cx, |h, cx| {
-                                    h.handle(Action::OpenFolder(path), cx)
+                                    h.handle(
+                                        Action::on_output(
+                                            surface_output.clone(),
+                                            Action::OpenFolder(path),
+                                        ),
+                                        cx,
+                                    )
                                 });
                             }),
                         )
                         .on_mouse_down(MouseButton::Right, move |_, _, cx| {
                             context_host.update(cx, |host, cx| {
                                 host.handle(
-                                    Action::Panel(Panel::DockFolderMenu {
-                                        path: context.clone(),
-                                    }),
+                                    Action::on_output(
+                                        context_output.clone(),
+                                        Action::Panel(Panel::DockFolderMenu {
+                                            path: context.clone(),
+                                        }),
+                                    ),
                                     cx,
                                 )
                             })
@@ -1875,9 +1954,18 @@ impl ShellView {
                 }
                 if launcher {
                     let h = self.host.clone();
+                    let surface_output = self.output.clone();
                     tile = tile
                         .on_click(move |_, _, cx| {
-                            h.update(cx, |h, cx| h.handle(Action::Panel(Panel::Apps), cx))
+                            h.update(cx, |h, cx| {
+                                h.handle(
+                                    Action::on_output(
+                                        surface_output.clone(),
+                                        Action::Launcher,
+                                    ),
+                                    cx,
+                                )
+                            })
                         })
                         .can_drop(|_, _, _| true)
                         .on_drop::<gpui::ExternalPaths>(|_, _, cx| cx.stop_propagation());
@@ -1921,9 +2009,16 @@ impl ShellView {
                         )
                         .on_mouse_down(MouseButton::Right, {
                             let h = self.host.clone();
+                            let surface_output = self.output.clone();
                             move |_, _, cx| {
                                 h.update(cx, |h, cx| {
-                                    h.handle(Action::Panel(Panel::Dock(context.clone())), cx)
+                                    h.handle(
+                                        Action::on_output(
+                                            surface_output.clone(),
+                                            Action::Panel(Panel::Dock(context.clone())),
+                                        ),
+                                        cx,
+                                    )
                                 })
                             }
                         })
@@ -2162,6 +2257,25 @@ impl ShellView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        // The fullscreen launcher owns its output. Keeping the Dock surface
+        // painted there would force the launcher to cut a rectangular hole
+        // through its scrim; hiding the surface instead leaves one clean
+        // backdrop. A Dock on another output is not covered by the launcher
+        // and stays live.
+        if host.panel == Some(Panel::Apps)
+            && host.panel_output.as_deref() == Some(self.output.as_str())
+        {
+            self.dock_motion.clear_hover();
+            #[cfg(test)]
+            {
+                self.dock_motion.input_regions.clear();
+                self.dock_motion.glass_regions.clear();
+                self.dock_motion.animation_active = false;
+            }
+            window.set_glass_region(Some(&[]));
+            window.set_input_region(Some(&[]));
+            return div().size_full().into_any_element();
+        }
         let mut frame = self.dock_frame(host, window, cx);
         let (content, icon_regions, extra_active) = self.dock_slots(host, &frame, p, cx);
         frame.active |= extra_active;

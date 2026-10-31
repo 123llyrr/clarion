@@ -60,11 +60,43 @@ pub struct SystemSnapshot {
     pub volume: Option<f64>,
     pub muted: bool,
     pub brightness: Option<f64>,
+    /// The averaged charge of the machine's system batteries, 0–1.
     pub battery: Option<f64>,
-    pub charging: bool,
+    /// What the batteries are doing, before the charge level folds in.
+    pub battery_status: BatteryStatus,
+    /// Full-charge capacity divided by design capacity. Battery wear, not the
+    /// current charge: 50% here means the pack holds half of its original Wh.
+    pub battery_health: Option<f64>,
+    /// Mains present. Inferred from a charging/full battery when the platform
+    /// exposes no AC device of its own.
+    pub ac_online: bool,
     pub trash_full: bool,
     pub clock: String,
     pub date: String,
+    /// The local calendar day, so the notification center's month grid does
+    /// not have to parse the localized `date` label back into numbers.
+    pub today: Option<chrono::NaiveDate>,
+}
+
+/// The kernel's `POWER_SUPPLY_STATUS`, reduced to the values the UI uses.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BatteryStatus {
+    #[default]
+    Unknown,
+    Charging,
+    Discharging,
+    NotCharging,
+    Full,
+}
+
+/// One pass over `/sys/class/power_supply`, kept separate from the snapshot so
+/// the bar, the popup and the tests read the same aggregation.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BatterySnapshot {
+    pub percent: Option<f64>,
+    pub status: BatteryStatus,
+    pub health: Option<f64>,
+    pub ac_online: bool,
 }
 
 #[derive(Debug)]
@@ -94,6 +126,8 @@ pub enum Command {
     LaunchDesktop(PathBuf),
     LaunchDesktopWithPaths(PathBuf, Vec<PathBuf>),
     OpenPath(PathBuf),
+    /// Open a web URL through the desktop handler.
+    OpenUrl(String),
     OpenSettings,
     SetVolume(f64),
     SetMuted(bool),
@@ -103,6 +137,10 @@ pub enum Command {
     },
     RefreshCatalog,
     SavePreferences(Preferences),
+    /// Count one successful application launch in the palette history.
+    RecordLaunch(String),
+    /// Lock, suspend or power the session off through logind/systemd.
+    System(crate::app::SystemAction),
 }
 
 #[derive(Clone, Debug)]
@@ -621,6 +659,22 @@ fn perform(
                 Duration::from_secs(3),
             )?;
         }
+        Command::OpenUrl(url) => {
+            let scheme = url.to_ascii_lowercase();
+            anyhow::ensure!(
+                (scheme.starts_with("https://") || scheme.starts_with("http://"))
+                    && !url.contains(char::is_whitespace)
+                    && !url.contains(char::is_control),
+                "Invalid URL"
+            );
+            run_tool(
+                "gio",
+                &["open", "--", url.as_str()],
+                &options.environment,
+                Duration::from_secs(3),
+            )?;
+        }
+        Command::System(action) => run_system_action(action, options)?,
         Command::OpenSettings => {
             request(
                 &options.environment,
@@ -689,6 +743,56 @@ fn perform(
         Command::SavePreferences(preferences) => {
             preferences.save(&options.environment, options.preview)?;
             emit(events, Event::Preferences(preferences), alive);
+        }
+        Command::RecordLaunch(id) => {
+            let mut history =
+                clarion_launcher::usage::LaunchHistory::load(&options.environment);
+            history.record_launch(&id, clarion_launcher::usage::unix_millis());
+            history.save(&options.environment)?;
+        }
+    }
+    Ok(())
+}
+
+/// Run one of the session's power actions. `loginctl`/`systemctl` return once
+/// the request is queued, and the caller already runs on the worker thread.
+fn run_system_action(action: crate::app::SystemAction, options: &Options) -> Result<()> {
+    use crate::app::SystemAction;
+    let timeout = Duration::from_secs(10);
+    match action {
+        SystemAction::Lock => {
+            // Locking the caller's own session needs no id; passing the known
+            // one keeps it deterministic under nested sessions.
+            match options.environment.get("XDG_SESSION_ID") {
+                Some(session) => run_tool(
+                    "loginctl",
+                    &["lock-session", session],
+                    &options.environment,
+                    timeout,
+                )?,
+                None => run_tool("loginctl", &["lock-session"], &options.environment, timeout)?,
+            };
+        }
+        SystemAction::Logout => {
+            let session = options
+                .environment
+                .get("XDG_SESSION_ID")
+                .context("无法确定当前会话（XDG_SESSION_ID）")?;
+            run_tool(
+                "loginctl",
+                &["terminate-session", session],
+                &options.environment,
+                timeout,
+            )?;
+        }
+        SystemAction::Suspend => {
+            run_tool("systemctl", &["suspend"], &options.environment, timeout)?;
+        }
+        SystemAction::Reboot => {
+            run_tool("systemctl", &["reboot"], &options.environment, timeout)?;
+        }
+        SystemAction::Shutdown => {
+            run_tool("systemctl", &["poweroff"], &options.environment, timeout)?;
         }
     }
     Ok(())
@@ -804,9 +908,11 @@ fn system_worker(options: Options, events: Sender<Event>, alive: Arc<AtomicBool>
                     })
                     .map(|value| (value / 100.).clamp(0., 1.));
             }
-            let (battery, charging) = battery_snapshot(Path::new("/sys/class/power_supply"));
-            hardware.battery = battery;
-            hardware.charging = charging;
+            let battery = battery_snapshot(Path::new("/sys/class/power_supply"));
+            hardware.battery = battery.percent;
+            hardware.battery_status = battery.status;
+            hardware.battery_health = battery.health;
+            hardware.ac_online = battery.ac_online;
             let data = options
                 .environment
                 .get("XDG_DATA_HOME")
@@ -827,6 +933,7 @@ fn system_worker(options: Options, events: Sender<Event>, alive: Arc<AtomicBool>
         let weekday = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
             [chrono::Datelike::weekday(&now).num_days_from_monday() as usize];
         hardware.date = format!("{} {weekday}", now.format("%m月%d日"));
+        hardware.today = Some(now.date_naive());
         emit(&events, Event::System(hardware.clone()), &alive);
         wait_alive(&alive, Duration::from_secs(1));
     }
@@ -843,24 +950,39 @@ fn parse_volume(value: &str) -> Option<f64> {
         .map(|v| v.clamp(0., 1.))
 }
 
-fn battery_snapshot(root: &Path) -> (Option<f64>, bool) {
+fn battery_snapshot(root: &Path) -> BatterySnapshot {
     let Ok(entries) = fs::read_dir(root) else {
-        return (None, false);
+        return BatterySnapshot::default();
     };
+    let mut snapshot = BatterySnapshot::default();
     let mut capacities = Vec::new();
+    let mut healths = Vec::new();
     let mut charging = false;
+    let mut full = false;
+    let mut discharging = false;
+    let mut not_charging = false;
+    let mut present = false;
     for entry in entries.flatten().take(32) {
         let path = entry.path();
-        if fs::read_to_string(path.join("type"))
+        let kind = fs::read_to_string(path.join("type"))
             .ok()
-            .is_none_or(|kind| kind.trim() != "Battery")
-        {
-            continue;
+            .map(|kind| kind.trim().to_owned());
+        match kind.as_deref() {
+            Some("Mains") => {
+                // Some platforms only expose the mains state here; not every
+                // AC adapter ships an `online` attribute.
+                if fs::read_to_string(path.join("online")).is_ok_and(|line| line.trim() == "1") {
+                    snapshot.ac_online = true;
+                }
+                continue;
+            }
+            Some("Battery") => {}
+            _ => continue,
         }
-        let present = fs::read_to_string(path.join("present"))
+        let battery_present = fs::read_to_string(path.join("present"))
             .ok()
             .and_then(|present| present.trim().parse::<u8>().ok());
-        if present == Some(0) {
+        if battery_present == Some(0) {
             continue;
         }
         // HID pens, touch controllers and similar per-device batteries are not
@@ -870,21 +992,64 @@ fn battery_snapshot(root: &Path) -> (Option<f64>, bool) {
         if peripheral {
             continue;
         }
-        if let Some(capacity) = fs::read_to_string(path.join("capacity"))
-            .ok()
-            .and_then(|s| s.trim().parse::<f64>().ok())
-            .filter(|v| v.is_finite() && (0. ..=100.).contains(v))
-        {
-            capacities.push(capacity / 100.)
+        present = true;
+        let number = |key: &str| {
+            fs::read_to_string(path.join(key))
+                .ok()
+                .and_then(|value| value.trim().parse::<f64>().ok())
+                .filter(|value: &f64| value.is_finite() && *value >= 0.)
+        };
+        if let Some(capacity) = number("capacity").filter(|value| *value <= 100.) {
+            capacities.push(capacity / 100.);
         }
-        charging |= fs::read_to_string(path.join("status"))
+        // Packs report either charge (Ah) or energy (Wh); the ratio is the
+        // same wear figure either way.
+        let full_capacity = number("charge_full").or_else(|| number("energy_full"));
+        let design_capacity = number("charge_full_design").or_else(|| number("energy_full_design"));
+        if let (Some(full_capacity), Some(design_capacity)) = (full_capacity, design_capacity) {
+            if design_capacity > 0. && full_capacity > 0. {
+                healths.push((full_capacity / design_capacity).clamp(0., 1.));
+            }
+        }
+        match fs::read_to_string(path.join("status"))
             .ok()
-            .is_some_and(|s| matches!(s.trim(), "Charging" | "Full"));
+            .map(|status| status.trim().to_owned())
+            .as_deref()
+        {
+            Some("Charging") => charging = true,
+            Some("Full") => full = true,
+            Some("Discharging") => discharging = true,
+            Some("Not charging") => not_charging = true,
+            _ => {}
+        }
     }
-    (
-        (!capacities.is_empty()).then(|| capacities.iter().sum::<f64>() / capacities.len() as f64),
-        charging,
-    )
+    if !present {
+        return snapshot;
+    }
+    snapshot.status = if charging {
+        BatteryStatus::Charging
+    } else if full {
+        BatteryStatus::Full
+    } else if discharging {
+        BatteryStatus::Discharging
+    } else if not_charging {
+        BatteryStatus::NotCharging
+    } else {
+        BatteryStatus::Unknown
+    };
+    // Charging or full is proof of mains even when no AC device is exposed.
+    snapshot.ac_online |= matches!(
+        snapshot.status,
+        BatteryStatus::Charging | BatteryStatus::Full
+    );
+    if !capacities.is_empty() {
+        snapshot.percent =
+            Some(capacities.iter().sum::<f64>() / capacities.len() as f64);
+    }
+    if !healths.is_empty() {
+        snapshot.health = Some(healths.iter().sum::<f64>() / healths.len() as f64);
+    }
+    snapshot
 }
 
 fn wait_alive(alive: &AtomicBool, duration: Duration) {
@@ -1069,13 +1234,81 @@ mod tests {
                 ("scope", "Device\n"),
             ],
         );
-        write("AC0", &[("type", "Mains\n"), ("status", "Online\n")]);
-        let (battery, charging) = battery_snapshot(directory.path());
+        write("AC0", &[("type", "Mains\n"), ("online", "1\n")]);
+        let snapshot = battery_snapshot(directory.path());
         assert!(
-            (battery.unwrap() - 0.9).abs() < 1e-6,
-            "the main battery must not be averaged with peripheral batteries: {battery:?}"
+            (snapshot.percent.unwrap() - 0.9).abs() < 1e-6,
+            "the main battery must not be averaged with peripheral batteries: {:?}",
+            snapshot.percent
         );
-        assert!(!charging);
+        assert_eq!(snapshot.status, BatteryStatus::NotCharging);
+        assert!(snapshot.ac_online, "the mains adapter is online");
+        assert_eq!(snapshot.health, None, "no full/design capacity was given");
+    }
+
+    #[test]
+    fn battery_snapshot_reports_wear_and_infers_mains_from_charging() {
+        let directory = tempfile::tempdir().unwrap();
+        let write = |name: &str, files: &[(&str, &str)]| {
+            let path = directory.path().join(name);
+            fs::create_dir_all(&path).unwrap();
+            for (file, value) in files {
+                fs::write(path.join(file), value).unwrap();
+            }
+        };
+        write(
+            "BAT0",
+            &[
+                ("type", "Battery\n"),
+                ("present", "1\n"),
+                ("capacity", "80\n"),
+                ("status", "Charging\n"),
+                ("charge_full", "4000000\n"),
+                ("charge_full_design", "5000000\n"),
+            ],
+        );
+        // No AC entry: a charging battery is itself proof of mains power.
+        let snapshot = battery_snapshot(directory.path());
+        assert_eq!(snapshot.status, BatteryStatus::Charging);
+        assert!(snapshot.ac_online);
+        assert!((snapshot.health.unwrap() - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn battery_snapshot_prefers_charge_and_full_over_discharging() {
+        let directory = tempfile::tempdir().unwrap();
+        let write = |name: &str, files: &[(&str, &str)]| {
+            let path = directory.path().join(name);
+            fs::create_dir_all(&path).unwrap();
+            for (file, value) in files {
+                fs::write(path.join(file), value).unwrap();
+            }
+        };
+        write(
+            "BAT0",
+            &[
+                ("type", "Battery\n"),
+                ("present", "1\n"),
+                ("capacity", "100\n"),
+                ("status", "Full\n"),
+            ],
+        );
+        write(
+            "BAT1",
+            &[
+                ("type", "Battery\n"),
+                ("present", "1\n"),
+                ("capacity", "40\n"),
+                ("status", "Discharging\n"),
+            ],
+        );
+        let snapshot = battery_snapshot(directory.path());
+        // A full pack means the machine is on mains; the aggregate percent is
+        // still the average the bar has always shown.
+        assert_eq!(snapshot.status, BatteryStatus::Full);
+        assert!(snapshot.ac_online);
+        assert!((snapshot.percent.unwrap() - 0.7).abs() < 1e-6);
+        assert_eq!(snapshot.health, None);
     }
     #[test]
     fn new_generation_never_retains_previous_windows_or_outputs() {

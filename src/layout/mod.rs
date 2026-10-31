@@ -4752,12 +4752,18 @@ impl<W: LayoutElement> Layout<W> {
         if self.monitor_for_output(&output).is_none() {
             return;
         }
-        self.apply_interactive_move_update(
-            &pending.window,
-            Point::from(batch.delta),
-            output,
-            pointer_pos,
-        );
+        // Applying a pose temporarily takes the interactive move state. Any
+        // nested desktop transition (for example the focus update when the
+        // pointer crosses outputs) must therefore run inside this transition,
+        // or its completion would acknowledge a move that still owns its tile.
+        self.with_desktop_transition(|this| {
+            this.apply_interactive_move_update(
+                &pending.window,
+                Point::from(batch.delta),
+                output,
+                pointer_pos,
+            )
+        });
     }
 
     pub fn interactive_move_update(

@@ -29,9 +29,17 @@ fn text(text: impl Into<String>, size: f32, weight: FontWeight, color: Hsla) -> 
     }
 }
 
+/// The control center's inner cards step down from the popup radius so the
+/// nested surfaces share one silhouette.
+const CONTROL_CARD_RADIUS: f32 = 16.;
+
 pub(super) fn card(p: Palette) -> Div {
+    rounded_card(p, 11.)
+}
+
+fn rounded_card(p: Palette, radius: f32) -> Div {
     div()
-        .rounded(px(11.))
+        .rounded(px(radius))
         .border_1()
         .border_color(p.line.opacity(0.7))
         .bg(linear_gradient(
@@ -45,6 +53,12 @@ pub(super) fn card(p: Palette) -> Div {
             blur_radius: px(3.),
             spread_radius: px(0.),
         }])
+}
+
+/// The control center's own card recipe: the shared fill with the larger
+/// radius that matches the popup.
+fn control_card(p: Palette) -> Div {
+    rounded_card(p, CONTROL_CARD_RADIUS)
 }
 
 fn percentage(value: Option<f64>) -> String {
@@ -78,7 +92,7 @@ impl ShellView {
             .and_then(|output| output.hdr_brightness)
             .map(|value| f64::from(value) / 100.)
             .or(host.system.brightness);
-        let mut footer = card(p).w_full().p(px(4.)).flex().flex_col();
+        let mut footer = control_card(p).w_full().p(px(4.)).flex().flex_col();
         for (index, (id, label, icon, action)) in [
             (
                 "controls-desktop",
@@ -108,7 +122,7 @@ impl ShellView {
             footer = footer.child(self.control_entry(id, label, icon, action, p));
         }
 
-        div()
+        let mut controls = div()
             .w_full()
             .flex()
             .flex_col()
@@ -139,6 +153,56 @@ impl ShellView {
                         p,
                     )),
             )
+            .child(
+                div()
+                    .w_full()
+                    .flex()
+                    .gap(px(8.))
+                    .child(self.control_tile(
+                        "controls-theme",
+                        "外观",
+                        if dark { "深色" } else { "浅色" },
+                        if dark { "moon" } else { "sun" },
+                        false,
+                        Action::Theme(if dark { "light" } else { "dark" }.into()),
+                        dark,
+                        p,
+                    ))
+                    .child(self.control_tile(
+                        "controls-launcher",
+                        "启动器",
+                        if host.prefs.launcher_presentation
+                            == crate::preferences::LauncherPresentation::Fullscreen
+                        {
+                            "全屏"
+                        } else {
+                            "弹窗"
+                        },
+                        if host.prefs.launcher_presentation
+                            == crate::preferences::LauncherPresentation::Fullscreen
+                        {
+                            "launchpad"
+                        } else {
+                            "display"
+                        },
+                        false,
+                        Action::LauncherPresentation(
+                            if host.prefs.launcher_presentation
+                                == crate::preferences::LauncherPresentation::Fullscreen
+                            {
+                                crate::preferences::LauncherPresentation::Palette
+                            } else {
+                                crate::preferences::LauncherPresentation::Fullscreen
+                            },
+                        ),
+                        dark,
+                        p,
+                    )),
+            );
+        if host.system.battery.is_some() {
+            controls = controls.child(self.control_battery(host, dark, p));
+        }
+        controls
             .child(self.control_slider(
                 "brightness",
                 "显示器",
@@ -175,6 +239,74 @@ impl ShellView {
             .into_any_element()
     }
 
+    /// The battery summary card. The bar already carries the state icon; the
+    /// popup adds the wear figure and spells out the same state.
+    fn control_battery(&self, host: &ViewState, dark: bool, p: Palette) -> AnyElement {
+        let Some(percent) = host.system.battery else {
+            return div().into_any_element();
+        };
+        let state = crate::battery::state(
+            host.system.battery,
+            host.system.battery_status,
+            host.system.ac_online,
+        );
+        let tone = crate::battery::tone(state);
+        let icon = crate::battery::icon(state, host.system.battery);
+        let detail = match host.system.battery_health.filter(|health| health.is_finite()) {
+            Some(health) => format!(
+                "{} · 健康度 {:.0}%",
+                crate::battery::label(state),
+                (health * 100.).round()
+            ),
+            None => crate::battery::label(state).to_owned(),
+        };
+        control_card(p)
+            .id("controls-battery")
+            .debug_selector(|| "controls-battery".into())
+            .w_full()
+            .h(px(70.))
+            .px(px(12.))
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .child(
+                div()
+                    .size(px(34.))
+                    .flex_shrink_0()
+                    .rounded_full()
+                    .bg(if dark {
+                        rgba(0xffffff20)
+                    } else {
+                        rgba(0xffffffb3)
+                    })
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(self.battery_icon(&icon, percent, tone, 28., p)),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(text("电池", 13., FontWeight::SEMIBOLD, p.fg))
+                    .child(text(detail, 11., FontWeight::NORMAL, p.muted)),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "controls-battery-percent".into())
+                    .child(text(
+                        crate::battery::percent_text(percent),
+                        15.,
+                        FontWeight::SEMIBOLD,
+                        p.fg,
+                    )),
+            )
+            .into_any_element()
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn control_tile(
         &self,
@@ -191,7 +323,7 @@ impl ShellView {
         let keyboard_host = self.host.clone();
         let keyboard_action = action.clone();
         let icon_color = if selected { rgb(0xffffff).into() } else { p.fg };
-        card(p)
+        control_card(p)
             .id(id)
             .flex_1()
             .min_w_0()
@@ -274,7 +406,7 @@ impl ShellView {
             .id(id)
             .h(px(31.))
             .px(px(8.))
-            .rounded(px(7.))
+            .rounded(px(10.))
             .flex()
             .items_center()
             .gap(px(9.))
@@ -371,7 +503,7 @@ impl ShellView {
                     }),
             );
         }
-        let body = card(p)
+        let body = control_card(p)
             .h(px(86.))
             .w_full()
             .px(px(12.))
@@ -747,6 +879,83 @@ mod tests {
     }
 
     #[gpui::test]
+    fn controls_show_the_battery_summary_only_with_a_battery(cx: &mut TestAppContext) {
+        let (_root, host) = private_host(cx);
+        let window = cx.update(|cx| testing::open_panel(&host, Panel::Controls, cx));
+        let mut visual = VisualTestContext::from_window(*window, cx);
+        activate(&mut visual, 320., 500.);
+        assert!(
+            visual.debug_bounds("controls-battery").is_none(),
+            "a machine without a battery keeps the compact dialog"
+        );
+
+        host.update(cx, |host, cx| {
+            host.system.battery = Some(0.07);
+            host.system.battery_status = crate::backend::BatteryStatus::Discharging;
+            host.system.battery_health = Some(0.4968);
+            host.system.ac_online = false;
+            host.changed(cx);
+        });
+        visual.run_until_parked();
+        assert!(
+            visual.debug_bounds("controls-battery").is_some(),
+            "the battery card joins the control center"
+        );
+        assert!(
+            visual
+                .debug_bounds("controls-battery-percent")
+                .is_some(),
+            "the card shows the charge percentage"
+        );
+    }
+
+    #[gpui::test]
+    fn controls_switch_appearance_and_launcher_presentation(cx: &mut TestAppContext) {
+        let (_root, host) = private_host(cx);
+        let window = cx.update(|cx| testing::open_panel(&host, Panel::Controls, cx));
+        let mut visual = VisualTestContext::from_window(*window, cx);
+        activate(&mut visual, 320., 590.);
+        for id in ["controls-theme", "controls-launcher"] {
+            assert!(
+                visual.debug_bounds(id).is_some(),
+                "the control center paints the {id} card"
+            );
+        }
+
+        // Both cards toggle in place, exactly like the Do Not Disturb tile.
+        let theme = visual
+            .debug_bounds("controls-theme")
+            .expect("appearance card");
+        visual.simulate_click(theme.center(), Modifiers::default());
+        visual.run_until_parked();
+        host.read_with(cx, |host, _| assert_eq!(host.prefs.theme, "light"));
+
+        let launcher = visual
+            .debug_bounds("controls-launcher")
+            .expect("launcher card");
+        visual.simulate_click(launcher.center(), Modifiers::default());
+        visual.run_until_parked();
+        host.read_with(cx, |host, _| {
+            assert_eq!(
+                host.prefs.launcher_presentation,
+                crate::preferences::LauncherPresentation::Palette
+            )
+        });
+
+        visual.simulate_click(theme.center(), Modifiers::default());
+        visual.run_until_parked();
+        host.read_with(cx, |host, _| assert_eq!(host.prefs.theme, "dark"));
+        visual.simulate_click(launcher.center(), Modifiers::default());
+        visual.run_until_parked();
+        host.read_with(cx, |host, _| {
+            assert_eq!(
+                host.prefs.launcher_presentation,
+                crate::preferences::LauncherPresentation::Fullscreen
+            )
+        });
+    }
+
+    #[gpui::test]
     fn controls_tile_enter_and_space_update_real_dnd_after_pointer_focus(cx: &mut TestAppContext) {
         let (_root, host) = private_host(cx);
         let window = cx.update(|cx| testing::open_panel(&host, Panel::Controls, cx));
@@ -776,7 +985,9 @@ mod tests {
         ] {
             let window = cx.update(|cx| testing::open_panel(&host, Panel::Controls, cx));
             let mut visual = VisualTestContext::from_window(*window, cx);
-            activate(&mut visual, 320., 424.);
+            // The control center now carries two tile rows, the battery card
+            // and the sliders; the footer entries need the real height.
+            activate(&mut visual, 320., 510.);
             focus_without_click(&mut visual, selector);
             host.read_with(cx, |host, _| assert_eq!(host.panel, Some(Panel::Controls)));
             visual.simulate_keystrokes("enter");

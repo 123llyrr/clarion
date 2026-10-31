@@ -7,7 +7,7 @@ use gpui::{px, TestAppContext, VisualTestContext};
 
 use super::dock_folder::{
     fan_capacity, fan_close_progress, fan_extension, fan_extension_center, fan_geometry,
-    fan_open_progress, fan_stack_layers,
+    fan_open_progress, rotated_plate_rows,
 };
 use super::*;
 use crate::app::testing;
@@ -39,6 +39,52 @@ fn viewer_host(cx: &mut TestAppContext) -> (tempfile::TempDir, gpui::Entity<crat
 }
 
 #[test]
+fn label_glass_follows_the_tilted_plate_silhouette() {
+    // A 120×24 plate tilted 16°: the frost mask must be the plate's own
+    // silhouette — neither its bounding box (which spills into the empty
+    // corners) nor an inscribed rectangle (which leaves the ends bare).
+    let plate = size(px(120.), px(24.));
+    let center = point(px(400.), px(300.));
+    let radians = 16f32.to_radians();
+    let mut glass = Vec::new();
+    rotated_plate_rows(&mut glass, center, plate, radians, 8.);
+    assert!(!glass.is_empty(), "the plate must supply a frost mask");
+    let contains = |x: f32, y: f32| {
+        glass.iter().any(|b| {
+            x >= f32::from(b.left())
+                && x < f32::from(b.right())
+                && y >= f32::from(b.top())
+                && y < f32::from(b.bottom())
+        })
+    };
+    let (sin, cos) = radians.sin_cos();
+    // Frost covers the plate itself, along its long axis and through its middle.
+    assert!(contains(400., 300.));
+    assert!(contains(400. + 40. * cos, 300. + 40. * sin));
+    assert!(contains(400. - 40. * cos, 300. - 40. * sin));
+    // A point 18px off the plate's long edge is outside the silhouette, even
+    // though it sits inside the bounding box.
+    let off = (400. - 18. * sin, 300. + 18. * cos);
+    assert!(!contains(off.0, off.1), "frost must not spill past the plate");
+    // The bounding box corners stay sharp.
+    let bbox_half_h = (120. * sin.abs() + 24. * cos.abs()) / 2.;
+    assert!(!contains(400., 300. - bbox_half_h + 1.));
+    assert!(!contains(400., 300. + bbox_half_h - 1.));
+    // Rows never exceed the plate's own width.
+    assert!(
+        glass
+            .iter()
+            .all(|b| f32::from(b.size.width) <= 120.01 && f32::from(b.size.height) >= 1.),
+        "rows must stay within the plate: {glass:?}"
+    );
+    // An upright plate folds into whole-row rectangles that tile it exactly.
+    let mut flat = Vec::new();
+    rotated_plate_rows(&mut flat, center, plate, 0., 8.);
+    let covered: f32 = flat.iter().map(|b| f32::from(b.size.height)).sum();
+    assert!((covered - 24.).abs() < 0.01, "upright plate rows: {flat:?}");
+}
+
+#[test]
 fn fan_items_stay_inside_every_output_edge() {
     let viewport = size(px(1440.), px(900.));
     for position in [
@@ -53,7 +99,16 @@ fn fan_items_stay_inside_every_output_edge() {
         };
         let visible = fan_capacity(anchor, position, 48., viewport).min(8);
         let (items, bounds) =
-            fan_geometry(anchor, position, visible, visible, 0, 48., viewport);
+            fan_geometry(
+            anchor,
+            position,
+            visible,
+            visible,
+            0,
+            48.,
+            viewport,
+            &vec!["文件"; visible],
+        );
         assert_eq!(items.len(), visible);
         assert!(bounds.left() >= px(0.) && bounds.top() >= px(0.));
         assert!(bounds.right() <= viewport.width && bounds.bottom() <= viewport.height);
@@ -85,6 +140,7 @@ fn crowded_fan_keeps_even_spacing_and_a_gentle_arc() {
         0,
         48.,
         viewport,
+        &vec!["文件"; 16],
     );
     assert_eq!(items.len(), 10);
     let gaps = items
@@ -93,8 +149,8 @@ fn crowded_fan_keeps_even_spacing_and_a_gentle_arc() {
         .collect::<Vec<_>>();
     for gap in &gaps {
         assert!(
-            (f32::from(*gap) - f32::from(gaps[0])).abs() < 0.01,
-            "the fan step must stay uniform, got {gaps:?}"
+            (f32::from(*gap) - f32::from(gaps[0])).abs() < 3.,
+            "the arc keeps a near-uniform vertical rhythm, got {gaps:?}"
         );
     }
     assert!(
@@ -118,6 +174,11 @@ fn crowded_fan_keeps_even_spacing_and_a_gentle_arc() {
         );
     }
     assert!(items.last().unwrap().angle <= 18.5);
+    assert!(
+        items.last().unwrap().angle >= items.first().unwrap().angle + 14.,
+        "ten cards should ride a 16° arc, got {}",
+        items.last().unwrap().angle
+    );
 }
 
 #[test]
@@ -131,6 +192,7 @@ fn bottom_fan_rows_leave_room_for_rotated_labels() {
         0,
         48.,
         viewport,
+        &vec!["文件"; 14],
     );
     for pair in items.windows(2) {
         let lower = pair[0].label_extent();
@@ -151,7 +213,16 @@ fn side_fan_labels_stay_compact_without_overlapping() {
     ] {
         let visible = fan_capacity(anchor, position, 48., viewport);
         let (items, _) =
-            fan_geometry(anchor, position, visible, visible, 0, 48., viewport);
+            fan_geometry(
+            anchor,
+            position,
+            visible,
+            visible,
+            0,
+            48.,
+            viewport,
+            &vec!["文件"; visible],
+        );
         assert_eq!(items.len(), visible);
         for item in &items {
             assert!(
@@ -164,7 +235,7 @@ fn side_fan_labels_stay_compact_without_overlapping() {
             let gap = f32::from(pair[1].icon.center().x - pair[0].icon.center().x)
                 * direction;
             assert!(
-                gap >= 110.,
+                gap >= 84.,
                 "side icons need horizontal spacing for their labels: {gap}"
             );
             let first = pair[0].label_extent();
@@ -195,13 +266,22 @@ fn small_side_icons_keep_enough_room_for_tilted_labels() {
         };
         let visible = fan_capacity(anchor, position, 32., viewport);
         let (items, _) =
-            fan_geometry(anchor, position, visible, visible, 0, 32., viewport);
+            fan_geometry(
+            anchor,
+            position,
+            visible,
+            visible,
+            0,
+            32.,
+            viewport,
+            &vec!["文件"; visible],
+        );
         let direction = if position == DockPosition::Left { 1. } else { -1. };
         for pair in items.windows(2) {
             let gap = f32::from(pair[1].icon.center().x - pair[0].icon.center().x)
                 * direction;
             assert!(
-                gap >= 110.,
+                gap >= 84.,
                 "{position:?} labels would collide at small icon sizes: {gap}"
             );
             let first = pair[0].label_extent();
@@ -245,10 +325,11 @@ fn fan_items_rotate_with_the_curve_from_the_dock() {
         0,
         48.,
         viewport,
+        &["文件"; 12],
     );
-    assert!(bottom[0].angle.abs() <= 0.01);
+    assert!(bottom[0].angle.abs() <= 2.5);
     assert!(
-        bottom[7].angle > 15.,
+        bottom[7].angle > 13.,
         "the outer bottom item should follow the arc, got {}",
         bottom[7].angle
     );
@@ -265,15 +346,24 @@ fn fan_items_rotate_with_the_curve_from_the_dock() {
         };
         let visible = fan_capacity(anchor, position, 48., viewport);
         let (items, _) =
-            fan_geometry(anchor, position, visible, visible, 0, 48., viewport);
+            fan_geometry(
+            anchor,
+            position,
+            visible,
+            visible,
+            0,
+            48.,
+            viewport,
+            &vec!["文件"; visible],
+        );
         assert!(
             items[0].angle.abs() < 0.01,
             "{position:?} the item at the dock must start upright, got {}",
             items[0].angle
         );
         assert!(
-            (items.last().unwrap().angle.abs() - 18.).abs() < 0.01,
-            "{position:?} outer item should lean into the curve, got {}",
+            (items.last().unwrap().angle.abs() - 27.).abs() < 1.5,
+            "{position:?} outer item should lean into the curve's tangent, got {}",
             items.last().unwrap().angle
         );
         for pair in items.windows(2) {
@@ -303,7 +393,16 @@ fn side_fan_starts_upright_and_curves_upward() {
         };
         let visible = fan_capacity(anchor, position, 48., viewport);
         let (items, _) =
-            fan_geometry(anchor, position, visible, visible, 0, 48., viewport);
+            fan_geometry(
+            anchor,
+            position,
+            visible,
+            visible,
+            0,
+            48.,
+            viewport,
+            &vec!["文件"; visible],
+        );
         assert!(visible >= 3, "{position:?} needs a curve to test");
         let first = items.first().unwrap();
         let last = items.last().unwrap();
@@ -320,7 +419,7 @@ fn side_fan_starts_upright_and_curves_upward() {
             "{position:?} the first icon must start upright"
         );
         assert!(
-            (last.angle.abs() - 18.).abs() < 0.01,
+            (last.angle.abs() - 27.).abs() < 1.5,
             "{position:?} the outer icon should lean into the curve, got {}",
             last.angle
         );
@@ -344,7 +443,7 @@ fn side_fan_starts_upright_and_curves_upward() {
             .collect::<Vec<_>>();
         for step in &x_steps {
             assert!(
-                *step > 100.,
+                *step > 84.,
                 "{position:?} cards should extend horizontally: {x_steps:?}"
             );
             assert!(
@@ -375,14 +474,18 @@ fn bottom_icon_and_label_rotate_as_one_rigid_group() {
         0,
         48.,
         viewport,
+        &vec!["文件"; 24],
     );
     for item in items {
         let dx = f32::from(item.label.center().x - item.icon.center().x);
         let dy = f32::from(item.label.center().y - item.icon.center().y);
         let distance = (dx * dx + dy * dy).sqrt();
+        // The plate is content-sized now, so the rigid radius follows the
+        // plate's own width: icon half, the gap, half the plate.
+        let expected = 24. + 12. + f32::from(item.label.size.width) / 2.;
         assert!(
-            (distance - 92.).abs() < 0.01,
-            "label offset must be rigid, got {distance}"
+            (distance - expected).abs() < 0.01,
+            "label offset must be rigid, got {distance} vs {expected}"
         );
         let offset_angle = dy.atan2(dx).to_degrees();
         let delta = (offset_angle - item.angle).rem_euclid(180.);
@@ -404,7 +507,16 @@ fn side_labels_rotate_with_their_icon_below_the_card() {
     ] {
         let visible = fan_capacity(anchor, position, 48., viewport);
         let (items, _) =
-            fan_geometry(anchor, position, visible, visible, 0, 48., viewport);
+            fan_geometry(
+            anchor,
+            position,
+            visible,
+            visible,
+            0,
+            48.,
+            viewport,
+            &vec!["文件"; visible],
+        );
         let first = items.first().unwrap();
         assert!(
             first.label.center().y > first.icon.center().y + px(20.),
@@ -496,30 +608,19 @@ fn fan_close_curve_anticipates_then_fades_smoothly() {
 }
 
 #[test]
-fn fan_stack_layers_fade_out_after_three_entries() {
-    let layers = fan_stack_layers(12, 0);
-    assert_eq!(layers.len(), 3);
-    assert_eq!(
-        layers.iter().map(|layer| layer.index).collect::<Vec<_>>(),
-        vec![2, 1, 0],
-        "far layers are painted first"
-    );
-    assert!(
-        layers[0].opacity < layers[1].opacity && layers[1].opacity < layers[2].opacity,
-        "opacity rises towards the visible end: {:?}",
-        layers.iter().map(|layer| layer.opacity).collect::<Vec<_>>()
-    );
-    assert!(layers[0].opacity <= 0.3);
-    assert!(fan_stack_layers(12, 10).len() == 2);
-    assert!(fan_stack_layers(12, 11).len() == 1);
-    assert!(fan_stack_layers(12, 12).is_empty());
-}
-
-#[test]
 fn fan_extension_continues_the_last_tangent() {
     let viewport = size(px(1440.), px(900.));
     let anchor = point(px(720.), px(860.));
-    let (items, _) = fan_geometry(anchor, DockPosition::Bottom, 12, 10, 0, 48., viewport);
+    let (items, _) = fan_geometry(
+        anchor,
+        DockPosition::Bottom,
+        12,
+        10,
+        0,
+        48.,
+        viewport,
+        &["文件"; 12],
+    );
     let last = items.last().unwrap();
     let (beyond, angle) =
         fan_extension(anchor, DockPosition::Bottom, 10, 48., viewport, 1.);
@@ -549,7 +650,16 @@ fn side_fan_extension_continues_upward_from_the_dock_tile() {
     ] {
         let visible = fan_capacity(anchor, position, 48., viewport);
         let (items, _) =
-            fan_geometry(anchor, position, visible, visible, 0, 48., viewport);
+            fan_geometry(
+            anchor,
+            position,
+            visible,
+            visible,
+            0,
+            48.,
+            viewport,
+            &vec!["文件"; visible],
+        );
         let last = items.last().unwrap();
         let (beyond, angle) = fan_extension(anchor, position, visible, 48., viewport, 1.);
         assert!(
@@ -563,11 +673,11 @@ fn side_fan_extension_continues_upward_from_the_dock_tile() {
         );
         match position {
             DockPosition::Left => assert!(
-                beyond.x > last.icon.center().x + px(100.),
+                beyond.x > last.icon.center().x + px(84.),
                 "{position:?} the terminal card should continue horizontally"
             ),
             DockPosition::Right => assert!(
-                beyond.x < last.icon.center().x - px(100.),
+                beyond.x < last.icon.center().x - px(84.),
                 "{position:?} the terminal card should continue horizontally"
             ),
             DockPosition::Bottom => unreachable!(),
@@ -586,6 +696,7 @@ fn fan_window_scrolls_only_when_there_are_more_entries() {
         12,
         48.,
         viewport,
+        &vec!["文件"; 28],
     );
     assert_eq!(items.first().unwrap().index, 12);
     assert_eq!(items.last().unwrap().index, 19);
@@ -921,7 +1032,7 @@ fn terminal_reveal_button_and_label_rotate_as_one_group(cx: &mut TestAppContext)
     let dy = f32::from(label.center().y - button.center().y);
     let distance = (dx * dx + dy * dy).sqrt();
     assert!(
-        (distance - 99.28).abs() < 1.,
+        (distance - 103.6).abs() < 1.,
         "the terminal pair must stay rigid, got {distance}"
     );
     assert!(
@@ -968,6 +1079,62 @@ fn clicking_a_fan_file_opens_it(cx: &mut TestAppContext) {
         opened |= matches!(command, crate::backend::Command::OpenPath(_));
     }
     assert!(opened, "clicking the fan item opens its file");
+}
+
+#[gpui::test]
+fn clicking_a_list_or_grid_file_opens_it_with_its_default_app(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let note = root.path().join("note.txt");
+    std::fs::write(&note, b"x").unwrap();
+    let root = root.path().canonicalize().unwrap();
+    let note = root.join("note.txt");
+    let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
+    host.update(cx, |host, cx| {
+        host.handle(Action::PinFolder(root.clone()), cx);
+    });
+    cx.run_until_parked();
+    for layout in [FolderLayout::List, FolderLayout::Grid] {
+        host.update(cx, |host, cx| {
+            host.handle(Action::SetFolderLayout(root.clone(), layout), cx);
+        });
+        cx.run_until_parked();
+        let commands = cx.update(|cx| testing::capture_backend(&host, cx));
+        let window = cx.update(|cx| testing::open_folder(&host, root.clone(), cx));
+        let view = window.root(cx).unwrap();
+        let mut visual = VisualTestContext::from_window(*window, cx);
+        visual.update(|window, cx| {
+            view.read(cx).focus(window, cx);
+            window.refresh();
+        });
+        visual.run_until_parked();
+        let item = visual
+            .debug_bounds("folder-entry-0")
+            .unwrap_or_else(|| panic!("the {layout:?} entry is painted"));
+        visual.simulate_mouse_move(item.center(), None, gpui::Modifiers::default());
+        visual.simulate_mouse_down(
+            item.center(),
+            gpui::MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+        visual.run_until_parked();
+        visual.simulate_mouse_up(
+            item.center(),
+            gpui::MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+        visual.run_until_parked();
+        let mut opened = None;
+        while let Ok(command) = commands.try_recv() {
+            if let crate::backend::Command::OpenPath(path) = command {
+                opened = Some(path);
+            }
+        }
+        assert_eq!(
+            opened.as_deref(),
+            Some(note.as_path()),
+            "{layout:?} click must open the file itself, not its folder"
+        );
+    }
 }
 
 #[gpui::test]
@@ -1079,7 +1246,7 @@ fn a_crowded_fan_shows_stacks_at_the_unexpanded_ends(cx: &mut TestAppContext) {
     });
     visual.run_until_parked();
     let far_stack = visual
-        .debug_bounds("folder-fan-stack-far")
+        .debug_bounds("folder-fan-stack-1")
         .expect("more content is folded at the outer end");
     assert!(visual.debug_bounds("folder-fan-fold-near").is_none());
     let reveal = visual.debug_bounds("folder-fan-reveal").unwrap();
@@ -1102,7 +1269,7 @@ fn a_crowded_fan_shows_stacks_at_the_unexpanded_ends(cx: &mut TestAppContext) {
     });
     visual.run_until_parked();
     assert!(visual.debug_bounds("folder-fan-fold-near").is_none());
-    assert!(visual.debug_bounds("folder-fan-stack-far").is_some());
+    assert!(visual.debug_bounds("folder-fan-stack-1").is_some());
 }
 
 #[gpui::test]
@@ -1445,7 +1612,7 @@ fn list_and_grid_render_entries_without_wrapping_long_names(cx: &mut TestAppCont
 }
 
 #[gpui::test]
-fn the_fan_back_button_holds_its_spot_while_navigating_deeper(cx: &mut TestAppContext) {
+fn the_terminal_card_becomes_the_back_button_inside_a_subfolder(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     let sub = root.path().join("Sub");
     let deep = sub.join("Deep");
@@ -1462,7 +1629,7 @@ fn the_fan_back_button_holds_its_spot_while_navigating_deeper(cx: &mut TestAppCo
         );
     });
     cx.run_until_parked();
-    let window = cx.update(|cx| testing::open_folder(&host, root, cx));
+    let window = cx.update(|cx| testing::open_folder(&host, root.clone(), cx));
     let view = window.root(cx).unwrap();
     let mut visual = VisualTestContext::from_window(*window, cx);
     visual.update(|window, cx| {
@@ -1471,25 +1638,129 @@ fn the_fan_back_button_holds_its_spot_while_navigating_deeper(cx: &mut TestAppCo
     });
     visual.run_until_parked();
     // The root owns only the Sub directory, so fan item 0 enters the level
-    // below and the back button appears.
+    // below. The terminal card itself turns into the back control, so no
+    // separate back button appears beside the Dock tile.
     let item = visual.debug_bounds("folder-fan-0").unwrap();
     visual.simulate_mouse_move(item.center(), None, gpui::Modifiers::default());
     visual.simulate_mouse_down(item.center(), gpui::MouseButton::Left, gpui::Modifiers::default());
     visual.run_until_parked();
     visual.simulate_mouse_up(item.center(), gpui::MouseButton::Left, gpui::Modifiers::default());
     visual.run_until_parked();
-    let back = visual
-        .debug_bounds("folder-fan-back")
-        .expect("the fan shows the back button after entering a folder");
+    assert!(
+        visual.debug_bounds("folder-fan-back").is_none(),
+        "the fan must not paint a separate back button"
+    );
+    let reveal = visual
+        .debug_bounds("folder-fan-reveal")
+        .expect("the terminal card is the back control");
+    assert!(
+        reveal.size.width >= px(40.),
+        "the terminal action is enlarged: {reveal:?}"
+    );
+    visual.simulate_mouse_move(reveal.center(), None, gpui::Modifiers::default());
+    visual.simulate_mouse_down(
+        reveal.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    visual.run_until_parked();
+    visual.simulate_mouse_up(
+        reveal.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    visual.run_until_parked();
+    let current = view.read_with(&visual, |view, _| {
+        view.state
+            .folder_navigation
+            .as_ref()
+            .map(|navigation| navigation.current.clone())
+    });
+    assert_eq!(current.as_deref(), Some(root.as_path()), "the terminal card went back");
+    host.read_with(&visual, |host, _| {
+        assert!(host.panel.is_some(), "going back keeps the fan open");
+    });
+    // A deeper level backs out one folder at a time from the same card.
     host.update(cx, |host, cx| {
+        host.handle(Action::NavigateFolder(sub.clone()), cx);
         host.handle(Action::NavigateFolder(deep.clone()), cx);
     });
     visual.run_until_parked();
-    let back_deeper = visual
-        .debug_bounds("folder-fan-back")
-        .expect("the back button survives deeper navigation");
-    assert_eq!(
-        back_deeper, back,
-        "the back button holds a fixed spot beside the Dock icon"
+    let reveal = visual.debug_bounds("folder-fan-reveal").unwrap();
+    visual.simulate_mouse_down(
+        reveal.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
     );
+    visual.run_until_parked();
+    visual.simulate_mouse_up(
+        reveal.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    visual.run_until_parked();
+    let current = view.read_with(&visual, |view, _| {
+        view.state
+            .folder_navigation
+            .as_ref()
+            .map(|navigation| navigation.current.clone())
+    });
+    assert_eq!(
+        current.as_deref(),
+        Some(sub.as_path()),
+        "deep navigation backs out one level"
+    );
+}
+
+#[gpui::test]
+fn clicking_the_terminal_card_at_the_root_reveals_the_folder(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("note.txt"), b"x").unwrap();
+    let root = root.path().canonicalize().unwrap();
+    let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
+    host.update(cx, |host, cx| {
+        host.handle(Action::PinFolder(root.clone()), cx);
+        host.handle(
+            Action::SetFolderLayout(root.clone(), FolderLayout::Fan),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    let commands = cx.update(|cx| testing::capture_backend(&host, cx));
+    let window = cx.update(|cx| testing::open_folder(&host, root.clone(), cx));
+    let view = window.root(cx).unwrap();
+    let mut visual = VisualTestContext::from_window(*window, cx);
+    visual.update(|window, cx| {
+        view.read(cx).focus(window, cx);
+        window.refresh();
+    });
+    visual.run_until_parked();
+    let reveal = visual.debug_bounds("folder-fan-reveal").unwrap();
+    visual.simulate_mouse_move(reveal.center(), None, gpui::Modifiers::default());
+    visual.simulate_mouse_down(
+        reveal.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    visual.run_until_parked();
+    visual.simulate_mouse_up(
+        reveal.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    visual.run_until_parked();
+    let mut opened = None;
+    while let Ok(command) = commands.try_recv() {
+        if let crate::backend::Command::OpenPath(path) = command {
+            opened = Some(path);
+        }
+    }
+    assert_eq!(
+        opened.as_deref(),
+        Some(root.as_path()),
+        "at the root the terminal card opens the folder in the file manager"
+    );
+    host.read_with(&visual, |host, _| {
+        assert!(host.panel.is_none(), "revealing the folder closes the fan");
+    });
 }

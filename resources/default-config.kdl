@@ -451,6 +451,16 @@ window-rule {
     open-focused false
 }
 
+// Clarion's own settings surfaces are dialogs, not tiles: open them floating
+// at their natural size, centred on the output, instead of flashing at tile
+// size before the shell can place them.
+window-rule {
+    match app-id=r#"^io\.github\.clarion\.DesktopPreferences$"#
+    match app-id=r#"^(clarion-settings|rs\.bxt\.clarion\.settings)$"#
+    open-floating true
+    open-focused true
+}
+
 // Example: block out two password managers from screen capture.
 // (This example rule is commented out with a "/-" in front.)
 /-window-rule {

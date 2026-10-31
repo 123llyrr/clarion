@@ -20,6 +20,7 @@ pub(crate) fn test_host(
         desktop: Default::default(),
         system: Default::default(),
         catalog: Arc::new(catalog),
+        launch_history: Arc::new(Default::default()),
         notifications: Vec::new(),
         tray: Vec::new(),
         history: Vec::new(),
@@ -31,6 +32,7 @@ pub(crate) fn test_host(
         error: None,
         error_generation: 0,
         panel: None,
+        panel_output: None,
         anchored: None,
         panel_exit: false,
         preview: true,
@@ -45,6 +47,9 @@ pub(crate) fn test_host(
         environment,
         outputs: BTreeMap::new(),
         popup: None,
+        menu: None,
+        menu_opening: false,
+        dispatch_output: None,
         exiting: None,
         exit_generation: 0,
         toast: None,
@@ -109,6 +114,41 @@ pub(crate) fn output_name(host: &Entity<Host>, cx: &App) -> String {
         .expect("test output was not created")
 }
 
+/// Register an extra monitor that shares the test platform's only display, so
+/// a dispatched action can name an output other than the one that holds focus.
+pub(crate) fn register_output(host: &Entity<Host>, name: &str, cx: &mut App) {
+    host.update(cx, |host, cx| {
+        let Some(view) = host.outputs.values().next() else {
+            return;
+        };
+        let view = OutputViews {
+            bar: view.bar,
+            dock: view.dock,
+            edge: view.edge,
+            desktop: view.desktop,
+            display: view.display,
+            width: view.width,
+            height: view.height,
+        };
+        host.outputs.insert(name.to_owned(), view);
+        host.changed(cx);
+    });
+}
+
+/// Apply an action tagged with the surface output that dispatched it, the way
+/// a bar or Dock click does.
+pub(crate) fn dispatch_on_output(
+    host: &Entity<Host>,
+    output: &str,
+    action: Action,
+    cx: &mut App,
+) -> WindowHandle<ShellView> {
+    host.update(cx, |host, cx| {
+        host.apply(Action::on_output(output, action), cx)
+    });
+    host.read(cx).popup.expect("test panel was not created")
+}
+
 pub(crate) fn open_dock(host: &Entity<Host>, cx: &mut App) -> WindowHandle<ShellView> {
     host.update(cx, |host, cx| host.reconcile_outputs(cx));
     host.read(cx)
@@ -124,6 +164,15 @@ pub(crate) fn capture_backend(
 ) -> std::sync::mpsc::Receiver<backend::Command> {
     let (backend, received) = backend::Backend::test_channel(32);
     host.update(cx, |host, _| host.backend = backend);
+    received
+}
+
+pub(crate) fn capture_service(
+    host: &Entity<Host>,
+    cx: &mut App,
+) -> async_channel::Receiver<services::Command> {
+    let (service, received) = services::ServiceHandle::test_channel(32);
+    host.update(cx, |host, _| host.service = service);
     received
 }
 

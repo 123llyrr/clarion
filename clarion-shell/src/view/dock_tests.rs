@@ -257,6 +257,79 @@ fn file_drag_over_an_app_keeps_the_hover_magnification(cx: &mut TestAppContext) 
 }
 
 #[gpui::test]
+fn the_fullscreen_launcher_hides_only_its_own_outputs_dock(cx: &mut TestAppContext) {
+    let mut fixture = Fixture::new(cx, false);
+    let idle = fixture.bounds();
+    let output = fixture
+        .view
+        .read_with(&fixture.visual, |view, _| view.output().to_owned());
+    assert!(fixture.contains_input(idle.center()));
+
+    fixture.host.update(cx, |host, cx| {
+        host.panel = Some(Panel::Apps);
+        host.panel_output = Some(output.clone());
+        host.changed(cx);
+    });
+    fixture.visual.run_until_parked();
+
+    assert!(
+        fixture.visual.debug_bounds(APP_SELECTOR).is_none(),
+        "the Dock must not paint underneath the fullscreen launcher"
+    );
+    assert!(
+        fixture.glass_regions().is_empty(),
+        "a hidden Dock must not blur a strip of the launcher"
+    );
+    assert!(
+        !fixture.contains_input(idle.center()),
+        "a hidden Dock must not keep its click targets"
+    );
+
+    fixture.host.update(cx, |host, cx| {
+        host.panel = None;
+        host.panel_output = None;
+        host.changed(cx);
+    });
+    fixture.visual.run_until_parked();
+
+    assert!(
+        fixture.visual.debug_bounds(APP_SELECTOR).is_some(),
+        "closing the launcher brings the Dock back"
+    );
+    assert!(
+        fixture.contains_input(idle.center()),
+        "the restored Dock accepts pointer input again"
+    );
+}
+
+#[gpui::test]
+fn another_outputs_dock_stays_visible_when_the_launcher_opens(cx: &mut TestAppContext) {
+    let mut fixture = Fixture::new(cx, false);
+    let idle = fixture.bounds();
+    assert!(fixture.contains_input(idle.center()));
+
+    fixture.host.update(cx, |host, cx| {
+        host.panel = Some(Panel::Apps);
+        host.panel_output = Some("another-output".to_owned());
+        host.changed(cx);
+    });
+    fixture.visual.run_until_parked();
+
+    assert!(
+        fixture.visual.debug_bounds(APP_SELECTOR).is_some(),
+        "a launcher on one output must leave the other outputs' Docks painted"
+    );
+    assert!(
+        fixture.contains_input(idle.center()),
+        "another output's Dock keeps its click targets"
+    );
+    assert!(
+        !fixture.glass_regions().is_empty(),
+        "another output's Dock keeps its frosted tray"
+    );
+}
+
+#[gpui::test]
 fn the_glass_region_frosts_only_the_resting_tray(cx: &mut TestAppContext) {
     let mut fixture = Fixture::new(cx, false);
     // Idle: the glass follows the tray, so it is non-empty and bounded.
@@ -416,12 +489,38 @@ fn auto_hide_slides_the_same_surface_outside_input_and_reveals_it_again(cx: &mut
 }
 
 #[test]
+fn a_folder_stack_fans_its_cards_instead_of_twisting() {
+    let cards = super::macos_dock::folder_stack_layout(3, 100.);
+    let angles = cards
+        .iter()
+        .map(|card| card.angle)
+        .collect::<Vec<_>>();
+    // Painted back to front: -40°, -20°, then the upright front card. Every
+    // card turns the same way, so the deck recedes instead of fanning out.
+    assert_eq!(angles, vec![-40., -20., 0.]);
+    // The back card rides up and to the right, smaller and dimmer.
+    assert!(cards[0].left > cards[2].left);
+    assert!(cards[0].top < cards[2].top);
+    assert!(cards[0].size < cards[2].size);
+    assert!(cards[0].opacity < cards[2].opacity);
+    assert_eq!(cards[2].opacity, 1.);
+    assert!(cards[0].size < 100.);
+    assert_eq!(cards[2].left, (100. - cards[2].size) / 2.);
+    // A folder with one item is not tilted or dimmed at all.
+    let single = super::macos_dock::folder_stack_layout(1, 100.);
+    assert_eq!(single.len(), 1);
+    assert_eq!(single[0].angle, 0.);
+    assert_eq!(single[0].opacity, 1.);
+}
+
+#[test]
 fn folder_stack_preview_puts_files_on_top_and_folders_at_the_back() {
     use crate::dock_folder::{FolderEntry, FolderEntryKind};
     let entry = |name: &str, kind: FolderEntryKind| FolderEntry {
         path: std::path::PathBuf::from(name),
         name: name.to_owned(),
         kind,
+        tags: Vec::new(),
         modified: None,
         size: 0,
     };

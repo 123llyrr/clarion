@@ -1,5 +1,6 @@
 mod app;
 mod appearance_controls;
+mod arrangement;
 mod autosave;
 mod command_palette;
 mod common_preferences;

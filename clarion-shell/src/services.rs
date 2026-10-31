@@ -13,11 +13,18 @@ use async_channel::{Receiver, Sender};
 pub struct Notification {
     pub id: u32,
     pub app: String,
+    /// The icon the application offered in `Notify`: an absolute path or a
+    /// freedesktop icon name. `None` means the card falls back to the app's
+    /// catalog artwork, then to a generic bell.
+    pub icon: Option<String>,
     pub title: String,
     pub body: String,
     pub actions: Vec<(String, String)>,
     pub created_at: u64,
     pub unread: bool,
+    /// Pinned notifications stay in the center and are never expired by the
+    /// service; the card shows the pin state in its header.
+    pub pinned: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,6 +45,12 @@ pub enum HistoryKind {
     Text,
     Image,
     Screenshot,
+    /// A `text/uri-list` capture whose entries are all local files.
+    Files,
+    /// An opaque payload the shell cannot render, e.g. a PDF or a video the
+    /// application offered as raw bytes. Videos are not their own class: they
+    /// ride the file tag with the other non-text payloads.
+    Binary,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,6 +62,13 @@ pub struct HistoryEntry {
     pub pinned: bool,
     pub created_at: u64,
     pub file_path: Option<std::path::PathBuf>,
+    /// The clipboard offer this entry came from, e.g. `text/plain`.
+    pub mime: String,
+    /// The payload size in bytes, before any thumbnail re-encoding.
+    pub bytes: usize,
+    /// Pixel size for image and screenshot entries, read while thumbnailing.
+    pub width: Option<u32>,
+    pub height: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -96,6 +116,9 @@ pub enum Command {
     MenuClick { id: String, item: i32 },
     NotificationAction { id: u32, action: String },
     DismissNotification(u32),
+    /// Pin or unpin one notification. Pinned entries stop expiring and sort
+    /// before the live feed.
+    PinNotification { id: u32, pinned: bool },
     MarkRead,
     Dnd(bool),
     Shutdown,
@@ -108,6 +131,14 @@ pub struct ServiceHandle {
 impl ServiceHandle {
     pub fn send(&self, command: Command) {
         let _ = self.commands.try_send(command);
+    }
+
+    /// Test-only: keep every command on a channel instead of starting the
+    /// native services, so a test can assert what the UI asked for.
+    #[cfg(test)]
+    pub fn test_channel(capacity: usize) -> (Self, Receiver<Command>) {
+        let (commands, receiver) = async_channel::bounded(capacity);
+        (Self { commands }, receiver)
     }
 }
 impl Drop for ServiceHandle {

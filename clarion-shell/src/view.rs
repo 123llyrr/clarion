@@ -1,16 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Clarion's single visual system. No legacy themes or alternate launcher.
 use crate::{
-    app::{Action, DockApp, Host, Panel, ViewState},
+    app::{Action, DockApp, Host, Panel, SystemAction, ViewState},
     backend,
-    input::{QueryChanged, TextInput},
-    preferences::{DockPosition, MAX_SURFACE_OPACITY, MIN_SURFACE_OPACITY},
+    battery,
+    input::{BackspaceAtStart, DeleteAtEnd, QueryChanged, TextInput},
+    preferences::{
+        DockPosition, LauncherLayout, LauncherPresentation, MAX_SURFACE_OPACITY,
+        MIN_SURFACE_OPACITY,
+    },
     services,
 };
+use clarion_launcher::catalog::AppCategory;
+use clarion_launcher::session::{BackspaceState, Mode, Session};
 use gpui::{prelude::*, *};
 use std::{
-    collections::HashMap,
-    path::PathBuf,
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
@@ -20,14 +27,44 @@ pub(crate) mod macos_dock;
 mod macos_launchpad;
 mod macos_notifications;
 mod macos_preferences;
+mod spotlight;
 
-actions!(shell, [Dismiss, Activate, Previous, Next]);
+actions!(
+    shell,
+    [
+        Dismiss,
+        Activate,
+        ActivateKeepOpen,
+        Previous,
+        Next,
+        PaletteSearch,
+        PaletteApps,
+        PaletteClipboardText,
+        PaletteClipboardImage,
+        PaletteClipboardFiles,
+        PaletteClipboardLayout
+    ]
+);
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("escape", Dismiss, Some("ClarionPanel")),
         KeyBinding::new("enter", Activate, Some("ClarionPanel")),
+        KeyBinding::new("shift-enter", ActivateKeepOpen, Some("ClarionPanel")),
         KeyBinding::new("up", Previous, Some("ClarionPanel")),
         KeyBinding::new("down", Next, Some("ClarionPanel")),
+        // Vim and readline walks over the same list.
+        KeyBinding::new("ctrl-k", Previous, Some("ClarionPanel")),
+        KeyBinding::new("ctrl-p", Previous, Some("ClarionPanel")),
+        KeyBinding::new("ctrl-j", Next, Some("ClarionPanel")),
+        KeyBinding::new("ctrl-n", Next, Some("ClarionPanel")),
+        // Clipboard mode only: the type tags and the layout switch. The
+        // handlers ignore them in every other mode.
+        KeyBinding::new("alt-t", PaletteClipboardText, Some("ClarionPanel")),
+        KeyBinding::new("alt-i", PaletteClipboardImage, Some("ClarionPanel")),
+        KeyBinding::new("alt-f", PaletteClipboardFiles, Some("ClarionPanel")),
+        KeyBinding::new("alt-d", PaletteClipboardLayout, Some("ClarionPanel")),
+        KeyBinding::new("ctrl-0", PaletteSearch, Some("ClarionPanel")),
+        KeyBinding::new("ctrl-1", PaletteApps, Some("ClarionPanel")),
     ]);
 }
 #[derive(Clone, Debug)]
@@ -35,8 +72,30 @@ pub enum Surface {
     Bar,
     Dock,
     Panel,
+    /// An application menu opened from a launcher tile. It is its own surface
+    /// over the launcher: the compositor can only frost a window against what
+    /// lies *behind* it, so a card painted into the launcher's window would
+    /// show the tiles underneath without any blur.
+    LauncherMenu,
     Toast(u32),
     DockEdge,
+}
+/// The palette header's leading mark and the cross-fade between two of them.
+/// The outgoing mark shrinks and fades under the incoming one, so a slash route
+/// answers the very first keystroke and a row walk in the `/` list follows the
+/// keyboard instead of popping.
+struct PaletteGlyph {
+    from: PathBuf,
+    to: PathBuf,
+    progress: crate::dock_motion::Motion,
+}
+/// A notification card being dragged towards dismissal: the pointer origin
+/// and the live offset, so the card follows the finger until the release.
+struct NotificationDrag {
+    id: u32,
+    start: Point<Pixels>,
+    dx: f32,
+    dy: f32,
 }
 pub struct ShellView {
     pub host: Entity<Host>,
@@ -47,9 +106,25 @@ pub struct ShellView {
     output: String,
     input: Entity<TextInput>,
     query: String,
+    /// The palette's session: mode, tool, layout/order overrides and the
+    /// parent stack `Backspace` unwinds. Other panels keep the resting state.
+    palette: Session,
+    /// The last rejected slash command, shown beneath the palette field.
+    palette_error: Option<String>,
+    /// The category tag the palette grid is filtered by, or `None` when every
+    /// categorized section shows.
+    palette_category: Option<AppCategory>,
+    /// The clipboard body's content-type tag, or `None` for every entry.
+    palette_clipboard_filter: Option<spotlight::ClipboardFilter>,
+    /// Set once the keyboard walks the slash completion list, so Enter on a
+    /// bare `/` runs the highlighted row instead of explaining the syntax.
+    palette_slash_picked: bool,
     filter: u8,
     selection: usize,
     scroll: ScrollHandle,
+    /// The clipboard details layout's own list scroll: that list is nested in
+    /// a fixed viewport, so it cannot share the sheet's handle.
+    clipboard_scroll: ScrollHandle,
     folder_fan_offset: usize,
     folder_fan_root: Option<PathBuf>,
     folder_fan_started: Option<std::time::Instant>,
@@ -60,8 +135,17 @@ pub struct ShellView {
     /// Whether the last `panel()` render used the fan layout.
     folder_fan_active: bool,
     /// The appear/disappear ride for a bar popup: `None` snaps, `Some` tracks
-    /// the fade between 0 (closed) and 1 (open) at the shared response.
+    /// the fade between 0 (closed) and 1 (open) at the shared response. The
+    /// fullscreen launcher rides the same motion.
     popup_motion: Option<crate::dock_motion::Motion>,
+    /// The launcher page slide in flight: the page that is leaving and the
+    /// spring that carries the incoming page past it.
+    launchpad_slide: Option<LaunchpadSlide>,
+    /// The palette header glyph's cross-fade: the mark on screen, the one it is
+    /// trading places with, and the spring between them. A slash route leads
+    /// with the command under the keyboard, so either side is an arbitrary
+    /// icon rather than one fixed pair.
+    palette_glyph: Option<PaletteGlyph>,
     /// The clock `popup_motion` samples against, captured at view creation so
     /// tests can settle the ride by snapping instead of racing real time.
     popup_epoch: std::time::Instant,
@@ -71,6 +155,24 @@ pub struct ShellView {
     folder_drag_layer: bool,
     /// Whether this Dock window itself received the current drag events.
     pub(crate) dock_drag_seen: bool,
+    /// The notification card currently following the pointer in a dismiss
+    /// drag, if any.
+    notification_drag: Option<NotificationDrag>,
+    /// Per-application expansion progress for folded notification stacks.
+    notification_stacks: RefCell<HashMap<String, crate::dock_motion::Elastic>>,
+    /// Applications whose stacks the user unfolded in this surface.
+    notification_expanded: RefCell<HashSet<String>>,
+    /// Measured natural heights of notification cards, keyed by notification
+    /// id. Cards size to their content, so the folded stack reads the real
+    /// layout height instead of a table of section sizes.
+    notification_heights: std::rc::Rc<RefCell<HashMap<u32, f32>>>,
+    /// Set when a drag dismissed a card, so the release is not also a click
+    /// that toggles its stack.
+    notification_drag_dismissed: std::cell::Cell<bool>,
+    /// The month the notification calendar displays; `None` follows today.
+    calendar_month: std::cell::Cell<Option<(i32, u32)>>,
+    /// The day the calendar highlights, or `None` after browsing away.
+    calendar_day: std::cell::Cell<Option<chrono::NaiveDate>>,
     #[cfg(test)]
     notification_regions: std::rc::Rc<std::cell::RefCell<Vec<Bounds<Pixels>>>>,
     focus: FocusHandle,
@@ -79,7 +181,7 @@ pub struct ShellView {
     tray_image_hashes: std::collections::HashMap<String, [u8; 32]>,
     /// Resolved freedesktop icon names, cached per view so the bar and the
     /// tray menus never walk the theme directories twice for one name.
-    theme_icons: std::cell::RefCell<HashMap<String, Option<PathBuf>>>,
+    theme_icons: std::cell::RefCell<HashMap<(String, String), Option<PathBuf>>>,
     /// The open/close fade of one submenu card, keyed by its menu item id.
     /// The card itself renders at the sampled opacity; the host releases the
     /// collapsed id once its fade has run out.
@@ -88,7 +190,26 @@ pub struct ShellView {
     /// The painted popup rectangle's height, sprung between the placement
     /// heights the expanding and folding submenus produce.
     popup_height_motion: Option<crate::dock_motion::Elastic>,
+    /// An application menu opened from a launcher tile. The card is its own
+    /// surface over the launcher; the launcher itself stays open underneath.
+    launcher_menu: Option<LauncherMenu>,
     cached_snapshot: std::sync::Weak<ViewState>,
+}
+/// A launcher page slide: the page that was on screen, the one replacing it,
+/// and the spring between the two. `started` is the clock the spring samples.
+struct LaunchpadSlide {
+    from: usize,
+    to: usize,
+    progress: crate::dock_motion::Motion,
+    started: std::time::Instant,
+}
+
+/// A launcher tile whose context menu is open.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LauncherMenu {
+    id: String,
+    /// The pointer press, in window coordinates.
+    anchor: (i32, i32),
 }
 #[derive(Clone, Copy)]
 struct Palette {
@@ -202,6 +323,66 @@ impl Palette {
         self.frost > 0.01
     }
 }
+
+/// Icon tint for a battery state. Only the charge bar changes colour; the
+/// outline keeps the foreground so the mark reads on both themes.
+fn battery_color(tone: battery::BatteryTone, p: Palette) -> Hsla {
+    match tone {
+        battery::BatteryTone::Normal => p.fg,
+        battery::BatteryTone::Charging => rgb(0x30d158).into(),
+        battery::BatteryTone::Low => rgb(0xff9f0a).into(),
+        battery::BatteryTone::Critical => rgb(0xff453a).into(),
+        battery::BatteryTone::Muted => p.muted,
+    }
+}
+
+/// A two-tone battery mark. Symbolic theme icons are single-colour by
+/// design, so tinting one would paint the outline and the charge the same
+/// green; drawing the shell lets the outline stay in the foreground colour
+/// while the bar inside carries the charge and the state colour.
+fn battery_mark(percent: f64, fill: Hsla, outline: Hsla, size: f32) -> AnyElement {
+    let percent = percent.clamp(0., 1.) as f32;
+    let height = (size * 0.54).max(8.);
+    let border = (size * 0.07).clamp(1., 1.6);
+    let inset = (border * 0.5).max(0.5);
+    let inner_width = (size - 2. * (border + inset)).max(0.);
+    let inner_height = (height - 2. * (border + inset)).max(1.);
+    let radius = (height * 0.28).max(2.);
+    let tip_width = (size * 0.09).clamp(1.5, 3.);
+    let tip_height = (height * 0.34).max(3.);
+    div()
+        .h(px(height))
+        .flex()
+        .items_center()
+        .gap(px(1.))
+        .child(
+            div()
+                .w(px(size))
+                .h(px(height))
+                .rounded(px(radius))
+                .border(px(border))
+                .border_color(outline)
+                .p(px(inset))
+                .flex()
+                .items_center()
+                .child(
+                    div()
+                        .h_full()
+                        .w(px(inner_width * percent))
+                        .rounded(px((inner_height * 0.35).max(1.)))
+                        .bg(fill),
+                ),
+        )
+        .child(
+            div()
+                .w(px(tip_width))
+                .h(px(tip_height))
+                .rounded(px(tip_width / 2.))
+                .bg(outline),
+        )
+        .into_any_element()
+}
+
 #[derive(Default)]
 struct SliderGesture {
     dragging: bool,
@@ -244,6 +425,12 @@ fn update_slider(
 }
 
 impl ShellView {
+    /// The output this surface belongs to. Tests read it to prove which
+    /// monitor a dispatched click opened its popup on.
+    #[cfg(test)]
+    pub(crate) fn output(&self) -> &str {
+        &self.output
+    }
     pub fn new(
         host: Entity<Host>,
         kind: Surface,
@@ -252,21 +439,68 @@ impl ShellView {
         cx: &mut Context<Self>,
     ) -> Self {
         let launchpad = state.panel == Some(Panel::Apps);
-        let dark_input = launchpad || state.dark();
+        let palette = state.panel == Some(Panel::Spotlight);
         let input = cx.new(|cx| {
-            TextInput::new(cx)
-                .with_placeholder(if launchpad {
-                    "搜索"
+            if palette {
+                // The palette's search line doubles as its title: boxless,
+                // large, and inked by the real theme — forcing light text on
+                // the pale light-theme card used to hide it.
+                TextInput::new(cx)
+                    .with_placeholder("搜索应用，或输入 / 执行命令")
+                    .with_bare(state.dark())
+            } else {
+                let dark_input = launchpad || state.dark();
+                let mut input = TextInput::new(cx).with_placeholder(if launchpad {
+                    "搜索应用"
                 } else {
                     "搜索最近内容"
-                })
-                .with_compact(dark_input)
+                });
+                input = if launchpad {
+                    input.with_capsule(dark_input)
+                } else {
+                    input.with_compact(dark_input)
+                };
+                input
+            }
         });
         cx.subscribe(&input, |this, _, QueryChanged(query), cx| {
             this.query = query.clone();
+            // A page slide describes the old result set; a new query starts
+            // its pages from a clean slate.
+            this.launchpad_slide = None;
+            // Every edit starts the slash completion over: Enter only runs the
+            // highlighted row once the keyboard has actually moved in it.
+            this.palette_slash_picked = false;
+            // Keep the session's draft in step with the field so mode switches
+            // and `Backspace` unwinding see the same text the user sees.
+            let literal = this.palette.literal;
+            this.palette = this.palette.clone().input(query.as_str(), literal, "");
             this.selection = 0;
+            this.palette_error = None;
             this.scroll.set_offset(point(px(0.), px(0.)));
             cx.notify();
+        })
+        .detach();
+        cx.subscribe(&input, |this, _, _: &BackspaceAtStart, cx| {
+            if this.state.panel != Some(Panel::Spotlight) {
+                return;
+            }
+            let inside = this.palette.can_backspace(BackspaceState {
+                focused: true,
+                ..Default::default()
+            });
+            if inside {
+                let host = this.state.clone();
+                this.palette_pop(&host, cx);
+            }
+        })
+        .detach();
+        cx.subscribe(&input, |this, _, _: &DeleteAtEnd, cx| {
+            if this.state.panel != Some(Panel::Spotlight) {
+                return;
+            }
+            let host = this.state.clone();
+            this.palette_delete_selected(&host, cx);
         })
         .detach();
         let dock_motion = macos_dock::DockViewMotion::new(state.dock_revealed);
@@ -280,9 +514,15 @@ impl ShellView {
             output,
             input,
             query: String::new(),
+            palette: Session::new(Mode::Search, 0),
+            palette_error: None,
+            palette_category: None,
+            palette_clipboard_filter: None,
+            palette_slash_picked: false,
             filter: 0,
             selection: 0,
             scroll: ScrollHandle::new(),
+            clipboard_scroll: ScrollHandle::new(),
             folder_fan_offset: 0,
             folder_fan_root: None,
             folder_fan_started: None,
@@ -290,9 +530,18 @@ impl ShellView {
             folder_fan_closed: false,
             folder_fan_active: false,
             popup_motion: None,
+            launchpad_slide: None,
+            palette_glyph: None,
             popup_epoch: std::time::Instant::now(),
             folder_drag_layer: false,
             dock_drag_seen: false,
+            notification_drag: None,
+            notification_stacks: Default::default(),
+            notification_expanded: Default::default(),
+            notification_heights: Default::default(),
+            notification_drag_dismissed: Default::default(),
+            calendar_month: Default::default(),
+            calendar_day: Default::default(),
             #[cfg(test)]
             notification_regions: Default::default(),
             focus: cx.focus_handle(),
@@ -302,8 +551,104 @@ impl ShellView {
             theme_icons: Default::default(),
             submenu_motion: Default::default(),
             popup_height_motion: None,
+            launcher_menu: None,
             cached_snapshot: Default::default(),
         }
+    }
+    /// A launcher menu surface: one application's context menu as its own
+    /// window over the launcher it was opened from.
+    pub(crate) fn new_launcher_menu(
+        host: Entity<Host>,
+        output: String,
+        state: Arc<ViewState>,
+        id: String,
+        anchor: (i32, i32),
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut view = Self::new(host, Surface::LauncherMenu, output, state, cx);
+        view.launcher_menu = Some(LauncherMenu { id, anchor });
+        view
+    }
+    /// The visible card of the open launcher menu, if this surface shows one.
+    fn launcher_menu_card(
+        &self,
+        host: &ViewState,
+        width: f32,
+        height: f32,
+    ) -> Option<Bounds<Pixels>> {
+        if !matches!(self.kind, Surface::LauncherMenu) {
+            return None;
+        }
+        let menu = self.launcher_menu.as_ref()?;
+        Some(crate::app::panels::launcher_menu_rect(
+            host, &menu.id, menu.anchor, width, height,
+        ))
+    }
+    /// The menu surface: a card over a full-window catcher. A click outside the
+    /// card dismisses the menu and hands the keyboard back to the launcher
+    /// underneath, which never leaves the screen.
+    fn launcher_menu_surface(
+        &self,
+        host: &ViewState,
+        p: Palette,
+        width: f32,
+        height: f32,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let Some(menu) = self.launcher_menu.as_ref() else {
+            return div().size_full().into_any_element();
+        };
+        let card = crate::app::panels::launcher_menu_rect(
+            host, &menu.id, menu.anchor, width, height,
+        );
+        let view = cx.entity().downgrade();
+        let dismiss = {
+            let view = view.clone();
+            move |_: &MouseDownEvent, _: &mut Window, cx: &mut App| {
+                cx.stop_propagation();
+                let _ = view.update(cx, |view, cx| view.invoke(Action::CloseMenu, cx));
+            }
+        };
+        let backdrop = div()
+            .id("launcher-menu-backdrop")
+            .absolute()
+            .left(px(0.))
+            .top(px(0.))
+            .w(px(width))
+            .h(px(height))
+            // A barely-there wash so the card reads as modal without dimming
+            // the launcher it belongs to.
+            .bg(rgba(0x00000001))
+            .on_mouse_down(MouseButton::Left, dismiss.clone())
+            .on_mouse_down(MouseButton::Right, dismiss);
+        let card = div()
+            .id("launcher-app-menu")
+            .absolute()
+            .left(card.origin.x)
+            .top(card.origin.y)
+            .w(card.size.width)
+            .h(card.size.height)
+            .rounded(px(12.))
+            .bg(p.panel)
+            .border_1()
+            .border_color(p.line)
+            // The same lift the launcher sheet gets: the card floats over the
+            // launcher instead of sitting in its plane.
+            .text_color(p.fg)
+            .text_size(px(13.))
+            .p(px(10.))
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+            .child(self.dock_menu(host, &menu.id, p));
+        div()
+            .id("launcher-menu-layer")
+            .size_full()
+            .child(backdrop)
+            .child(card)
+            .into_any_element()
     }
     pub fn observe_activation(&self, window: &mut Window, cx: &mut Context<Self>) {
         cx.observe_window_activation(window, |this, window, cx| {
@@ -313,14 +658,23 @@ impl ShellView {
                 && matches!(this.kind, Surface::Panel)
                 && this.state.panel != Some(Panel::Preferences)
             {
-                this.activated = false;
                 let host = this.host.clone();
                 let view = cx.entity();
                 let panel = this.state.panel.clone();
                 cx.defer(move |cx| {
+                    // A launcher's own menu surface sits over it and takes the
+                    // keyboard; that is not the user leaving the launcher.
+                    let menu_up = {
+                        let host = host.read(cx);
+                        host.menu.is_some() || host.menu_opening
+                    };
+                    if menu_up {
+                        return;
+                    }
                     if host.read(cx).panel == panel {
                         view.update(cx, |this, cx| {
                             if this.state.panel == panel {
+                                this.activated = false;
                                 this.dismiss_folder_fan(cx);
                             }
                         });
@@ -331,7 +685,11 @@ impl ShellView {
         .detach();
     }
     pub fn focus(&self, window: &mut Window, cx: &App) {
-        if matches!(self.state.panel, Some(Panel::Apps | Panel::Recent)) {
+        if matches!(
+            self.state.panel,
+            Some(Panel::Apps | Panel::Spotlight | Panel::Recent)
+        ) && !matches!(self.kind, Surface::LauncherMenu)
+        {
             window.focus(&self.input.focus_handle(cx));
         } else {
             window.focus(&self.focus);
@@ -512,7 +870,29 @@ impl ShellView {
         }
     }
     fn symbol(&self, name: &str, size: f32, p: Palette) -> AnyElement {
-        let path = icon_path(name);
+        // UI glyphs prefer the desktop theme's symbolic icon so the shell's
+        // controls match the installed icon set; the bundled file remains the
+        // fallback for themes that do not carry the name.
+        let path = symbolic_name(name)
+            .and_then(|symbol| {
+                let mut cache = self.theme_icons.borrow_mut();
+                theme_icon(symbol, &mut cache)
+            })
+            .unwrap_or_else(|| icon_path(name));
+        self.glyph(&path, size, p)
+    }
+    /// Resolve a glyph by its desktop-theme symbolic name. Themes that lack the
+    /// name fall back to the bundled asset's own alias, then to the bundled
+    /// file, so a missing mark degrades instead of blanking out.
+    fn themed_glyph_path(&self, symbol: &str, fallback_asset: &str) -> PathBuf {
+        let mut cache = self.theme_icons.borrow_mut();
+        theme_icon(symbol, &mut cache)
+            .or_else(|| {
+                symbolic_name(fallback_asset).and_then(|alias| theme_icon(alias, &mut cache))
+            })
+            .unwrap_or_else(|| icon_path(fallback_asset))
+    }
+    fn glyph(&self, path: &Path, size: f32, p: Palette) -> AnyElement {
         if path.is_file() {
             svg()
                 .path(path.to_string_lossy().into_owned())
@@ -526,6 +906,111 @@ impl ShellView {
                 .child("◇")
                 .into_any_element()
         }
+    }
+    /// The current theme's battery artwork. `img` keeps the SVG's own colours
+    /// (green charge, amber/red low levels) instead of the monochrome tint the
+    /// `svg` element would apply; the active theme already carries the light
+    /// or dark outline chosen by `set_icon_theme`.
+    fn battery_icon(
+        &self,
+        name: &str,
+        percent: f64,
+        tone: battery::BatteryTone,
+        size: f32,
+        p: Palette,
+    ) -> AnyElement {
+        let path = {
+            let mut cache = self.theme_icons.borrow_mut();
+            let mut path = theme_icon(name, &mut cache);
+            if path.is_none() && name.ends_with("-100-charging-symbolic") {
+                // Sets that stop the charging family at 90 still have the
+                // charged mark at 100; a full battery must look full.
+                path = theme_icon("battery-level-100-charged-symbolic", &mut cache);
+            }
+            path.or_else(|| theme_icon("battery-symbolic", &mut cache))
+        };
+        match path {
+            Some(path) => img(path)
+                .size(px(size))
+                .object_fit(ObjectFit::Contain)
+                .into_any_element(),
+            // A theme with no battery artwork at all still gets a readable
+            // two-tone mark instead of a hole in the status row.
+            None => battery_mark(percent, battery_color(tone, p), p.fg, size),
+        }
+    }
+    /// The palette header's leading mark. `path` is the mark the body on screen
+    /// calls for — the store mark for applications, the selected command's own
+    /// icon for the command bodies. One spring swaps them: the outgoing mark
+    /// shrinks and fades under the incoming one.
+    fn spotlight_glyph(
+        &mut self,
+        path: PathBuf,
+        host: &ViewState,
+        window: &mut Window,
+        p: Palette,
+    ) -> AnyElement {
+        const SIZE: f32 = 30.;
+        let now = self.popup_epoch.elapsed();
+        let reduced = host.prefs.reduce_motion;
+        let glyph = self.palette_glyph.get_or_insert_with(|| PaletteGlyph {
+            from: path.clone(),
+            to: path.clone(),
+            progress: crate::dock_motion::Motion::new(1.),
+        });
+        if glyph.to != path {
+            glyph.from = std::mem::replace(&mut glyph.to, path);
+            if reduced {
+                glyph.progress.snap(1.);
+            } else {
+                glyph.progress.snap(0.);
+                glyph.progress.retarget(1., now);
+            }
+        }
+        if reduced {
+            glyph.progress.snap(1.);
+        }
+        let sample = glyph.progress.sample(now);
+        if sample.active {
+            window.request_animation_frame();
+        }
+        let progress = sample.value.clamp(0., 1.);
+        let from = glyph.from.clone();
+        let to = glyph.to.clone();
+        let mut stack = div().relative().w(px(SIZE)).h(px(SIZE));
+        if progress < 0.999 {
+            stack = stack.child(
+                div()
+                    .absolute()
+                    .left(px(0.))
+                    .top(px(0.))
+                    .w(px(SIZE))
+                    .h(px(SIZE))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .opacity(1. - progress)
+                    .debug_selector(|| "spotlight-glyph-from".to_owned())
+                    .child(self.glyph(&from, SIZE * (1. - 0.3 * progress), p)),
+            );
+        }
+        if progress > 0.001 {
+            stack = stack.child(
+                div()
+                    .absolute()
+                    .left(px(0.))
+                    .top(px(0.))
+                    .w(px(SIZE))
+                    .h(px(SIZE))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .opacity(progress)
+                    .debug_selector(|| "spotlight-glyph-to".to_owned())
+                    .child(self.glyph(&to, SIZE * (0.7 + 0.3 * progress), p)),
+            );
+        }
+        stack.into_any_element()
     }
     fn glyph_button(&self, id: &str, name: &str, action: Action, p: Palette) -> AnyElement {
         let host = self.host.clone();
@@ -574,6 +1059,7 @@ impl ShellView {
             "clarion-mark-black.png"
         });
         let h = self.host.clone();
+        let bar_output = self.output.clone();
         let mut row = div()
             .id("macos-menu-bar")
             .size_full()
@@ -608,7 +1094,15 @@ impl ShellView {
                             .object_fit(ObjectFit::Contain),
                     )
                     .on_click(move |_, _, cx| {
-                        h.update(cx, |h, cx| h.handle(Action::Panel(Panel::Preferences), cx))
+                        h.update(cx, |h, cx| {
+                            h.handle(
+                                Action::on_output(
+                                    bar_output.clone(),
+                                    Action::Panel(Panel::Preferences),
+                                ),
+                                cx,
+                            )
+                        })
                     }),
             )
             .child(
@@ -637,6 +1131,9 @@ impl ShellView {
                 let right_id = item.id.clone();
                 let menu = item.item_is_menu;
                 let h = self.host.clone();
+                // The bar exists on every output: a tray popup belongs to the
+                // monitor whose bar was clicked, focused or not.
+                let bar_output = self.output.clone();
                 let icon = if let Some(image) = self.image_cache.get(&format!("tray:{}", item.id)) {
                     img(image.clone())
                         .size(px(tray_glyph))
@@ -675,7 +1172,13 @@ impl ShellView {
                                 if menu {
                                     let x = f32::from(event.position().x);
                                     h.handle(
-                                        Action::AnchoredPanel(Panel::Tray(left_id.clone()), x),
+                                        Action::on_output(
+                                            bar_output.clone(),
+                                            Action::AnchoredPanel(
+                                                Panel::Tray(left_id.clone()),
+                                                x,
+                                            ),
+                                        ),
                                         cx,
                                     )
                                 } else {
@@ -692,10 +1195,20 @@ impl ShellView {
                         })
                         .on_mouse_down(MouseButton::Right, {
                             let h = self.host.clone();
+                            let bar_output = self.output.clone();
                             move |event: &MouseDownEvent, _, cx| {
                                 let x = f32::from(event.position.x);
                                 h.update(cx, |h, cx| {
-                                    h.handle(Action::AnchoredPanel(Panel::Tray(right_id.clone()), x), cx)
+                                    h.handle(
+                                        Action::on_output(
+                                            bar_output.clone(),
+                                            Action::AnchoredPanel(
+                                                Panel::Tray(right_id.clone()),
+                                                x,
+                                            ),
+                                        ),
+                                        cx,
+                                    )
                                 })
                             }
                         }),
@@ -732,56 +1245,75 @@ impl ShellView {
         }
         if width > 800. {
             if let Some(battery) = host.system.battery {
-                let fill = div()
-                    .w(px((19. * scale) * battery.clamp(0., 1.) as f32))
-                    .h(px(7. * scale))
-                    .rounded(px(1. * scale))
-                    .bg(if host.system.charging {
-                        rgb(0x30d158).into()
-                    } else {
-                        p.fg
-                    });
+                let state = battery::state(
+                    host.system.battery,
+                    host.system.battery_status,
+                    host.system.ac_online,
+                );
+                let tone = battery::tone(state);
+                let icon = battery::icon(state, host.system.battery);
+                // The indicator is also the fastest way into the control
+                // center: it carries the same anchored click as the buttons.
+                let h = self.host.clone();
+                let bar_output = self.output.clone();
                 let mut indicator = div()
                     .id("menu-battery")
+                    .debug_selector(|| "menu-battery".into())
                     .h_full()
                     .px(px(6. * scale))
                     .flex()
                     .items_center()
-                    .gap(px(5. * scale));
-                if host.prefs.show_battery_percentage {
-                    indicator = indicator.child(
-                        div()
-                            .text_size(px(12. * scale))
-                            .child(format!("{}%", (battery * 100.).round())),
-                    );
-                }
-                row = row.child(
-                    indicator.child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(1.5 * scale))
-                            .child(
-                                div()
-                                    .w(px(23. * scale))
-                                    .h(px(11. * scale))
-                                    .p(px(1. * scale))
-                                    .border_1()
-                                    .border_color(p.fg.opacity(0.65))
-                                    .rounded(px(2.5 * scale))
-                                    .child(fill),
+                    .gap(px(5. * scale))
+                    .rounded(px(4.))
+                    .cursor_pointer()
+                    .hover(move |s| s.bg(p.line))
+                    .on_click(move |event: &ClickEvent, _, cx| {
+                        let x = f32::from(event.position().x);
+                        h.update(cx, |h, cx| {
+                            h.handle(
+                                Action::on_output(
+                                    bar_output.clone(),
+                                    Action::AnchoredPanel(Panel::Controls, x),
+                                ),
+                                cx,
                             )
-                            .child(
-                                div()
-                                    .w(px(1.5 * scale))
-                                    .h(px(4. * scale))
-                                    .rounded(px(0.75 * scale))
-                                    .bg(p.fg.opacity(0.65)),
-                            ),
-                    ),
-                );
+                        });
+                    })
+                    .child(self.battery_icon(
+                        &icon,
+                        battery,
+                        tone,
+                        (status_glyph * 1.5).round().clamp(16., 28.),
+                        p,
+                    ));
+                if host.prefs.show_battery_percentage {
+                    indicator = indicator
+                        .child(div().text_size(px(text)).child(battery::percent_text(battery)));
+                }
+                row = row.child(indicator);
             }
         }
+        // The launcher lives next to the control center, within reach of the
+        // status row: one click opens the palette. It is deliberately the
+        // popup launcher, not whatever the fullscreen preference says.
+        let h = self.host.clone();
+        let bar_output = self.output.clone();
+        row = row.child(
+            self.status_button_base("spotlight", "search", p, tile, status_glyph)
+                .debug_selector(|| "menu-spotlight".into())
+                .on_click(move |_, _, cx| {
+                    h.update(cx, |h, cx| {
+                        h.handle(
+                            Action::on_output(
+                                bar_output.clone(),
+                                Action::Panel(Panel::Spotlight),
+                            ),
+                            cx,
+                        )
+                    });
+                })
+                .into_any_element(),
+        );
         row = row.child(self.anchored_status_button(
             "controls",
             "control-center",
@@ -796,6 +1328,7 @@ impl ShellView {
             host.system.clock.clone()
         };
         let h = self.host.clone();
+        let bar_output = self.output.clone();
         row.child(
             div()
                 .id("menu-clock")
@@ -811,7 +1344,13 @@ impl ShellView {
                 .child(menu_text(clock, FontWeight::NORMAL, p.fg, cx))
                 .on_click(move |_, _, cx| {
                     h.update(cx, |h, cx| {
-                        h.handle(Action::Panel(Panel::Notifications), cx)
+                        h.handle(
+                            Action::on_output(
+                                bar_output.clone(),
+                                Action::Panel(Panel::Notifications),
+                            ),
+                            cx,
+                        )
                     })
                 }),
         )
@@ -827,6 +1366,9 @@ impl ShellView {
         icon_size: f32,
     ) -> AnyElement {
         let h = self.host.clone();
+        // Bar buttons live on every output; a popup they open belongs to this
+        // bar's monitor, not to whichever output holds keyboard focus.
+        let action = Action::on_output(self.output.clone(), action);
         self.status_button_base(id, name, p, tile, icon_size)
             .on_click(move |_, _, cx| h.update(cx, |h, cx| h.handle(action.clone(), cx)))
             .into_any_element()
@@ -843,10 +1385,16 @@ impl ShellView {
         icon_size: f32,
     ) -> AnyElement {
         let h = self.host.clone();
+        let output = self.output.clone();
         self.status_button_base(id, name, p, tile, icon_size)
             .on_click(move |event: &ClickEvent, _, cx| {
                 let x = f32::from(event.position().x);
-                h.update(cx, |h, cx| h.handle(Action::AnchoredPanel(panel.clone(), x), cx))
+                h.update(cx, |h, cx| {
+                    h.handle(
+                        Action::on_output(output.clone(), Action::AnchoredPanel(panel.clone(), x)),
+                        cx,
+                    )
+                })
             })
             .into_any_element()
     }
@@ -887,7 +1435,10 @@ impl ShellView {
     fn recent(&self, host: &ViewState, p: Palette, cx: &Context<Self>) -> AnyElement {
         let mut rows = div().flex().flex_col().gap_3();
         let mut filters = div().flex().gap_2();
-        for (i, label) in ["全部", "文本", "图片", "截图"].iter().enumerate() {
+        for (i, label) in ["全部", "文本", "图片", "截图", "文件"]
+            .iter()
+            .enumerate()
+        {
             filters = filters.child(
                 div()
                     .id(("recent-filter", i))
@@ -946,10 +1497,23 @@ impl ShellView {
             if self.filter == 1 && !matches!(entry.kind, services::HistoryKind::Text) {
                 continue;
             }
-            if self.filter == 2 && matches!(entry.kind, services::HistoryKind::Text) {
+            if self.filter == 2
+                && !matches!(
+                    entry.kind,
+                    services::HistoryKind::Image | services::HistoryKind::Screenshot
+                )
+            {
                 continue;
             }
             if self.filter == 3 && !matches!(entry.kind, services::HistoryKind::Screenshot) {
+                continue;
+            }
+            if self.filter == 4
+                && !matches!(
+                    entry.kind,
+                    services::HistoryKind::Files | services::HistoryKind::Binary
+                )
+            {
                 continue;
             }
             count += 1;
@@ -957,6 +1521,7 @@ impl ShellView {
                 services::HistoryKind::Text => "文字",
                 services::HistoryKind::Image => "图片",
                 services::HistoryKind::Screenshot => "截图",
+                services::HistoryKind::Files | services::HistoryKind::Binary => "文件",
             };
             let mut card = div()
                 .p_4()
@@ -976,6 +1541,13 @@ impl ShellView {
                         .w_full()
                         .max_h(px(150.))
                         .object_fit(ObjectFit::Contain),
+                );
+            } else if entry.kind == services::HistoryKind::Binary {
+                card = card.child(
+                    div()
+                        .text_xs()
+                        .text_color(p.muted)
+                        .child(format!("{}（无法预览，可直接复制）", entry.mime)),
                 );
             } else {
                 card = card.child(
@@ -1015,7 +1587,11 @@ impl ShellView {
             if let Some(path) = &entry.file_path {
                 actions = actions.child(self.button(
                     format!("open-{}", entry.id),
-                    "打开原图",
+                    if entry.kind == services::HistoryKind::Files {
+                        "打开"
+                    } else {
+                        "打开原图"
+                    },
                     Action::Backend(backend::Command::OpenPath(path.clone())),
                     p,
                 ));
@@ -1033,7 +1609,7 @@ impl ShellView {
             div()
                 .text_xs()
                 .text_color(p.muted)
-                .child("历史仅留在本次会话。清空或移除记录不会删除截图原件。"),
+                .child("记录保存在 ~/.local/state/clarion-shell。清空或移除记录不会删除截图原件。"),
         )
         .into_any_element()
     }
@@ -1510,9 +2086,16 @@ impl ShellView {
                     )
                     .on_mouse_down(MouseButton::Right, {
                         let h = self.host.clone();
+                        let surface_output = self.output.clone();
                         move |_, _, cx| {
                             h.update(cx, |h, cx| {
-                                h.handle(Action::Panel(Panel::Dock(context.clone())), cx)
+                                h.handle(
+                                    Action::on_output(
+                                        surface_output.clone(),
+                                        Action::Panel(Panel::Dock(context.clone())),
+                                    ),
+                                    cx,
+                                )
                             })
                         }
                     })
@@ -1557,6 +2140,15 @@ impl ShellView {
         let app = apps.iter().find(|a| a.id == id);
         let mut row = div().flex().flex_col().gap_2();
         if let Some(app) = app {
+            // A pinned application may have no windows (not running) or many;
+            // either way the menu keeps one launch entry at the top so the
+            // Dock icon's menu can always start the app.
+            row = row.child(self.button(
+                "launch-from-menu",
+                "打开应用",
+                Action::Launch(id.into()),
+                p,
+            ));
             for w in &app.windows {
                 row = row
                     .child(self.button(
@@ -1652,6 +2244,7 @@ impl ShellView {
                 | Panel::DockFolderMenu { .. }
                 | Panel::Controls
                 | Panel::Recent
+                | Panel::Spotlight
                 | Panel::Tray(_)
         );
         let placement = if modal {
@@ -1670,15 +2263,34 @@ impl ShellView {
                 return self.dock_folder_fan(host, root, width, height, p, window, cx);
             }
         }
+        // The launcher sheet reads larger than the small menus, so it carries
+        // a bigger radius; the rest keep their proven values.
+        let popup_radius = if panel == Panel::Spotlight {
+            crate::app::panels::SPOTLIGHT_RADIUS
+        } else if panel == Panel::Controls {
+            crate::app::panels::CONTROLS_RADIUS
+        } else if menu {
+            12.
+        } else {
+            16.
+        };
         let mut body = div()
             .size_full()
-            .rounded(px(if menu { 12. } else { 16. }))
+            .rounded(px(popup_radius))
             .text_color(p.fg)
             .text_size(px(13.));
         if arrow.is_none() {
             // A modal popup draws its own outline so the body and the pointer
-            // share one fill and one border.
-            body = body.bg(p.panel).border_1().border_color(p.line);
+            // share one fill and one border. The launcher sheet's rim is a
+            // step heavier but nearly transparent: the frosted wallpaper
+            // tints it instead of a hard line.
+            body = body.bg(p.panel);
+            body = if panel == Panel::Spotlight {
+                body.border_2()
+                    .border_color(p.fg.opacity(0.09))
+            } else {
+                body.border_1().border_color(p.line)
+            };
         }
         if panel == Panel::Controls {
             // The control center rides the shared modal popup below.
@@ -1727,6 +2339,7 @@ impl ShellView {
         }
         let content = match &panel {
             Panel::Recent => self.recent(host, p, cx),
+            Panel::Spotlight => self.spotlight_results(host, p, cx),
             Panel::Controls => self.macos_controls(host, p),
             Panel::Tray(_) => self.tray_menu(host, p),
             Panel::Dock(id) => self.dock_menu(host, id, p),
@@ -1745,6 +2358,11 @@ impl ShellView {
         body = if panel == Panel::Controls || matches!(panel, Panel::Tray(_)) {
             // The control center and the tray menus share one surface recipe.
             body.p(px(12.))
+        } else if panel == Panel::Spotlight {
+            // The palette keeps a real margin around its grid and list, and
+            // reads a point larger than the menus. The sheet grows by the same
+            // six points as the padding so the content area stays put.
+            body.px(px(24.)).py(px(16.)).text_size(px(14.))
         } else {
             body.p(px(10.))
         };
@@ -1766,6 +2384,67 @@ impl ShellView {
                         .bg(p.card)
                         .child(self.input.clone()),
                 );
+        }
+        if panel == Panel::Spotlight {
+            // The Applications-sheet header: leading glyph, the bare search
+            // line, a round close control, then a hairline. The pill row rides
+            // between two hairlines like the reference sheet, and the section
+            // header carries the keyboard guide as its trailing note.
+            let glyph_path = self.palette_glyph_path();
+            let glyph = self.spotlight_glyph(glyph_path, host, window, p);
+            body = body
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(12.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(glyph)
+                        .child(
+                            div()
+                                .id("spotlight-search")
+                                .flex_1()
+                                .min_w_0()
+                                .child(self.input.clone()),
+                        )
+                        .child(
+                            // The reference sheet's trailing control. It is a
+                            // static mark for now; a later version wires it to
+                            // "back to the main search field".
+                            div()
+                                .debug_selector(|| "spotlight-header-help".to_owned())
+                                .child(self.glyph(
+                                    &self.themed_glyph_path("help-about-symbolic", "settings.svg"),
+                                    34.,
+                                    p,
+                                )),
+                        ),
+                )
+                .child(
+                    div()
+                        .h(px(1.))
+                        .my(px(3.))
+                        .debug_selector(|| "spotlight-rule-search".to_owned())
+                        .bg(p.line),
+                );
+            if let Some(pills) = self.spotlight_pills(host, p, cx) {
+                body = body.child(pills).child(
+                    div()
+                        .h(px(1.))
+                        .my(px(3.))
+                        .debug_selector(|| "spotlight-rule-pills".to_owned())
+                        .bg(p.line),
+                );
+            }
+            if let Some(error) = &self.palette_error {
+                body = body.child(
+                    div()
+                        .px(px(2.))
+                        .text_size(px(12.))
+                        .text_color(rgb(0xe5a87f))
+                        .child(error.clone()),
+                );
+            }
         }
         if let Some(error) = &host.error {
             body = body.child(
@@ -1905,6 +2584,13 @@ impl ShellView {
             let backdrop = backdrop.on_mouse_down(MouseButton::Right, move |_, _, cx| {
                 h.update(cx, |h, cx| h.handle(Action::Close, cx))
             });
+            let backdrop = if panel == Panel::Spotlight {
+                // The launcher sheet dims the desktop behind it and rides the
+                // same appear motion as the popup.
+                backdrop.bg(p.scrim).opacity(ride)
+            } else {
+                backdrop
+            };
             let overlay = div().relative().size_full().child(backdrop);
             let mut surfaced = div()
                 .absolute()
@@ -1951,6 +2637,7 @@ impl Render for ShellView {
             Surface::Bar => self.bar(host, p, width, cx),
             Surface::Dock => self.macos_dock(host, p, window, cx),
             Surface::Panel => self.panel(host, p, window, cx),
+            Surface::LauncherMenu => self.launcher_menu_surface(host, p, width, height, cx),
             Surface::Toast(id) => {
                 if let Some(item) = host.notifications.iter().find(|n| n.id == id) {
                     self.macos_toast(item, host, p, window, cx)
@@ -1976,6 +2663,7 @@ impl Render for ShellView {
                     .into_any_element()
             }
         };
+        let menu_card = self.launcher_menu_card(host, width, height);
         // Notifications set their regions after layout, when wrapped card
         // heights and the clamped scroll offset are available.
         let modal = matches!(
@@ -1987,10 +2675,24 @@ impl Render for ShellView {
                     | Panel::DockFolderMenu { .. }
                     | Panel::Controls
                     | Panel::Recent
+                    | Panel::Spotlight
                     | Panel::Tray(_)
             )
         );
-        if matches!(self.kind, Surface::Panel)
+        if matches!(self.kind, Surface::LauncherMenu) {
+            // The menu window is transparent except for its card: the catcher
+            // covers the output for clicks, the frost only the card itself.
+            let full = vec![Bounds::new(
+                point(px(0.), px(0.)),
+                size(px(width), px(height)),
+            )];
+            let regions = menu_card
+                .filter(|_| p.frosted())
+                .map(card_frost_region)
+                .unwrap_or_default();
+            window.set_glass_region(Some(&regions));
+            window.set_input_region(Some(&full));
+        } else if matches!(self.kind, Surface::Panel)
             && host.panel != Some(Panel::Notifications)
             && modal
         {
@@ -2004,26 +2706,32 @@ impl Render for ShellView {
             )];
             // Set the frost region first so the background effect never falls
             // back to blurring the whole fullscreen window for a frame.
-            if !p.frosted() {
+            if !p.frosted() || self.folder_drag_layer {
                 window.set_glass_region(Some(&[]));
             } else if let Some(panel) = host.panel.as_ref() {
                 let placement =
                     crate::app::panels::placement(host, panel, width, height);
                 if let Some(popup) = placement.popup {
-                    if self.folder_drag_layer {
-                        // The popup is now an invisible drag layer; never leave
-                        // its old frost rectangle over the desktop.
-                        window.set_glass_region(Some(&[]));
+                    // Frost the popup's actual outline. A plain rectangle would
+                    // blur the transparent corners and the strip beside the
+                    // pointer wedge, leaving a rectangular halo around it. The
+                    // region's radius must match the painted radius — a squarer
+                    // region lets the blur poke past the rounded corners.
+                    let radius = if matches!(panel, Panel::Spotlight) {
+                        crate::app::panels::SPOTLIGHT_RADIUS
+                    } else if matches!(panel, Panel::Controls) {
+                        crate::app::panels::CONTROLS_RADIUS
                     } else {
-                        // Frost the popup's actual outline. A plain rectangle would
-                        // blur the transparent corners and the strip beside the
-                        // pointer wedge, leaving a rectangular halo around it.
-                        window.set_glass_region(Some(&popup_region(placement.arrow, popup)));
-                    }
-                } else {
+                        POPUP_RADIUS
+                    };
+                    let regions = popup_region(placement.arrow, popup, radius);
+                    window.set_glass_region(Some(&regions));
+                } else if !matches!(panel, Panel::DockFolder { .. }) {
                     // `None` falls back to the full input region in the
-                    // compositor, which would blur the whole output. The fan
-                    // must explicitly advertise an empty frost region.
+                    // compositor, which would blur the whole output. Panels
+                    // without a visible rectangle advertise an empty frost
+                    // region — except the fan, which paints its own regions
+                    // while rendering and must not be wiped here.
                     window.set_glass_region(Some(&[]));
                 }
             }
@@ -2040,7 +2748,7 @@ impl Render for ShellView {
                 (0., 0., width, height, 16.)
             };
             let mut regions = if is_apps {
-                macos_launchpad::backdrop_regions(host, width, height)
+                macos_launchpad::backdrop_regions(width, height)
             } else {
                 rounded_region(w, h, radius)
             };
@@ -2059,7 +2767,7 @@ impl Render for ShellView {
             }
             window.set_input_region(Some(&regions));
         }
-        div()
+        let surface = div()
             .id("clarion-surface")
             .size_full()
             .font_family(shell_font(cx))
@@ -2070,15 +2778,60 @@ impl Render for ShellView {
                 if this.folder_drag_layer {
                     this.forward_drag_move(event.position, event.modifiers, window, cx);
                 }
+                if let Some(drag) = this.notification_drag.as_mut() {
+                    drag.dx = f32::from(event.position.x - drag.start.x);
+                    drag.dy = f32::from(event.position.y - drag.start.y);
+                    cx.notify();
+                }
             }))
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseUpEvent, window, cx| {
                     this.finish_folder_drag_layer(event.position, event.modifiers, window, cx);
+                    if let Some(drag) = this.notification_drag.take() {
+                        let dismissed = drag.dx.abs().max(drag.dy.abs())
+                            >= macos_notifications::DISMISS_DRAG;
+                        this.notification_drag_dismissed.set(dismissed);
+                        if dismissed {
+                            this.invoke(
+                                Action::Service(services::Command::DismissNotification(
+                                    drag.id,
+                                )),
+                                cx,
+                            );
+                        }
+                        cx.notify();
+                    }
                 }),
             )
             .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
                 if this.input.read(cx).has_preedit() {
+                    return;
+                }
+                if this.launcher_menu.is_some() {
+                    // The menu is its own surface: escape folds it away and
+                    // leaves the launcher and its draft alone.
+                    this.invoke(Action::CloseMenu, cx);
+                    return;
+                }
+                if this.state.panel == Some(Panel::Spotlight) {
+                    // The palette unwinds before it closes: leave a tool or the
+                    // `>` command editor, then clear the draft.
+                    let stacked = this.palette.tool.is_some()
+                        || (this.palette.mode == Mode::Commands
+                            && this.palette.parent.is_some());
+                    if stacked {
+                        let host = this.state.clone();
+                        this.palette_pop(&host, cx);
+                        return;
+                    }
+                    if !this.query.is_empty() {
+                        this.palette_error = None;
+                        this.palette_set_query(String::new(), cx);
+                        cx.notify();
+                        return;
+                    }
+                    this.invoke(Action::Close, cx);
                     return;
                 }
                 if this.folder_drag_layer {
@@ -2091,40 +2844,108 @@ impl Render for ShellView {
                 }
             }))
             .on_action(cx.listener(|this, _: &Activate, _, cx| {
-                if this.input.read(cx).has_preedit() || this.state.panel != Some(Panel::Apps) {
+                if this.input.read(cx).has_preedit()
+                    || matches!(this.kind, Surface::LauncherMenu)
+                {
                     return;
                 }
-                let id = {
-                    let h = &this.state;
-                    h.catalog
+                if this.state.panel == Some(Panel::Spotlight) {
+                    let host = this.state.clone();
+                    this.palette_activate(&host, false, cx);
+                    return;
+                }
+                let id = match this.state.panel {
+                    Some(Panel::Apps) => this
+                        .state
+                        .catalog
                         .search(&this.query)
                         .get(this.selection)
-                        .map(|a| a.id.clone())
+                        .map(|a| a.id.clone()),
+                    _ => None,
                 };
                 if let Some(id) = id {
                     this.invoke(Action::Launch(id), cx);
                 }
             }))
+            .on_action(cx.listener(|this, _: &ActivateKeepOpen, _, cx| {
+                if this.input.read(cx).has_preedit()
+                    || matches!(this.kind, Surface::LauncherMenu)
+                {
+                    return;
+                }
+                if this.state.panel == Some(Panel::Spotlight) {
+                    let host = this.state.clone();
+                    this.palette_activate(&host, true, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PaletteSearch, _, cx| {
+                if this.state.panel == Some(Panel::Spotlight)
+                    && !this.input.read(cx).has_preedit()
+                {
+                    this.palette_switch_mode(Mode::Search, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PaletteApps, _, cx| {
+                if this.state.panel == Some(Panel::Spotlight)
+                    && !this.input.read(cx).has_preedit()
+                {
+                    this.palette_switch_mode(Mode::Apps, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PaletteClipboardText, _, cx| {
+                if !this.input.read(cx).has_preedit() {
+                    this.palette_clipboard_shortcut(spotlight::ClipboardFilter::Text, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PaletteClipboardImage, _, cx| {
+                if !this.input.read(cx).has_preedit() {
+                    this.palette_clipboard_shortcut(spotlight::ClipboardFilter::Image, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PaletteClipboardFiles, _, cx| {
+                if !this.input.read(cx).has_preedit() {
+                    this.palette_clipboard_shortcut(spotlight::ClipboardFilter::Files, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PaletteClipboardLayout, _, cx| {
+                if this.state.panel == Some(Panel::Spotlight)
+                    && this.palette.mode == Mode::Clipboard
+                    && !this.input.read(cx).has_preedit()
+                {
+                    let host = this.state.clone();
+                    this.palette_toggle_clipboard_layout(&host, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &Previous, window, cx| {
                 if !this.input.read(cx).has_preedit() {
+                    let before = this.selection;
                     this.selection = this.selection.saturating_sub(1);
-                    if this.state.panel == Some(Panel::Apps) {
-                        this.keyboard_selection_into_view(this.state.as_ref(), window);
+                    this.launchpad_note_page_change(before, window);
+                    if this.state.panel == Some(Panel::Spotlight) {
+                        this.palette_note_slash_navigation();
+                        this.palette_selection_into_view(&this.state);
                     }
                     cx.notify();
                 }
             }))
             .on_action(cx.listener(|this, _: &Next, window, cx| {
                 if !this.input.read(cx).has_preedit() {
-                    let count = this.state.catalog.search(&this.query).len();
+                    let count = match this.state.panel {
+                        Some(Panel::Spotlight) => this.palette_row_count(&this.state),
+                        _ => this.state.catalog.search(&this.query).len(),
+                    };
+                    let before = this.selection;
                     this.selection = (this.selection + 1).min(count.saturating_sub(1));
-                    if this.state.panel == Some(Panel::Apps) {
-                        this.keyboard_selection_into_view(this.state.as_ref(), window);
+                    this.launchpad_note_page_change(before, window);
+                    if this.state.panel == Some(Panel::Spotlight) {
+                        this.palette_note_slash_navigation();
+                        this.palette_selection_into_view(&this.state);
                     }
                     cx.notify();
                 }
             }))
-            .child(content)
+            .child(content);
+        surface
     }
 }
 fn menu_text(text: String, weight: FontWeight, color: Hsla, cx: &App) -> StyledText {
@@ -2439,9 +3260,26 @@ pub fn rounded_region(width: f32, height: f32, radius: f32) -> Vec<Bounds<Pixels
 /// the pointer wedge. Wayland background-effect regions are rectangle lists,
 /// so the wedge is approximated with one-point bands, the same way
 /// [`rounded_region`] approximates the corner arcs.
+/// The frosted shape of a launcher menu card: the rounded outline the card
+/// paints, moved to its window position.
+fn card_frost_region(card: Bounds<Pixels>) -> Vec<Bounds<Pixels>> {
+    let mut regions = rounded_region(
+        f32::from(card.size.width),
+        f32::from(card.size.height),
+        12.,
+    );
+    translate_regions(
+        &mut regions,
+        f32::from(card.origin.x),
+        f32::from(card.origin.y),
+    );
+    regions
+}
+
 pub fn popup_region(
     arrow: Option<crate::app::panels::Arrow>,
     popup: Bounds<Pixels>,
+    radius: f32,
 ) -> Vec<Bounds<Pixels>> {
     use crate::app::panels::{ArrowEdge, DOCK_ARROW};
     let x = f32::from(popup.origin.x);
@@ -2452,12 +3290,12 @@ pub fn popup_region(
         return Vec::new();
     }
     let Some(arrow) = arrow else {
-        let mut regions = rounded_region(width, height, POPUP_RADIUS);
+        let mut regions = rounded_region(width, height, radius);
         translate_regions(&mut regions, x, y);
         return regions;
     };
     let (bx, by, bw, bh) = popup_body(arrow.edge, width, height);
-    let radius = POPUP_RADIUS.min(bw / 2.).min(bh / 2.);
+    let radius = radius.min(bw / 2.).min(bh / 2.);
     let mut regions = rounded_region(bw.max(0.), bh.max(0.), radius);
     translate_regions(&mut regions, x + bx, y + by);
     let base = DOCK_ARROW;
@@ -2521,6 +3359,38 @@ pub fn popup_region(
     }
     regions
 }
+/// The symbolic icon the palette header swaps to while the field routes a
+/// slash command. Themes name this mark differently — re-point this one
+/// constant to match the installed icon set.
+const SPOTLIGHT_COMMAND_GLYPH: &str = "explore-symbolic";
+
+/// The symbolic icon the desktop theme provides for a bundled glyph, or
+/// `None` when the glyph has no common theme counterpart and always draws
+/// from the bundled assets.
+fn symbolic_name(asset: &str) -> Option<&'static str> {
+    Some(match asset {
+        "x.svg" => "window-close-symbolic",
+        "wine.svg" => "wine-symbolic",
+        "launchpad.svg" => "software-store-symbolic",
+        "grid.svg" => "view-app-grid-symbolic",
+        "chevron-down.svg" => "pan-down-symbolic",
+        "chevron-right.svg" => "pan-end-symbolic",
+        "bell.svg" => "bell-symbolic",
+        "sun.svg" => "weather-clear-symbolic",
+        "moon.svg" => "weather-clear-night-symbolic",
+        "speaker.svg" => "audio-volume-high-symbolic",
+        "speaker-muted.svg" => "audio-volume-muted-symbolic",
+        "sliders.svg" => "sliders-symbolic",
+        "settings.svg" => "settings-symbolic",
+        "clipboard.svg" => "edit-paste-symbolic",
+        "search.svg" => "system-search-symbolic",
+        "display.svg" => "display-symbolic",
+        "home.svg" => "user-home-symbolic",
+        "downloads.svg" => "folder-download-symbolic",
+        _ => return None,
+    })
+}
+
 fn icon_path(name: &str) -> PathBuf {
     image_path(&format!("{name}.svg"))
 }
@@ -2543,18 +3413,19 @@ fn collect_menu_icons(items: &[services::MenuItem], out: &mut Vec<Vec<u8>>) {
 /// Resolve a freedesktop icon name to a real file on the theme paths. Device,
 /// signal and battery icons ship in the system themes; the shell only needs a
 /// small, ordered probe over the common sizes and categories.
-fn theme_icon(name: &str, cache: &mut HashMap<String, Option<PathBuf>>) -> Option<PathBuf> {
-    if let Some(cached) = cache.get(name) {
+fn theme_icon(name: &str, cache: &mut HashMap<(String, String), Option<PathBuf>>) -> Option<PathBuf> {
+    let key = (current_icon_theme(), name.to_owned());
+    if let Some(cached) = cache.get(&key) {
         return cached.clone();
     }
     let resolved = resolve_theme_icon(name);
-    cache.insert(name.to_owned(), resolved.clone());
+    cache.insert(key, resolved.clone());
     resolved
 }
 
 /// The icon theme the desktop currently selected: the GTK settings (both
 /// majors) first, then KDE's kdeglobals, then the spec fallback theme.
-fn current_icon_theme() -> String {
+fn configured_icon_theme() -> String {
     if let Ok(home) = std::env::var("HOME") {
         let config = PathBuf::from(&home).join(".config");
         for file in ["gtk-4.0/settings.ini", "gtk-3.0/settings.ini"] {
@@ -2571,6 +3442,72 @@ fn current_icon_theme() -> String {
         }
     }
     "hicolor".to_owned()
+}
+
+/// The icon theme every resolution uses right now. The shell switches the
+/// light/dark *variant* here once, when its appearance changes, so the icon
+/// resolvers never have to reason about the appearance themselves.
+static ACTIVE_ICON_THEME: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+pub(crate) fn current_icon_theme() -> String {
+    ACTIVE_ICON_THEME
+        .read()
+        .ok()
+        .and_then(|theme| theme.clone())
+        .unwrap_or_else(configured_icon_theme)
+}
+
+/// Point icon resolution at the light or dark variant of the desktop's icon
+/// theme. Called when the shell appearance changes and once at startup.
+pub(crate) fn set_icon_theme(dark: bool) {
+    let base = configured_icon_theme();
+    let theme = icon_theme_variant(&base, dark, icon_theme_installed);
+    if let Ok(mut active) = ACTIVE_ICON_THEME.write() {
+        if active.as_deref() != Some(theme.as_str()) {
+            *active = Some(theme);
+        }
+    }
+}
+
+/// The light/dark counterpart of a theme name. Light themes get a `-dark`
+/// suffix; a dark theme chosen in the desktop settings strips it again.
+/// The `exists` probe keeps a missing variant from blanking the icons.
+fn icon_theme_variant(base: &str, dark: bool, exists: impl Fn(&str) -> bool) -> String {
+    if dark {
+        for suffix in ["-dark", "-Dark"] {
+            if !base.ends_with(suffix) {
+                let candidate = format!("{base}{suffix}");
+                if exists(&candidate) {
+                    return candidate;
+                }
+            }
+        }
+        base.to_owned()
+    } else {
+        for suffix in ["-dark", "-Dark"] {
+            if let Some(light) = base.strip_suffix(suffix) {
+                if exists(light) {
+                    return light.to_owned();
+                }
+            }
+        }
+        base.to_owned()
+    }
+}
+
+fn icon_theme_installed(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let home = std::env::var("HOME").ok().map(PathBuf::from);
+    let mut roots = vec![PathBuf::from("/usr/share/icons")];
+    if let Some(home) = home {
+        roots.push(home.join(".icons"));
+        roots.push(home.join(".local/share/icons"));
+    }
+    roots
+        .into_iter()
+        .any(|root| root.join(name).join("index.theme").is_file())
 }
 
 /// One `key = value` pair out of an ini-style settings file.
@@ -2620,6 +3557,9 @@ fn probe_theme(dir: &std::path::Path, name: &str) -> Option<PathBuf> {
         "apps",
         "panel",
         "places",
+        // File-type marks live in `mimes`; without it every document fell back
+        // to the bundled artwork instead of the theme the desktop selected.
+        "mimes",
         "categories",
         "",
     ];
@@ -2655,7 +3595,7 @@ fn probe_theme(dir: &std::path::Path, name: &str) -> Option<PathBuf> {
     None
 }
 
-fn resolve_theme_icon(name: &str) -> Option<PathBuf> {
+pub(crate) fn resolve_theme_icon(name: &str) -> Option<PathBuf> {
     if name.is_empty() || name.contains("..") {
         return None;
     }
@@ -2764,6 +3704,45 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
+    fn icon_theme_variant_follows_the_shell_appearance() {
+        let installed = |name: &str| {
+            matches!(
+                name,
+                "MacTahoe" | "MacTahoe-dark" | "Papirus" | "Papirus-Dark"
+            )
+        };
+        assert_eq!(
+            icon_theme_variant("MacTahoe", true, installed),
+            "MacTahoe-dark"
+        );
+        assert_eq!(
+            icon_theme_variant("MacTahoe", false, installed),
+            "MacTahoe"
+        );
+        // A desktop that already selected the dark variant comes back to the
+        // light one when the shell switches appearance.
+        assert_eq!(
+            icon_theme_variant("MacTahoe-dark", false, installed),
+            "MacTahoe"
+        );
+        assert_eq!(
+            icon_theme_variant("MacTahoe-dark", true, installed),
+            "MacTahoe-dark"
+        );
+        // Both common spellings of the dark suffix are understood.
+        assert_eq!(
+            icon_theme_variant("Papirus", true, installed),
+            "Papirus-Dark"
+        );
+        assert_eq!(
+            icon_theme_variant("Papirus-Dark", false, installed),
+            "Papirus"
+        );
+        // A theme without a dark variant is used exactly as installed.
+        assert_eq!(icon_theme_variant("Adwaita", true, |_| false), "Adwaita");
+    }
+
+    #[::core::prelude::v1::test]
     fn surface_opacity_only_fades_backgrounds_not_foreground_text() {
         for dark in [true, false] {
             for opacity in [0.3, 0.68, 1.0] {
@@ -2795,7 +3774,7 @@ mod tests {
             })
         };
         for edge in [ArrowEdge::Bottom, ArrowEdge::Left, ArrowEdge::Right] {
-            let regions = popup_region(Some(Arrow { edge, offset: 100. }), popup);
+            let regions = popup_region(Some(Arrow { edge, offset: 100. }), popup, POPUP_RADIUS);
             assert!(!regions.is_empty());
             assert!(regions.len() <= 256);
             for region in &regions {
@@ -2811,7 +3790,7 @@ mod tests {
         let regions = popup_region(Some(Arrow {
             edge: ArrowEdge::Bottom,
             offset: 125.,
-        }), popup);
+        }), popup, POPUP_RADIUS);
         // The wedge is frosted all the way to its tip, while the empty strip
         // on either side of it stays clear.
         assert!(contains(&regions, 175., 298.5));
@@ -2820,7 +3799,7 @@ mod tests {
         assert!(!contains(&regions, 51., 290.2));
         assert!(!contains(&regions, 298., 290.2));
 
-        let regions = popup_region(None, popup);
+        let regions = popup_region(None, popup, POPUP_RADIUS);
         assert!(contains(&regions, 175., 200.));
         assert!(!contains(&regions, 50.2, 100.2));
         assert!(!contains(&regions, 50.5, 290.2));

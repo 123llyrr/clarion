@@ -36,6 +36,21 @@ struct NotificationsState {
     next_id: u32,
     dnd: bool,
 }
+/// How long an unpinned notification stays before the service expires it.
+const UNPIN_GRACE: Duration = Duration::from_secs(5);
+
+/// Toggle the pin state of one stored notification. A pinned entry stops
+/// expiring entirely; unpinning gives it the usual short grace period.
+fn set_pinned(state: &mut NotificationsState, id: u32, pinned: bool) {
+    if let Some(stored) = state.items.get_mut(&id) {
+        stored.item.pinned = pinned;
+        stored.expires = if pinned {
+            None
+        } else {
+            Some(Instant::now() + UNPIN_GRACE)
+        };
+    }
+}
 #[derive(Clone)]
 struct Notifications {
     state: Arc<Mutex<NotificationsState>>,
@@ -50,7 +65,7 @@ impl Notifications {
             .values()
             .map(|stored| stored.item.clone())
             .collect();
-        items.sort_by_key(|item| std::cmp::Reverse(item.created_at));
+        items.sort_by_key(|item| (!item.pinned, std::cmp::Reverse(item.created_at)));
         let _ = self.events.try_send(Event::Notifications(items));
     }
     async fn close(&self, connection: &Connection, id: u32, reason: u32, remove: bool) {
@@ -97,7 +112,7 @@ impl Notifications {
         &self,
         app_name: &str,
         replaces_id: u32,
-        _app_icon: &str,
+        app_icon: &str,
         summary: &str,
         body: &str,
         actions: Vec<String>,
@@ -106,6 +121,7 @@ impl Notifications {
         #[zbus(header)] header: Header<'_>,
     ) -> zbus::fdo::Result<u32> {
         if app_name.len() > 4096
+            || app_icon.len() > 4096
             || summary.len() > 16384
             || body.len() > 65536
             || actions.len() > 64
@@ -152,6 +168,7 @@ impl Notifications {
                 item: Notification {
                     id,
                     app: app_name.into(),
+                    icon: (!app_icon.is_empty()).then(|| app_icon.to_owned()),
                     title: summary.into(),
                     body: body.into(),
                     actions: actions
@@ -162,6 +179,7 @@ impl Notifications {
                         .collect(),
                     created_at: now_ms(),
                     unread: !dnd,
+                    pinned: false,
                 },
                 owner,
                 expires,
@@ -839,6 +857,10 @@ pub(super) async fn run(events: Sender<Event>, commands: Receiver<Command>) -> R
                 Command::DismissNotification(id) => {
                     notifications.close(&connection, id, 2, true).await
                 }
+                Command::PinNotification { id, pinned } => {
+                    set_pinned(&mut notifications.state.lock().unwrap(), id, pinned);
+                    notifications.snapshot();
+                }
                 Command::NotificationAction { id, action } => {
                     let owner = notifications
                         .state
@@ -851,7 +873,10 @@ pub(super) async fn run(events: Sender<Event>, commands: Receiver<Command>) -> R
                         })
                         .map(|item| item.owner.clone());
                     if let Some(owner) = owner {
-                        connection
+                        // A vanished owner must not leave a dead action button
+                        // behind: close the local notification even when the
+                        // signal can no longer be delivered.
+                        let _ = connection
                             .emit_signal(
                                 Some(owner.as_str()),
                                 NOTIFY_PATH,
@@ -859,7 +884,7 @@ pub(super) async fn run(events: Sender<Event>, commands: Receiver<Command>) -> R
                                 "ActionInvoked",
                                 &(id, action),
                             )
-                            .await?;
+                            .await;
                         notifications.close(&connection, id, 2, false).await;
                     }
                 }
@@ -956,5 +981,79 @@ mod tests {
     #[test]
     fn malformed_icon_dimensions_are_rejected() {
         assert!(icon(&Properties::new(), "IconPixmap").is_none());
+    }
+
+    fn stored(id: u32, pinned: bool, created_at: u64) -> StoredNotification {
+        StoredNotification {
+            item: Notification {
+                id,
+                app: "测试应用".into(),
+                icon: None,
+                title: format!("通知 {id}"),
+                body: String::new(),
+                actions: Vec::new(),
+                created_at,
+                unread: true,
+                pinned,
+            },
+            owner: ":1.1".into(),
+            expires: Some(Instant::now() + Duration::from_secs(30)),
+            active: true,
+        }
+    }
+
+    fn notifications(items: Vec<StoredNotification>) -> (Notifications, Receiver<Event>) {
+        let (events, receiver) = async_channel::bounded(8);
+        let state = NotificationsState {
+            items: items.into_iter().map(|item| (item.item.id, item)).collect(),
+            next_id: 0,
+            dnd: false,
+        };
+        (
+            Notifications {
+                state: Arc::new(Mutex::new(state)),
+                events,
+            },
+            receiver,
+        )
+    }
+
+    fn snapshot_ids(receiver: &Receiver<Event>) -> Vec<u32> {
+        match receiver.try_recv().expect("the snapshot reaches the shell") {
+            Event::Notifications(items) => items.iter().map(|item| item.id).collect(),
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pinned_notifications_sort_before_newer_unpinned_ones() {
+        let (notifications, receiver) = notifications(vec![
+            stored(1, false, 900),
+            stored(2, false, 950),
+            stored(3, true, 100),
+        ]);
+        notifications.snapshot();
+        assert_eq!(snapshot_ids(&receiver), vec![3, 2, 1]);
+    }
+
+    #[test]
+    fn pinning_stops_expiry_and_unpinning_restores_a_grace_period() {
+        let (notifications, _receiver) = notifications(vec![stored(1, false, 10)]);
+        let mut state = notifications.state.lock().unwrap();
+        set_pinned(&mut state, 1, true);
+        let pinned = &state.items[&1];
+        assert!(pinned.item.pinned);
+        assert!(pinned.expires.is_none(), "a pinned entry never expires");
+
+        let before = Instant::now();
+        set_pinned(&mut state, 1, false);
+        let unpinned = &state.items[&1];
+        assert!(!unpinned.item.pinned);
+        let expires = unpinned.expires.expect("unpinning restarts the timer");
+        assert!(expires >= before + UNPIN_GRACE);
+        assert!(expires <= Instant::now() + UNPIN_GRACE);
+
+        // Unknown ids are harmless.
+        set_pinned(&mut state, 99, true);
     }
 }

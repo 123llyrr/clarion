@@ -581,6 +581,7 @@ impl MacWindow {
             show,
             display_id,
             window_min_size,
+            app_id: _,
             tabbing_identifier,
         }: WindowParams,
         executor: ForegroundExecutor,

@@ -393,6 +393,12 @@ impl WaylandWindow {
                 .wm_base
                 .get_xdg_surface(&surface, &globals.qh, surface.id());
             let toplevel = xdg_surface.get_toplevel(&globals.qh, surface.id());
+            // Announce the application id before the initial commit below, so
+            // the compositor's initial configure already sees it and applies
+            // window rules for the surface instead of tiling it first.
+            if let Some(app_id) = params.app_id.as_deref() {
+                toplevel.set_app_id(app_id.to_owned());
+            }
             if params.kind == WindowKind::Floating {
                 toplevel.set_parent(parent.as_ref());
             }
@@ -1067,8 +1073,7 @@ impl PlatformWindow for WaylandWindow {
 
     fn set_input_region(&self, rectangles: Option<&[Bounds<Pixels>]>) {
         let mut state = self.borrow_mut();
-        let requested =
-            rectangles.map(|rectangles| rectangles.iter().take(256).copied().collect::<Vec<_>>());
+        let requested = rectangles.map(requested_region);
         if state.closed || state.input_region == requested {
             return;
         }
@@ -1093,8 +1098,7 @@ impl PlatformWindow for WaylandWindow {
 
     fn set_glass_region(&self, rectangles: Option<&[Bounds<Pixels>]>) {
         let mut state = self.borrow_mut();
-        let requested =
-            rectangles.map(|rectangles| rectangles.iter().take(256).copied().collect::<Vec<_>>());
+        let requested = rectangles.map(requested_region);
         if state.closed || state.glass_region == requested {
             return;
         }
@@ -1409,6 +1413,16 @@ fn update_window(mut state: RefMut<WaylandWindowState>) {
     sync_background_effect(&mut state);
 
     region.destroy();
+}
+
+/// Keep every rectangle a surface asks for. The protocol encoder
+/// ([`background_effect::rectangles`]) already bounds the request, but a
+/// second, tighter cap here silently starves whatever was reported last: a
+/// scanline mask (a tilted Dock label follows its own outline one row at a
+/// time) fills a few hundred rectangles, and truncating it drops the labels at
+/// the end of the list while the first few keep their frost.
+fn requested_region(rectangles: &[Bounds<Pixels>]) -> Vec<Bounds<Pixels>> {
+    rectangles.iter().take(4096).copied().collect()
 }
 
 /// Request glass only for explicitly Blurred windows. Transparent preview,

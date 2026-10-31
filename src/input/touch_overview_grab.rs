@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use calloop::timer::{TimeoutAction, Timer};
 use calloop::{LoopHandle, RegistrationToken};
+use smithay::backend::input::InputTime;
 use smithay::desktop::Window;
 use smithay::input::pointer::{CursorIcon, CursorImageStatus};
 use smithay::input::tablet::tool::{TabletToolGrab, TabletToolInnerHandle};
@@ -185,7 +186,7 @@ impl TouchOverviewGrab {
                 // An empty axis frame wakes our focus-cleared compositor grab;
                 // it changes no pressure, position, tip, or button state.
                 tool.axis(state, tablet::tool::AxisFrame::default());
-                tool.frame(state, get_monotonic_time().as_millis() as u32);
+                tool.frame(state, crate::utils::input_time());
             }
         });
     }
@@ -489,7 +490,7 @@ impl TouchGrab<State> for TouchOverviewGrab {
         }
 
         self.new_location = event.location;
-        self.event_timestamp = Some(Duration::from_millis(u64::from(event.time)));
+        self.event_timestamp = Some(Duration::from_micros(event.time.micros()));
     }
 
     fn frame(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>) {
@@ -559,7 +560,7 @@ impl TabletToolGrab<State> for TouchOverviewGrab {
         handle.motion(data, None, event);
 
         self.new_location = event.location;
-        self.event_timestamp = Some(Duration::from_millis(u64::from(event.time)));
+        self.event_timestamp = Some(Duration::from_micros(event.time.micros()));
     }
 
     fn down(
@@ -605,7 +606,7 @@ impl TabletToolGrab<State> for TouchOverviewGrab {
         &mut self,
         data: &mut State,
         handle: &mut TabletToolInnerHandle<'_, State>,
-        time: u32,
+        time: InputTime,
     ) {
         handle.frame(data, time);
         self.arm_tablet_long_press(data, handle);
@@ -616,7 +617,7 @@ impl TabletToolGrab<State> for TouchOverviewGrab {
                 self,
                 data,
                 SERIAL_COUNTER.next_serial(),
-                get_monotonic_time().as_millis() as u32,
+                crate::utils::input_time(),
                 true,
             );
         }

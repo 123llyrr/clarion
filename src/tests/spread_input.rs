@@ -56,7 +56,7 @@ fn setup() -> (Fixture, Window, Window) {
         &MotionEvent {
             location: Point::from((100., 100.)),
             serial: SERIAL_COUNTER.next_serial(),
-            time: 1,
+            time: smithay::backend::input::InputTime::from_millis(1),
         },
     );
     pointer.frame(f.clarion_state());

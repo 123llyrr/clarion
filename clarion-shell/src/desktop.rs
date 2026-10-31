@@ -79,6 +79,8 @@ struct DesktopEntry {
     path: PathBuf,
     name: String,
     kind: EntryKind,
+    /// Finder-style tags (`user.xdg.tags`), drawn as dots on the artwork.
+    tags: Vec<String>,
     modified: Option<SystemTime>,
 }
 
@@ -861,17 +863,10 @@ impl DesktopView {
             .into_any_element()
     }
 
-    fn file_icon(kind: EntryKind) -> AnyElement {
-        use crate::desktop_icons::{self, DesktopIconKind};
-        desktop_icons::icon(
-            match kind {
-                EntryKind::Directory => DesktopIconKind::Folder,
-                EntryKind::File => DesktopIconKind::Document,
-                EntryKind::Image => DesktopIconKind::Image,
-                EntryKind::Application => DesktopIconKind::Application,
-            },
-            DESKTOP_ICON_SIZE,
-        )
+    /// Type-matched artwork from the current icon theme, with the path's tags
+    /// riding on it. `None` is the bare folder the "new folder" tile shows.
+    fn file_icon(path: Option<&Path>, is_dir: bool, tags: &[String]) -> AnyElement {
+        crate::file_icons::icon(path, is_dir, tags, DESKTOP_ICON_SIZE, 0.)
     }
 }
 
@@ -1066,7 +1061,7 @@ impl Render for DesktopView {
                     .items_center()
                     .gap(px(3.))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(Self::file_icon(EntryKind::Directory))
+                    .child(Self::file_icon(None, true, &[]))
                     .child(
                         div()
                             .w_full()
@@ -1114,7 +1109,11 @@ impl Render for DesktopView {
                         } else {
                             rgba(0xffffff00)
                         })
-                        .child(Self::file_icon(entry.kind)),
+                        .child(Self::file_icon(
+                            Some(&entry.path),
+                            entry.kind == EntryKind::Directory,
+                            &entry.tags,
+                        )),
                 )
                 .on_mouse_down(
                     MouseButton::Left,
@@ -1819,6 +1818,7 @@ fn scan(directory: &Path) -> Result<Vec<DesktopEntry>> {
             path: path.clone(),
             name: raw_name.to_string_lossy().into_owned(),
             kind,
+            tags: crate::file_icons::tags(&path),
             modified: metadata.modified().ok(),
         });
     }
@@ -1994,12 +1994,14 @@ fn worker(
                     path: PathBuf::from("/clarion-preview/Documents"),
                     name: "文档".into(),
                     kind: EntryKind::Directory,
+                    tags: Vec::new(),
                     modified: None,
                 },
                 DesktopEntry {
                     path: PathBuf::from("/clarion-preview/Welcome.txt"),
                     name: "欢迎使用 Clarion.txt".into(),
                     kind: EntryKind::File,
+                    tags: Vec::new(),
                     modified: None,
                 },
             ],

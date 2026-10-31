@@ -59,6 +59,7 @@ pub mod misc;
 pub mod output;
 pub mod recent_windows;
 pub mod renderer;
+pub mod scale;
 pub mod schema;
 pub mod utils;
 pub mod window_rule;

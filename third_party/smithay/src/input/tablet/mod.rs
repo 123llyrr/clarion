@@ -19,7 +19,7 @@
 //! use smithay::input::{Seat, SeatState, SeatHandler, pointer::CursorImageStatus};
 //! use smithay::input::tablet::{TabletSeatHandler, TabletSeatTrait};
 //! use smithay::backend::input::TabletToolDescriptor;
-//! # use smithay::backend::input::KeyState;
+//! # use smithay::backend::input::{InputTime, KeyState};
 //! # use smithay::input::{
 //! #   pointer::{PointerTarget, AxisFrame, MotionEvent, ButtonEvent, RelativeMotionEvent,
 //! #             GestureSwipeBeginEvent, GestureSwipeUpdateEvent, GestureSwipeEndEvent,
@@ -57,7 +57,7 @@
 //! #   fn button(&self, seat: &Seat<State>, data: &mut State, event: &ButtonEvent) {}
 //! #   fn axis(&self, seat: &Seat<State>, data: &mut State, frame: AxisFrame) {}
 //! #   fn frame(&self, seat: &Seat<State>, data: &mut State) {}
-//! #   fn leave(&self, seat: &Seat<State>, data: &mut State, serial: Serial, time: u32) {}
+//! #   fn leave(&self, seat: &Seat<State>, data: &mut State, serial: Serial, time: InputTime) {}
 //! #   fn gesture_swipe_begin(&self, seat: &Seat<State>, data: &mut State, event: &GestureSwipeBeginEvent) {}
 //! #   fn gesture_swipe_update(&self, seat: &Seat<State>, data: &mut State, event: &GestureSwipeUpdateEvent) {}
 //! #   fn gesture_swipe_end(&self, seat: &Seat<State>, data: &mut State, event: &GestureSwipeEndEvent) {}
@@ -77,7 +77,7 @@
 //! #       key: KeysymHandle<'_>,
 //! #       state: KeyState,
 //! #       serial: Serial,
-//! #       time: u32,
+//! #       time: InputTime,
 //! #   ) {}
 //! #   fn modifiers(&self, seat: &Seat<State>, data: &mut State, modifiers: ModifiersState, serial: Serial) {}
 //! # }
@@ -99,7 +99,7 @@
 //! #   fn motion(&self, seat: &Seat<State>, data: &mut State, tool_descriptor: &TabletToolDescriptor, event: &tool::MotionEvent) {}
 //! #   fn axis(&self, seat: &Seat<State>, data: &mut State, tool_descriptor: &TabletToolDescriptor, frame: tool::AxisFrame) {}
 //! #   fn button(&self, seat: &Seat<State>, data: &mut State, tool_descriptor: &TabletToolDescriptor, event: &tool::ButtonEvent) {}
-//! #   fn frame(&self, seat: &Seat<State>, data: &mut State, tool_descriptor: &TabletToolDescriptor, time: u32) {}
+//! #   fn frame(&self, seat: &Seat<State>, data: &mut State, tool_descriptor: &TabletToolDescriptor, time: InputTime) {}
 //! # }
 //!
 //! // implement the required traits
@@ -342,6 +342,13 @@ pub struct TabletSeat<D: TabletSeatHandler> {
     pub(crate) arc: Arc<Mutex<Inner<D>>>,
 }
 
+impl<D: TabletSeatHandler> TabletSeat<D> {
+    /// Create a weak reference to this tablet seat
+    pub fn downgrade(&self) -> WeakTabletSeat<D> {
+        WeakTabletSeat(Arc::downgrade(&self.arc))
+    }
+}
+
 impl<D: TabletSeatHandler> Default for TabletSeat<D> {
     fn default() -> Self {
         Self {
@@ -560,14 +567,9 @@ impl<D: TabletSeatHandler + 'static> TabletSeat<D> {
         self.arc.lock().unwrap().tools.len()
     }
 
-    /// Run a callback on all available tablet tools
-    pub fn with_tools<T>(
-        &self,
-        callback: impl FnOnce(&HashMap<TabletToolDescriptor, TabletToolHandle<D>>) -> T,
-    ) -> T {
-        let guard = self.arc.lock().unwrap();
-
-        callback(&guard.tools)
+    /// Get a map of all tablet tools known by this [`TabletSeat`].
+    pub fn get_tools(&self) -> HashMap<TabletToolDescriptor, TabletToolHandle<D>> {
+        self.arc.lock().unwrap().tools.clone()
     }
 
     /// Remove tablet tool device

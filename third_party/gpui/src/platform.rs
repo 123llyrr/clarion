@@ -876,6 +876,7 @@ impl PlatformInputHandler {
         Self { cx, handler }
     }
 
+    #[cfg_attr(any(target_os = "linux", target_os = "freebsd"), allow(dead_code))]
     fn selected_text_range(&mut self, ignore_disabled_input: bool) -> Option<UTF16Selection> {
         self.cx
             .update(|window, cx| {
@@ -1188,6 +1189,13 @@ pub(crate) struct WindowParams {
     pub display_id: Option<DisplayId>,
 
     pub window_min_size: Option<Size<Pixels>>,
+
+    /// Application identifier announced before the first surface commit, so
+    /// the compositor can match window rules against it when it answers the
+    /// initial configure.
+    #[cfg_attr(not(feature = "wayland"), allow(dead_code))]
+    pub app_id: Option<String>,
+
     #[cfg(target_os = "macos")]
     pub tabbing_identifier: Option<String>,
 }

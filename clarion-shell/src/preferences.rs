@@ -7,6 +7,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use clarion_launcher::search::AppOrder;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -67,6 +68,27 @@ pub enum FolderSort {
     Size,
 }
 
+/// How the launcher (`clarion-shell-msg launcher`, the Dock tile and F4)
+/// presents itself. The palette is the compact palette window; both share the
+/// same catalog, ranking and activation path.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LauncherPresentation {
+    #[default]
+    Fullscreen,
+    Palette,
+}
+
+/// Application layout inside the launcher palette. The grid keeps the
+/// Launchpad feel; the list matches the reference implementation's default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LauncherLayout {
+    #[default]
+    Grid,
+    List,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DockFolderPreference {
     pub path: String,
@@ -116,6 +138,11 @@ pub struct Preferences {
     pub animate_opening_applications: bool,
     pub show_recent_applications: bool,
     pub show_launcher: bool,
+    pub launcher_presentation: LauncherPresentation,
+    /// Palette-only presentation of application results; slash commands
+    /// (`/list`, `/grid`, `/smart`, ...) override it for the session.
+    pub spotlight_app_layout: LauncherLayout,
+    pub spotlight_app_order: AppOrder,
     pub show_downloads: bool,
     pub minimize_into_app: bool,
     pub use_original_icons: bool,
@@ -152,6 +179,9 @@ impl Default for Preferences {
             animate_opening_applications: true,
             show_recent_applications: true,
             show_launcher: true,
+            launcher_presentation: LauncherPresentation::Fullscreen,
+            spotlight_app_layout: LauncherLayout::Grid,
+            spotlight_app_order: AppOrder::Name,
             show_downloads: true,
             minimize_into_app: true,
             use_original_icons: true,
@@ -389,6 +419,15 @@ impl Preferences {
         p.dock_position = get("dock_position", "dock_position")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
+        p.launcher_presentation = get("launcher_presentation", "launcher_presentation")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+        p.spotlight_app_layout = get("spotlight_app_layout", "spotlight_app_layout")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+        p.spotlight_app_order = get("spotlight_app_order", "spotlight_app_order")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
         p.minimize_effect = get("minimize_effect", "minimize_effect")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
@@ -451,6 +490,9 @@ impl Preferences {
             animate_opening_applications,
             show_recent_applications,
             show_launcher,
+            launcher_presentation,
+            spotlight_app_layout,
+            spotlight_app_order,
             show_downloads,
             minimize_into_app,
             use_original_icons,
@@ -507,6 +549,82 @@ mod tests {
             Preferences::from_json(&serde_json::json!({})).pinned_app_ids,
             None
         );
+    }
+    #[test]
+    fn launcher_presentation_defaults_to_fullscreen_and_roundtrips() {
+        let defaults = Preferences::default();
+        assert_eq!(
+            defaults.launcher_presentation,
+            LauncherPresentation::Fullscreen
+        );
+        // Missing or unsupported values fall back to the fullscreen Launchpad.
+        for json in [
+            serde_json::json!({}),
+            serde_json::json!({"launcher_presentation": "bogus"}),
+            serde_json::json!({"launcher_presentation": 3}),
+        ] {
+            assert_eq!(
+                Preferences::from_json(&json).launcher_presentation,
+                LauncherPresentation::Fullscreen
+            );
+        }
+        assert_eq!(
+            Preferences::from_json(&serde_json::json!({"launcher_presentation": "palette"}))
+                .launcher_presentation,
+            LauncherPresentation::Palette
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let env = environment(dir.path());
+        let mut prefs = defaults;
+        prefs.launcher_presentation = LauncherPresentation::Palette;
+        prefs.save(&env, false).unwrap();
+        let saved: Value = serde_json::from_slice(&fs::read(preferences_path(&env).unwrap()).unwrap())
+            .unwrap();
+        assert_eq!(saved["launcher_presentation"], serde_json::json!("palette"));
+        assert_eq!(Preferences::load(&env, false).unwrap(), prefs);
+    }
+    #[test]
+    fn palette_layout_and_order_default_grid_and_name_and_reject_foreign_values() {
+        let defaults = Preferences::default();
+        assert_eq!(defaults.spotlight_app_layout, LauncherLayout::Grid);
+        assert_eq!(defaults.spotlight_app_order, AppOrder::Name);
+        let parsed = Preferences::from_json(&serde_json::json!({
+            "spotlight_app_layout": "list",
+            "spotlight_app_order": "most-used"
+        }));
+        assert_eq!(parsed.spotlight_app_layout, LauncherLayout::List);
+        assert_eq!(parsed.spotlight_app_order, AppOrder::MostUsed);
+        for json in [
+            serde_json::json!({"spotlight_app_layout": "fan"}),
+            serde_json::json!({"spotlight_app_layout": 2}),
+        ] {
+            assert_eq!(
+                Preferences::from_json(&json).spotlight_app_layout,
+                LauncherLayout::Grid
+            );
+        }
+        for json in [
+            serde_json::json!({"spotlight_app_order": "oldest"}),
+            serde_json::json!({"spotlight_app_order": 1.5}),
+        ] {
+            assert_eq!(
+                Preferences::from_json(&json).spotlight_app_order,
+                AppOrder::Name
+            );
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let env = environment(dir.path());
+        let prefs = Preferences {
+            spotlight_app_layout: LauncherLayout::List,
+            spotlight_app_order: AppOrder::Smart,
+            ..defaults
+        };
+        prefs.save(&env, false).unwrap();
+        let saved: Value = serde_json::from_slice(&fs::read(preferences_path(&env).unwrap()).unwrap())
+            .unwrap();
+        assert_eq!(saved["spotlight_app_layout"], serde_json::json!("list"));
+        assert_eq!(saved["spotlight_app_order"], serde_json::json!("smart"));
+        assert_eq!(Preferences::load(&env, false).unwrap(), prefs);
     }
     #[test]
     fn atomic_save_preserves_unknown_nested_values_and_reloads_new_fields() {
