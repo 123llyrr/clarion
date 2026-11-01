@@ -17,6 +17,7 @@ pub struct Shaders {
     pub clipped_surface: Option<GlesTexProgram>,
     pub postprocess_and_clip: Option<GlesTexProgram>,
     pub resize: Option<ShaderProgram>,
+    pub genie: Option<ShaderProgram>,
     pub gradient_fade: Option<GlesTexProgram>,
     pub blur: Option<BlurProgram>,
     pub close: Option<ShaderProgram>,
@@ -35,6 +36,7 @@ pub enum ProgramType {
     Resize,
     Close,
     Open,
+    Genie,
 }
 
 impl Shaders {
@@ -144,6 +146,23 @@ impl Shaders {
             })
             .ok();
 
+        let genie = ShaderProgram::compile(
+            renderer,
+            include_str!("genie.frag"),
+            &[
+                UniformName::new("window_rect", UniformType::_4f),
+                UniformName::new("target_rect", UniformType::_4f),
+                UniformName::new("texture_rect", UniformType::_4f),
+                UniformName::new("texture_scale", UniformType::_2f),
+                UniformName::new("area_origin", UniformType::_2f),
+                UniformName::new("edge", UniformType::_1f),
+                UniformName::new("morph", UniformType::_1f),
+            ],
+            &["clarion_tex"],
+        )
+        .map_err(|err| warn!("error compiling genie shader; using mesh fallback: {err:?}"))
+        .ok();
+
         let gradient_fade = renderer
             .compile_custom_texture_shader(
                 include_str!("gradient_fade.frag"),
@@ -183,6 +202,7 @@ impl Shaders {
             clipped_surface,
             postprocess_and_clip,
             resize,
+            genie,
             gradient_fade,
             blur,
             close,
@@ -247,6 +267,7 @@ impl Shaders {
                 .borrow()
                 .clone()
                 .or_else(|| self.open.clone()),
+            ProgramType::Genie => self.genie.clone(),
         }
     }
 }
@@ -502,6 +523,7 @@ pub fn animation_source(program: ProgramType, custom: Option<&str>) -> String {
             include_str!("close_epilogue.frag"),
         ]
         .concat(),
+        ProgramType::Genie => include_str!("genie.frag").to_owned(),
         _ => unreachable!("not an animation shader"),
     }
 }
@@ -514,6 +536,12 @@ pub fn init_native(
     set_custom_resize_program(renderer, None);
     set_custom_open_program(renderer, None);
     set_custom_close_program(renderer, None);
+    if let Err(err) = renderer.animation_program(
+        ProgramType::Genie,
+        &animation_source(ProgramType::Genie, None),
+    ) {
+        warn!("error compiling native genie shader; using mesh fallback: {err:#}");
+    }
     set_custom_resize_program(renderer, animations.window_resize.custom_shader.as_deref());
     set_custom_open_program(renderer, animations.window_open.custom_shader.as_deref());
     set_custom_close_program(

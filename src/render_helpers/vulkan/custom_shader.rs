@@ -154,7 +154,7 @@ fn embedded_fragment(source: &str) -> Option<&'static [u8]> {
     use crate::render_helpers::shaders::{
         animation_source, ProgramType, DENIAL_EXPLOSION_SHADER, DENIAL_IMPLODE_SHADER,
     };
-    let builtins: [(ProgramType, Option<&str>, &[u8]); 5] = [
+    let builtins: [(ProgramType, Option<&str>, &[u8]); 6] = [
         (
             ProgramType::Resize,
             None,
@@ -179,6 +179,11 @@ fn embedded_fragment(source: &str) -> Option<&'static [u8]> {
             ProgramType::Close,
             Some(DENIAL_IMPLODE_SHADER),
             include_bytes!("shaders/animation_implode.frag.spv"),
+        ),
+        (
+            ProgramType::Genie,
+            None,
+            include_bytes!("shaders/animation_genie.frag.spv"),
         ),
     ];
     builtins.into_iter().find_map(|(kind, custom, bytes)| {

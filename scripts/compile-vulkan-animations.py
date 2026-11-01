@@ -55,3 +55,7 @@ for name, kind, body in [('resize', 'resize', 'resize'), ('open', 'open', 'open_
         files.append('rounding_alpha')
     source = ''.join((root / 'shaders' / (file + '.frag')).read_text() for file in files)
     compile_shader(translate(source), 'frag', 'animation_' + name + '.frag')
+
+# Genie is a self-contained funnel shader: no prelude or epilogue interface.
+compile_shader(translate((root / 'shaders/genie.frag').read_text()), 'frag',
+               'animation_genie.frag')

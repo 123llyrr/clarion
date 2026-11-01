@@ -12,10 +12,10 @@ use smithay::utils::{Logical, Rectangle};
 use crate::animation::{Animation, Clock, Curve};
 
 fn duration_ms(effect: MinimizeEffect) -> u64 {
-    // Clarion's visual timing: the shorter Genie duration restores the previous
-    // response speed. Big Sur's recovered 500ms is not a performance target.
+    // niri-edge's Genie preset: the 550 ms sheet-through-funnel timing. Scale
+    // keeps Clarion's shorter uniform shrink.
     match effect {
-        MinimizeEffect::Genie => 450,
+        MinimizeEffect::Genie => 550,
         MinimizeEffect::Scale => 250,
     }
 }
@@ -41,6 +41,23 @@ pub(crate) struct GeniePose {
     pub(crate) target: Rectangle<f64, Logical>,
     pub(crate) edge: DockEdge,
     pub(crate) effect: MinimizeEffect,
+    pub(crate) minimizing: bool,
+}
+
+impl GeniePose {
+    /// The shader's 0 = window, 1 = icon coordinate. The animation always
+    /// travels between those endpoints, whether it is minimizing or restoring.
+    pub(crate) fn morph(&self) -> f64 {
+        self.progress.clamp(0., 1.)
+    }
+
+    /// niri-edge's short fade hides the collapsed sheet at the Dock. The
+    /// restore direction reaches the same endpoint from progress 1, so a
+    /// single rule keeps both directions continuous.
+    pub(crate) fn fade(&self) -> f32 {
+        let window = if self.minimizing { 0.06 } else { 0.04 };
+        smoothstep(((1. - self.morph()) / window).clamp(0., 1.)) as f32
+    }
 }
 
 impl Genie {
@@ -148,6 +165,7 @@ impl Genie {
             target: self.target,
             edge: self.edge,
             effect: self.effect,
+            minimizing: self.minimizing,
         }
     }
 }
@@ -164,7 +182,7 @@ mod tests {
 
     #[test]
     fn minimize_timing_and_reversal_use_responsive_defaults() {
-        for (effect, duration) in [(MinimizeEffect::Genie, 450), (MinimizeEffect::Scale, 250)] {
+        for (effect, duration) in [(MinimizeEffect::Genie, 550), (MinimizeEffect::Scale, 250)] {
             let mut clock = Clock::with_time(Duration::ZERO);
             let source = Rectangle::new((20., 20.).into(), (640., 480.).into());
             let target = Rectangle::new((300., 680.).into(), (48., 48.).into());
@@ -180,11 +198,44 @@ mod tests {
             let before = genie.pose();
             assert!((before.progress - 0.5).abs() < 0.003);
             genie.reverse(clock.clone(), false);
-            assert_eq!(before, genie.pose());
+            let after = genie.pose();
+            // Direction changes the endpoint label and fade window, never the
+            // already composed geometry or timing sample.
+            assert_eq!(after.progress, before.progress);
+            assert_eq!(after.source, before.source);
+            assert_eq!(after.target, before.target);
+            assert_eq!(after.edge, before.edge);
+            assert_eq!(after.effect, before.effect);
+            assert_ne!(after.minimizing, before.minimizing);
+            assert_eq!(after.fade(), before.fade());
             clock.set_unadjusted(Duration::from_millis(duration * 2));
             assert!(genie.is_done());
             assert_eq!(genie.progress(), 0.);
         }
+    }
+
+    #[test]
+    fn genie_fade_uses_the_niri_minimize_and_restore_windows() {
+        let source = Rectangle::new((20., 20.).into(), (640., 480.).into());
+        let target = Rectangle::new((300., 680.).into(), (48., 48.).into());
+        let pose = |progress, minimizing| GeniePose {
+            progress,
+            source,
+            target,
+            edge: DockEdge::Bottom,
+            effect: MinimizeEffect::Genie,
+            minimizing,
+        };
+
+        assert_eq!(pose(0., true).fade(), 1.);
+        assert_eq!(pose(1., true).fade(), 0.);
+        assert!((pose(0.97, true).fade() - 0.5).abs() < 1e-6);
+        assert_eq!(pose(1., false).fade(), 0.);
+        assert_eq!(pose(0., false).fade(), 1.);
+        assert!((pose(0.98, false).fade() - 0.5).abs() < 1e-6);
+        // The fade stays out of the bending stage.
+        assert_eq!(pose(0.9, true).fade(), 1.);
+        assert_eq!(pose(0.9, false).fade(), 1.);
     }
 
     struct SampledGenie {

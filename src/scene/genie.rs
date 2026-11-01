@@ -6,8 +6,9 @@ use std::rc::Rc;
 use clarion_core::deformation::MeshVertex;
 use clarion_ipc::{DockEdge, MinimizeEffect};
 use smithay::backend::renderer::element::Id;
+use smithay::backend::renderer::gles::Uniform;
 use smithay::backend::renderer::utils::CommitCounter;
-use smithay::utils::{Logical, Point, Rectangle, Size};
+use smithay::utils::{Logical, Point, Rectangle, Scale, Size};
 
 use crate::layout::minimized::GeniePose;
 
@@ -101,12 +102,103 @@ impl GenieCache {
             commit: self.commit,
             area,
             vertices: vertices.into(),
-            // Geometry reaches the icon continuously without a separate fade.
-            // Completion releases this mesh through the animation lifecycle.
-            alpha: 1.,
+            // The shader path supplies the same fade through element alpha.
+            // Keep the emergency mesh fallback visually aligned at the Dock.
+            alpha: if pose.effect == MinimizeEffect::Genie {
+                pose.fade()
+            } else {
+                1.
+            },
         };
         self.cached = Some(mesh.clone());
         mesh
+    }
+}
+
+/// Shader-side geometry for the niri-edge funnel. The element covers the
+/// union of the window and its Dock target plus the snapshot's shadow margin;
+/// the fragment shader inverse-maps every pixel back into the retained image.
+#[derive(Debug, Clone)]
+pub(crate) struct GenieShaderGeometry {
+    pub(crate) area: Rectangle<f64, Logical>,
+    uniforms: Rc<[Uniform<'static>]>,
+}
+
+impl GenieShaderGeometry {
+    pub(crate) fn new(
+        pose: &GeniePose,
+        texture_area: Rectangle<f64, Logical>,
+        texture_pixels: (f64, f64),
+        scale: f64,
+    ) -> Option<Self> {
+        let source = pose.source;
+        if source.size.w <= 0.
+            || source.size.h <= 0.
+            || texture_pixels.0 <= 0.
+            || texture_pixels.1 <= 0.
+            || !scale.is_finite()
+            || scale <= 0.
+        {
+            return None;
+        }
+        let texture_rect = [
+            (texture_area.loc.x / source.size.w) as f32,
+            (texture_area.loc.y / source.size.h) as f32,
+            (texture_area.size.w / source.size.w) as f32,
+            (texture_area.size.h / source.size.h) as f32,
+        ];
+        if texture_rect[2] <= 0. || texture_rect[3] <= 0. {
+            return None;
+        }
+        // The retained snapshot may extend outside the window geometry through
+        // decorations and shadows. Give it the same inverse-mapped margin the
+        // funnel gives the window, then snap the quad to physical pixels so
+        // the resting frame resamples exactly like the offscreen texture.
+        let mut area = source.merge(pose.target);
+        let left = texture_area.loc.x.abs();
+        let right = (texture_area.loc.x + texture_area.size.w - source.size.w).abs();
+        let top = texture_area.loc.y.abs();
+        let bottom = (texture_area.loc.y + texture_area.size.h - source.size.h).abs();
+        let pad_x = left.max(right) / source.size.w * area.size.w;
+        let pad_y = top.max(bottom) / source.size.h * area.size.h;
+        area.loc -= Point::from((pad_x, pad_y));
+        area.size += Size::from((2. * pad_x, 2. * pad_y));
+        let area = area
+            .to_physical_precise_up::<f64, i32>(Scale::<f64>::from(scale))
+            .to_f64()
+            .to_logical(scale);
+        if area.size.w <= 0. || area.size.h <= 0. {
+            return None;
+        }
+        let texture_pixels_per_used = [
+            (texture_area.size.w * scale / texture_pixels.0) as f32,
+            (texture_area.size.h * scale / texture_pixels.1) as f32,
+        ];
+        let rect = |r: Rectangle<f64, Logical>| {
+            [r.loc.x as f32, r.loc.y as f32, r.size.w as f32, r.size.h as f32]
+        };
+        let edge = match pose.edge {
+            DockEdge::Bottom => 0.,
+            DockEdge::Left => 1.,
+            DockEdge::Right => 2.,
+            DockEdge::Top => 3.,
+        };
+        Some(Self {
+            area,
+            uniforms: Rc::new([
+                Uniform::new("window_rect", rect(source)),
+                Uniform::new("target_rect", rect(pose.target)),
+                Uniform::new("texture_rect", texture_rect),
+                Uniform::new("texture_scale", texture_pixels_per_used),
+                Uniform::new("area_origin", [area.loc.x as f32, area.loc.y as f32]),
+                Uniform::new("edge", edge),
+                Uniform::new("morph", pose.morph() as f32),
+            ]),
+        })
+    }
+
+    pub(crate) fn uniforms(&self) -> Rc<[Uniform<'static>]> {
+        self.uniforms.clone()
     }
 }
 
@@ -172,6 +264,7 @@ mod tests {
             target: Rectangle::new((300., 680.).into(), (48., 48.).into()),
             edge: DockEdge::Bottom,
             effect: MinimizeEffect::Genie,
+            minimizing: true,
         }
     }
 
@@ -250,7 +343,7 @@ mod tests {
     }
 
     #[test]
-    fn output_scale_invalidates_the_frozen_mesh_identity_without_a_fade() {
+    fn output_scale_invalidates_the_frozen_mesh_identity() {
         let mut cache = GenieCache::default();
         let mut pose = pose();
         let area = Rectangle::from_size(pose.source.size);
@@ -291,7 +384,8 @@ mod tests {
             7,
             1.5,
         );
-        assert_eq!(finishing.alpha, 1.);
+        assert_eq!(finishing.alpha, pose.fade());
+        assert!(finishing.alpha < 1.);
     }
 
     #[test]
