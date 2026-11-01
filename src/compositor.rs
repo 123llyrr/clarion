@@ -2879,9 +2879,16 @@ impl Clarion {
         }
 
         let compositor_state = CompositorState::new_v6::<State>(&display_handle);
+        // Minimize is implemented by XdgShellHandler::minimize_request. GTK
+        // hides or disables its titlebar button unless the min capability is
+        // advertised. WindowMenu stays out until show_window_menu is handled.
         let xdg_shell_state = XdgShellState::new_with_capabilities::<State>(
             &display_handle,
-            [WmCapabilities::Fullscreen, WmCapabilities::Maximize],
+            [
+                WmCapabilities::Minimize,
+                WmCapabilities::Fullscreen,
+                WmCapabilities::Maximize,
+            ],
         );
         let xdg_decoration_state =
             XdgDecorationState::new_with_filter::<State, _>(&display_handle, |client| {

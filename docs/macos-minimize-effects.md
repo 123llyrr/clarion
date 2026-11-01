@@ -8,6 +8,9 @@ Material 仍使用独立配置。旧 macOS 外壳 JSON 没有 `minimize_effect` 
 窗口由合成器真实最小化，保留映射、窗口 ID、工作区归属和后续客户端提交。
 普通布局和输入不再命中该窗口；从 Dock 激活时恢复它，并使其真正获得焦点。
 两种效果都采样真实客户端内容，沿用各自输出、截图、录屏的隐私遮挡规则。
+合成器在 `xdg_toplevel` 初始 configure 前宣告 `minimize` 能力，GTK 4 等客户端
+据此显示并启用标题栏最小化按钮；`window_menu` 仍未宣告，因为
+`show_window_menu` 尚未实现。该能力在新会话或新建 toplevel 时生效。
 
 ## 呈现方式
 
