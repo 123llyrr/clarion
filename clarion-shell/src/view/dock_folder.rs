@@ -16,11 +16,14 @@ pub(super) struct FolderEntryDrag {
     pub path: PathBuf,
 }
 
+/// The drag ghost follows the system's icon language instead of a bespoke
+/// pill: the file's own artwork at Dock scale, floating without a plate or
+/// caption. GPUI's internal drag has no platform-provided ghost, so this is
+/// the closest match to the icon the desktop and Dock already draw.
 struct FolderDragPreview {
     path: PathBuf,
-    background: Hsla,
-    foreground: Hsla,
-    shadow: Hsla,
+    is_dir: bool,
+    tags: Vec<String>,
 }
 
 /// Applies a glyph-only rotation while an element paints. The element keeps an
@@ -317,43 +320,16 @@ fn fan_label_background(radians: f32, p: Palette) -> AnyElement {
 
 impl Render for FolderDragPreview {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let name = self
-            .path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| self.path.to_string_lossy().into_owned());
         div()
             .debug_selector(|| "folder-drag-preview".into())
-            .flex()
-            .items_center()
-            .gap_1()
-            .px(px(8.))
-            .py(px(6.))
-            .rounded(px(6.))
-            .opacity(0.3)
-            .bg(self.background)
-            .text_color(self.foreground)
-            .shadow(vec![BoxShadow {
-                color: self.shadow,
-                offset: point(px(0.), px(4.)),
-                blur_radius: px(12.),
-                spread_radius: px(0.),
-            }])
+            .opacity(0.8)
             .child(crate::file_icons::icon(
                 Some(&self.path),
-                self.path.is_dir(),
-                &[],
-                28.,
+                self.is_dir,
+                &self.tags,
+                64.,
                 0.,
             ))
-            .child(
-                div()
-                    .max_w(px(180.))
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .child(name),
-            )
     }
 }
 
@@ -1216,6 +1192,8 @@ impl ShellView {
                         )),
                 );
             let drag_view = view.clone();
+            let drag_tags = entry.tags.clone();
+            let drag_is_dir = kind == FolderEntryKind::Directory;
             if !closing {
                 icon = icon.on_drag(
                     FolderEntryDrag {
@@ -1228,9 +1206,8 @@ impl ShellView {
                         drag_view.update(cx, |this, cx| this.begin_folder_drag(window, cx));
                         cx.new(|_| FolderDragPreview {
                             path: drag.path.clone(),
-                            background: p.panel.blend(p.panel),
-                            foreground: p.fg,
-                            shadow: p.shadow,
+                            is_dir: drag_is_dir,
+                            tags: drag_tags.clone(),
                         })
                     },
                 );
@@ -1425,11 +1402,12 @@ impl ShellView {
         // the open-in-new mark; after navigating into a subfolder the same
         // card becomes the back arrow instead of growing a second control.
         let reveal_glyph = (reveal_size * 0.5).max(14.);
+        let reveal_radians = reveal_angle.to_radians();
         let reveal_icon = if can_go_back {
             let path = self.themed_glyph_path("go-previous-symbolic", "chevron-left.svg");
-            self.glyph(&path, reveal_glyph, p)
+            self.glyph_rotated(&path, reveal_glyph, reveal_radians, p)
         } else {
-            self.symbol("external-link", reveal_glyph, p)
+            self.glyph_rotated(&icon_path("external-link"), reveal_glyph, reveal_radians, p)
         };
         overlay = overlay.child(
             div()
@@ -1689,6 +1667,8 @@ impl ShellView {
             path.parent().unwrap_or(&path).to_path_buf()
         };
         let view = cx.entity();
+        let drag_tags = entry.tags.clone();
+        let drag_is_dir = kind == FolderEntryKind::Directory;
         div()
             .id(SharedString::from(id))
             .debug_selector(move || selector.clone())
@@ -1722,9 +1702,8 @@ impl ShellView {
                     view.update(cx, |this, cx| this.begin_folder_drag(window, cx));
                     cx.new(|_| FolderDragPreview {
                         path: drag.path.clone(),
-                        background: p.panel.blend(p.panel),
-                        foreground: p.fg,
-                        shadow: p.shadow,
+                        is_dir: drag_is_dir,
+                        tags: drag_tags.clone(),
                     })
                 },
             )
@@ -1771,6 +1750,8 @@ impl ShellView {
             path.parent().unwrap_or(&path).to_path_buf()
         };
         let view = cx.entity();
+        let drag_tags = entry.tags.clone();
+        let drag_is_dir = kind == FolderEntryKind::Directory;
         div()
             .id(SharedString::from(id))
             .debug_selector(move || selector.clone())
@@ -1805,9 +1786,8 @@ impl ShellView {
                     view.update(cx, |this, cx| this.begin_folder_drag(window, cx));
                     cx.new(|_| FolderDragPreview {
                         path: drag.path.clone(),
-                        background: p.panel.blend(p.panel),
-                        foreground: p.fg,
-                        shadow: p.shadow,
+                        is_dir: drag_is_dir,
+                        tags: drag_tags.clone(),
                     })
                 },
             )

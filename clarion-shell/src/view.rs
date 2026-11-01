@@ -893,11 +893,18 @@ impl ShellView {
             .unwrap_or_else(|| icon_path(fallback_asset))
     }
     fn glyph(&self, path: &Path, size: f32, p: Palette) -> AnyElement {
+        self.glyph_rotated(path, size, 0., p)
+    }
+    /// Paint a glyph turned about its own center. The hitbox and layout stay
+    /// axis aligned; only the artwork follows the fan tangent, the same way the
+    /// file cards do.
+    fn glyph_rotated(&self, path: &Path, size: f32, angle: f32, p: Palette) -> AnyElement {
         if path.is_file() {
             svg()
                 .path(path.to_string_lossy().into_owned())
                 .size(px(size))
                 .text_color(p.fg)
+                .with_transformation(Transformation::rotate(radians(angle)))
                 .into_any_element()
         } else {
             div()

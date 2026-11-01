@@ -756,9 +756,12 @@ fn drag_folder_entry_to_dock(
         visual.debug_bounds("folder-drag-layer").is_some(),
         "grabbing a folder entry leaves an invisible drag layer"
     );
+    let preview = visual
+        .debug_bounds("folder-drag-preview")
+        .expect("the drag preview is painted by the fullscreen drag layer");
     assert!(
-        visual.debug_bounds("folder-drag-preview").is_some(),
-        "the drag preview is painted by the fullscreen drag layer"
+        preview.size.width >= px(56.) && (preview.size.width - preview.size.height).abs() < px(1.),
+        "the ghost is the square system icon, not a text pill: {preview:?}"
     );
     let output = visual.update(|window, _| window.viewport_size());
     let dock_size = dock_visual.update(|window, _| window.viewport_size());
