@@ -4,9 +4,8 @@
 
 use super::*;
 use crate::app::panels::{
-    FOLDER_MENU_ACTION_ROW, FOLDER_MENU_CHOICE_GAP, FOLDER_MENU_CHOICE_ROW,
-    FOLDER_MENU_HEADER_ROW, FOLDER_MENU_INNER_GAP, FOLDER_MENU_LABEL_ROW,
-    FOLDER_MENU_SEPARATOR_ROW,
+    FOLDER_MENU_ACTION_ROW, FOLDER_MENU_CHOICE_GAP, FOLDER_MENU_CHOICE_ROW, FOLDER_MENU_HEADER_ROW,
+    FOLDER_MENU_INNER_GAP, FOLDER_MENU_LABEL_ROW, FOLDER_MENU_SEPARATOR_ROW,
 };
 use crate::dock_folder::{FolderEntry, FolderEntryKind};
 use crate::preferences::{FolderDisplay, FolderLayout, FolderSort};
@@ -101,8 +100,19 @@ fn rotate_text(child: AnyElement, center: Point<Pixels>, angle: f32) -> AnyEleme
     .into_any_element()
 }
 
-fn fit_label(text: &str, width: f32) -> String {
-    let limit = ((width / 7.).floor() as usize).max(3);
+const FAN_LABEL_TEXT_SIZE: f32 = 12.;
+const FAN_SIDE_LABEL_TEXT_SIZE: f32 = 14.;
+
+pub(super) fn fan_label_text_size(position: DockPosition) -> f32 {
+    match position {
+        DockPosition::Left | DockPosition::Right => FAN_SIDE_LABEL_TEXT_SIZE,
+        DockPosition::Bottom => FAN_LABEL_TEXT_SIZE,
+    }
+}
+
+fn fit_label(text: &str, width: f32, size: f32) -> String {
+    let unit = 7. * (size / FAN_LABEL_TEXT_SIZE);
+    let limit = ((width / unit).floor() as usize).max(3);
     let mut used = 0;
     let mut fitted = String::with_capacity(text.len());
     for ch in text.chars() {
@@ -153,8 +163,7 @@ pub(super) fn rotated_plate_rows(
         (-width / 2. + radius, height / 2. - radius, 90.),
     ] {
         for step in 0..=ARC_STEPS {
-            let (step_sin, step_cos) = (start_degrees
-                + 90. * step as f32 / ARC_STEPS as f32)
+            let (step_sin, step_cos) = (start_degrees + 90. * step as f32 / ARC_STEPS as f32)
                 .to_radians()
                 .sin_cos();
             let x = corner_x + radius * step_cos;
@@ -257,9 +266,7 @@ fn append_rotated_round_rect(
 
 /// A short ease-out-back curve for the fan unfolding. Values above 1 are the
 /// elastic overshoot; `false` means the animation has settled.
-pub(super) fn fan_open_progress(
-    elapsed: std::time::Duration,
-) -> (f32, bool) {
+pub(super) fn fan_open_progress(elapsed: std::time::Duration) -> (f32, bool) {
     const DURATION: f32 = 0.42;
     const BACK: f32 = 1.35;
     let t = elapsed.as_secs_f32() / DURATION;
@@ -276,9 +283,7 @@ pub(super) fn fan_open_progress(
 /// snapping back. The second value is the paint opacity, which follows the
 /// collapse and reaches zero as the folder icon is revealed; `false` means the
 /// window is ready to close.
-pub(super) fn fan_close_progress(
-    elapsed: std::time::Duration,
-) -> (f32, f32, bool) {
+pub(super) fn fan_close_progress(elapsed: std::time::Duration) -> (f32, f32, bool) {
     const DURATION: f32 = 0.36;
     const ANTICIPATION: f32 = 4.;
     let t = elapsed.as_secs_f32() / DURATION;
@@ -444,11 +449,7 @@ fn side_base_offset(icon: f32) -> f32 {
     icon / 2. + 10. + side_label_width(icon) / 2.
 }
 /// Positive means the fan bends right; negative means it bends left.
-fn fan_direction(
-    position: DockPosition,
-    anchor: Point<Pixels>,
-    viewport: Size<Pixels>,
-) -> f32 {
+fn fan_direction(position: DockPosition, anchor: Point<Pixels>, viewport: Size<Pixels>) -> f32 {
     match position {
         DockPosition::Bottom => {
             if f32::from(anchor.x) < f32::from(viewport.width) / 2. {
@@ -527,12 +528,10 @@ fn fan_slots(
             let step = fan_step(position, icon);
             let rise_step = side_rise_step(icon);
             let rise = span * rise_step;
-            let base_x =
-                f32::from(anchor.x) + direction * side_base_offset(icon);
+            let base_x = f32::from(anchor.x) + direction * side_base_offset(icon);
             // The end tilt is the curve's own tangent at the outer end, so
             // the cards lean exactly into the parabola they ride.
-            let end_tilt =
-                f32::atan2(2. * rise_step, step).to_degrees();
+            let end_tilt = f32::atan2(2. * rise_step, step).to_degrees();
             (0..visible)
                 .map(|index| {
                     let t = t(index);
@@ -575,10 +574,8 @@ pub(super) fn fan_capacity(
             };
             // Leave room for the horizontal terminal button / stack, which sits
             // four rise steps above the last card.
-            let vertical = ((f32::from(anchor.y) - icon / 2. - 8. - 4. * rise)
-                .max(0.)
-                / rise)
-                .floor();
+            let vertical =
+                ((f32::from(anchor.y) - icon / 2. - 8. - 4. * rise).max(0.) / rise).floor();
             ((columns.floor().min(vertical) as usize) + 1).clamp(1, 10)
         }
     }
@@ -587,7 +584,14 @@ pub(super) fn fan_capacity(
 /// Estimated painted width of a label at its 12pt size: the same weights the
 /// fitter uses, so a content-sized plate fits its text without truncation.
 fn label_text_width(text: &str) -> f32 {
-    text.chars().map(|c| if c.is_ascii() { 7. } else { 13. }).sum()
+    label_text_width_at(text, FAN_LABEL_TEXT_SIZE)
+}
+
+fn label_text_width_at(text: &str, size: f32) -> f32 {
+    let scale = size / FAN_LABEL_TEXT_SIZE;
+    text.chars()
+        .map(|c| if c.is_ascii() { 7. } else { 13. } * scale)
+        .sum()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -616,10 +620,9 @@ pub(super) fn fan_geometry(
     let mut min_y = f32::MAX;
     let mut max_x = f32::MIN;
     let mut max_y = f32::MIN;
-    for (step, (center_x, center_y, angle)) in
-        fan_slots(anchor, position, visible, icon, viewport)
-            .into_iter()
-            .enumerate()
+    for (step, (center_x, center_y, angle)) in fan_slots(anchor, position, visible, icon, viewport)
+        .into_iter()
+        .enumerate()
     {
         // The bottom fan's label plate grows to fit its name (clavis-style),
         // so long file names are never truncated; the side fans keep their
@@ -639,9 +642,7 @@ pub(super) fn fan_geometry(
             ),
             // The side label hangs off the card's local bottom edge, directly
             // below the upright icon, and turns with the icon as one card.
-            DockPosition::Left | DockPosition::Right => {
-                (0., icon / 2. + 4. + FAN_LABEL_H / 2.)
-            }
+            DockPosition::Left | DockPosition::Right => (0., icon / 2. + 4. + FAN_LABEL_H / 2.),
         };
         let (sin, cos) = angle.to_radians().sin_cos();
         let label_center = point(
@@ -711,12 +712,7 @@ pub(super) fn fan_geometry(
     )
 }
 
-fn fan_extension_delta(
-    position: DockPosition,
-    icon: f32,
-    angle: f32,
-    beyond: f32,
-) -> (f32, f32) {
+fn fan_extension_delta(position: DockPosition, icon: f32, angle: f32, beyond: f32) -> (f32, f32) {
     match position {
         DockPosition::Bottom => {
             // Continue the same circle: the step rides the tangent at the
@@ -750,8 +746,7 @@ pub(super) fn fan_extension(
     viewport: Size<Pixels>,
     beyond: f32,
 ) -> (Point<Pixels>, f32) {
-    let Some((x, y, angle)) = fan_slots(anchor, position, visible, icon, viewport).pop()
-    else {
+    let Some((x, y, angle)) = fan_slots(anchor, position, visible, icon, viewport).pop() else {
         return (anchor, 0.);
     };
     let beyond = beyond.max(0.);
@@ -772,10 +767,7 @@ pub(super) fn fan_extension_after(
     let center = last.icon.center();
     let (dx, dy) = fan_extension_delta(position, icon, last.angle, beyond);
     (
-        point(
-            px(f32::from(center.x) + dx),
-            px(f32::from(center.y) + dy),
-        ),
+        point(px(f32::from(center.x) + dx), px(f32::from(center.y) + dy)),
         last.angle,
     )
 }
@@ -821,25 +813,26 @@ impl ShellView {
     /// makes it invisible and empty. The surface still owns the implicit
     /// pointer grab so it can paint the drag preview anywhere on the output;
     /// each pointer event is forwarded to the Dock window below.
-    pub(super) fn begin_folder_drag(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn begin_folder_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.folder_drag_layer {
             return;
         }
         self.folder_drag_layer = true;
         self.folder_fan_closed = false;
         self.folder_fan_closing = None;
-        self.host.update(cx, |host, _| host.folder_drag_layer = true);
+        self.host
+            .update(cx, |host, _| host.folder_drag_layer = true);
         window.set_background_appearance(WindowBackgroundAppearance::Transparent);
         window.refresh();
         cx.notify();
     }
 
     /// Translates a fullscreen folder-overlay point into Dock surface coordinates.
-    fn dock_drag_position(&self, position: Point<Pixels>, window: &Window) -> Option<Point<Pixels>> {
+    fn dock_drag_position(
+        &self,
+        position: Point<Pixels>,
+        window: &Window,
+    ) -> Option<Point<Pixels>> {
         let host = &self.state;
         let apps = host.dock_apps();
         let (width, height) = host
@@ -935,7 +928,8 @@ impl ShellView {
         self.folder_fan_closed = true;
         self.folder_fan_closing = None;
         self.folder_drag_layer = false;
-        self.host.update(cx, |host, _| host.folder_drag_layer = false);
+        self.host
+            .update(cx, |host, _| host.folder_drag_layer = false);
         self.invoke(Action::Close, cx);
     }
 
@@ -993,6 +987,7 @@ impl ShellView {
         let anchor = point(px(anchor_x), px(anchor_y));
         let viewport = size(px(width), px(height));
         let icon_size = host.prefs.dock_size as f32;
+        let label_size = fan_label_text_size(host.prefs.dock_position);
         let entries = host
             .folder_snapshots
             .get(&current)
@@ -1022,14 +1017,7 @@ impl ShellView {
         let terminal = |beyond: f32| {
             let (center, angle) = items
                 .last()
-                .map(|last| {
-                    fan_extension_after(
-                        last,
-                        host.prefs.dock_position,
-                        icon_size,
-                        beyond,
-                    )
-                })
+                .map(|last| fan_extension_after(last, host.prefs.dock_position, icon_size, beyond))
                 .unwrap_or_else(|| {
                     fan_extension(
                         anchor,
@@ -1042,10 +1030,8 @@ impl ShellView {
                 });
             (
                 point(
-                    px(anchor_x
-                        + (f32::from(center.x) - anchor_x) * fan_open),
-                    px(anchor_y
-                        + (f32::from(center.y) - anchor_y) * fan_open),
+                    px(anchor_x + (f32::from(center.x) - anchor_x) * fan_open),
+                    px(anchor_y + (f32::from(center.y) - anchor_y) * fan_open),
                 ),
                 angle * fan_open,
             )
@@ -1075,9 +1061,9 @@ impl ShellView {
         // one. The pile never leans; it only extends the curve it grows from.
         // (`beyond` below is measured in card steps, so the pixel distances
         // divide by the step.)
-        let labels_left = items.first().is_some_and(|item| {
-            f32::from(item.label.center().x) < f32::from(item.icon.center().x)
-        });
+        let labels_left = items
+            .first()
+            .is_some_and(|item| f32::from(item.label.center().x) < f32::from(item.icon.center().x));
         const STACK_LAYERS: usize = 4;
         let step = fan_step(host.prefs.dock_position, icon_size);
         let stack_head = 8.;
@@ -1153,10 +1139,8 @@ impl ShellView {
             let icon_angle = item.angle * fan_open;
             let final_label_center = item.label.center();
             let label_center = point(
-                px(anchor_x
-                    + (f32::from(final_label_center.x) - anchor_x) * fan_open),
-                px(anchor_y
-                    + (f32::from(final_label_center.y) - anchor_y) * fan_open),
+                px(anchor_x + (f32::from(final_label_center.x) - anchor_x) * fan_open),
+                px(anchor_y + (f32::from(final_label_center.y) - anchor_y) * fan_open),
             );
             let label_left = f32::from(label_center.x) - f32::from(item.label.size.width) / 2.;
             let label_top = f32::from(label_center.y) - f32::from(item.label.size.height) / 2.;
@@ -1164,6 +1148,7 @@ impl ShellView {
             let label_text = fit_label(
                 &name,
                 (f32::from(item.label.size.width) - 24.).max(1.),
+                label_size,
             );
             let mut icon = div()
                 .id(SharedString::from(id.clone()))
@@ -1196,9 +1181,7 @@ impl ShellView {
             let drag_is_dir = kind == FolderEntryKind::Directory;
             if !closing {
                 icon = icon.on_drag(
-                    FolderEntryDrag {
-                        path: path.clone(),
-                    },
+                    FolderEntryDrag { path: path.clone() },
                     move |drag, _offset, window, cx| {
                         // Keep the surface as an invisible drag layer so the
                         // preview follows the pointer; the Dock gets the same
@@ -1246,7 +1229,10 @@ impl ShellView {
                     icon_reveal_view.update(cx, |this, cx| this.dismiss_folder_fan(cx));
                 });
             let label = div()
-                .id(SharedString::from(format!("folder-fan-label-{}", item.index)))
+                .id(SharedString::from(format!(
+                    "folder-fan-label-{}",
+                    item.index
+                )))
                 .absolute()
                 .left(px(label_left))
                 .top(px(label_top))
@@ -1282,7 +1268,7 @@ impl ShellView {
                     div()
                         .px(px(12.))
                         .text_color(p.fg)
-                        .text_size(px(12.))
+                        .text_size(px(label_size))
                         .whitespace_nowrap()
                         .child(label_text)
                         .into_any_element(),
@@ -1326,7 +1312,7 @@ impl ShellView {
             "在文件管理器中显示"
         };
         let label_w = if can_go_back {
-            (label_text_width(reveal_label) + 24.).clamp(64., FAN_LABEL_W)
+            (label_text_width_at(reveal_label, label_size) + 24.).clamp(64., FAN_LABEL_W)
         } else {
             FAN_LABEL_W + 36.
         };
@@ -1477,7 +1463,7 @@ impl ShellView {
                     div()
                         .px(px(12.))
                         .text_color(p.fg)
-                        .text_size(px(12.))
+                        .text_size(px(label_size))
                         .whitespace_nowrap()
                         .child(reveal_label)
                         .into_any_element(),
@@ -1493,9 +1479,7 @@ impl ShellView {
                             host.handle(Action::FolderBack, cx);
                         } else {
                             host.handle(
-                                Action::Backend(backend::Command::OpenPath(
-                                    label_current.clone(),
-                                )),
+                                Action::Backend(backend::Command::OpenPath(label_current.clone())),
                                 cx,
                             );
                         }
@@ -1521,15 +1505,17 @@ impl ShellView {
         let max_offset = entries.len().saturating_sub(capacity);
         overlay
             .opacity(fan_opacity.clamp(0., 1.))
-            .on_scroll_wheel(cx.listener(move |this, event: &gpui::ScrollWheelEvent, _, cx| {
-                let delta = f32::from(event.delta.pixel_delta(px(20.)).y);
-                if delta < 0. {
-                    this.folder_fan_offset = (this.folder_fan_offset + 1).min(max_offset);
-                } else {
-                    this.folder_fan_offset = this.folder_fan_offset.saturating_sub(1);
-                }
-                cx.notify();
-            }))
+            .on_scroll_wheel(
+                cx.listener(move |this, event: &gpui::ScrollWheelEvent, _, cx| {
+                    let delta = f32::from(event.delta.pixel_delta(px(20.)).y);
+                    if delta < 0. {
+                        this.folder_fan_offset = (this.folder_fan_offset + 1).min(max_offset);
+                    } else {
+                        this.folder_fan_offset = this.folder_fan_offset.saturating_sub(1);
+                    }
+                    cx.notify();
+                }),
+            )
             .into_any_element()
     }
 
@@ -1692,9 +1678,7 @@ impl ShellView {
                     .child(name),
             )
             .on_drag(
-                FolderEntryDrag {
-                    path: path.clone(),
-                },
+                FolderEntryDrag { path: path.clone() },
                 move |drag, _offset, window, cx| {
                     // The popup becomes an invisible fullscreen drag layer so
                     // the preview follows the pointer everywhere; its pointer
@@ -1777,9 +1761,7 @@ impl ShellView {
                     .child(name),
             )
             .on_drag(
-                FolderEntryDrag {
-                    path: path.clone(),
-                },
+                FolderEntryDrag { path: path.clone() },
                 move |drag, _offset, window, cx| {
                     // The grid popup becomes the same invisible fullscreen drag
                     // layer as the fan and list layouts.
@@ -2062,9 +2044,7 @@ impl ShellView {
                     .text_color(p.fg)
                     .child(label),
             )
-            .on_click(move |_, _, cx| {
-                host.update(cx, |host, cx| host.handle(action.clone(), cx))
-            })
+            .on_click(move |_, _, cx| host.update(cx, |host, cx| host.handle(action.clone(), cx)))
             .into_any_element()
     }
 }

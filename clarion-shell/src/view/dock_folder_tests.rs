@@ -7,7 +7,7 @@ use gpui::{px, TestAppContext, VisualTestContext};
 
 use super::dock_folder::{
     fan_capacity, fan_close_progress, fan_extension, fan_extension_center, fan_geometry,
-    fan_open_progress, rotated_plate_rows,
+    fan_label_text_size, fan_open_progress, rotated_plate_rows,
 };
 use super::*;
 use crate::app::testing;
@@ -65,7 +65,10 @@ fn label_glass_follows_the_tilted_plate_silhouette() {
     // A point 18px off the plate's long edge is outside the silhouette, even
     // though it sits inside the bounding box.
     let off = (400. - 18. * sin, 300. + 18. * cos);
-    assert!(!contains(off.0, off.1), "frost must not spill past the plate");
+    assert!(
+        !contains(off.0, off.1),
+        "frost must not spill past the plate"
+    );
     // The bounding box corners stay sharp.
     let bbox_half_h = (120. * sin.abs() + 24. * cos.abs()) / 2.;
     assert!(!contains(400., 300. - bbox_half_h + 1.));
@@ -98,8 +101,7 @@ fn fan_items_stay_inside_every_output_edge() {
             DockPosition::Right => point(px(1400.), px(450.)),
         };
         let visible = fan_capacity(anchor, position, 48., viewport).min(8);
-        let (items, bounds) =
-            fan_geometry(
+        let (items, bounds) = fan_geometry(
             anchor,
             position,
             visible,
@@ -205,6 +207,13 @@ fn bottom_fan_rows_leave_room_for_rotated_labels() {
 }
 
 #[test]
+fn side_fan_labels_grow_two_sizes_while_the_bottom_stays_put() {
+    assert_eq!(fan_label_text_size(DockPosition::Left), 14.);
+    assert_eq!(fan_label_text_size(DockPosition::Right), 14.);
+    assert_eq!(fan_label_text_size(DockPosition::Bottom), 12.);
+}
+
+#[test]
 fn side_fan_labels_stay_compact_without_overlapping() {
     let viewport = size(px(1440.), px(900.));
     for (position, anchor) in [
@@ -212,8 +221,7 @@ fn side_fan_labels_stay_compact_without_overlapping() {
         (DockPosition::Right, point(px(1400.), px(450.))),
     ] {
         let visible = fan_capacity(anchor, position, 48., viewport);
-        let (items, _) =
-            fan_geometry(
+        let (items, _) = fan_geometry(
             anchor,
             position,
             visible,
@@ -230,10 +238,13 @@ fn side_fan_labels_stay_compact_without_overlapping() {
                 "{position:?} labels must rotate with their icons"
             );
         }
-        let direction = if position == DockPosition::Left { 1. } else { -1. };
+        let direction = if position == DockPosition::Left {
+            1.
+        } else {
+            -1.
+        };
         for pair in items.windows(2) {
-            let gap = f32::from(pair[1].icon.center().x - pair[0].icon.center().x)
-                * direction;
+            let gap = f32::from(pair[1].icon.center().x - pair[0].icon.center().x) * direction;
             assert!(
                 gap >= 84.,
                 "side icons need horizontal spacing for their labels: {gap}"
@@ -265,8 +276,7 @@ fn small_side_icons_keep_enough_room_for_tilted_labels() {
             DockPosition::Bottom => unreachable!(),
         };
         let visible = fan_capacity(anchor, position, 32., viewport);
-        let (items, _) =
-            fan_geometry(
+        let (items, _) = fan_geometry(
             anchor,
             position,
             visible,
@@ -276,10 +286,13 @@ fn small_side_icons_keep_enough_room_for_tilted_labels() {
             viewport,
             &vec!["文件"; visible],
         );
-        let direction = if position == DockPosition::Left { 1. } else { -1. };
+        let direction = if position == DockPosition::Left {
+            1.
+        } else {
+            -1.
+        };
         for pair in items.windows(2) {
-            let gap = f32::from(pair[1].icon.center().x - pair[0].icon.center().x)
-                * direction;
+            let gap = f32::from(pair[1].icon.center().x - pair[0].icon.center().x) * direction;
             assert!(
                 gap >= 84.,
                 "{position:?} labels would collide at small icon sizes: {gap}"
@@ -335,18 +348,14 @@ fn fan_items_rotate_with_the_curve_from_the_dock() {
     );
     assert!(bottom[7].angle <= 18.5);
 
-    for (position, expected) in [
-        (DockPosition::Left, 1.0),
-        (DockPosition::Right, -1.0),
-    ] {
+    for (position, expected) in [(DockPosition::Left, 1.0), (DockPosition::Right, -1.0)] {
         let anchor = match position {
             DockPosition::Left => point(px(40.), px(450.)),
             DockPosition::Right => point(px(1400.), px(450.)),
             DockPosition::Bottom => unreachable!(),
         };
         let visible = fan_capacity(anchor, position, 48., viewport);
-        let (items, _) =
-            fan_geometry(
+        let (items, _) = fan_geometry(
             anchor,
             position,
             visible,
@@ -382,18 +391,14 @@ fn fan_items_rotate_with_the_curve_from_the_dock() {
 #[test]
 fn side_fan_starts_upright_and_curves_upward() {
     let viewport = size(px(1440.), px(900.));
-    for (position, direction) in [
-        (DockPosition::Left, 1.),
-        (DockPosition::Right, -1.),
-    ] {
+    for (position, direction) in [(DockPosition::Left, 1.), (DockPosition::Right, -1.)] {
         let anchor = match position {
             DockPosition::Left => point(px(40.), px(450.)),
             DockPosition::Right => point(px(1400.), px(450.)),
             DockPosition::Bottom => unreachable!(),
         };
         let visible = fan_capacity(anchor, position, 48., viewport);
-        let (items, _) =
-            fan_geometry(
+        let (items, _) = fan_geometry(
             anchor,
             position,
             visible,
@@ -437,9 +442,7 @@ fn side_fan_starts_upright_and_curves_upward() {
         }
         let x_steps = items
             .windows(2)
-            .map(|pair| {
-                f32::from(pair[1].icon.center().x - pair[0].icon.center().x) * direction
-            })
+            .map(|pair| f32::from(pair[1].icon.center().x - pair[0].icon.center().x) * direction)
             .collect::<Vec<_>>();
         for step in &x_steps {
             assert!(
@@ -452,8 +455,7 @@ fn side_fan_starts_upright_and_curves_upward() {
             );
         }
         let first_rise = first.icon.center().y - items[1].icon.center().y;
-        let last_rise =
-            items[visible - 2].icon.center().y - last.icon.center().y;
+        let last_rise = items[visible - 2].icon.center().y - last.icon.center().y;
         assert!(
             last_rise > first_rise,
             "{position:?} the upward curve must accelerate: {first_rise:?} vs {last_rise:?}"
@@ -506,8 +508,7 @@ fn side_labels_rotate_with_their_icon_below_the_card() {
         (DockPosition::Right, point(px(1400.), px(450.))),
     ] {
         let visible = fan_capacity(anchor, position, 48., viewport);
-        let (items, _) =
-            fan_geometry(
+        let (items, _) = fan_geometry(
             anchor,
             position,
             visible,
@@ -566,20 +567,21 @@ fn fan_open_curve_overshoots_then_settles() {
 fn fan_close_curve_anticipates_then_fades_smoothly() {
     let (start, opacity, active) = fan_close_progress(std::time::Duration::ZERO);
     assert!((start - 1.).abs() < 1e-5, "the fan begins open: {start}");
-    assert!((opacity - 1.).abs() < 1e-5, "the fan begins opaque: {opacity}");
+    assert!(
+        (opacity - 1.).abs() < 1e-5,
+        "the fan begins opaque: {opacity}"
+    );
     assert!(active);
     // The early anticipation is still visible, but it is now short and the
     // last frames approach zero with no velocity.
-    let (early, opacity, active) =
-        fan_close_progress(std::time::Duration::from_millis(40));
+    let (early, opacity, active) = fan_close_progress(std::time::Duration::from_millis(40));
     assert!(active);
     assert!(
         early > 1.,
         "the retract should ease outwards before collapsing, got {early}"
     );
     assert!((opacity - 1.).abs() < 1e-5, "the anticipation stays opaque");
-    let (late, late_opacity, active) =
-        fan_close_progress(std::time::Duration::from_millis(220));
+    let (late, late_opacity, active) = fan_close_progress(std::time::Duration::from_millis(220));
     assert!(active);
     assert!(
         late < 1. && late > 0.,
@@ -592,16 +594,14 @@ fn fan_close_curve_anticipates_then_fades_smoothly() {
     assert!((late_opacity - late).abs() < 1e-5);
     // The frame before the window closes is already nearly transparent, so the
     // folder tile underneath is revealed instead of a final snap.
-    let (last, last_opacity, active) =
-        fan_close_progress(std::time::Duration::from_millis(350));
+    let (last, last_opacity, active) = fan_close_progress(std::time::Duration::from_millis(350));
     assert!(active);
     assert!(last < 0.02, "the last frame is almost collapsed: {last}");
     assert!(
         last_opacity < 0.02,
         "the last frame is almost transparent: {last_opacity}"
     );
-    let (end, end_opacity, active) =
-        fan_close_progress(std::time::Duration::from_millis(400));
+    let (end, end_opacity, active) = fan_close_progress(std::time::Duration::from_millis(400));
     assert_eq!(end, 0.);
     assert_eq!(end_opacity, 0.);
     assert!(!active);
@@ -622,8 +622,7 @@ fn fan_extension_continues_the_last_tangent() {
         &["文件"; 12],
     );
     let last = items.last().unwrap();
-    let (beyond, angle) =
-        fan_extension(anchor, DockPosition::Bottom, 10, 48., viewport, 1.);
+    let (beyond, angle) = fan_extension(anchor, DockPosition::Bottom, 10, 48., viewport, 1.);
     assert!(
         (angle - last.angle).abs() < 0.01,
         "the terminal group must share the last item's angle: {angle} vs {}",
@@ -649,8 +648,7 @@ fn side_fan_extension_continues_upward_from_the_dock_tile() {
         (DockPosition::Right, point(px(1400.), px(450.))),
     ] {
         let visible = fan_capacity(anchor, position, 48., viewport);
-        let (items, _) =
-            fan_geometry(
+        let (items, _) = fan_geometry(
             anchor,
             position,
             visible,
@@ -769,7 +767,10 @@ fn drag_folder_entry_to_dock(
         px((f32::from(output.width) - f32::from(dock_size.width)) / 2.),
         px(f32::from(output.height) - 8. - f32::from(dock_size.height)),
     );
-    let target = point(idle_app.center().x + origin.x, idle_app.center().y + origin.y);
+    let target = point(
+        idle_app.center().x + origin.x,
+        idle_app.center().y + origin.y,
+    );
     visual.simulate_mouse_move(
         target,
         Some(gpui::MouseButton::Left),
@@ -800,17 +801,11 @@ fn drag_folder_entry_to_dock(
             "an app that rejects the path must not show a + badge"
         );
         assert!(
-            dock_visual
-                .debug_bounds("dock-drag-accept-wash")
-                .is_none(),
+            dock_visual.debug_bounds("dock-drag-accept-wash").is_none(),
             "an app that rejects the path must not be washed"
         );
     }
-    visual.simulate_mouse_up(
-        target,
-        gpui::MouseButton::Left,
-        gpui::Modifiers::default(),
-    );
+    visual.simulate_mouse_up(target, gpui::MouseButton::Left, gpui::Modifiers::default());
     visual.run_until_parked();
     let mut launched = None;
     while let Ok(command) = commands.try_recv() {
@@ -822,9 +817,7 @@ fn drag_folder_entry_to_dock(
 }
 
 #[gpui::test]
-fn dragging_a_file_over_an_open_folder_magnifies_the_app_under_it(
-    cx: &mut TestAppContext,
-) {
+fn dragging_a_file_over_an_open_folder_magnifies_the_app_under_it(cx: &mut TestAppContext) {
     let (root, host) = viewer_host(cx);
     let folder = root.path().join("pinned");
     std::fs::create_dir(&folder).unwrap();
@@ -860,11 +853,7 @@ fn dragging_a_file_over_an_open_folder_magnifies_the_app_under_it(
     visual.run_until_parked();
     let item = visual.debug_bounds("folder-fan-0").unwrap();
     let start = item.center();
-    visual.simulate_mouse_down(
-        start,
-        gpui::MouseButton::Left,
-        gpui::Modifiers::default(),
-    );
+    visual.simulate_mouse_down(start, gpui::MouseButton::Left, gpui::Modifiers::default());
     // Cross GPUI's drag threshold. Grabbing the file retracts the fan right
     // away, so the fullscreen overlay stops owning the pointer.
     visual.simulate_mouse_move(
@@ -885,7 +874,10 @@ fn dragging_a_file_over_an_open_folder_magnifies_the_app_under_it(
         px((f32::from(output.width) - f32::from(dock_size.width)) / 2.),
         px(f32::from(output.height) - 8. - f32::from(dock_size.height)),
     );
-    let target = point(idle_app.center().x + origin.x, idle_app.center().y + origin.y);
+    let target = point(
+        idle_app.center().x + origin.x,
+        idle_app.center().y + origin.y,
+    );
     visual.simulate_mouse_move(
         target,
         Some(gpui::MouseButton::Left),
@@ -926,12 +918,7 @@ fn dragging_a_file_over_an_open_folder_magnifies_the_app_under_it(
 
 #[gpui::test]
 fn folder_entry_drag_to_a_compatible_app_launches_it(cx: &mut TestAppContext) {
-    let launched = drag_folder_entry_to_dock(
-        cx,
-        FolderLayout::List,
-        "folder-entry-0",
-        true,
-    );
+    let launched = drag_folder_entry_to_dock(cx, FolderLayout::List, "folder-entry-0", true);
     let (desktop, files) = launched.expect("the folder entry opened in the target app");
     assert_eq!(desktop.file_name().unwrap(), "viewer.desktop");
     assert_eq!(files[0].file_name().unwrap(), "note.txt");
@@ -939,23 +926,13 @@ fn folder_entry_drag_to_a_compatible_app_launches_it(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn folder_entry_drag_to_an_incompatible_app_does_nothing(cx: &mut TestAppContext) {
-    let launched = drag_folder_entry_to_dock(
-        cx,
-        FolderLayout::List,
-        "folder-entry-1",
-        false,
-    );
+    let launched = drag_folder_entry_to_dock(cx, FolderLayout::List, "folder-entry-1", false);
     assert!(launched.is_none());
 }
 
 #[gpui::test]
 fn folder_grid_entry_drag_uses_the_same_drag_layer(cx: &mut TestAppContext) {
-    let launched = drag_folder_entry_to_dock(
-        cx,
-        FolderLayout::Grid,
-        "folder-entry-0",
-        true,
-    );
+    let launched = drag_folder_entry_to_dock(cx, FolderLayout::Grid, "folder-entry-0", true);
     let (desktop, files) = launched.expect("the grid entry opened in the target app");
     assert_eq!(desktop.file_name().unwrap(), "viewer.desktop");
     assert_eq!(files[0].file_name().unwrap(), "note.txt");
@@ -1011,10 +988,7 @@ fn terminal_reveal_button_and_label_rotate_as_one_group(cx: &mut TestAppContext)
     let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
     host.update(cx, |host, cx| {
         host.handle(Action::PinFolder(root.clone()), cx);
-        host.handle(
-            Action::SetFolderLayout(root.clone(), FolderLayout::Fan),
-            cx,
-        );
+        host.handle(Action::SetFolderLayout(root.clone(), FolderLayout::Fan), cx);
     });
     cx.run_until_parked();
     let window = cx.update(|cx| testing::open_folder(&host, root, cx));
@@ -1052,10 +1026,7 @@ fn clicking_a_fan_file_opens_it(cx: &mut TestAppContext) {
     let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
     host.update(cx, |host, cx| {
         host.handle(Action::PinFolder(root.clone()), cx);
-        host.handle(
-            Action::SetFolderLayout(root.clone(), FolderLayout::Fan),
-            cx,
-        );
+        host.handle(Action::SetFolderLayout(root.clone(), FolderLayout::Fan), cx);
     });
     cx.run_until_parked();
     let commands = cx.update(|cx| testing::capture_backend(&host, cx));
@@ -1069,13 +1040,21 @@ fn clicking_a_fan_file_opens_it(cx: &mut TestAppContext) {
     visual.run_until_parked();
     let item = visual.debug_bounds("folder-fan-0").unwrap();
     visual.simulate_mouse_move(item.center(), None, gpui::Modifiers::default());
-    visual.simulate_mouse_down(item.center(), gpui::MouseButton::Left, gpui::Modifiers::default());
+    visual.simulate_mouse_down(
+        item.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
     visual.run_until_parked();
     assert!(
         host.read_with(&visual, |host, _| host.panel.is_some()),
         "mouse down on a fan item must not hit the dismiss backdrop"
     );
-    visual.simulate_mouse_up(item.center(), gpui::MouseButton::Left, gpui::Modifiers::default());
+    visual.simulate_mouse_up(
+        item.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
     visual.run_until_parked();
     let mut opened = false;
     while let Ok(command) = commands.try_recv() {
@@ -1203,11 +1182,7 @@ fn dragging_a_fan_item_to_a_compatible_app_launches_it(cx: &mut TestAppContext) 
         gpui::Modifiers::default(),
     );
     visual.run_until_parked();
-    visual.simulate_mouse_up(
-        drop,
-        gpui::MouseButton::Left,
-        gpui::Modifiers::default(),
-    );
+    visual.simulate_mouse_up(drop, gpui::MouseButton::Left, gpui::Modifiers::default());
     visual.run_until_parked();
     assert!(
         host.read_with(&dock_visual, |host, _| host.panel.is_none()),
@@ -1234,10 +1209,7 @@ fn a_crowded_fan_shows_stacks_at_the_unexpanded_ends(cx: &mut TestAppContext) {
     let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
     host.update(cx, |host, cx| {
         host.handle(Action::PinFolder(root.clone()), cx);
-        host.handle(
-            Action::SetFolderLayout(root.clone(), FolderLayout::Fan),
-            cx,
-        );
+        host.handle(Action::SetFolderLayout(root.clone(), FolderLayout::Fan), cx);
     });
     cx.run_until_parked();
     let window = cx.update(|cx| testing::open_folder(&host, root, cx));
@@ -1262,7 +1234,10 @@ fn a_crowded_fan_shows_stacks_at_the_unexpanded_ends(cx: &mut TestAppContext) {
         visual.debug_bounds("folder-fan-reveal-label").is_some(),
         "the reveal control carries a side label"
     );
-    assert!(far_stack.size.width >= px(40.), "the far stack keeps icon size");
+    assert!(
+        far_stack.size.width >= px(40.),
+        "the far stack keeps icon size"
+    );
     visual.update(|window, cx| {
         view.update(cx, |view, cx| {
             view.folder_fan_offset = 1;
@@ -1276,9 +1251,7 @@ fn a_crowded_fan_shows_stacks_at_the_unexpanded_ends(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn side_dock_fan_starts_upright_and_curves_upward_from_the_folder_tile(
-    cx: &mut TestAppContext,
-) {
+fn side_dock_fan_starts_upright_and_curves_upward_from_the_folder_tile(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("a.txt"), b"x").unwrap();
     std::fs::write(root.path().join("b.txt"), b"x").unwrap();
@@ -1287,10 +1260,7 @@ fn side_dock_fan_starts_upright_and_curves_upward_from_the_folder_tile(
     host.update(cx, |host, cx| {
         host.prefs.dock_position = DockPosition::Left;
         host.handle(Action::PinFolder(root.clone()), cx);
-        host.handle(
-            Action::SetFolderLayout(root.clone(), FolderLayout::Fan),
-            cx,
-        );
+        host.handle(Action::SetFolderLayout(root.clone(), FolderLayout::Fan), cx);
     });
     cx.run_until_parked();
     let window = cx.update(|cx| testing::open_folder(&host, root.clone(), cx));
@@ -1339,15 +1309,8 @@ fn folder_menu_uses_vertical_choice_lists(cx: &mut TestAppContext) {
         host.handle(Action::PinFolder(root.clone()), cx);
     });
     cx.run_until_parked();
-    let window = cx.update(|cx| {
-        testing::open_panel(
-            &host,
-            Panel::DockFolderMenu {
-                path: root.clone(),
-            },
-            cx,
-        )
-    });
+    let window = cx
+        .update(|cx| testing::open_panel(&host, Panel::DockFolderMenu { path: root.clone() }, cx));
     let view = window.root(cx).unwrap();
     let mut visual = VisualTestContext::from_window(*window, cx);
     visual.update(|window, cx| {
@@ -1359,9 +1322,7 @@ fn folder_menu_uses_vertical_choice_lists(cx: &mut TestAppContext) {
         .read_with(&visual, |view, _| {
             crate::app::panels::placement(
                 view.state.as_ref(),
-                &Panel::DockFolderMenu {
-                    path: root.clone(),
-                },
+                &Panel::DockFolderMenu { path: root.clone() },
                 1440.,
                 900.,
             )
@@ -1452,15 +1413,8 @@ fn folder_menu_changes_display_layout_and_sort(cx: &mut TestAppContext) {
         host.handle(Action::PinFolder(root.clone()), cx);
     });
     cx.run_until_parked();
-    let window = cx.update(|cx| {
-        testing::open_panel(
-            &host,
-            Panel::DockFolderMenu {
-                path: root.clone(),
-            },
-            cx,
-        )
-    });
+    let window = cx
+        .update(|cx| testing::open_panel(&host, Panel::DockFolderMenu { path: root.clone() }, cx));
     let view = window.root(cx).unwrap();
     let mut visual = VisualTestContext::from_window(*window, cx);
     visual.update(|window, cx| {
@@ -1468,7 +1422,11 @@ fn folder_menu_changes_display_layout_and_sort(cx: &mut TestAppContext) {
         window.refresh();
     });
     visual.run_until_parked();
-    for id in ["folder-display-folder", "folder-layout-grid", "folder-sort-size"] {
+    for id in [
+        "folder-display-folder",
+        "folder-layout-grid",
+        "folder-sort-size",
+    ] {
         let bounds = visual.debug_bounds(id).expect("menu choice is painted");
         visual.simulate_click(bounds.center(), gpui::Modifiers::default());
         visual.run_until_parked();
@@ -1608,10 +1566,7 @@ fn list_and_grid_render_entries_without_wrapping_long_names(cx: &mut TestAppCont
         .debug_bounds("folder-entry-0")
         .expect("the long entry is painted");
     assert!(long.size.height <= px(34.01));
-    assert!(
-        long.size.width <= px(280.01),
-        "long entry bounds: {long:?}"
-    );
+    assert!(long.size.width <= px(280.01), "long entry bounds: {long:?}");
 }
 
 #[gpui::test]
@@ -1626,10 +1581,7 @@ fn the_terminal_card_becomes_the_back_button_inside_a_subfolder(cx: &mut TestApp
     let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
     host.update(cx, |host, cx| {
         host.handle(Action::PinFolder(root.clone()), cx);
-        host.handle(
-            Action::SetFolderLayout(root.clone(), FolderLayout::Fan),
-            cx,
-        );
+        host.handle(Action::SetFolderLayout(root.clone(), FolderLayout::Fan), cx);
     });
     cx.run_until_parked();
     let window = cx.update(|cx| testing::open_folder(&host, root.clone(), cx));
@@ -1645,9 +1597,17 @@ fn the_terminal_card_becomes_the_back_button_inside_a_subfolder(cx: &mut TestApp
     // separate back button appears beside the Dock tile.
     let item = visual.debug_bounds("folder-fan-0").unwrap();
     visual.simulate_mouse_move(item.center(), None, gpui::Modifiers::default());
-    visual.simulate_mouse_down(item.center(), gpui::MouseButton::Left, gpui::Modifiers::default());
+    visual.simulate_mouse_down(
+        item.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
     visual.run_until_parked();
-    visual.simulate_mouse_up(item.center(), gpui::MouseButton::Left, gpui::Modifiers::default());
+    visual.simulate_mouse_up(
+        item.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
     visual.run_until_parked();
     assert!(
         visual.debug_bounds("folder-fan-back").is_none(),
@@ -1679,7 +1639,11 @@ fn the_terminal_card_becomes_the_back_button_inside_a_subfolder(cx: &mut TestApp
             .as_ref()
             .map(|navigation| navigation.current.clone())
     });
-    assert_eq!(current.as_deref(), Some(root.as_path()), "the terminal card went back");
+    assert_eq!(
+        current.as_deref(),
+        Some(root.as_path()),
+        "the terminal card went back"
+    );
     host.read_with(&visual, |host, _| {
         assert!(host.panel.is_some(), "going back keeps the fan open");
     });
@@ -1723,10 +1687,7 @@ fn clicking_the_terminal_card_at_the_root_reveals_the_folder(cx: &mut TestAppCon
     let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
     host.update(cx, |host, cx| {
         host.handle(Action::PinFolder(root.clone()), cx);
-        host.handle(
-            Action::SetFolderLayout(root.clone(), FolderLayout::Fan),
-            cx,
-        );
+        host.handle(Action::SetFolderLayout(root.clone(), FolderLayout::Fan), cx);
     });
     cx.run_until_parked();
     let commands = cx.update(|cx| testing::capture_backend(&host, cx));

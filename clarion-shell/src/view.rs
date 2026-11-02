@@ -2,8 +2,7 @@
 //! Clarion's single visual system. No legacy themes or alternate launcher.
 use crate::{
     app::{Action, DockApp, Host, Panel, SystemAction, ViewState},
-    backend,
-    battery,
+    backend, battery,
     input::{BackspaceAtStart, DeleteAtEnd, QueryChanged, TextInput},
     preferences::{
         DockPosition, LauncherLayout, LauncherPresentation, MAX_SURFACE_OPACITY,
@@ -249,13 +248,7 @@ impl Palette {
     /// Build the palette from the resolved appearance values. Only the two
     /// surface colours receive the opacity sliders; foreground colours stay
     /// fully opaque so text never fades with the menu background.
-    fn styled(
-        dark: bool,
-        accent: Hsla,
-        dock_alpha: f32,
-        surface_alpha: f32,
-        frost: f32,
-    ) -> Self {
+    fn styled(dark: bool, accent: Hsla, dock_alpha: f32, surface_alpha: f32, frost: f32) -> Self {
         let dock_alpha = dock_alpha.clamp(0.3, 1.);
         let surface_alpha = surface_alpha.clamp(0.3, 1.);
         let frost = frost.clamp(0., 1.);
@@ -581,7 +574,11 @@ impl ShellView {
         }
         let menu = self.launcher_menu.as_ref()?;
         Some(crate::app::panels::launcher_menu_rect(
-            host, &menu.id, menu.anchor, width, height,
+            host,
+            &menu.id,
+            menu.anchor,
+            width,
+            height,
         ))
     }
     /// The menu surface: a card over a full-window catcher. A click outside the
@@ -598,9 +595,8 @@ impl ShellView {
         let Some(menu) = self.launcher_menu.as_ref() else {
             return div().size_full().into_any_element();
         };
-        let card = crate::app::panels::launcher_menu_rect(
-            host, &menu.id, menu.anchor, width, height,
-        );
+        let card =
+            crate::app::panels::launcher_menu_rect(host, &menu.id, menu.anchor, width, height);
         let view = cx.entity().downgrade();
         let dismiss = {
             let view = view.clone();
@@ -826,7 +822,11 @@ impl ShellView {
     /// toggled column reads the same on enabled and disabled rows.
     fn check_circle(&self, on: bool, p: Palette) -> AnyElement {
         let color = if on { p.accent } else { p.muted };
-        let path = icon_path(if on { "menu-check.svg" } else { "menu-ring.svg" });
+        let path = icon_path(if on {
+            "menu-check.svg"
+        } else {
+            "menu-ring.svg"
+        });
         if path.is_file() {
             return svg()
                 .path(path.to_string_lossy().into_owned())
@@ -1181,10 +1181,7 @@ impl ShellView {
                                     h.handle(
                                         Action::on_output(
                                             bar_output.clone(),
-                                            Action::AnchoredPanel(
-                                                Panel::Tray(left_id.clone()),
-                                                x,
-                                            ),
+                                            Action::AnchoredPanel(Panel::Tray(left_id.clone()), x),
                                         ),
                                         cx,
                                     )
@@ -1209,10 +1206,7 @@ impl ShellView {
                                     h.handle(
                                         Action::on_output(
                                             bar_output.clone(),
-                                            Action::AnchoredPanel(
-                                                Panel::Tray(right_id.clone()),
-                                                x,
-                                            ),
+                                            Action::AnchoredPanel(Panel::Tray(right_id.clone()), x),
                                         ),
                                         cx,
                                     )
@@ -1294,8 +1288,11 @@ impl ShellView {
                         p,
                     ));
                 if host.prefs.show_battery_percentage {
-                    indicator = indicator
-                        .child(div().text_size(px(text)).child(battery::percent_text(battery)));
+                    indicator = indicator.child(
+                        div()
+                            .text_size(px(text))
+                            .child(battery::percent_text(battery)),
+                    );
                 }
                 row = row.child(indicator);
             }
@@ -1311,10 +1308,7 @@ impl ShellView {
                 .on_click(move |_, _, cx| {
                     h.update(cx, |h, cx| {
                         h.handle(
-                            Action::on_output(
-                                bar_output.clone(),
-                                Action::Panel(Panel::Spotlight),
-                            ),
+                            Action::on_output(bar_output.clone(), Action::Panel(Panel::Spotlight)),
                             cx,
                         )
                     });
@@ -1442,10 +1436,7 @@ impl ShellView {
     fn recent(&self, host: &ViewState, p: Palette, cx: &Context<Self>) -> AnyElement {
         let mut rows = div().flex().flex_col().gap_3();
         let mut filters = div().flex().gap_2();
-        for (i, label) in ["全部", "文本", "图片", "截图", "文件"]
-            .iter()
-            .enumerate()
-        {
+        for (i, label) in ["全部", "文本", "图片", "截图", "文件"].iter().enumerate() {
             filters = filters.child(
                 div()
                     .id(("recent-filter", i))
@@ -1660,11 +1651,7 @@ impl ShellView {
         // themselves align in one clean column.
         let mut row = div().flex().flex_col().gap(px(3.));
         let label = item.label.replace('_', "");
-        let children: Vec<_> = item
-            .children
-            .iter()
-            .filter(|child| child.visible)
-            .collect();
+        let children: Vec<_> = item.children.iter().filter(|child| child.visible).collect();
         // A submenu folds behind its chevron row; the tree belongs to the
         // shell, so opening it never reaches the application. A collapsing
         // card still paints while its fade rides out.
@@ -1754,7 +1741,8 @@ impl ShellView {
             // (slightly above at rest, dipping past it on the overshoot) and
             // its content fades with the same spring.
             row = row.child(
-                card.opacity(fade.clamp(0., 1.)).mt(px(((1. - fade) * 6.).clamp(-8., 8.))),
+                card.opacity(fade.clamp(0., 1.))
+                    .mt(px(((1. - fade) * 6.).clamp(-8., 8.))),
             );
         } else {
             row = row.child(title);
@@ -1763,11 +1751,7 @@ impl ShellView {
     }
     /// The owner's icon for a row: raw bytes first, then a resolved theme
     /// icon name. Theme svgs recolor to the palette; bitmaps stay as sent.
-    fn menu_item_icon(
-        &self,
-        item: &services::MenuItem,
-        p: Palette,
-    ) -> Option<AnyElement> {
+    fn menu_item_icon(&self, item: &services::MenuItem, p: Palette) -> Option<AnyElement> {
         use sha2::{Digest, Sha256};
         if let Some(bytes) = &item.icon_png {
             let hash: [u8; 32] = Sha256::digest(bytes).into();
@@ -1974,11 +1958,7 @@ impl ShellView {
                     if this.drawer.drag.is_some() {
                         this.drawer.track_drag(x, y);
                         cx.notify();
-                    } else if this
-                        .drawer
-                        .press
-                        .as_ref()
-                        .is_some_and(|press| press.pinned)
+                    } else if this.drawer.press.as_ref().is_some_and(|press| press.pinned)
                         && {
                             let press = this.drawer.press.as_ref().unwrap();
                             (x - press.pointer).abs() >= crate::dock_motion::DRAG_THRESHOLD
@@ -2013,11 +1993,7 @@ impl ShellView {
                 }
             }));
         for (index, id) in order.iter().enumerate() {
-            let dragging = self
-                .drawer
-                .drag
-                .as_ref()
-                .is_some_and(|drag| &drag.id == id);
+            let dragging = self.drawer.drag.as_ref().is_some_and(|drag| &drag.id == id);
             if dragging {
                 // The dragged tile floats above the grid; the grid keeps its
                 // shape and the vacated cell stays empty.
@@ -2293,8 +2269,7 @@ impl ShellView {
             // tints it instead of a hard line.
             body = body.bg(p.panel);
             body = if panel == Panel::Spotlight {
-                body.border_2()
-                    .border_color(p.fg.opacity(0.09))
+                body.border_2().border_color(p.fg.opacity(0.09))
             } else {
                 body.border_1().border_color(p.line)
             };
@@ -2350,12 +2325,8 @@ impl ShellView {
             Panel::Controls => self.macos_controls(host, p),
             Panel::Tray(_) => self.tray_menu(host, p),
             Panel::Dock(id) => self.dock_menu(host, id, p),
-            Panel::DockFolder { .. } => {
-                self.dock_folder_content(host, width, height, p, cx)
-            }
-            Panel::DockFolderMenu { path } => {
-                self.dock_folder_menu_content(host, path, p)
-            }
+            Panel::DockFolder { .. } => self.dock_folder_content(host, width, height, p, cx),
+            Panel::DockFolderMenu { path } => self.dock_folder_menu_content(host, path, p),
             Panel::DockOverflow { ids, icon_size } => {
                 self.dock_overflow(host, ids, f32::from(*icon_size), p, window, cx)
             }
@@ -2555,10 +2526,7 @@ impl ShellView {
                 if sprung.active {
                     window.request_animation_frame();
                 }
-                (
-                    sample.value.clamp(0., 1.),
-                    sprung.value.max(24.),
-                )
+                (sample.value.clamp(0., 1.), sprung.value.max(24.))
             } else {
                 (1., ph)
             };
@@ -2716,8 +2684,7 @@ impl Render for ShellView {
             if !p.frosted() || self.folder_drag_layer {
                 window.set_glass_region(Some(&[]));
             } else if let Some(panel) = host.panel.as_ref() {
-                let placement =
-                    crate::app::panels::placement(host, panel, width, height);
+                let placement = crate::app::panels::placement(host, panel, width, height);
                 if let Some(popup) = placement.popup {
                     // Frost the popup's actual outline. A plain rectangle would
                     // blur the transparent corners and the strip beside the
@@ -2743,9 +2710,7 @@ impl Render for ShellView {
                 }
             }
             window.set_input_region(Some(&full));
-        } else if matches!(self.kind, Surface::Panel)
-            && host.panel != Some(Panel::Notifications)
-        {
+        } else if matches!(self.kind, Surface::Panel) && host.panel != Some(Panel::Notifications) {
             let is_apps = host.panel == Some(Panel::Apps);
             let (x, y, w, h, radius) = if is_apps {
                 (0., 0., width, height, 0.)
@@ -2796,14 +2761,12 @@ impl Render for ShellView {
                 cx.listener(|this, event: &MouseUpEvent, window, cx| {
                     this.finish_folder_drag_layer(event.position, event.modifiers, window, cx);
                     if let Some(drag) = this.notification_drag.take() {
-                        let dismissed = drag.dx.abs().max(drag.dy.abs())
-                            >= macos_notifications::DISMISS_DRAG;
+                        let dismissed =
+                            drag.dx.abs().max(drag.dy.abs()) >= macos_notifications::DISMISS_DRAG;
                         this.notification_drag_dismissed.set(dismissed);
                         if dismissed {
                             this.invoke(
-                                Action::Service(services::Command::DismissNotification(
-                                    drag.id,
-                                )),
+                                Action::Service(services::Command::DismissNotification(drag.id)),
                                 cx,
                             );
                         }
@@ -2825,8 +2788,7 @@ impl Render for ShellView {
                     // The palette unwinds before it closes: leave a tool or the
                     // `>` command editor, then clear the draft.
                     let stacked = this.palette.tool.is_some()
-                        || (this.palette.mode == Mode::Commands
-                            && this.palette.parent.is_some());
+                        || (this.palette.mode == Mode::Commands && this.palette.parent.is_some());
                     if stacked {
                         let host = this.state.clone();
                         this.palette_pop(&host, cx);
@@ -2851,9 +2813,7 @@ impl Render for ShellView {
                 }
             }))
             .on_action(cx.listener(|this, _: &Activate, _, cx| {
-                if this.input.read(cx).has_preedit()
-                    || matches!(this.kind, Surface::LauncherMenu)
-                {
+                if this.input.read(cx).has_preedit() || matches!(this.kind, Surface::LauncherMenu) {
                     return;
                 }
                 if this.state.panel == Some(Panel::Spotlight) {
@@ -2875,9 +2835,7 @@ impl Render for ShellView {
                 }
             }))
             .on_action(cx.listener(|this, _: &ActivateKeepOpen, _, cx| {
-                if this.input.read(cx).has_preedit()
-                    || matches!(this.kind, Surface::LauncherMenu)
-                {
+                if this.input.read(cx).has_preedit() || matches!(this.kind, Surface::LauncherMenu) {
                     return;
                 }
                 if this.state.panel == Some(Panel::Spotlight) {
@@ -2886,15 +2844,13 @@ impl Render for ShellView {
                 }
             }))
             .on_action(cx.listener(|this, _: &PaletteSearch, _, cx| {
-                if this.state.panel == Some(Panel::Spotlight)
-                    && !this.input.read(cx).has_preedit()
+                if this.state.panel == Some(Panel::Spotlight) && !this.input.read(cx).has_preedit()
                 {
                     this.palette_switch_mode(Mode::Search, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &PaletteApps, _, cx| {
-                if this.state.panel == Some(Panel::Spotlight)
-                    && !this.input.read(cx).has_preedit()
+                if this.state.panel == Some(Panel::Spotlight) && !this.input.read(cx).has_preedit()
                 {
                     this.palette_switch_mode(Mode::Apps, cx);
                 }
@@ -3169,11 +3125,7 @@ fn append_popup_path(
     };
     match arrow.edge {
         ArrowEdge::Bottom => {
-            let tip = clamp_pointer(
-                arrow.offset,
-                left + r + base,
-                right - r - base,
-            );
+            let tip = clamp_pointer(arrow.offset, left + r + base, right - r - base);
             path.move_to(at(left + r, top));
             path.line_to(at(right - r, top));
             corner(path, (right - r, top), (right, top), (right, top + r));
@@ -3190,27 +3142,23 @@ fn append_popup_path(
             path.line_to(at(tip, height - POPUP_INSET));
             path.line_to(at(tip - base, bottom));
             path.line_to(at(left + r, bottom));
-            corner(
-                path,
-                (left + r, bottom),
-                (left, bottom),
-                (left, bottom - r),
-            );
+            corner(path, (left + r, bottom), (left, bottom), (left, bottom - r));
             path.line_to(at(left, top + r));
             corner(path, (left, top + r), (left, top), (left + r, top));
             path.close();
         }
         ArrowEdge::Left => {
-            let tip = clamp_pointer(
-                arrow.offset,
-                top + r + base,
-                bottom - r - base,
-            );
+            let tip = clamp_pointer(arrow.offset, top + r + base, bottom - r - base);
             path.move_to(at(left + r, top));
             path.line_to(at(right - r, top));
             corner(path, (right - r, top), (right, top), (right, top + r));
             path.line_to(at(right, bottom - r));
-            corner(path, (right, bottom - r), (right, bottom), (right - r, bottom));
+            corner(
+                path,
+                (right, bottom - r),
+                (right, bottom),
+                (right - r, bottom),
+            );
             path.line_to(at(left + r, bottom));
             corner(path, (left + r, bottom), (left, bottom), (left, bottom - r));
             path.line_to(at(left, tip + base));
@@ -3221,11 +3169,7 @@ fn append_popup_path(
             path.close();
         }
         ArrowEdge::Right => {
-            let tip = clamp_pointer(
-                arrow.offset,
-                top + r + base,
-                bottom - r - base,
-            );
+            let tip = clamp_pointer(arrow.offset, top + r + base, bottom - r - base);
             path.move_to(at(left + r, top));
             path.line_to(at(right - r, top));
             corner(path, (right - r, top), (right, top), (right, top + r));
@@ -3233,7 +3177,12 @@ fn append_popup_path(
             path.line_to(at(width - POPUP_INSET, tip));
             path.line_to(at(right, tip + base));
             path.line_to(at(right, bottom - r));
-            corner(path, (right, bottom - r), (right, bottom), (right - r, bottom));
+            corner(
+                path,
+                (right, bottom - r),
+                (right, bottom),
+                (right - r, bottom),
+            );
             path.line_to(at(left + r, bottom));
             corner(path, (left + r, bottom), (left, bottom), (left, bottom - r));
             path.line_to(at(left, top + r));
@@ -3270,11 +3219,7 @@ pub fn rounded_region(width: f32, height: f32, radius: f32) -> Vec<Bounds<Pixels
 /// The frosted shape of a launcher menu card: the rounded outline the card
 /// paints, moved to its window position.
 fn card_frost_region(card: Bounds<Pixels>) -> Vec<Bounds<Pixels>> {
-    let mut regions = rounded_region(
-        f32::from(card.size.width),
-        f32::from(card.size.height),
-        12.,
-    );
+    let mut regions = rounded_region(f32::from(card.size.width), f32::from(card.size.height), 12.);
     translate_regions(
         &mut regions,
         f32::from(card.origin.x),
@@ -3310,17 +3255,12 @@ pub fn popup_region(
         ArrowEdge::Bottom => {
             let body_bottom = by + bh;
             let tip_y = height - POPUP_INSET;
-            let tip_x = clamp_pointer(
-                arrow.offset,
-                bx + radius + base,
-                bx + bw - radius - base,
-            );
+            let tip_x = clamp_pointer(arrow.offset, bx + radius + base, bx + bw - radius - base);
             // One-point rows narrowing from the base to the tip.
             let rows = (tip_y - body_bottom).ceil().max(0.) as u32;
             for row in 0..rows {
                 let top = body_bottom + row as f32;
-                let progress =
-                    ((top + 0.5 - body_bottom) / (tip_y - body_bottom)).clamp(0., 1.);
+                let progress = ((top + 0.5 - body_bottom) / (tip_y - body_bottom)).clamp(0., 1.);
                 let half = base * (1. - progress);
                 let left = (tip_x - half).max(bx);
                 let right = (tip_x + half).min(bx + bw);
@@ -3329,11 +3269,7 @@ pub fn popup_region(
         }
         ArrowEdge::Left => {
             let tip_x = POPUP_INSET;
-            let tip_y = clamp_pointer(
-                arrow.offset,
-                by + radius + base,
-                by + bh - radius - base,
-            );
+            let tip_y = clamp_pointer(arrow.offset, by + radius + base, by + bh - radius - base);
             let columns = (bx - tip_x).ceil().max(0.) as u32;
             for column in 0..columns {
                 let left = tip_x + column as f32;
@@ -3347,16 +3283,11 @@ pub fn popup_region(
         ArrowEdge::Right => {
             let body_right = bx + bw;
             let tip_x = width - POPUP_INSET;
-            let tip_y = clamp_pointer(
-                arrow.offset,
-                by + radius + base,
-                by + bh - radius - base,
-            );
+            let tip_y = clamp_pointer(arrow.offset, by + radius + base, by + bh - radius - base);
             let columns = (tip_x - body_right).ceil().max(0.) as u32;
             for column in 0..columns {
                 let left = body_right + column as f32;
-                let progress =
-                    ((left + 0.5 - body_right) / (tip_x - body_right)).clamp(0., 1.);
+                let progress = ((left + 0.5 - body_right) / (tip_x - body_right)).clamp(0., 1.);
                 let half = base * (1. - progress);
                 let top = (tip_y - half).max(by);
                 let bottom = (tip_y + half).min(by + bh);
@@ -3420,7 +3351,10 @@ fn collect_menu_icons(items: &[services::MenuItem], out: &mut Vec<Vec<u8>>) {
 /// Resolve a freedesktop icon name to a real file on the theme paths. Device,
 /// signal and battery icons ship in the system themes; the shell only needs a
 /// small, ordered probe over the common sizes and categories.
-fn theme_icon(name: &str, cache: &mut HashMap<(String, String), Option<PathBuf>>) -> Option<PathBuf> {
+fn theme_icon(
+    name: &str,
+    cache: &mut HashMap<(String, String), Option<PathBuf>>,
+) -> Option<PathBuf> {
     let key = (current_icon_theme(), name.to_owned());
     if let Some(cached) = cache.get(&key) {
         return cached.clone();
@@ -3536,26 +3470,8 @@ fn ini_value(text: &str, key: &str) -> Option<String> {
 /// `size/category` (hicolor) and `category/size` (MacTahoe) — so try both.
 fn probe_theme(dir: &std::path::Path, name: &str) -> Option<PathBuf> {
     const SIZES: &[&str] = &[
-        "scalable",
-        "symbolic",
-        "256",
-        "256x256",
-        "128",
-        "128x128",
-        "96",
-        "96x96",
-        "64",
-        "64x64",
-        "48",
-        "48x48",
-        "32",
-        "32x32",
-        "24",
-        "24x24",
-        "22",
-        "22x22",
-        "16",
-        "16x16",
+        "scalable", "symbolic", "256", "256x256", "128", "128x128", "96", "96x96", "64", "64x64",
+        "48", "48x48", "32", "32x32", "24", "24x24", "22", "22x22", "16", "16x16",
     ];
     const CATEGORIES: &[&str] = &[
         "devices",
@@ -3637,7 +3553,9 @@ pub(crate) fn resolve_theme_icon(name: &str) -> Option<PathBuf> {
                 let path = entry.path();
                 let theme = path.file_name().map(|n| n.to_string_lossy().into_owned());
                 if path.is_dir()
-                    && theme.as_deref().is_none_or(|theme| theme != current && theme != "hicolor")
+                    && theme
+                        .as_deref()
+                        .is_none_or(|theme| theme != current && theme != "hicolor")
                 {
                     others.push(path);
                 }
@@ -3663,7 +3581,7 @@ pub(crate) fn resolve_theme_icon(name: &str) -> Option<PathBuf> {
     }
     None
 }
-fn image_path(filename: &str) -> PathBuf {
+pub(crate) fn image_path(filename: &str) -> PathBuf {
     let prefix = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().and_then(|p| p.parent()).map(|p| p.to_path_buf()));
@@ -3722,10 +3640,7 @@ mod tests {
             icon_theme_variant("MacTahoe", true, installed),
             "MacTahoe-dark"
         );
-        assert_eq!(
-            icon_theme_variant("MacTahoe", false, installed),
-            "MacTahoe"
-        );
+        assert_eq!(icon_theme_variant("MacTahoe", false, installed), "MacTahoe");
         // A desktop that already selected the dark variant comes back to the
         // light one when the shell switches appearance.
         assert_eq!(
@@ -3753,13 +3668,7 @@ mod tests {
     fn surface_opacity_only_fades_backgrounds_not_foreground_text() {
         for dark in [true, false] {
             for opacity in [0.3, 0.68, 1.0] {
-                let palette = Palette::styled(
-                    dark,
-                    rgb(0x0a84ff).into(),
-                    opacity,
-                    opacity,
-                    0.82,
-                );
+                let palette = Palette::styled(dark, rgb(0x0a84ff).into(), opacity, opacity, 0.82);
                 assert!((palette.panel.a - opacity).abs() < 0.0001);
                 assert!((palette.dock.a - opacity).abs() < 0.0001);
                 assert_eq!(palette.fg.a, 1.0);
@@ -3794,10 +3703,14 @@ mod tests {
             assert!(!contains(&regions, 50.2, 100.2));
             assert!(!contains(&regions, 299.8, 100.2));
         }
-        let regions = popup_region(Some(Arrow {
-            edge: ArrowEdge::Bottom,
-            offset: 125.,
-        }), popup, POPUP_RADIUS);
+        let regions = popup_region(
+            Some(Arrow {
+                edge: ArrowEdge::Bottom,
+                offset: 125.,
+            }),
+            popup,
+            POPUP_RADIUS,
+        );
         // The wedge is frosted all the way to its tip, while the empty strip
         // on either side of it stays clear.
         assert!(contains(&regions, 175., 298.5));
@@ -3831,7 +3744,10 @@ mod tests {
                     PathBuilder::fill()
                 };
                 append_popup_path(&mut path, arrow, point(px(0.), px(0.)), width, height);
-                assert!(path.build().is_ok(), "the popup outline builds for {edge:?}");
+                assert!(
+                    path.build().is_ok(),
+                    "the popup outline builds for {edge:?}"
+                );
             }
         }
     }

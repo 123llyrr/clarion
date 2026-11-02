@@ -130,6 +130,17 @@ impl TextInput {
         self.light = !dark;
         self
     }
+    /// Keep the text ink in step with the surface's light or dark theme.
+    pub fn set_dark(&mut self, dark: bool, cx: &mut Context<Self>) {
+        let light = !dark;
+        if self.light != light {
+            self.light = light;
+            cx.notify();
+        }
+    }
+    pub fn focused(&self, window: &Window) -> bool {
+        self.focus_handle.is_focused(window)
+    }
     pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
@@ -218,7 +229,8 @@ impl TextInput {
     }
 
     fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
-        if self.content.is_empty() && self.selected_range.is_empty() && self.marked_range.is_none() {
+        if self.content.is_empty() && self.selected_range.is_empty() && self.marked_range.is_none()
+        {
             // Nothing to delete: the palette listens for this to drop the
             // highlighted clipboard row instead.
             cx.emit(DeleteAtEnd);

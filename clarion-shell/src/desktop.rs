@@ -21,6 +21,7 @@ use gpui::*;
 use image::ImageReader;
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::desktop_menu::{DesktopMenuView, MenuColors};
 use crate::input::{QueryChanged, TextInput};
 use crate::preferences::SurfaceAppearance;
 
@@ -35,6 +36,10 @@ const DESKTOP_CELL_WIDTH: f32 = 112.;
 const DESKTOP_CELL_HEIGHT: f32 = 112.;
 const DESKTOP_ICON_SIZE: f32 = 64.;
 const DESKTOP_LABEL_WIDTH: f32 = 104.;
+/// The inline rename/new-folder field. One compact capsule for both so a
+/// tile never grows a control larger than its own grid cell.
+const DESKTOP_EDIT_FIELD_HEIGHT: f32 = 28.;
+const DESKTOP_EDIT_FIELD_RADIUS: f32 = 7.;
 
 actions!(
     clarion_desktop,
@@ -307,6 +312,12 @@ pub struct DesktopView {
     inspector: Option<Inspector>,
     inspection_generation: u64,
     menu: Option<Point<Pixels>>,
+    /// The overlay surface painting the context menu. It is a window of its
+    /// own so the compositor can frost the desktop behind it.
+    menu_window: Option<WindowHandle<DesktopMenuView>>,
+    /// This window's handle, captured when the menu first opens so closing it
+    /// can hand activation back to the desktop.
+    own_window: Option<WindowHandle<DesktopView>>,
     rename: Option<PathBuf>,
     rename_name: String,
     input: Entity<TextInput>,
@@ -353,7 +364,11 @@ impl DesktopView {
         appearance: SurfaceAppearance,
         cx: &mut Context<Self>,
     ) -> Self {
-        let input = cx.new(|cx| TextInput::new(cx).with_placeholder("文件名称"));
+        let input = cx.new(|cx| {
+            TextInput::new(cx)
+                .with_placeholder("文件名称")
+                .with_capsule(appearance.dark)
+        });
         cx.subscribe(&input, |this, _, QueryChanged(name), cx| {
             this.rename_name = name.clone();
             cx.notify();
@@ -437,6 +452,8 @@ impl DesktopView {
             inspector: None,
             inspection_generation: 0,
             menu: None,
+            menu_window: None,
+            own_window: None,
             rename: None,
             rename_name: String::new(),
             input,
@@ -479,7 +496,97 @@ impl DesktopView {
     pub fn set_appearance(&mut self, appearance: SurfaceAppearance, cx: &mut Context<Self>) {
         if self.appearance != appearance {
             self.appearance = appearance;
+            self.input
+                .update(cx, |input, cx| input.set_dark(appearance.dark, cx));
+            if let Some(menu) = self.menu_window {
+                let _ = menu.update(cx, |menu, _, cx| menu.set_appearance(appearance, cx));
+            }
             cx.notify();
+        }
+    }
+
+    /// Open the context menu as its own overlay surface. `position` is the
+    /// click point in the desktop window's logical coordinates; the overlay
+    /// covers the same output, so the card lands where the user clicked while
+    /// the compositor can still frost the desktop below it.
+    fn open_menu(&mut self, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_menu(cx);
+        let Some(desktop) = window.window_handle().downcast::<DesktopView>() else {
+            return;
+        };
+        self.own_window = Some(desktop);
+        let viewport = window.viewport_size();
+        let width = f32::from(viewport.width);
+        let height = f32::from(viewport.height);
+        let display = window.display(cx).map(|display| display.id());
+        let has_selection = self.selected.is_some();
+        let has_image = self
+            .entries
+            .iter()
+            .find(|entry| Some(&entry.path) == self.selected.as_ref())
+            .is_some_and(|entry| entry.kind == EntryKind::Image);
+        let selected = self.selected.clone();
+        let reserved = self.reserved_edges;
+        let appearance = self.appearance;
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(width), px(height)));
+        let options = crate::app::window_options(
+            "clarion-desktop-menu",
+            display,
+            bounds,
+            false,
+            LayerShellAnchor::ALL,
+            -1,
+            LayerShellKeyboardInteractivity::Exclusive,
+            LayerShellMargins::default(),
+            LayerShellLayer::Overlay,
+        );
+        match cx.open_window(options, move |window, cx| {
+            let menu = cx.new(|cx| {
+                DesktopMenuView::new(
+                    desktop,
+                    position,
+                    width,
+                    height,
+                    reserved,
+                    appearance,
+                    has_selection,
+                    has_image,
+                    selected,
+                    cx,
+                )
+            });
+            let focus = menu.read(cx).focus_handle();
+            window.focus(&focus);
+            window.activate_window();
+            menu
+        }) {
+            Ok(menu) => {
+                self.menu = Some(position);
+                self.menu_window = Some(menu);
+            }
+            Err(error) => self.error = Some(format!("无法打开桌面菜单：{error}")),
+        }
+        cx.notify();
+    }
+
+    /// Release the menu surface and clear its anchor. The removal is deferred so
+    /// a row click can close the very surface that is currently dispatching.
+    pub(crate) fn close_menu(&mut self, cx: &mut Context<Self>) {
+        self.menu = None;
+        let own = self.own_window;
+        if let Some(menu) = self.menu_window.take() {
+            cx.defer(move |cx| {
+                let _ = menu.update(cx, |_, window, _| window.remove_window());
+                if let Some(own) = own {
+                    let _ = own.update(cx, |_, window, _| window.activate_window());
+                }
+            });
+        }
+    }
+
+    pub(crate) fn open_desktop_folder(&mut self, cx: &mut Context<Self>) {
+        if let Some(path) = self.directory.clone() {
+            self.send(DesktopAction::Open(path), cx)
         }
     }
 
@@ -490,6 +597,7 @@ impl DesktopView {
     }
 
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.close_menu(cx);
         self.enqueue(Work::Refresh, cx);
     }
 
@@ -509,17 +617,17 @@ impl DesktopView {
         cx.notify();
     }
 
-    fn send(&mut self, action: DesktopAction, cx: &mut Context<Self>) {
+    pub(crate) fn send(&mut self, action: DesktopAction, cx: &mut Context<Self>) {
         if self.preview {
             self.error = Some("预览模式不会打开或修改用户文件".into());
         } else if self.actions.try_send(action).is_err() {
             self.error = Some("桌面操作暂时不可用".into());
         }
-        self.menu = None;
+        self.close_menu(cx);
         cx.notify();
     }
 
-    fn begin_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn begin_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.busy || self.rename.is_some() || self.new_folder || self.inspector.is_some() {
             return;
         }
@@ -541,16 +649,17 @@ impl DesktopView {
         else {
             return;
         };
-        self.menu = None;
+        self.close_menu(cx);
         self.rename = Some(entry.path);
         self.rename_name = entry.name.clone();
         self.input
             .update(cx, |input, cx| input.set_text(&entry.name, true, cx));
+        window.activate_window();
         window.focus(&self.input.focus_handle(cx));
         cx.notify();
     }
 
-    fn activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.inspector.is_some() {
             return;
         }
@@ -611,7 +720,7 @@ impl DesktopView {
             .collect()
     }
 
-    fn select_all(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn select_all(&mut self, cx: &mut Context<Self>) {
         if self.rename.is_some() || self.new_folder || self.inspector.is_some() {
             return;
         }
@@ -622,11 +731,11 @@ impl DesktopView {
             .collect();
         self.selected = self.entries.first().map(|entry| entry.path.clone());
         self.selection_anchor = self.selected.clone();
-        self.menu = None;
+        self.close_menu(cx);
         cx.notify();
     }
 
-    fn inspect(&mut self, quick_look: bool, cx: &mut Context<Self>) {
+    pub(crate) fn inspect(&mut self, quick_look: bool, cx: &mut Context<Self>) {
         if self.rename.is_some() || self.new_folder {
             return;
         }
@@ -643,7 +752,7 @@ impl DesktopView {
             return;
         }
         self.inspection_generation = self.inspection_generation.wrapping_add(1);
-        self.menu = None;
+        self.close_menu(cx);
         self.enqueue(
             Work::Inspect {
                 generation: self.inspection_generation,
@@ -654,7 +763,7 @@ impl DesktopView {
         );
     }
 
-    fn begin_new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn begin_new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.busy || self.rename.is_some() || self.new_folder || self.inspector.is_some() {
             return;
         }
@@ -665,28 +774,29 @@ impl DesktopView {
         }
         self.rename_name = available_folder_name(&self.entries);
         self.new_folder = true;
-        self.menu = None;
+        self.close_menu(cx);
         self.selected = None;
         self.selection_anchor = None;
         self.selected_many.clear();
         self.input
             .update(cx, |input, cx| input.set_text(&self.rename_name, true, cx));
+        window.activate_window();
         window.focus(&self.input.focus_handle(cx));
         cx.notify();
     }
 
-    fn trash(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn trash(&mut self, cx: &mut Context<Self>) {
         if self.rename.is_none() && !self.new_folder && self.inspector.is_none() && !self.busy {
             let paths = self.selection();
             if !paths.is_empty() {
-                self.menu = None;
+                self.close_menu(cx);
                 self.enqueue(Work::Trash(paths), cx);
             }
         }
     }
 
     fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.menu = None;
+        self.close_menu(cx);
         self.marquee = None;
         self.rename = None;
         self.new_folder = false;
@@ -758,7 +868,7 @@ impl DesktopView {
             offset.y = px(grid.height) - bounds.bottom();
         }
         self.scroll.set_offset(offset);
-        self.menu = None;
+        self.close_menu(cx);
         cx.notify();
     }
 
@@ -790,76 +900,29 @@ impl DesktopView {
         cx.notify();
     }
 
-    /// The desktop window has no compositor frost region of its own, so its
-    /// contextual surfaces borrow the same tint and opacity controls and add a
-    /// gentle wash. That keeps them coherent with shell menus without blurring
-    /// the whole output.
-    fn menu_surface(&self) -> Hsla {
-        let appearance = self.appearance;
-        let base: Hsla = if appearance.dark {
-            rgb(0x202631).into()
+    /// The desktop window has no compositor frost region of its own; the
+    /// inline editor therefore borrows the context menu's tint and rules so the
+    /// two controls read as one material.
+    fn edit_field(&self, focused: bool) -> AnyElement {
+        let colors = MenuColors::new(self.appearance);
+        let line = if focused {
+            colors.text().opacity(0.30)
         } else {
-            rgb(0xf7f8fc).into()
+            colors.line()
         };
-        let alpha = (0.55 + 0.45 * appearance.surface_opacity).clamp(0., 1.);
-        let wash = Hsla::from(rgb(0xffffff)).opacity(
-            if appearance.dark {
-                0.02 + 0.04 * appearance.frost
-            } else {
-                0.03 + 0.06 * appearance.frost
-            },
-        );
-        base.opacity(alpha).blend(wash)
-    }
-
-    fn menu_text(&self) -> Hsla {
-        if self.appearance.dark {
-            rgb(0xf4f5fa).into()
-        } else {
-            rgb(0x23242a).into()
-        }
-    }
-
-    fn menu_line(&self) -> Hsla {
-        Hsla::from(rgb(if self.appearance.dark {
-            0xd9e3ff
-        } else {
-            0x355578
-        }))
-        .opacity(0.12 + 0.06 * self.appearance.frost)
-    }
-
-    fn menu_hover(&self) -> Hsla {
-        Hsla::from(rgb(if self.appearance.dark {
-            0xffffff
-        } else {
-            0x344966
-        }))
-        .opacity(0.07 + 0.04 * self.appearance.frost)
-    }
-
-    fn menu_shadow(&self) -> Hsla {
-        Hsla::from(rgb(0x000000)).opacity(0.20 + 0.12 * self.appearance.frost)
-    }
-
-    fn context_button(
-        &self,
-        id: &'static str,
-        label: &'static str,
-        action: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
-        cx: &Context<Self>,
-    ) -> AnyElement {
-        let hover = self.menu_hover();
         div()
-            .id(id)
-            .px_3()
-            .py_2()
-            .rounded(px(6.))
-            .text_sm()
-            .cursor_pointer()
-            .hover(move |style| style.bg(hover))
-            .child(label)
-            .on_click(cx.listener(move |this, _, window, cx| action(this, window, cx)))
+            .debug_selector(|| "desktop-edit-field".into())
+            .w_full()
+            .h(px(DESKTOP_EDIT_FIELD_HEIGHT))
+            .flex()
+            .items_center()
+            .rounded(px(DESKTOP_EDIT_FIELD_RADIUS))
+            .bg(colors.surface())
+            .border_1()
+            .border_color(line)
+            .overflow_hidden()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(self.input.clone())
             .into_any_element()
     }
 
@@ -886,17 +949,7 @@ impl Render for DesktopView {
         let viewport = window.viewport_size();
         let width = f32::from(viewport.width);
         let height = f32::from(viewport.height);
-        let [top, bottom, left, right] = self.reserved_edges;
-        let menu_position = self.menu.map(|position| {
-            point(
-                px(f32::from(position.x).clamp(left + 8., (width - right - 238.).max(left + 8.))),
-                px(f32::from(position.y).clamp(
-                    top + 8.,
-                    (height - bottom - if self.selected.is_some() { 430. } else { 270. })
-                        .max(top + 8.),
-                )),
-            )
-        });
+        let [top, bottom, _, _] = self.reserved_edges;
         let mut root = div()
             .id("clarion-desktop")
             .size_full()
@@ -959,7 +1012,7 @@ impl Render for DesktopView {
                     this.selected = None;
                     this.selection_anchor = None;
                     this.selected_many = base.clone();
-                    this.menu = None;
+                    this.close_menu(cx);
                     this.rename = None;
                     this.new_folder = false;
                     this.marquee = grid.contains(event.position).then_some(MarqueeSelection {
@@ -1004,9 +1057,8 @@ impl Render for DesktopView {
                     this.marquee = None;
                     this.rename = None;
                     this.new_folder = false;
-                    this.menu = Some(event.position);
                     window.focus(&this.focus);
-                    cx.notify();
+                    this.open_menu(event.position, window, cx);
                 }),
             );
         if let Some(image) = &self.wallpaper {
@@ -1062,15 +1114,7 @@ impl Render for DesktopView {
                     .gap(px(3.))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .child(Self::file_icon(None, true, &[]))
-                    .child(
-                        div()
-                            .w_full()
-                            .px_1()
-                            .py_1()
-                            .rounded(px(4.))
-                            .bg(rgb(0x202b37))
-                            .child(self.input.clone()),
-                    ),
+                    .child(self.edit_field(self.input.read(cx).focused(window))),
             );
         }
         for (index, entry) in self.entries.iter().enumerate() {
@@ -1120,7 +1164,7 @@ impl Render for DesktopView {
                     cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                         cx.stop_propagation();
                         window.focus(&this.focus);
-                        this.menu = None;
+                        this.close_menu(cx);
                         this.marquee = None;
                         if this.rename.as_ref() != Some(&path) {
                             this.rename = None;
@@ -1170,21 +1214,11 @@ impl Render for DesktopView {
                         if !this.selected_many.contains(&context_path) {
                             this.selected_many = [context_path.clone()].into();
                         }
-                        this.menu = Some(event.position);
-                        cx.notify();
+                        this.open_menu(event.position, window, cx);
                     }),
                 );
             if editing {
-                icon = icon.child(
-                    div()
-                        .w_full()
-                        .px_1()
-                        .py_1()
-                        .rounded(px(4.))
-                        .bg(rgb(0x202b37))
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .child(self.input.clone()),
-                );
+                icon = icon.child(self.edit_field(self.input.read(cx).focused(window)));
             } else {
                 let mut caption = div()
                     .max_w_full()
@@ -1257,126 +1291,7 @@ impl Render for DesktopView {
                     .child(error.clone()),
             );
         }
-        let menu_surface = self.menu_surface();
-        let menu_text = self.menu_text();
-        let menu_line = self.menu_line();
-        let menu_shadow = self.menu_shadow();
-        if let Some(position) = menu_position {
-            let mut menu = div()
-                .id("desktop-context-menu")
-                .absolute()
-                .left(position.x)
-                .top(position.y)
-                .w(px(230.))
-                .max_h(px((height - top - bottom - 16.).max(80.)))
-                .overflow_y_scroll()
-                .p_1()
-                .rounded(px(12.))
-                .bg(menu_surface)
-                .text_color(menu_text)
-                .border_1()
-                .border_color(menu_line)
-                .shadow(vec![BoxShadow {
-                    color: menu_shadow,
-                    offset: point(px(0.), px(8.)),
-                    blur_radius: px(24.),
-                    spread_radius: px(0.),
-                }])
-                .flex()
-                .flex_col()
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation());
-            if self.selected.is_some() {
-                menu = menu
-                    .child(self.context_button(
-                        "desktop-open",
-                        "打开",
-                        |this, window, cx| this.activate(window, cx),
-                        cx,
-                    ))
-                    .child(self.context_button(
-                        "desktop-info",
-                        "显示简介",
-                        |this, _, cx| this.inspect(false, cx),
-                        cx,
-                    ))
-                    .child(self.context_button(
-                        "desktop-quick-look",
-                        "快速查看",
-                        |this, _, cx| this.inspect(true, cx),
-                        cx,
-                    ))
-                    .child(self.context_button(
-                        "desktop-rename",
-                        "重命名…",
-                        |this, window, cx| this.begin_rename(window, cx),
-                        cx,
-                    ))
-                    .child(self.context_button(
-                        "desktop-trash",
-                        "移到废纸篓",
-                        |this, _, cx| this.trash(cx),
-                        cx,
-                    ));
-                if self
-                    .entries
-                    .iter()
-                    .find(|entry| Some(&entry.path) == self.selected.as_ref())
-                    .is_some_and(|entry| entry.kind == EntryKind::Image)
-                {
-                    menu = menu.child(self.context_button(
-                        "desktop-wallpaper-file",
-                        "设为桌面壁纸",
-                        |this, _, cx| {
-                            if let Some(path) = this.selected.clone() {
-                                this.send(DesktopAction::Wallpaper(Some(path)), cx)
-                            }
-                        },
-                        cx,
-                    ));
-                }
-                menu = menu.child(div().h(px(1.)).my_1().bg(menu_line));
-            }
-            root = root.child(
-                menu.child(self.context_button(
-                    "desktop-new-folder",
-                    "新建文件夹…",
-                    |this, window, cx| this.begin_new_folder(window, cx),
-                    cx,
-                ))
-                .child(self.context_button(
-                    "desktop-refresh",
-                    "刷新桌面",
-                    |this, _, cx| {
-                        this.menu = None;
-                        this.refresh(cx)
-                    },
-                    cx,
-                ))
-                .child(self.context_button(
-                    "desktop-open-directory",
-                    "打开桌面文件夹",
-                    |this, _, cx| {
-                        if let Some(path) = this.directory.clone() {
-                            this.send(DesktopAction::Open(path), cx)
-                        }
-                    },
-                    cx,
-                ))
-                .child(self.context_button(
-                    "desktop-wallpaper",
-                    "更换壁纸…",
-                    |this, _, cx| this.send(DesktopAction::Wallpaper(None), cx),
-                    cx,
-                ))
-                .child(self.context_button(
-                    "desktop-settings",
-                    "桌面设置…",
-                    |this, _, cx| this.send(DesktopAction::Settings, cx),
-                    cx,
-                )),
-            );
-        }
+        let colors = MenuColors::new(self.appearance);
         if let Some(inspector) = &self.inspector {
             let panel_width = (width - 64.).clamp(220., 760.);
             let panel_height = (height - top - bottom - 32.).clamp(180., 640.);
@@ -1442,12 +1357,12 @@ impl Render for DesktopView {
                             .max_h(px(panel_height))
                             .rounded(px(16.))
                             .overflow_hidden()
-                            .bg(menu_surface)
-                            .text_color(menu_text)
+                            .bg(colors.surface())
+                            .text_color(colors.text())
                             .border_1()
-                            .border_color(menu_line)
+                            .border_color(colors.line())
                             .shadow(vec![BoxShadow {
-                                color: menu_shadow,
+                                color: colors.shadow(),
                                 offset: point(px(0.), px(8.)),
                                 blur_radius: px(24.),
                                 spread_radius: px(0.),
@@ -1463,7 +1378,7 @@ impl Render for DesktopView {
                                     .px_4()
                                     .py_3()
                                     .border_b_1()
-                                    .border_color(menu_line)
+                                    .border_color(colors.line())
                                     .child(
                                         div()
                                             .id("desktop-inspector-close")
@@ -2289,6 +2204,235 @@ mod tests {
         assert!(inspect_paths(&directory, &[text.clone(), text], true).is_err());
     }
 
+    fn desktop_fixture<'a>(
+        cx: &'a mut TestAppContext,
+        directory: &Path,
+    ) -> (
+        Entity<DesktopView>,
+        &'a mut VisualTestContext,
+        async_channel::Receiver<DesktopAction>,
+        mpsc::Receiver<Work>,
+    ) {
+        let entries = scan(directory).unwrap();
+        let (actions, received_actions) = async_channel::unbounded();
+        let (work, received_work) = mpsc::sync_channel(16);
+        cx.update(|cx| {
+            TextInput::bind_keys(cx);
+            DesktopView::bind_keys(cx);
+        });
+        let (view, visual) = cx.add_window_view(|window, cx| {
+            let input = cx.new(|cx| {
+                TextInput::new(cx)
+                    .with_placeholder("文件名称")
+                    .with_capsule(true)
+            });
+            cx.subscribe(
+                &input,
+                |this: &mut DesktopView, _, QueryChanged(name), cx| {
+                    this.rename_name = name.clone();
+                    cx.notify();
+                },
+            )
+            .detach();
+            let focus = cx.focus_handle();
+            window.focus(&focus);
+            window.activate_window();
+            DesktopView {
+                output: "isolated".into(),
+                actions,
+                preview: false,
+                entries,
+                directory: Some(directory.to_path_buf()),
+                wallpaper: None,
+                selected: None,
+                selected_many: BTreeSet::new(),
+                selection_anchor: None,
+                marquee: None,
+                labels: HashMap::new(),
+                new_folder: false,
+                inspector: None,
+                inspection_generation: 0,
+                menu: None,
+                menu_window: None,
+                own_window: None,
+                rename: None,
+                rename_name: String::new(),
+                input,
+                focus,
+                error: None,
+                busy: false,
+                work,
+                alive: Arc::new(AtomicBool::new(true)),
+                scroll: ScrollHandle::new(),
+                reserved_edges: [0.; 4],
+                appearance: Default::default(),
+            }
+        });
+        (view, visual, received_actions, received_work)
+    }
+
+    #[gpui::test]
+    fn rename_and_context_menu_use_the_compact_shell_style(cx: &mut TestAppContext) {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("Desktop");
+        fs::create_dir(&directory).unwrap();
+        fs::write(directory.join("first.txt"), b"keep").unwrap();
+        let (view, visual, _actions, _work) = desktop_fixture(cx, &directory);
+        let tile = visual.update(|window, cx| {
+            let grid = view.read(cx).grid(window);
+            Bounds::new(grid.origin + grid.tile(0).origin, grid.tile(0).size)
+        });
+
+        visual.simulate_click(tile.center(), Modifiers::default());
+        visual.simulate_keystrokes("f2");
+        visual.run_until_parked();
+        let rename = visual
+            .debug_bounds("desktop-edit-field")
+            .expect("the rename field is painted");
+        assert!(
+            f32::from(rename.size.height) <= 30.,
+            "the rename field must stay compact inside a desktop tile: {:?}",
+            rename
+        );
+
+        visual.simulate_keystrokes("escape");
+        visual.simulate_keystrokes("super-shift-n");
+        visual.run_until_parked();
+        let new_folder = visual
+            .debug_bounds("desktop-edit-field")
+            .expect("the new-folder field is painted");
+        assert_eq!(
+            rename.size, new_folder.size,
+            "rename and new folder share one field style"
+        );
+        visual.simulate_keystrokes("escape");
+
+        let windows_before = visual.cx.windows();
+        visual.simulate_mouse_down(tile.center(), MouseButton::Right, Modifiers::default());
+        visual.run_until_parked();
+        // A card painted into the desktop surface can never be frosted: the
+        // compositor blurs what lies behind a surface, never its own icons.
+        // The menu therefore has to be a surface of its own, like the
+        // launcher's application menu.
+        assert_eq!(
+            visual.cx.windows().len(),
+            windows_before.len() + 1,
+            "the context menu must open its own overlay surface"
+        );
+        let handle = view
+            .read_with(visual, |view, _| view.menu_window)
+            .expect("the desktop records its menu surface");
+        let menu_entity = handle
+            .root(&mut visual.cx)
+            .expect("the menu surface has a root view");
+        let mut menu = VisualTestContext::from_window(*handle, &visual.cx);
+        menu.run_until_parked();
+        let card = menu
+            .debug_bounds("desktop-context-menu")
+            .expect("the context menu is painted in its own surface");
+        assert!(
+            f32::from(card.size.width) <= 220.,
+            "the context menu stays compact: {card:?}"
+        );
+        let row = menu
+            .debug_bounds("desktop-open")
+            .expect("the open row is painted");
+        assert!(
+            f32::from(row.size.height) <= 28.,
+            "menu rows stay compact: {row:?}"
+        );
+        for id in [
+            "desktop-menu-separator-0",
+            "desktop-menu-separator-1",
+            "desktop-menu-separator-2",
+            "desktop-menu-separator-3",
+        ] {
+            assert!(
+                menu.debug_bounds(id).is_some(),
+                "the context menu must group its actions with {id}"
+            );
+        }
+        for id in [
+            "desktop-menu-icon-desktop-open",
+            "desktop-menu-icon-desktop-info",
+            "desktop-menu-icon-desktop-quick-look",
+            "desktop-menu-icon-desktop-rename",
+            "desktop-menu-icon-desktop-trash",
+            "desktop-menu-icon-desktop-new-folder",
+            "desktop-menu-icon-desktop-refresh",
+            "desktop-menu-icon-desktop-open-directory",
+            "desktop-menu-icon-desktop-wallpaper",
+            "desktop-menu-icon-desktop-settings",
+        ] {
+            assert!(
+                menu.debug_bounds(id).is_some(),
+                "the context menu row must carry the {id} prefix"
+            );
+        }
+        assert_eq!(
+            menu_entity.read_with(&menu, |menu, _| menu.glass),
+            Some(card),
+            "the frosted mask must be the exact painted card outline"
+        );
+        view.update(visual, |view, cx| {
+            view.set_appearance(
+                SurfaceAppearance {
+                    frost: 0.,
+                    ..view.appearance
+                },
+                cx,
+            );
+        });
+        menu.run_until_parked();
+        assert!(
+            menu_entity.read_with(&menu, |menu, _| menu.glass.is_none()),
+            "zero frost must drop the glass region instead of blurring the desktop"
+        );
+
+        // The inline editor lives in the desktop window, so a menu action has
+        // to hand focus back there and take its own surface down.
+        let new_folder = menu
+            .debug_bounds("desktop-new-folder")
+            .expect("the new-folder row is painted");
+        menu.simulate_click(new_folder.center(), Modifiers::default());
+        visual.run_until_parked();
+        assert!(
+            view.read_with(visual, |view, _| view.new_folder),
+            "the menu action starts the inline new-folder field"
+        );
+        assert!(
+            view.read_with(visual, |view, _| view.menu_window.is_none()),
+            "the menu surface closes once its action has run"
+        );
+        assert!(
+            visual.debug_bounds("desktop-edit-field").is_some(),
+            "the field is painted back in the desktop window"
+        );
+        let input_focus = view.read_with(visual, |view, cx| view.input.focus_handle(cx));
+        assert_eq!(
+            visual.update(|window, cx| window.focused(cx)),
+            Some(input_focus),
+            "the inline field must own keyboard focus after the menu closes"
+        );
+        visual.simulate_keystrokes("escape");
+        visual.run_until_parked();
+
+        visual.simulate_mouse_down(tile.center(), MouseButton::Right, Modifiers::default());
+        visual.run_until_parked();
+        let escape = view
+            .read_with(visual, |view, _| view.menu_window)
+            .expect("a fresh menu surface");
+        let mut escape = VisualTestContext::from_window(*escape, &visual.cx);
+        escape.simulate_keystrokes("escape");
+        escape.run_until_parked();
+        visual.run_until_parked();
+        assert_eq!(
+            visual.cx.windows().len(),
+            windows_before.len(),
+            "escape must dismiss the menu surface"
+        );
+    }
+
     #[gpui::test]
     fn forwarded_desktop_shortcuts_dispatch_real_actions_and_inline_folder_creation(
         cx: &mut TestAppContext,
@@ -2335,6 +2479,8 @@ mod tests {
                 inspector: None,
                 inspection_generation: 0,
                 menu: None,
+                menu_window: None,
+                own_window: None,
                 rename: None,
                 rename_name: String::new(),
                 input,

@@ -2381,7 +2381,7 @@ fn preferences_window_is_placed(
 
 // Mirror the layer-shell role declaration at each call site.
 #[allow(clippy::too_many_arguments)]
-fn window_options(
+pub(crate) fn window_options(
     namespace: &'static str,
     display: Option<DisplayId>,
     bounds: Bounds<Pixels>,
@@ -2411,8 +2411,10 @@ fn window_options(
         },
         display_id: display,
         window_background: if preview
-            || matches!(namespace, "clarion-desktop" | "clarion-dock-edge")
-        {
+            || matches!(
+                namespace,
+                "clarion-desktop" | "clarion-desktop-menu" | "clarion-dock-edge"
+            ) {
             WindowBackgroundAppearance::Transparent
         } else {
             WindowBackgroundAppearance::Blurred

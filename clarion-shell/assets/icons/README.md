@@ -43,6 +43,15 @@ monitor and storage sections, alongside the project mark.
 `clarion-overview.png` is the circular About-panel artwork supplied by the
 project owner.
 
+## Desktop context-menu marks
+
+`menu-open.svg`, `menu-info.svg`, `menu-eye.svg`, `menu-pencil.svg`,
+`menu-trash.svg`, `menu-folder-plus.svg`, `menu-folder-open.svg` and
+`menu-refresh.svg` are original Clarion monochrome action marks under
+GPL-3.0-or-later. They are the bundled fallbacks for the desktop context
+menu's prefix icons; the shell prefers the current icon theme's symbolic
+marks when present.
+
 ## Native action icons
 
 `bell.svg`, `circle.svg`, `clipboard.svg`, `grid.svg`, `scan.svg`, `sliders.svg`,
