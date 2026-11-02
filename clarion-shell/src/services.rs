@@ -111,14 +111,27 @@ pub enum Command {
     Clear,
     Pause(bool),
     RecordScreenshot(std::path::PathBuf),
-    TrayActivate { id: String, x: i32, y: i32 },
+    TrayActivate {
+        id: String,
+        x: i32,
+        y: i32,
+    },
     GetMenu(String),
-    MenuClick { id: String, item: i32 },
-    NotificationAction { id: u32, action: String },
+    MenuClick {
+        id: String,
+        item: i32,
+    },
+    NotificationAction {
+        id: u32,
+        action: String,
+    },
     DismissNotification(u32),
     /// Pin or unpin one notification. Pinned entries stop expiring and sort
     /// before the live feed.
-    PinNotification { id: u32, pinned: bool },
+    PinNotification {
+        id: u32,
+        pinned: bool,
+    },
     MarkRead,
     Dnd(bool),
     Shutdown,

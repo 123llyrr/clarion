@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Floating macOS Dock. The shadow canvas is outside the tray's layout budget.
-use super::*;
 use super::dock_folder::FolderEntryDrag;
+use super::*;
 
 /// Hover tooltip text size.
 const TOOLTIP_TEXT_SIZE: f32 = 13.;
@@ -331,7 +331,8 @@ pub(super) struct DockViewMotion {
     pub(super) drag_accept: Option<String>,
     /// A folder from outside the Dock is hovering the tray and the Dock is
     /// holding open an extra folder slot for it.
-    pub(super) folder_drop_active: bool,    /// The reserved slot should show the folder placeholder. It stays true
+    pub(super) folder_drop_active: bool,
+    /// The reserved slot should show the folder placeholder. It stays true
     /// while the drag remains over the Dock, including over apps or the
     /// shifted trash, until the drag leaves or ends.
     pub(super) folder_drop_visible: bool,
@@ -590,7 +591,11 @@ impl DockViewMotion {
         let mut insert = 0usize;
         for (index, _) in &remaining {
             // The dragged application leaves a hole at its own slot.
-            let slot = if *index < drag.insert { *index } else { *index + 1 };
+            let slot = if *index < drag.insert {
+                *index
+            } else {
+                *index + 1
+            };
             let center = geometry.base + slot as f32 * geometry.item + geometry.icon / 2.;
             if center < pointer {
                 insert = *index + 1;
@@ -916,8 +921,7 @@ impl ShellView {
     /// truth — drag detection and the tray's `can_drop` both read this.
     fn folder_strip_main_range(&self) -> (f32, f32) {
         let geometry = &self.dock_motion.geometry;
-        let start = geometry.apps_end
-            + ((geometry.folder_base - geometry.apps_end) / 3.).max(0.);
+        let start = geometry.apps_end + ((geometry.folder_base - geometry.apps_end) / 3.).max(0.);
         (start, geometry.trash_start)
     }
 
@@ -937,11 +941,7 @@ impl ShellView {
             return None;
         }
         let vertical = self.state.prefs.dock_position != DockPosition::Bottom;
-        let main = f32::from(if vertical {
-            position.y
-        } else {
-            position.x
-        });
+        let main = f32::from(if vertical { position.y } else { position.x });
         let id = self
             .dock_motion
             .drag_targets
@@ -1104,17 +1104,18 @@ impl ShellView {
                 h.update(cx, |h, cx| h.handle(Action::FolderDropPreview(false), cx));
             }
         }
-        let folder_drop_target = if self.dock_motion.folder_drop_active
-            && self.dock_motion.folder_drop_visible
-        {
-            1.
-        } else {
-            0.
-        };
+        let folder_drop_target =
+            if self.dock_motion.folder_drop_active && self.dock_motion.folder_drop_visible {
+                1.
+            } else {
+                0.
+            };
         if host.prefs.reduce_motion {
             self.dock_motion.folder_drop.snap(folder_drop_target);
         } else {
-            self.dock_motion.folder_drop.retarget(folder_drop_target, now);
+            self.dock_motion
+                .folder_drop
+                .retarget(folder_drop_target, now);
         }
         let folder_drop = self.dock_motion.folder_drop.sample(now);
         // UPSTREAM(gpui): this watchdog papers over two upstream gaps that we
@@ -1156,10 +1157,7 @@ impl ShellView {
             // would look exactly like the lost-pointer state. The drag path
             // drives the hover state itself below, so reconciliation must not
             // fight it while a drag is active.
-            if self.dock_motion.hovered
-                && !cx.has_active_drag()
-                && !window.is_window_hovered()
-            {
+            if self.dock_motion.hovered && !cx.has_active_drag() && !window.is_window_hovered() {
                 self.dock_motion.clear_hover();
                 self.dock_drag_seen = false;
                 let h = self.host.clone();
@@ -1249,7 +1247,8 @@ impl ShellView {
         let active = visibility.active
             || strength.active
             || folder_drop.active
-            || (strength.value > 0.001 && pointer.active);        let mut regions = rounded_region(tray_w, tray_h, metrics.radius);
+            || (strength.value > 0.001 && pointer.active);
+        let mut regions = rounded_region(tray_w, tray_h, metrics.radius);
         for region in &mut regions {
             region.origin.x += px(tray_x);
             region.origin.y += px(tray_y);
@@ -1303,7 +1302,8 @@ impl ShellView {
         let left = frame.left;
         let dark = frame.dark;
         let slide = frame.slide;
-        let launcher_offset = frame.launcher_offset;        let now = frame.now;
+        let launcher_offset = frame.launcher_offset;
+        let now = frame.now;
         let mut extra_active = false;
         let mut content = div().absolute().inset_0();
         // The pinned applications that did not fit the row wait in the overflow
@@ -1918,7 +1918,11 @@ impl ShellView {
                 };
                 // A file the app can open lifts its icon slightly and tints the
                 // artwork so the drop target stands out without hiding it.
-                let icon_size = if accepting { slot.size * 1.12 } else { slot.size };
+                let icon_size = if accepting {
+                    slot.size * 1.12
+                } else {
+                    slot.size
+                };
                 let icon_inset = (slot.size - icon_size) / 2.;
                 let icon_element = self.icon(icon, icon_size, p);
                 tile = if accepting {
@@ -1959,10 +1963,7 @@ impl ShellView {
                         .on_click(move |_, _, cx| {
                             h.update(cx, |h, cx| {
                                 h.handle(
-                                    Action::on_output(
-                                        surface_output.clone(),
-                                        Action::Launcher,
-                                    ),
+                                    Action::on_output(surface_output.clone(), Action::Launcher),
                                     cx,
                                 )
                             })
@@ -2088,7 +2089,11 @@ impl ShellView {
                             h.update(cx, |h, cx| {
                                 h.handle(
                                     Action::Core(clarion_ipc::Action::Spawn {
-                                        command: vec!["gio".into(), "open".into(), "trash:///".into()],
+                                        command: vec![
+                                            "gio".into(),
+                                            "open".into(),
+                                            "trash:///".into(),
+                                        ],
                                     }),
                                     cx,
                                 )
@@ -2118,8 +2123,7 @@ impl ShellView {
             if separate {
                 // The separator sits in the middle of the gap it divides.
                 let position = slot.origin_main
-                    - (crate::dock_motion::row_gap(metrics.icon_size)
-                        + metrics.separator_extra)
+                    - (crate::dock_motion::row_gap(metrics.icon_size) + metrics.separator_extra)
                         / 2.;
                 content = content.child(
                     div()
@@ -2173,20 +2177,16 @@ impl ShellView {
         if let Some(drag) = self.dock_motion.drag.clone() {
             if let Some(app) = apps.iter().find(|app| app.id == drag.id).cloned() {
                 let icon = metrics.icon_size;
-                let leading = (drag.pointer - drag.grab)
-                    .clamp(metrics.end_gap, (metrics.length - metrics.end_gap - icon).max(0.));
+                let leading = (drag.pointer - drag.grab).clamp(
+                    metrics.end_gap,
+                    (metrics.length - metrics.end_gap - icon).max(0.),
+                );
                 let (x, y) = if !vertical {
-                    (
-                        leading,
-                        metrics.cross_padding + metrics.inset + slide,
-                    )
+                    (leading, metrics.cross_padding + metrics.inset + slide)
                 } else if left {
                     (metrics.inset - slide, leading)
                 } else {
-                    (
-                        metrics.cross_padding + metrics.inset + slide,
-                        leading,
-                    )
+                    (metrics.cross_padding + metrics.inset + slide, leading)
                 };
                 let mut tile = dock_slot(SharedString::from(format!("dock-drag-{}", app.id)), icon)
                     .left(px(x))
@@ -2198,10 +2198,7 @@ impl ShellView {
                         spread_radius: px(0.),
                     }]);
                 tile = tile.child(self.icon(app.icon.clone(), icon, p));
-                icon_regions.push(Bounds::new(
-                    point(px(x), px(y)),
-                    size(px(icon), px(icon)),
-                ));
+                icon_regions.push(Bounds::new(point(px(x), px(y)), size(px(icon), px(icon))));
                 content = content.child(tile);
             }
         }
@@ -2217,33 +2214,23 @@ impl ShellView {
                 let leading = (drag.pointer - drag.grab)
                     .clamp(group_start, (group_end - icon).max(group_start));
                 let (x, y) = if !vertical {
-                    (
-                        leading,
-                        metrics.cross_padding + metrics.inset + slide,
-                    )
+                    (leading, metrics.cross_padding + metrics.inset + slide)
                 } else if left {
                     (metrics.inset - slide, leading)
                 } else {
-                    (
-                        metrics.cross_padding + metrics.inset + slide,
-                        leading,
-                    )
+                    (metrics.cross_padding + metrics.inset + slide, leading)
                 };
-                let mut tile =
-                    dock_slot(SharedString::from("dock-folder-drag"), icon)
-                        .left(px(x))
-                        .top(px(y))
-                        .shadow(vec![BoxShadow {
-                            color: rgba(0x00000052).into(),
-                            offset: point(px(0.), px(6.)),
-                            blur_radius: px(14.),
-                            spread_radius: px(0.),
-                        }]);
+                let mut tile = dock_slot(SharedString::from("dock-folder-drag"), icon)
+                    .left(px(x))
+                    .top(px(y))
+                    .shadow(vec![BoxShadow {
+                        color: rgba(0x00000052).into(),
+                        offset: point(px(0.), px(6.)),
+                        blur_radius: px(14.),
+                        spread_radius: px(0.),
+                    }]);
                 tile = tile.child(folder_tile_icon(Some(folder), icon, false, p));
-                icon_regions.push(Bounds::new(
-                    point(px(x), px(y)),
-                    size(px(icon), px(icon)),
-                ));
+                icon_regions.push(Bounds::new(point(px(x), px(y)), size(px(icon), px(icon))));
                 content = content.child(tile);
             }
         }
@@ -2288,8 +2275,8 @@ impl ShellView {
         let tray_w = frame.tray_w;
         let tray_h = frame.tray_h;
         let metrics = &frame.metrics;
-        let folder_drop_lift = frame.folder_drop_lift;        // Clip the protocol masks to the negotiated surface. Quantizing keeps
-        // subpixel animation from issuing redundant Wayland region commits.
+        let folder_drop_lift = frame.folder_drop_lift; // Clip the protocol masks to the negotiated surface. Quantizing keeps
+                                                       // subpixel animation from issuing redundant Wayland region commits.
         let viewport = window.viewport_size();
         let quantize = |regions: Vec<Bounds<Pixels>>| -> Vec<Bounds<Pixels>> {
             regions
@@ -2299,8 +2286,9 @@ impl ShellView {
                     let y = f32::from(r.top()).floor().max(0.);
                     let right = f32::from(r.right()).ceil().min(f32::from(viewport.width));
                     let bottom = f32::from(r.bottom()).ceil().min(f32::from(viewport.height));
-                    (right > x && bottom > y)
-                        .then(|| Bounds::new(point(px(x), px(y)), size(px(right - x), px(bottom - y))))
+                    (right > x && bottom > y).then(|| {
+                        Bounds::new(point(px(x), px(y)), size(px(right - x), px(bottom - y)))
+                    })
                 })
                 .collect()
         };
@@ -2386,17 +2374,13 @@ impl ShellView {
                         linear_color_stop(p.frost_wash, 0.),
                         linear_color_stop(rgba(0xffffff00), 1.),
                     ))
-                    .child(
-                        div()
-                            .absolute()
-                            .inset_0()
-                            .rounded(px(metrics.radius))
-                            .bg(linear_gradient(
-                                180.,
-                                linear_color_stop(p.accent_wash, 0.),
-                                linear_color_stop(rgba(0xffffff00), 0.35),
-                            )),
-                    ),
+                    .child(div().absolute().inset_0().rounded(px(metrics.radius)).bg(
+                        linear_gradient(
+                            180.,
+                            linear_color_stop(p.accent_wash, 0.),
+                            linear_color_stop(rgba(0xffffff00), 0.35),
+                        ),
+                    )),
             );
         let tooltip = self.dock_motion.tooltip_name.clone().map(|name| {
             // Size the label to the application name so the container grows with
@@ -2484,14 +2468,9 @@ impl ShellView {
                 } else if this.dock_motion.drag.is_some() {
                     this.dock_motion.track_drag(target);
                     cx.notify();
-                } else if this
-                    .dock_motion
-                    .folder_press
-                    .as_ref()
-                    .is_some_and(|press| {
-                        (target - press.pointer).abs() >= crate::dock_motion::DRAG_THRESHOLD
-                    })
-                {
+                } else if this.dock_motion.folder_press.as_ref().is_some_and(|press| {
+                    (target - press.pointer).abs() >= crate::dock_motion::DRAG_THRESHOLD
+                }) {
                     let folders = this.state.dock_folders.clone();
                     if this.dock_motion.begin_folder_drag(target, &folders) {
                         this.dock_motion.track_folder_drag(target);
@@ -2656,7 +2635,9 @@ impl ShellView {
                         return;
                     };
                     let h = this.host.clone();
-                    cx.defer(move |cx| h.update(cx, |h, cx| h.handle(Action::DockOrder(order), cx)));
+                    cx.defer(move |cx| {
+                        h.update(cx, |h, cx| h.handle(Action::DockOrder(order), cx))
+                    });
                     cx.notify();
                 }),
             )

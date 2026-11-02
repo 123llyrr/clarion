@@ -578,8 +578,8 @@ mod tests {
         let mut prefs = defaults;
         prefs.launcher_presentation = LauncherPresentation::Palette;
         prefs.save(&env, false).unwrap();
-        let saved: Value = serde_json::from_slice(&fs::read(preferences_path(&env).unwrap()).unwrap())
-            .unwrap();
+        let saved: Value =
+            serde_json::from_slice(&fs::read(preferences_path(&env).unwrap()).unwrap()).unwrap();
         assert_eq!(saved["launcher_presentation"], serde_json::json!("palette"));
         assert_eq!(Preferences::load(&env, false).unwrap(), prefs);
     }
@@ -620,8 +620,8 @@ mod tests {
             ..defaults
         };
         prefs.save(&env, false).unwrap();
-        let saved: Value = serde_json::from_slice(&fs::read(preferences_path(&env).unwrap()).unwrap())
-            .unwrap();
+        let saved: Value =
+            serde_json::from_slice(&fs::read(preferences_path(&env).unwrap()).unwrap()).unwrap();
         assert_eq!(saved["spotlight_app_layout"], serde_json::json!("list"));
         assert_eq!(saved["spotlight_app_order"], serde_json::json!("smart"));
         assert_eq!(Preferences::load(&env, false).unwrap(), prefs);

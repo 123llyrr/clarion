@@ -170,14 +170,7 @@ impl ShellView {
             .justify_center()
             .cursor_pointer()
             .hover(move |s| s.bg(p.line))
-            .child(self.symbol(
-                "x",
-                11.,
-                Palette {
-                    fg: p.muted,
-                    ..p
-                },
-            ))
+            .child(self.symbol("x", 11., Palette { fg: p.muted, ..p }))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(move |_, _, cx| {
                 cx.stop_propagation();
@@ -237,12 +230,11 @@ impl ShellView {
             0
         };
         let collapsed = first_height + sheets as f32 * STACK_STEP;
-        let open_height = heights.iter().sum::<f32>()
-            + CARD_GAP * items.len().saturating_sub(1) as f32;
+        let open_height =
+            heights.iter().sum::<f32>() + CARD_GAP * items.len().saturating_sub(1) as f32;
         // The elastic sample may overshoot its endpoint; let the container
         // ride the bounce, but never clip the top card smaller than itself.
-        let height =
-            (collapsed + (open_height - collapsed) * progress).max(first_height);
+        let height = (collapsed + (open_height - collapsed) * progress).max(first_height);
 
         // Where each real card sits once the pile is open.
         let mut expanded = Vec::with_capacity(heights.len());
@@ -304,8 +296,7 @@ impl ShellView {
                 4. + depth as f32 * 4.
             };
             let y = folded_y + (expanded[index] - folded_y) * progress;
-            let inset =
-                folded_inset * (1. - progress.clamp(0., 1.));
+            let inset = folded_inset * (1. - progress.clamp(0., 1.));
             let opacity = if index <= sheets {
                 1.
             } else {
@@ -346,10 +337,7 @@ impl ShellView {
         cx: &Context<Self>,
     ) -> AnyElement {
         let id = item.id;
-        let drag = self
-            .notification_drag
-            .as_ref()
-            .filter(|drag| drag.id == id);
+        let drag = self.notification_drag.as_ref().filter(|drag| drag.id == id);
         let (drag_dx, drag_dy) = drag.map(|drag| (drag.dx, drag.dy)).unwrap_or((0., 0.));
         // The column clips its contents, so the card only nudges while the
         // pointer travels; the fade carries the rest of the dismissal signal.
@@ -371,39 +359,29 @@ impl ShellView {
                     .text_ellipsis()
                     .text_size(px(11.))
                     .line_height(px(14.))
-                    .child(menu_text(
-                        item.app.clone(),
-                        FontWeight::MEDIUM,
-                        p.muted,
-                        cx,
-                    )),
+                    .child(menu_text(item.app.clone(), FontWeight::MEDIUM, p.muted, cx)),
             )
             .child(self.notification_pin(item, p, cx))
             .child(self.notification_close(id, p));
 
-        let mut text = div()
-            .flex()
-            .flex_col()
-            .gap(px(2.))
-            .min_w_0()
-            .child(
-                div()
-                    .id(("notification-title", id as usize))
-                    .debug_selector(move || format!("notification-title-{id}"))
-                    .w_full()
-                    .max_h(px(TITLE_HEIGHT))
-                    .whitespace_normal()
-                    .text_size(px(13.))
-                    .line_height(px(17.))
-                    .line_clamp(2)
-                    .overflow_hidden()
-                    .child(menu_text(
-                        item.title.clone(),
-                        FontWeight::SEMIBOLD,
-                        p.fg,
-                        cx,
-                    )),
-            );
+        let mut text = div().flex().flex_col().gap(px(2.)).min_w_0().child(
+            div()
+                .id(("notification-title", id as usize))
+                .debug_selector(move || format!("notification-title-{id}"))
+                .w_full()
+                .max_h(px(TITLE_HEIGHT))
+                .whitespace_normal()
+                .text_size(px(13.))
+                .line_height(px(17.))
+                .line_clamp(2)
+                .overflow_hidden()
+                .child(menu_text(
+                    item.title.clone(),
+                    FontWeight::SEMIBOLD,
+                    p.fg,
+                    cx,
+                )),
+        );
         if !item.body.is_empty() {
             text = text.child(
                 div()
@@ -552,34 +530,35 @@ impl ShellView {
 
         if let Some(app) = stack {
             let reduce = host.prefs.reduce_motion;
-            card = card.on_click(cx.listener(move |this, _, _, cx| {
-                if this.notification_drag_dismissed.replace(false) {
-                    return;
-                }
-                let expanded = {
-                    let mut open = this.notification_expanded.borrow_mut();
-                    if open.contains(&app) {
-                        open.remove(&app);
-                        false
-                    } else {
-                        open.insert(app.clone());
-                        true
+            card = card
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if this.notification_drag_dismissed.replace(false) {
+                        return;
                     }
-                };
-                let target = if expanded { 1. } else { 0. };
-                let now = this.popup_epoch.elapsed();
-                let mut stacks = this.notification_stacks.borrow_mut();
-                let motion = stacks
-                    .entry(app.clone())
-                    .or_insert_with(|| crate::dock_motion::Elastic::new(0.));
-                if reduce {
-                    motion.snap(target);
-                } else {
-                    motion.retarget(target, now);
-                }
-                cx.notify();
-            }))
-            .cursor_pointer();
+                    let expanded = {
+                        let mut open = this.notification_expanded.borrow_mut();
+                        if open.contains(&app) {
+                            open.remove(&app);
+                            false
+                        } else {
+                            open.insert(app.clone());
+                            true
+                        }
+                    };
+                    let target = if expanded { 1. } else { 0. };
+                    let now = this.popup_epoch.elapsed();
+                    let mut stacks = this.notification_stacks.borrow_mut();
+                    let motion = stacks
+                        .entry(app.clone())
+                        .or_insert_with(|| crate::dock_motion::Elastic::new(0.));
+                    if reduce {
+                        motion.snap(target);
+                    } else {
+                        motion.retarget(target, now);
+                    }
+                    cx.notify();
+                }))
+                .cursor_pointer();
         }
         card.into_any_element()
     }
@@ -679,16 +658,10 @@ impl ShellView {
                 div()
                     .text_size(px(11.))
                     .line_height(px(14.))
-                    .child(menu_text(
-                        "今天".into(),
-                        FontWeight::MEDIUM,
-                        p.accent,
-                        cx,
-                    )),
+                    .child(menu_text("今天".into(), FontWeight::MEDIUM, p.accent, cx)),
             )
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.calendar_month
-                    .set(Some((today.year(), today.month())));
+                this.calendar_month.set(Some((today.year(), today.month())));
                 this.calendar_day.set(Some(today));
                 cx.notify();
             }))
@@ -798,29 +771,20 @@ impl ShellView {
         }
 
         let mut grid = div().flex().flex_col().gap(px(2.)).child(
-            div()
-                .flex()
-                .w_full()
-                .h(px(18.))
-                .children(
-                    ["一", "二", "三", "四", "五", "六", "日"]
-                        .into_iter()
-                        .map(|label| {
-                            div()
-                                .flex_1()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .text_size(px(11.))
-                                .line_height(px(14.))
-                                .child(menu_text(
-                                    label.into(),
-                                    FontWeight::MEDIUM,
-                                    p.muted,
-                                    cx,
-                                ))
-                        }),
-                ),
+            div().flex().w_full().h(px(18.)).children(
+                ["一", "二", "三", "四", "五", "六", "日"]
+                    .into_iter()
+                    .map(|label| {
+                        div()
+                            .flex_1()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_size(px(11.))
+                            .line_height(px(14.))
+                            .child(menu_text(label.into(), FontWeight::MEDIUM, p.muted, cx))
+                    }),
+            ),
         );
         for week in calendar_weeks(calendar) {
             let mut row = div().flex().w_full();
@@ -915,18 +879,10 @@ impl ShellView {
                     .line_height(px(36.))
                     .child(menu_text(date, FontWeight::LIGHT, p.fg, cx)),
             )
-            .child(
-                div()
-                    .h(px(1.))
-                    .bg(p.line.opacity(0.6)),
-            )
+            .child(div().h(px(1.)).bg(p.line.opacity(0.6)))
             .child(tools)
             .child(grid)
-            .child(
-                div()
-                    .h(px(1.))
-                    .bg(p.line.opacity(0.6)),
-            )
+            .child(div().h(px(1.)).bg(p.line.opacity(0.6)))
             .child(
                 div()
                     .flex()
@@ -936,12 +892,7 @@ impl ShellView {
                         div()
                             .text_size(px(12.))
                             .line_height(px(15.))
-                            .child(menu_text(
-                                "通知".into(),
-                                FontWeight::MEDIUM,
-                                p.muted,
-                                cx,
-                            )),
+                            .child(menu_text("通知".into(), FontWeight::MEDIUM, p.muted, cx)),
                     )
                     .child(
                         div()
@@ -1014,14 +965,7 @@ impl ShellView {
                     .items_center()
                     .justify_center()
                     .gap(px(8.))
-                    .child(self.symbol(
-                        "bell",
-                        24.,
-                        Palette {
-                            fg: p.muted,
-                            ..p
-                        },
-                    ))
+                    .child(self.symbol("bell", 24., Palette { fg: p.muted, ..p }))
                     .child(
                         div()
                             .text_size(px(13.))
@@ -1039,8 +983,7 @@ impl ShellView {
         // group; the stacks inherit that order so the most important card tops
         // the column.
         for (app, items) in notification_groups(&host.notifications) {
-            let (stack, active) =
-                self.notification_stack(host, &app, &items, p, now, cx);
+            let (stack, active) = self.notification_stack(host, &app, &items, p, now, cx);
             animating |= active;
             cards = cards.child(stack);
         }
@@ -1083,11 +1026,7 @@ impl ShellView {
             );
 
         let close_host = self.host.clone();
-        let frost = container_regions(
-            point(popup.origin.x + px(slide), popup.origin.y),
-            pw,
-            ph,
-        );
+        let frost = container_regions(point(popup.origin.x + px(slide), popup.origin.y), pw, ph);
         #[cfg(test)]
         let recorded_regions = self.notification_regions.clone();
         div()
@@ -1287,8 +1226,8 @@ struct CalendarMonth {
 }
 
 fn calendar_month(year: i32, month: u32) -> CalendarMonth {
-    let first =
-        NaiveDate::from_ymd_opt(year, month, 1).unwrap_or_else(|| NaiveDate::from_ymd_opt(2000, 1, 1).unwrap());
+    let first = NaiveDate::from_ymd_opt(year, month, 1)
+        .unwrap_or_else(|| NaiveDate::from_ymd_opt(2000, 1, 1).unwrap());
     let next = shifted_month(year, month, 1);
     let next = NaiveDate::from_ymd_opt(next.0, next.1, 1).unwrap_or(first);
     let days = (next - chrono::Duration::days(1)).day();
@@ -1455,10 +1394,21 @@ mod tests {
         assert_eq!(month.first_weekday, 3);
         let weeks = calendar_weeks(month);
         assert_eq!(weeks.len(), 5);
-        assert_eq!(weeks[0], vec![None, None, None, Some(1), Some(2), Some(3), Some(4)]);
+        assert_eq!(
+            weeks[0],
+            vec![None, None, None, Some(1), Some(2), Some(3), Some(4)]
+        );
         assert_eq!(
             weeks[4],
-            vec![Some(26), Some(27), Some(28), Some(29), Some(30), Some(31), None]
+            vec![
+                Some(26),
+                Some(27),
+                Some(28),
+                Some(29),
+                Some(30),
+                Some(31),
+                None
+            ]
         );
         for week in weeks {
             assert_eq!(week.len(), 7);
@@ -1631,11 +1581,7 @@ mod tests {
         let card = visual.debug_bounds("notification-card-1").unwrap();
         let start = card.center();
         visual.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
-        visual.simulate_mouse_move(
-            start + point(px(160.), px(0.)),
-            None,
-            Modifiers::default(),
-        );
+        visual.simulate_mouse_move(start + point(px(160.), px(0.)), None, Modifiers::default());
         visual.simulate_mouse_up(
             start + point(px(160.), px(0.)),
             MouseButton::Left,
@@ -1643,10 +1589,7 @@ mod tests {
         );
         visual.run_until_parked();
         let command = received.try_recv().expect("the drag reaches the service");
-        assert!(matches!(
-            command,
-            services::Command::DismissNotification(1)
-        ));
+        assert!(matches!(command, services::Command::DismissNotification(1)));
     }
 
     #[gpui::test]
@@ -1715,7 +1658,10 @@ mod tests {
             open.size.height,
             first.size.height + second.size.height + px(CARD_GAP)
         );
-        assert!(second.top() >= first.bottom(), "the second card follows the first");
+        assert!(
+            second.top() >= first.bottom(),
+            "the second card follows the first"
+        );
         assert_eq!(
             second.size.width, first.size.width,
             "an open stack gives every card the full column width"
@@ -1814,7 +1760,9 @@ mod tests {
             assert_eq!(view.calendar_day.get(), None);
         });
         assert!(visual.debug_bounds("notification-calendar-today").is_none());
-        assert!(visual.debug_bounds("notification-calendar-today-button").is_some());
+        assert!(visual
+            .debug_bounds("notification-calendar-today-button")
+            .is_some());
 
         // Picking a day highlights it with the filled circle.
         let day = visual
@@ -1879,7 +1827,10 @@ mod tests {
             .advance_clock(std::time::Duration::from_millis(400));
         visual.run_until_parked();
         host.read_with(cx, |host, _| {
-            assert!(host.panel.is_none(), "the surface is released after the ride");
+            assert!(
+                host.panel.is_none(),
+                "the surface is released after the ride"
+            );
         });
     }
 
@@ -1900,7 +1851,10 @@ mod tests {
         );
         visual.run_until_parked();
         host.read_with(cx, |host, _| {
-            assert!(host.panel.is_none(), "an outside click dismisses the center");
+            assert!(
+                host.panel.is_none(),
+                "an outside click dismisses the center"
+            );
         });
     }
 }

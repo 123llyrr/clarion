@@ -117,7 +117,13 @@ impl ShellView {
         .enumerate()
         {
             if index != 0 {
-                footer = footer.child(div().ml(px(32.)).mr(px(8.)).h(px(1.)).bg(p.line.opacity(0.55)));
+                footer = footer.child(
+                    div()
+                        .ml(px(32.))
+                        .mr(px(8.))
+                        .h(px(1.))
+                        .bg(p.line.opacity(0.55)),
+                );
             }
             footer = footer.child(self.control_entry(id, label, icon, action, p));
         }
@@ -252,7 +258,11 @@ impl ShellView {
         );
         let tone = crate::battery::tone(state);
         let icon = crate::battery::icon(state, host.system.battery);
-        let detail = match host.system.battery_health.filter(|health| health.is_finite()) {
+        let detail = match host
+            .system
+            .battery_health
+            .filter(|health| health.is_finite())
+        {
             Some(health) => format!(
                 "{} · 健康度 {:.0}%",
                 crate::battery::label(state),
@@ -902,9 +912,7 @@ mod tests {
             "the battery card joins the control center"
         );
         assert!(
-            visual
-                .debug_bounds("controls-battery-percent")
-                .is_some(),
+            visual.debug_bounds("controls-battery-percent").is_some(),
             "the card shows the charge percentage"
         );
     }

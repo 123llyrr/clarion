@@ -92,8 +92,7 @@ fn launchpad_metrics(width: f32, height: f32) -> LaunchpadMetrics {
     let band_bottom = (dock_top - LAUNCHPAD_DOTS_BOTTOM - LAUNCHPAD_DOTS_H).max(grid_top);
     let available_height = (band_bottom - grid_top - LAUNCHPAD_DOTS_GAP).max(LAUNCHPAD_ROW_H);
     let min_grid = LAUNCHPAD_MIN_COLUMNS as f32 * LAUNCHPAD_MIN_COLUMN_PITCH;
-    let side = LAUNCHPAD_ARROW_BAND
-        .min(((width - min_grid) / 2.).max(LAUNCHPAD_ARROW_SIZE / 2.));
+    let side = LAUNCHPAD_ARROW_BAND.min(((width - min_grid) / 2.).max(LAUNCHPAD_ARROW_SIZE / 2.));
     let page_width = (width - 2. * side).max(LAUNCHPAD_MIN_COLUMN_PITCH);
     let columns = ((page_width / LAUNCHPAD_MIN_COLUMN_PITCH).floor() as usize)
         .clamp(LAUNCHPAD_MIN_COLUMNS, LAUNCHPAD_MAX_COLUMNS);
@@ -104,8 +103,7 @@ fn launchpad_metrics(width: f32, height: f32) -> LaunchpadMetrics {
     } else {
         LAUNCHPAD_ROW_GAP
     };
-    let grid_height =
-        rows as f32 * LAUNCHPAD_ROW_H + (rows.saturating_sub(1)) as f32 * row_gap;
+    let grid_height = rows as f32 * LAUNCHPAD_ROW_H + (rows.saturating_sub(1)) as f32 * row_gap;
     let dots_top = grid_top + grid_height + LAUNCHPAD_DOTS_GAP;
     LaunchpadMetrics {
         width: page_width,
@@ -280,9 +278,8 @@ impl ShellView {
                         cx.stop_propagation();
                         let state = state.clone();
                         let win = &*window;
-                        let _ = view.update(cx, |view, cx| {
-                            view.launchpad_page(forward, &state, win, cx)
-                        });
+                        let _ = view
+                            .update(cx, |view, cx| view.launchpad_page(forward, &state, win, cx));
                     })
             })
             .child(launchpad_icon(&path, 20., white))
@@ -351,12 +348,7 @@ impl ShellView {
         let end = (start + per_page).min(found.len());
         let slice = &found[start.min(found.len())..end];
         let white: Hsla = rgb(0xffffff).into();
-        let mut results = div()
-            .w_full()
-            .h_full()
-            .flex()
-            .flex_col()
-            .items_start();
+        let mut results = div().w_full().h_full().flex().flex_col().items_start();
 
         // One page of rows kept at their natural height. The spare middle
         // band stays empty below; stretching it would turn a short page into
@@ -444,8 +436,7 @@ impl ShellView {
                                         anchor,
                                     },
                                 );
-                                let _ =
-                                    view.update(cx, |view, cx| view.invoke(action, cx));
+                                let _ = view.update(cx, |view, cx| view.invoke(action, cx));
                             }
                         }),
                 );
@@ -487,8 +478,7 @@ impl ShellView {
         let metrics = grid_metrics(window);
         let white: Hsla = rgb(0xffffff).into();
         let found = host.catalog.search(&self.query);
-        let (page, pages, per_page) =
-            launchpad_page_count(window, found.len(), self.selection);
+        let (page, pages, per_page) = launchpad_page_count(window, found.len(), self.selection);
         // The launcher fades in as one surface. Closing is the same ride
         // backwards: the Host keeps the window alive for the other half and
         // frees it once the motion settles.
@@ -527,12 +517,10 @@ impl ShellView {
         if slide.is_none() {
             self.launchpad_slide = None;
         }
-        let current =
-            self.launchpad_page_grid(&found, page, per_page, &metrics, p, cx);
+        let current = self.launchpad_page_grid(&found, page, per_page, &metrics, p, cx);
         let grid: AnyElement = match slide {
             Some((from, to, t)) if from != to && to == page && from < pages => {
-                let leaving =
-                    self.launchpad_page_grid(&found, from, per_page, &metrics, p, cx);
+                let leaving = self.launchpad_page_grid(&found, from, per_page, &metrics, p, cx);
                 // Forward steps move the old page left; backward steps move it
                 // right and the incoming page follows from the other side.
                 let direction = if to > from { -1. } else { 1. };
@@ -598,9 +586,11 @@ impl ShellView {
                 };
                 layer.child(self.launchpad_arrow(forward, enabled, host, cx))
             };
-            page_area = page_area
-                .child(arrow(false, page > 0, cx))
-                .child(arrow(true, page + 1 < pages, cx));
+            page_area = page_area.child(arrow(false, page > 0, cx)).child(arrow(
+                true,
+                page + 1 < pages,
+                cx,
+            ));
         }
 
         let search_icon = self.themed_glyph_path("system-search-symbolic", "search.svg");
@@ -631,7 +621,10 @@ impl ShellView {
         let dots = if pages > 1 {
             self.launchpad_dots(page, pages, host, cx)
         } else {
-            div().h(px(LAUNCHPAD_DOTS_H)).flex_shrink_0().into_any_element()
+            div()
+                .h(px(LAUNCHPAD_DOTS_H))
+                .flex_shrink_0()
+                .into_any_element()
         };
 
         let search_zone = div()
@@ -671,10 +664,7 @@ impl ShellView {
         let width = f32::from(window.viewport_size().width);
         let height = f32::from(window.viewport_size().height);
         let mut surface = div().relative().size_full().opacity(ride);
-        for (index, region) in backdrop_regions(width, height)
-            .into_iter()
-            .enumerate()
-        {
+        for (index, region) in backdrop_regions(width, height).into_iter().enumerate() {
             let h = self.host.clone();
             surface = surface.child(
                 div()

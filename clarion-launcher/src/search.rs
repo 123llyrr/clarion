@@ -240,9 +240,13 @@ mod tests {
     #[test]
     fn the_ladder_prefers_exact_then_prefix_then_word_start() {
         assert!(field_score("firefox", "firefox", 80) > field_score("firefox esr", "firefox", 80));
-        assert!(field_score("firefox esr", "firefox", 80) > field_score("x firefox", "firefox", 80));
+        assert!(
+            field_score("firefox esr", "firefox", 80) > field_score("x firefox", "firefox", 80)
+        );
         assert!(field_score("x firefox", "firefox", 80) > field_score("myfirefox", "firefox", 80));
-        assert!(field_score("myfirefox", "firefox", 80) > field_score("f-i-r-e-f-o-x", "firefox", 80));
+        assert!(
+            field_score("myfirefox", "firefox", 80) > field_score("f-i-r-e-f-o-x", "firefox", 80)
+        );
         assert_eq!(field_score("terminal", "firefox", 80), -1);
     }
 
@@ -271,7 +275,10 @@ mod tests {
 
     #[test]
     fn empty_query_matches_every_application() {
-        let apps = [app("a.desktop", "Alpha", "", &[]), app("b.desktop", "Beta", "", &[])];
+        let apps = [
+            app("a.desktop", "Alpha", "", &[]),
+            app("b.desktop", "Beta", "", &[]),
+        ];
         let ranked = ranked_apps(&apps, "", AppOrder::Name, &HashMap::new(), 0);
         assert_eq!(ranked.len(), 2);
         assert_eq!(ranked[0].name, "Alpha");
@@ -282,7 +289,13 @@ mod tests {
         let strong = app("strong.desktop", "Terminal", "", &[]);
         let weak = app("weak.desktop", "X Terminal Emulator", "", &[]);
         let usage = history(&[("weak.desktop", 500, 9_000_000)]);
-        let ranked = ranked_apps([&strong, &weak], "terminal", AppOrder::MostUsed, &usage, 10_000_000);
+        let ranked = ranked_apps(
+            [&strong, &weak],
+            "terminal",
+            AppOrder::MostUsed,
+            &usage,
+            10_000_000,
+        );
         assert_eq!(ranked[0].id, "strong.desktop");
     }
 
@@ -311,7 +324,10 @@ mod tests {
 
     #[test]
     fn unmatched_applications_disappear() {
-        let apps = [app("a.desktop", "Alpha", "", &[]), app("b.desktop", "Beta", "", &[])];
+        let apps = [
+            app("a.desktop", "Alpha", "", &[]),
+            app("b.desktop", "Beta", "", &[]),
+        ];
         let ranked = ranked_apps(&apps, "beta", AppOrder::Name, &HashMap::new(), 0);
         assert_eq!(ranked.len(), 1);
         assert_eq!(ranked[0].id, "b.desktop");

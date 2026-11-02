@@ -278,10 +278,7 @@ fn launch_with_runner(
     // Finish every probe before invoking GIO. Failure after this point must
     // reach the caller unchanged: retrying directly could open the app twice.
     let scope = probe_scope(env, runner)?;
-    let mut arguments = vec![
-        OsString::from("launch"),
-        path.as_os_str().to_owned(),
-    ];
+    let mut arguments = vec![OsString::from("launch"), path.as_os_str().to_owned()];
     arguments.extend(files.iter().map(|file| file.as_os_str().to_owned()));
     match scope {
         Some(scope) => runner.launch("systemd-run", &scope.arguments("gio", &arguments), env),
@@ -302,8 +299,9 @@ pub fn launch_desktop_file_with_paths(
 ) -> Result<()> {
     anyhow::ensure!(
         files.len() <= 16
-            && files.iter().all(|file| file.is_absolute()
-                && !file.as_os_str().as_bytes().contains(&0)),
+            && files
+                .iter()
+                .all(|file| file.is_absolute() && !file.as_os_str().as_bytes().contains(&0)),
         "Invalid file arguments"
     );
     launch_with_runner(path, files, env, &mut SystemRunner)
@@ -474,9 +472,7 @@ mod tests {
                 fail_launch: true,
                 ..Default::default()
             };
-            assert!(
-                launch_with_runner(Path::new("bad.desktop"), &[], &env, &mut runner).is_err()
-            );
+            assert!(launch_with_runner(Path::new("bad.desktop"), &[], &env, &mut runner).is_err());
             assert_eq!(runner.launches.len(), usize::from(!fail_before));
             assert!(runner.launches.iter().all(|call| call.0 == "systemd-run"));
         }
@@ -511,9 +507,7 @@ mod tests {
             help: "--scope --user --slice=SLICE --collect",
             ..Default::default()
         };
-        assert!(
-            launch_with_runner(Path::new("fixture.desktop"), &[], &env, &mut runner).is_err()
-        );
+        assert!(launch_with_runner(Path::new("fixture.desktop"), &[], &env, &mut runner).is_err());
         assert!(runner.launches.is_empty());
     }
 

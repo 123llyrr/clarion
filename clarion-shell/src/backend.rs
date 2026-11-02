@@ -745,8 +745,7 @@ fn perform(
             emit(events, Event::Preferences(preferences), alive);
         }
         Command::RecordLaunch(id) => {
-            let mut history =
-                clarion_launcher::usage::LaunchHistory::load(&options.environment);
+            let mut history = clarion_launcher::usage::LaunchHistory::load(&options.environment);
             history.record_launch(&id, clarion_launcher::usage::unix_millis());
             history.save(&options.environment)?;
         }
@@ -1043,8 +1042,7 @@ fn battery_snapshot(root: &Path) -> BatterySnapshot {
         BatteryStatus::Charging | BatteryStatus::Full
     );
     if !capacities.is_empty() {
-        snapshot.percent =
-            Some(capacities.iter().sum::<f64>() / capacities.len() as f64);
+        snapshot.percent = Some(capacities.iter().sum::<f64>() / capacities.len() as f64);
     }
     if !healths.is_empty() {
         snapshot.health = Some(healths.iter().sum::<f64>() / healths.len() as f64);

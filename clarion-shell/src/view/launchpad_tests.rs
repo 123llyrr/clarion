@@ -270,9 +270,8 @@ fn a_partial_page_keeps_the_full_page_pitch(cx: &mut TestAppContext) {
         .iter()
         .map(|app| app.id.clone())
         .collect();
-    let (_, pages, per_page) = visual.update(|window, _| {
-        super::launchpad_page_count(window, order.len(), 0)
-    });
+    let (_, pages, per_page) =
+        visual.update(|window, _| super::launchpad_page_count(window, order.len(), 0));
     let metrics = visual.update(|window, _| super::grid_metrics(window));
     let last_dot = visual
         .debug_bounds(leaked(format!("launchpad-page-{}", pages - 1)))
@@ -323,8 +322,8 @@ fn a_partial_page_keeps_the_full_page_pitch(cx: &mut TestAppContext) {
             metrics.row_gap
         );
     }
-    let page_height = page_rows as f32 * LAUNCHPAD_ROW_H
-        + (page_rows.saturating_sub(1)) as f32 * metrics.row_gap;
+    let page_height =
+        page_rows as f32 * LAUNCHPAD_ROW_H + (page_rows.saturating_sub(1)) as f32 * metrics.row_gap;
     assert!(
         (f32::from(last.bottom()) - (metrics.grid_top + page_height)).abs() <= 1.,
         "a partial page keeps its natural height: last bottom {:?}, expected {}",
@@ -590,9 +589,8 @@ fn the_launchpad_pages_a_wide_grid_with_arrows_and_dots(cx: &mut TestAppContext)
         .iter()
         .map(|app| app.id.clone())
         .collect();
-    let (page, pages, per_page) = visual.update(|window, _| {
-        super::launchpad_page_count(window, order.len(), 0)
-    });
+    let (page, pages, per_page) =
+        visual.update(|window, _| super::launchpad_page_count(window, order.len(), 0));
     assert_eq!(page, 0);
     assert!(pages > 1, "48 apps do not fit one wide page");
 
@@ -603,17 +601,13 @@ fn the_launchpad_pages_a_wide_grid_with_arrows_and_dots(cx: &mut TestAppContext)
     assert!(f32::from(search.size.width) > 400., "the capsule is wide");
     assert!(visual.debug_bounds("launchpad-prev").is_some());
     assert!(visual.debug_bounds("launchpad-next").is_some());
-    assert!(
-        visual
-            .debug_bounds(leaked(format!("launchpad-page-{}", pages - 1)))
-            .is_some()
-    );
+    assert!(visual
+        .debug_bounds(leaked(format!("launchpad-page-{}", pages - 1)))
+        .is_some());
 
-    assert!(
-        visual
-            .debug_bounds(leaked(format!("launchpad-app-{}", order[0])))
-            .is_some()
-    );
+    assert!(visual
+        .debug_bounds(leaked(format!("launchpad-app-{}", order[0])))
+        .is_some());
     assert!(
         visual
             .debug_bounds(leaked(format!("launchpad-app-{}", order[per_page])))
@@ -631,11 +625,9 @@ fn the_launchpad_pages_a_wide_grid_with_arrows_and_dots(cx: &mut TestAppContext)
             .is_none(),
         "the arrows page sideways instead of scrolling"
     );
-    assert!(
-        visual
-            .debug_bounds(leaked(format!("launchpad-app-{}", order[per_page])))
-            .is_some()
-    );
+    assert!(visual
+        .debug_bounds(leaked(format!("launchpad-app-{}", order[per_page])))
+        .is_some());
 
     // The dots jump straight to a page too.
     let last = visual

@@ -139,7 +139,11 @@ fn blocked_grabs_and_modal_ui_do_not_trigger_hot_corners() {
     motion(&mut f, (1276., 4.));
     assert!(!f.clarion().layout.is_overview_open());
     assert!(f.clarion().hot_corner_latch().is_none());
-    pointer.unset_grab(f.clarion_state(), SERIAL_COUNTER.next_serial(), smithay::backend::input::InputTime::from_millis(1));
+    pointer.unset_grab(
+        f.clarion_state(),
+        SERIAL_COUNTER.next_serial(),
+        smithay::backend::input::InputTime::from_millis(1),
+    );
     assert!(f.clarion().exit_confirm_dialog.show());
     motion(&mut f, (1276., 4.));
     assert!(!f.clarion().layout.is_overview_open());
@@ -203,7 +207,11 @@ fn an_already_moving_compositor_window_keeps_hot_corner_input_priority() {
     assert!(!f.clarion().layout.is_overview_open());
     assert!(f.clarion().hot_corner_latch().is_none());
     assert!(pointer.is_grabbed());
-    pointer.unset_grab(f.clarion_state(), SERIAL_COUNTER.next_serial(), smithay::backend::input::InputTime::from_millis(30));
+    pointer.unset_grab(
+        f.clarion_state(),
+        SERIAL_COUNTER.next_serial(),
+        smithay::backend::input::InputTime::from_millis(30),
+    );
 }
 
 #[test]
@@ -308,7 +316,11 @@ fn touch_and_tablet_compositor_grabs_block_pointer_hot_corners() {
     assert!(!f.clarion().layout.is_overview_open());
     assert!(f.clarion().hot_corner_latch().is_none());
     assert!(pen.is_grabbed());
-    pen.unset_grab(f.clarion_state(), SERIAL_COUNTER.next_serial(), smithay::backend::input::InputTime::from_millis(30));
+    pen.unset_grab(
+        f.clarion_state(),
+        SERIAL_COUNTER.next_serial(),
+        smithay::backend::input::InputTime::from_millis(30),
+    );
 }
 
 impl Dispatch<ZwlrVirtualPointerManagerV1, ()> for super::client::State {

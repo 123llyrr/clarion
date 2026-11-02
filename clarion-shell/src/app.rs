@@ -19,10 +19,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-mod dock_folders;
-pub(crate) mod panels;
 #[cfg(test)]
 mod dock_folder_tests;
+mod dock_folders;
+pub(crate) mod panels;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Panel {
@@ -39,13 +39,20 @@ pub enum Panel {
     Dock(String),
     /// A pinned folder's contents. The root identifies the Dock tile the popup
     /// points at; navigation state lives in `ViewState::folder_navigation`.
-    DockFolder { root: PathBuf },
+    DockFolder {
+        root: PathBuf,
+    },
     /// Configuration for one pinned folder.
-    DockFolderMenu { path: PathBuf },
+    DockFolderMenu {
+        path: PathBuf,
+    },
     /// The applications folded into the Dock's overflow tile, plus the fitted
     /// icon size (a discrete ladder step) the Dock row is drawing so the drawer
     /// tiles match it.
-    DockOverflow { ids: Vec<String>, icon_size: u16 },
+    DockOverflow {
+        ids: Vec<String>,
+        icon_size: u16,
+    },
 }
 #[derive(Clone)]
 pub enum Action {
@@ -81,7 +88,10 @@ pub enum Action {
     SetFolderDescending(PathBuf, bool),
     /// Hold open (or release) one extra folder slot for an external drop.
     FolderDropPreview(bool),
-    OpenPathsWithApp { app_id: String, paths: Vec<PathBuf> },
+    OpenPathsWithApp {
+        app_id: String,
+        paths: Vec<PathBuf>,
+    },
     /// Open a web URL through the desktop handler (the `/web` page).
     OpenUrl(String),
     Core(CoreAction),
@@ -106,7 +116,10 @@ pub enum Action {
     Launcher,
     /// Open one launcher tile's application menu as a surface over the
     /// launcher. The launcher stays open underneath.
-    OpenMenu { id: String, anchor: (i32, i32) },
+    OpenMenu {
+        id: String,
+        anchor: (i32, i32),
+    },
     /// Fold the launcher's application menu away and hand the keyboard back to
     /// the launcher it belongs to.
     CloseMenu,
@@ -444,11 +457,7 @@ struct ShellLifetime(#[allow(dead_code)] Entity<Host>);
 impl Global for ShellLifetime {}
 
 /// Record the labels of the expanded submenu parents whose id is listed.
-fn collect_expanded_labels(
-    items: &[services::MenuItem],
-    expanded: &[i32],
-    out: &mut Vec<String>,
-) {
+fn collect_expanded_labels(items: &[services::MenuItem], expanded: &[i32], out: &mut Vec<String>) {
     for item in items {
         if item.visible
             && !item.children.is_empty()
@@ -897,7 +906,9 @@ impl Host {
                     let _ = self
                         .backend
                         .send(backend::Command::LaunchDesktop(app.desktop_file.clone()));
-                    let _ = self.backend.send(backend::Command::RecordLaunch(id.clone()));
+                    let _ = self
+                        .backend
+                        .send(backend::Command::RecordLaunch(id.clone()));
                     if self.prefs.animate_opening_applications && !self.prefs.reduce_motion {
                         let now = Instant::now();
                         let started = self.launches.entry(id.clone()).or_insert(now);
@@ -986,8 +997,8 @@ impl Host {
                 self.configure_folder(&path, |folder| folder.descending = descending, cx)
             }
             Action::FolderDropPreview(active) => {
-                let active = active
-                    && self.prefs.dock_folders.len() < crate::preferences::MAX_DOCK_FOLDERS;
+                let active =
+                    active && self.prefs.dock_folders.len() < crate::preferences::MAX_DOCK_FOLDERS;
                 if self.folder_drop_preview != active {
                     self.folder_drop_preview = active;
                     self.changed(cx);
@@ -1026,12 +1037,9 @@ impl Host {
                         self.collapsing_menus.push(id);
                         let target = id;
                         cx.spawn(async move |host, cx| {
-                            cx.background_executor()
-                                .timer(Self::SUBMENU_FADE)
-                                .await;
-                            let _ = host.update(cx, |host, cx| {
-                                host.finish_submenu_collapse(target, cx)
-                            });
+                            cx.background_executor().timer(Self::SUBMENU_FADE).await;
+                            let _ = host
+                                .update(cx, |host, cx| host.finish_submenu_collapse(target, cx));
                         })
                         .detach();
                     }
@@ -1139,16 +1147,12 @@ impl Host {
             }
             Action::PaletteCommand(id) => {
                 if let Some(popup) = self.popup {
-                    let _ = popup.update(cx, |view, _, cx| {
-                        view.palette_command_by_id(&id, cx)
-                    });
+                    let _ = popup.update(cx, |view, _, cx| view.palette_command_by_id(&id, cx));
                 }
             }
             Action::RunCatalog(id) => {
                 if let Some(popup) = self.popup {
-                    let _ = popup.update(cx, |view, _, cx| {
-                        view.palette_action_by_id(&id, cx)
-                    });
+                    let _ = popup.update(cx, |view, _, cx| view.palette_action_by_id(&id, cx));
                 }
             }
             Action::Screenshot(mode) => {
@@ -1299,9 +1303,7 @@ impl Host {
         self.exiting = Some(window);
         cx.notify();
         cx.spawn(async move |host, cx| {
-            cx.background_executor()
-                .timer(Self::POPUP_EXIT)
-                .await;
+            cx.background_executor().timer(Self::POPUP_EXIT).await;
             let _ = host.update(cx, |host, cx| host.finish_popup_exit(generation, cx));
         })
         .detach();
@@ -1346,9 +1348,7 @@ impl Host {
         let generation = self.error_generation;
         cx.notify();
         cx.spawn(async move |host, cx| {
-            cx.background_executor()
-                .timer(Self::ERROR_BANNER)
-                .await;
+            cx.background_executor().timer(Self::ERROR_BANNER).await;
             let _ = host.update(cx, |host, cx| host.release_error(generation, cx));
         })
         .detach();
@@ -1551,9 +1551,8 @@ impl Host {
         let state = Arc::new(self.snapshot());
         self.menu_opening = true;
         let opened = cx.open_window(options, move |window, cx| {
-            let view = cx.new(|cx| {
-                ShellView::new_launcher_menu(host, output, state, id, anchor, cx)
-            });
+            let view =
+                cx.new(|cx| ShellView::new_launcher_menu(host, output, state, id, anchor, cx));
             view.update(cx, |view, cx| view.observe_activation(window, cx));
             view.read(cx).focus(window, cx);
             view
@@ -2195,12 +2194,8 @@ impl Host {
         if self.prefs.minimize_into_app && !self.prefs.dock_hidden {
             for (name, output) in &self.outputs {
                 let metrics = self.dock_metrics(output.width, output.height);
-                let (surface_x, surface_y) = panels::dock_surface_origin(
-                    &state,
-                    &metrics,
-                    output.width,
-                    output.height,
-                );
+                let (surface_x, surface_y) =
+                    panels::dock_surface_origin(&state, &metrics, output.width, output.height);
                 let slots = metrics.samples(None, 0.);
                 let icon = f64::from(metrics.icon_size);
                 let inset = f64::from(metrics.inset);
@@ -2218,10 +2213,7 @@ impl Host {
                             surface_x as f64 + main,
                             surface_y as f64 + f64::from(metrics.cross_padding) + inset,
                         ),
-                        DockPosition::Left => (
-                            surface_x as f64 + inset,
-                            surface_y as f64 + main,
-                        ),
+                        DockPosition::Left => (surface_x as f64 + inset, surface_y as f64 + main),
                         DockPosition::Right => (
                             surface_x as f64
                                 + f64::from(metrics.surface_width - metrics.thickness)
@@ -2229,9 +2221,7 @@ impl Host {
                             surface_y as f64 + main,
                         ),
                     };
-                    if main + icon
-                        > f64::from(metrics.main_padding + metrics.length) + 0.001
-                    {
+                    if main + icon > f64::from(metrics.main_padding + metrics.length) + 0.001 {
                         continue;
                     }
                     for window in &app.windows {
@@ -2805,9 +2795,7 @@ mod tray_lifecycle_tests {
     fn a_tray_popup_closes_immediately_when_its_owner_exits(cx: &mut TestAppContext) {
         let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
         host.update(cx, |host, _| host.tray = vec![tray_item("fixture")]);
-        let popup = cx.update(|cx| {
-            testing::open_panel(&host, Panel::Tray("fixture".into()), cx)
-        });
+        let popup = cx.update(|cx| testing::open_panel(&host, Panel::Tray("fixture".into()), cx));
         host.read_with(cx, |host, _| {
             assert_eq!(host.panel, Some(Panel::Tray("fixture".into())));
         });

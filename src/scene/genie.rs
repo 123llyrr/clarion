@@ -175,7 +175,12 @@ impl GenieShaderGeometry {
             (texture_area.size.h * scale / texture_pixels.1) as f32,
         ];
         let rect = |r: Rectangle<f64, Logical>| {
-            [r.loc.x as f32, r.loc.y as f32, r.size.w as f32, r.size.h as f32]
+            [
+                r.loc.x as f32,
+                r.loc.y as f32,
+                r.size.w as f32,
+                r.size.h as f32,
+            ]
         };
         let edge = match pose.edge {
             DockEdge::Bottom => 0.,

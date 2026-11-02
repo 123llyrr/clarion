@@ -184,7 +184,10 @@ fn window_app_ids_match_desktop_file_shapes_across_compositors() {
     }
     // Distinct applications never collapse into one another.
     window.app_id = Some("org.gnome.Nautilus".into());
-    assert!(!super::window_matches_app_id(&window, "org.gnome.Calculator.desktop"));
+    assert!(!super::window_matches_app_id(
+        &window,
+        "org.gnome.Calculator.desktop"
+    ));
     assert!(!super::window_matches_app_id(&window, "dolphin.desktop"));
 }
 
@@ -198,9 +201,15 @@ fn unresolved_windows_group_by_application_rather_than_window_id() {
     second.app_id = Some("com.example.Gadget".into());
     let unrelated = window();
     // Two windows from the same unknown application share one Dock tile...
-    assert_eq!(super::synthetic_dock_id(&first), super::synthetic_dock_id(&second));
+    assert_eq!(
+        super::synthetic_dock_id(&first),
+        super::synthetic_dock_id(&second)
+    );
     // ...and an unrelated application keeps its own.
-    assert_ne!(super::synthetic_dock_id(&first), super::synthetic_dock_id(&unrelated));
+    assert_ne!(
+        super::synthetic_dock_id(&first),
+        super::synthetic_dock_id(&unrelated)
+    );
     // A window with no app id falls back to its own id.
     let mut anonymous = window();
     anonymous.app_id = None;
@@ -781,8 +790,7 @@ fn dock_order_drops_unknown_ids_and_unpinning_prunes_the_saved_arrangement(
     let host = cx
         .update(|cx| testing::test_host(cx, fixture.catalog.clone(), fixture.environment.clone()));
     host.update(cx, |host, cx| {
-        host.prefs.pinned_app_ids =
-            Some(vec!["alpha.desktop".into(), "beta.desktop".into()]);
+        host.prefs.pinned_app_ids = Some(vec!["alpha.desktop".into(), "beta.desktop".into()]);
         host.handle(
             Action::DockOrder(vec![
                 "beta.desktop".into(),
@@ -802,7 +810,9 @@ fn dock_order_drops_unknown_ids_and_unpinning_prunes_the_saved_arrangement(
         );
         assert_eq!(host.pinned(), ["beta.desktop", "alpha.desktop"]);
     });
-    host.update(cx, |host, cx| host.handle(Action::PinApp("beta.desktop".into()), cx));
+    host.update(cx, |host, cx| {
+        host.handle(Action::PinApp("beta.desktop".into()), cx)
+    });
     cx.run_until_parked();
     host.read_with(cx, |host, _| {
         assert_eq!(

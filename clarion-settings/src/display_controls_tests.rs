@@ -440,12 +440,7 @@ fn dragging_a_monitor_changes_only_the_arrangement_draft() {
         .max_by(|a, b| a.center().y.total_cmp(&b.center().y))
         .unwrap()
         .center();
-    drag(
-        &mut app,
-        &context,
-        from,
-        from + egui::vec2(80., 0.),
-    );
+    drag(&mut app, &context, from, from + egui::vec2(80., 0.));
     assert!(app.display.arrangement_pending());
     assert!(!app.display.settings_pending());
     assert!(app.display.due.is_some());

@@ -241,10 +241,7 @@ mod tests {
             icon(BatteryState::Missing, None),
             "battery-missing-symbolic"
         );
-        assert_eq!(
-            icon(BatteryState::Unknown, Some(0.5)),
-            "battery-symbolic"
-        );
+        assert_eq!(icon(BatteryState::Unknown, Some(0.5)), "battery-symbolic");
         assert_eq!(level(0.99), 100);
         assert_eq!(level(0.94), 90);
         assert_eq!(level(0.), 0);

@@ -199,7 +199,10 @@ fn overview_tablet_release_and_proximity_out_have_distinct_semantics() {
             Focus::Clear,
         );
         assert!(pen.is_grabbed());
-        pen.frame(f.clarion_state(), smithay::backend::input::InputTime::from_millis(10));
+        pen.frame(
+            f.clarion_state(),
+            smithay::backend::input::InputTime::from_millis(10),
+        );
         if hold {
             dispatch_for(&mut f, Duration::from_millis(550));
             let output = f.clarion_output(1);
@@ -236,7 +239,10 @@ fn overview_tablet_release_and_proximity_out_have_distinct_semantics() {
         }
         assert!(!pen.is_grabbed());
         assert_eq!(f.clarion().layout.is_overview_open(), stays_open);
-        pen.frame(f.clarion_state(), smithay::backend::input::InputTime::from_millis(21));
+        pen.frame(
+            f.clarion_state(),
+            smithay::backend::input::InputTime::from_millis(21),
+        );
         assert_eq!(f.clarion().layout.is_overview_open(), stays_open);
     }
 }
@@ -325,7 +331,10 @@ fn overview_tablet_release_after_completed_mode_switch_does_not_commit_old_tap()
         f.clarion().layout.active_workspace().unwrap().id(),
         workspace
     );
-    pen.frame(f.clarion_state(), smithay::backend::input::InputTime::from_millis(21));
+    pen.frame(
+        f.clarion_state(),
+        smithay::backend::input::InputTime::from_millis(21),
+    );
     assert!(f.clarion().layout.is_overview_open());
 }
 

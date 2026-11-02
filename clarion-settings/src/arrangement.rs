@@ -261,12 +261,11 @@ impl Arrangement {
                 released = true;
             }
             if response.hovered() && editable {
-                ui.ctx()
-                    .set_cursor_icon(if self.drag.is_some() {
-                        CursorIcon::Grabbing
-                    } else {
-                        CursorIcon::Grab
-                    });
+                ui.ctx().set_cursor_icon(if self.drag.is_some() {
+                    CursorIcon::Grabbing
+                } else {
+                    CursorIcon::Grab
+                });
             }
         }
 
@@ -428,19 +427,24 @@ fn screen_to_world(
     (local.x + bounds.x, local.y + bounds.y)
 }
 
-fn snap(
-    pos: (f32, f32),
-    size: (i32, i32),
-    others: &[MonitorRect],
-    threshold: f32,
-) -> (f32, f32) {
+fn snap(pos: (f32, f32), size: (i32, i32), others: &[MonitorRect], threshold: f32) -> (f32, f32) {
     let width = size.0 as f32;
     let height = size.1 as f32;
     let mut x_targets = vec![0.];
     let mut y_targets = vec![0.];
     for other in others {
-        x_targets.extend([other.x, other.right(), other.x - width, other.right() - width]);
-        y_targets.extend([other.y, other.bottom(), other.y - height, other.bottom() - height]);
+        x_targets.extend([
+            other.x,
+            other.right(),
+            other.x - width,
+            other.right() - width,
+        ]);
+        y_targets.extend([
+            other.y,
+            other.bottom(),
+            other.y - height,
+            other.bottom() - height,
+        ]);
     }
     (
         snap_axis(pos.0, &x_targets, threshold),
@@ -480,14 +484,28 @@ fn settle(pos: (f32, f32), size: (i32, i32), others: &[MonitorRect]) -> Option<(
             return Some(position);
         };
         let options = [
-            (other.x - width, position.1, (position.0 - (other.x - width)).abs()),
-            (other.right(), position.1, (position.0 - other.right()).abs()),
-            (position.0, other.y - height, (position.1 - (other.y - height)).abs()),
-            (position.0, other.bottom(), (position.1 - other.bottom()).abs()),
+            (
+                other.x - width,
+                position.1,
+                (position.0 - (other.x - width)).abs(),
+            ),
+            (
+                other.right(),
+                position.1,
+                (position.0 - other.right()).abs(),
+            ),
+            (
+                position.0,
+                other.y - height,
+                (position.1 - (other.y - height)).abs(),
+            ),
+            (
+                position.0,
+                other.bottom(),
+                (position.1 - other.bottom()).abs(),
+            ),
         ];
-        let (x, y, _) = options
-            .into_iter()
-            .min_by(|a, b| a.2.total_cmp(&b.2))?;
+        let (x, y, _) = options.into_iter().min_by(|a, b| a.2.total_cmp(&b.2))?;
         position = (x, y);
     }
     None
@@ -596,9 +614,7 @@ pub(super) fn changed_size(
         None if after.scale != before.scale || mode_changed => {
             let physical = output
                 .physical_size
-                .map_or((0, 0), |(width, height)| {
-                    (width as i32, height as i32)
-                });
+                .map_or((0, 0), |(width, height)| (width as i32, height as i32));
             guess_monitor_scale(physical, (i32::from(mode.width), i32::from(mode.height)))
         }
         None => logical.scale,
@@ -624,7 +640,11 @@ fn preferred_mode(output: &Output) -> Option<clarion_ipc::ConfiguredMode> {
         .modes
         .iter()
         .find(|mode| mode.is_preferred)
-        .or_else(|| output.current_mode.and_then(|index| output.modes.get(index)))
+        .or_else(|| {
+            output
+                .current_mode
+                .and_then(|index| output.modes.get(index))
+        })
         .map(configured_mode)
 }
 
@@ -811,10 +831,7 @@ mod tests {
         }];
         let arrangement = Arrangement::new(seeds);
         assert!(!arrangement.dirty());
-        assert_eq!(
-            placed(&arrangement.positions()),
-            expected(&[("A", (0, 0))])
-        );
+        assert_eq!(placed(&arrangement.positions()), expected(&[("A", (0, 0))]));
     }
 
     #[test]
@@ -846,10 +863,7 @@ mod tests {
 
     #[test]
     fn fitted_canvas_contains_every_monitor() {
-        let bounds = union(&[
-            rect(0., 0., 3840., 1080.),
-            rect(3840., 0., 1080., 1920.),
-        ]);
+        let bounds = union(&[rect(0., 0., 3840., 1080.), rect(3840., 0., 1080., 1920.)]);
         let canvas = Rect::from_min_size(egui::pos2(0., 0.), egui::vec2(668., 180.));
         let (origin, scale) = fit(canvas, bounds);
         let area = canvas.shrink(CANVAS_PADDING);

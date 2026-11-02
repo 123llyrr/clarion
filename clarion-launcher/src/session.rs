@@ -178,7 +178,11 @@ impl Session {
 
     pub fn enter_tool(self, tool: Tool, query: &str, consume_command: bool) -> Self {
         let mut parent = match &self.tool {
-            Some(_) => self.parent.as_deref().cloned().unwrap_or_else(|| self.clone()),
+            Some(_) => self
+                .parent
+                .as_deref()
+                .cloned()
+                .unwrap_or_else(|| self.clone()),
             None => self.clone(),
         };
         if consume_command && self.tool.is_none() {
@@ -218,7 +222,11 @@ impl Session {
         if self.tool.is_some() || self.mode != scope || !allowed {
             return self;
         }
-        let current = self.overrides.iter().find(|entry| entry.key == key).copied();
+        let current = self
+            .overrides
+            .iter()
+            .find(|entry| entry.key == key)
+            .copied();
         // Even a repeated override consumes the slash draft.
         let selection = self.selection.clone();
         let mut next = self.input("", false, &selection);
@@ -262,9 +270,10 @@ impl Session {
         if self.tool.is_some() || self.literal {
             return Route::Query(text.to_owned());
         }
-        if let Some(rest) = text.strip_prefix('\\').and_then(|rest| {
-            (rest.starts_with('/') || rest.starts_with('>')).then_some(rest)
-        }) {
+        if let Some(rest) = text
+            .strip_prefix('\\')
+            .and_then(|rest| (rest.starts_with('/') || rest.starts_with('>')).then_some(rest))
+        {
             return Route::Literal(rest.to_owned());
         }
         if self.mode != Mode::Commands {
@@ -349,7 +358,7 @@ mod tests {
             }
         );
         assert_eq!(
-            session.route("/") ,
+            session.route("/"),
             Route::Slash {
                 name: String::new(),
                 arguments: String::new()
@@ -373,7 +382,13 @@ mod tests {
     fn commands_mode_treats_a_leading_angle_as_text() {
         let commands = Session::new(Mode::Commands, 0);
         assert_eq!(commands.route(">x"), Route::Query(">x".into()));
-        assert_eq!(commands.route("/apps"), Route::Slash { name: "apps".into(), arguments: String::new() });
+        assert_eq!(
+            commands.route("/apps"),
+            Route::Slash {
+                name: "apps".into(),
+                arguments: String::new()
+            }
+        );
     }
 
     #[test]
@@ -425,14 +440,20 @@ mod tests {
         assert!(grid.query.is_empty());
         assert_eq!(grid.effective("appsLayout", "list"), "grid");
         // Repeating the override clears the draft but does not stack.
-        let again = grid.clone().input("/grid", false, "").set_override("appsLayout", "grid", "list");
+        let again =
+            grid.clone()
+                .input("/grid", false, "")
+                .set_override("appsLayout", "grid", "list");
         assert_eq!(again.overrides.len(), 1);
         // The saved value removes the override.
         let saved = grid.set_override("appsLayout", "list", "list");
         assert!(saved.overrides.is_empty());
         // Wrong mode / tool scope leaves the session untouched.
         let clipboard = Session::new(Mode::Clipboard, 0).input("/grid", false, "");
-        assert_eq!(clipboard.clone().set_override("appsLayout", "grid", "list"), clipboard);
+        assert_eq!(
+            clipboard.clone().set_override("appsLayout", "grid", "list"),
+            clipboard
+        );
     }
 
     #[test]

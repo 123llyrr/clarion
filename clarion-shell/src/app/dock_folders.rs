@@ -222,10 +222,7 @@ impl Host {
         let sort = preference.sort;
         let descending = preference.descending;
         let generation = {
-            let generation = self
-                .folder_scan_generation
-                .entry(path.clone())
-                .or_insert(0);
+            let generation = self.folder_scan_generation.entry(path.clone()).or_insert(0);
             *generation = generation.wrapping_add(1);
             *generation
         };
@@ -242,12 +239,14 @@ impl Host {
                 }
                 match result {
                     Ok(snapshot) => {
-                        host.dock_folder_cache.insert(path.clone(), Arc::new(snapshot));
+                        host.dock_folder_cache
+                            .insert(path.clone(), Arc::new(snapshot));
                         host.dock_folder_errors.remove(&path);
                     }
                     Err(error) => {
                         host.dock_folder_cache.remove(&path);
-                        host.dock_folder_errors.insert(path.clone(), error.to_string());
+                        host.dock_folder_errors
+                            .insert(path.clone(), error.to_string());
                     }
                 }
                 host.changed(cx);

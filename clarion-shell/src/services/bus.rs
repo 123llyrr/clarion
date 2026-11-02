@@ -586,7 +586,11 @@ fn parse_layout(layout: Layout, depth: usize, budget: &mut usize) -> Option<Menu
         toggle,
         icon_name: {
             let name = string(&p, "icon-name");
-            if name.is_empty() { None } else { Some(name) }
+            if name.is_empty() {
+                None
+            } else {
+                Some(name)
+            }
         },
         icon_png: menu_icon(&p, "icon-data"),
         children,
@@ -728,9 +732,15 @@ pub(super) async fn run(events: Sender<Event>, commands: Receiver<Command>) -> R
     loop {
         while let Ok(registration) = pending.try_recv() {
             let key = format!("{}{}", registration.service, registration.path);
-            if register(&connection, registration, &mut items, &refresh, &menu_reload)
-                .await
-                .unwrap_or(false)
+            if register(
+                &connection,
+                registration,
+                &mut items,
+                &refresh,
+                &menu_reload,
+            )
+            .await
+            .unwrap_or(false)
             {
                 watcher_signal(&connection, "StatusNotifierItemRegistered", &key).await;
                 emit_tray(&events, &items);
@@ -928,8 +938,8 @@ pub(super) async fn run(events: Sender<Event>, commands: Receiver<Command>) -> R
                     anyhow::ensure!(enabled(&item.menu, menu_id), "菜单项目不可用");
                     let owner = item.owner.clone();
                     let path = item.item.menu_path.clone().context("托盘菜单不可用")?;
-                    let proxy = Proxy::new(&connection, owner.as_str(), path.as_str(), MENU_IFACE)
-                        .await?;
+                    let proxy =
+                        Proxy::new(&connection, owner.as_str(), path.as_str(), MENU_IFACE).await?;
                     // A menu owner can reject an id after it regenerated its
                     // layout. The refreshed rows below tell the truth about
                     // the menu, so the rejection stays silent instead of

@@ -120,7 +120,9 @@ fn folder_count_is_capped_at_eight(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn folder_configuration_and_order_are_persisted_and_snapshot_exposes_views(cx: &mut TestAppContext) {
+fn folder_configuration_and_order_are_persisted_and_snapshot_exposes_views(
+    cx: &mut TestAppContext,
+) {
     let root = tempfile::tempdir().unwrap();
     let a = root.path().join("a");
     let b = root.path().join("b");
@@ -142,7 +144,10 @@ fn folder_configuration_and_order_are_persisted_and_snapshot_exposes_views(cx: &
             ]),
             cx,
         );
-        host.handle(Action::SetFolderDisplay(a.clone(), FolderDisplay::Folder), cx);
+        host.handle(
+            Action::SetFolderDisplay(a.clone(), FolderDisplay::Folder),
+            cx,
+        );
         host.handle(Action::SetFolderLayout(a.clone(), FolderLayout::Grid), cx);
         host.handle(Action::SetFolderSort(a.clone(), FolderSort::Size), cx);
         host.handle(Action::SetFolderDescending(a.clone(), true), cx);

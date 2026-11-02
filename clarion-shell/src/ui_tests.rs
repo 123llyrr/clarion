@@ -639,7 +639,8 @@ fn a_long_window_title_stays_on_one_truncated_dock_menu_row(cx: &mut TestAppCont
             "A very long window title that must not wrap or push the dock menu rows apart",
         )];
     });
-    let window = cx.update(|cx| testing::open_panel(&host, Panel::Dock("alpha.desktop".into()), cx));
+    let window =
+        cx.update(|cx| testing::open_panel(&host, Panel::Dock("alpha.desktop".into()), cx));
     let view = window.root(cx).unwrap();
     let mut visual = VisualTestContext::from_window(*window, cx);
     visual.update(|window, cx| {
@@ -802,13 +803,15 @@ fn a_tray_menu_click_opens_the_popup_under_that_icon(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn clicking_outside_a_bar_popup_dismisses_it_once_the_exit_ride_finishes(
-    cx: &mut TestAppContext,
-) {
+fn clicking_outside_a_bar_popup_dismisses_it_once_the_exit_ride_finishes(cx: &mut TestAppContext) {
     let (_fixture, host, _view, mut visual, window) = panel(cx, Panel::Controls);
     // The modal window covers the whole output; this press lands on its
     // catcher, well away from the visible control center rectangle.
-    visual.simulate_mouse_down(point(px(10.), px(760.)), MouseButton::Left, Modifiers::default());
+    visual.simulate_mouse_down(
+        point(px(10.), px(760.)),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
     visual.run_until_parked();
     host.read_with(cx, |host, _| {
         // The dismissal keeps the surface alive for the closing fade: `panel`
@@ -883,8 +886,7 @@ fn a_bar_popup_lands_on_the_monitor_that_dispatched_the_click(cx: &mut TestAppCo
         .read_with(cx, |view, _| view.output().to_owned())
         .expect("the panel window is alive");
     assert_eq!(
-        opened,
-        secondary,
+        opened, secondary,
         "the tray menu belongs to the bar that was clicked, not to the focused output"
     );
 }
@@ -902,7 +904,12 @@ fn the_launcher_records_the_monitor_that_opened_it(cx: &mut TestAppContext) {
     cx.update(|cx| testing::register_output(&host, &secondary, cx));
 
     cx.update(|cx| {
-        testing::dispatch_on_output(&host, &secondary, crate::app::Action::Panel(Panel::Apps), cx)
+        testing::dispatch_on_output(
+            &host,
+            &secondary,
+            crate::app::Action::Panel(Panel::Apps),
+            cx,
+        )
     });
 
     let state = cx.update(|cx| testing::snapshot(&host, cx));
@@ -915,9 +922,7 @@ fn the_launcher_records_the_monitor_that_opened_it(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn the_launcher_command_opens_the_presentation_the_preferences_select(
-    cx: &mut TestAppContext,
-) {
+fn the_launcher_command_opens_the_presentation_the_preferences_select(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     let host = cx
         .update(|cx| testing::test_host(cx, fixture.catalog.clone(), fixture.environment.clone()));
@@ -954,9 +959,7 @@ fn the_launcher_command_opens_the_presentation_the_preferences_select(
 }
 
 #[gpui::test]
-fn the_launcher_palette_ranks_scored_matches_and_enter_launches(
-    cx: &mut TestAppContext,
-) {
+fn the_launcher_palette_ranks_scored_matches_and_enter_launches(cx: &mut TestAppContext) {
     let (_fixture, host, view, mut visual, window) = panel(cx, Panel::Spotlight);
     visual.simulate_input("browser");
     assert_eq!(
@@ -1115,7 +1118,11 @@ fn palette_commands_report_scope_and_unimplemented_entries(cx: &mut TestAppConte
     visual.simulate_keystrokes("escape");
     visual.run_until_parked();
     host.read_with(cx, |host, _| {
-        assert_eq!(host.panel, Some(Panel::Spotlight), "escape starts the close ride");
+        assert_eq!(
+            host.panel,
+            Some(Panel::Spotlight),
+            "escape starts the close ride"
+        );
         assert!(host.panel_exit);
     });
 }
@@ -1138,7 +1145,10 @@ fn palette_system_actions_hand_off_to_the_worker(cx: &mut TestAppContext) {
         "a slash action hands the session action to the worker"
     );
     host.read_with(cx, |host, _| {
-        assert!(host.panel_exit, "the palette folds away after a power action");
+        assert!(
+            host.panel_exit,
+            "the palette folds away after a power action"
+        );
     });
 }
 
@@ -1150,7 +1160,10 @@ fn palette_settings_actions_toggle_preferences(cx: &mut TestAppContext) {
     visual.simulate_keystrokes("enter");
     visual.run_until_parked();
     host.read_with(cx, |host, _| {
-        assert!(host.prefs.reduce_motion, "the toggle flipped the preference");
+        assert!(
+            host.prefs.reduce_motion,
+            "the toggle flipped the preference"
+        );
     });
 }
 
@@ -1195,7 +1208,10 @@ fn the_web_page_searches_through_engines(cx: &mut TestAppContext) {
         "the engine prefix builds its search URL"
     );
     host.read_with(cx, |host, _| {
-        assert!(host.panel_exit, "the sheet folds away after opening the search");
+        assert!(
+            host.panel_exit,
+            "the sheet folds away after opening the search"
+        );
     });
 }
 
@@ -1232,21 +1248,31 @@ fn the_actions_page_lists_filters_and_runs_compositor_actions(cx: &mut TestAppCo
     visual.simulate_keystrokes("enter");
     visual.run_until_parked();
     assert!(
-        visual.debug_bounds("spotlight-action-window.close").is_some(),
+        visual
+            .debug_bounds("spotlight-action-window.close")
+            .is_some(),
         "the catalog opens on its first window action"
     );
     assert!(
-        visual.debug_bounds("spotlight-action-window.close").is_some()
-            && visual.debug_bounds("spotlight-action-system.suspend").is_some(),
+        visual
+            .debug_bounds("spotlight-action-window.close")
+            .is_some()
+            && visual
+                .debug_bounds("spotlight-action-system.suspend")
+                .is_some(),
         "the whole catalog is listed, not only one section"
     );
 
     // The draft narrows the catalog by title, keyword or section.
     visual.simulate_input("关闭窗口");
     visual.run_until_parked();
-    assert!(visual.debug_bounds("spotlight-action-window.close").is_some());
+    assert!(visual
+        .debug_bounds("spotlight-action-window.close")
+        .is_some());
     assert!(
-        visual.debug_bounds("spotlight-action-column.focus-left").is_none(),
+        visual
+            .debug_bounds("spotlight-action-column.focus-left")
+            .is_none(),
         "a filtered page hides the rest of the catalog"
     );
 
@@ -1263,7 +1289,10 @@ fn the_actions_page_lists_filters_and_runs_compositor_actions(cx: &mut TestAppCo
         "the catalog entry maps to its IPC action"
     );
     host.read_with(cx, |host, _| {
-        assert!(host.panel_exit, "the sheet folds away after running an action");
+        assert!(
+            host.panel_exit,
+            "the sheet folds away after running an action"
+        );
     });
 }
 
@@ -1290,7 +1319,9 @@ fn the_actions_page_runs_shell_actions_and_pops_back(cx: &mut TestAppContext) {
     visual.simulate_keystrokes("backspace");
     visual.run_until_parked();
     assert!(
-        visual.debug_bounds("spotlight-action-window.close").is_none(),
+        visual
+            .debug_bounds("spotlight-action-window.close")
+            .is_none(),
         "backspace leaves the catalog"
     );
     host.read_with(cx, |host, _| {
@@ -1300,9 +1331,7 @@ fn the_actions_page_runs_shell_actions_and_pops_back(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn right_clicking_a_palette_tile_opens_a_menu_surface_over_the_palette(
-    cx: &mut TestAppContext,
-) {
+fn right_clicking_a_palette_tile_opens_a_menu_surface_over_the_palette(cx: &mut TestAppContext) {
     let (_fixture, host, view, mut visual, window) = panel(cx, Panel::Spotlight);
     // The fixture has three applications, so the first grid row is centred:
     // its first tile spans x 381..519 inside the palette popup, below the
@@ -1327,7 +1356,11 @@ fn right_clicking_a_palette_tile_opens_a_menu_surface_over_the_palette(
         "the palette window stays open under its menu"
     );
     host.read_with(cx, |host, _| {
-        assert_eq!(host.panel, Some(Panel::Spotlight), "the launcher stays open")
+        assert_eq!(
+            host.panel,
+            Some(Panel::Spotlight),
+            "the launcher stays open"
+        )
     });
     // The menu surface catches every pointer event over the palette: a click
     // on the card keeps it open...
@@ -1805,7 +1838,12 @@ fn clipboard_type_tags_filter_by_content_kind(cx: &mut TestAppContext) {
 fn the_clipboard_details_preview_an_opaque_payload(cx: &mut TestAppContext) {
     let (_fixture, host, _view, mut visual, _window) = panel(cx, Panel::Spotlight);
     host.update(cx, |host, cx| {
-        host.history = vec![clipboard_blob_entry("blob:video", "video/mp4", 2_400_000, 1)];
+        host.history = vec![clipboard_blob_entry(
+            "blob:video",
+            "video/mp4",
+            2_400_000,
+            1,
+        )];
         host.clipboard_available = true;
         host.changed(cx);
     });
@@ -1897,9 +1935,8 @@ fn ctrl_j_k_and_ctrl_n_p_walk_the_palette_lists(cx: &mut TestAppContext) {
     let (_fixture, _host, view, mut visual, _window) = panel(cx, Panel::Spotlight);
     visual.simulate_keystrokes("ctrl-1");
     visual.run_until_parked();
-    let selection = |visual: &mut VisualTestContext| {
-        view.read_with(visual, |view, _| view.selection)
-    };
+    let selection =
+        |visual: &mut VisualTestContext| view.read_with(visual, |view, _| view.selection);
     assert_eq!(selection(&mut visual), 0);
 
     visual.simulate_keystrokes("ctrl-j");
@@ -1996,10 +2033,7 @@ fn selecting_a_category_tag_filters_the_grid_tiles(cx: &mut TestAppContext) {
     // grid — the filter used to change the layout but leave every tile.
     visual.update(|_, cx| {
         view.update(cx, |view, cx| {
-            view.palette_toggle_category(
-                clarion_launcher::catalog::AppCategory::Utilities,
-                cx,
-            )
+            view.palette_toggle_category(clarion_launcher::catalog::AppCategory::Utilities, cx)
         });
     });
     let state = view.read_with(&visual, |view, _| view.state.clone());
@@ -2097,4 +2131,3 @@ fn right_clicking_a_launchpad_tile_keeps_the_launchpad_closeable(cx: &mut TestAp
         assert_eq!(host.panel, Some(Panel::Apps));
     });
 }
-

@@ -258,9 +258,7 @@ fn payload_bytes(payload: &Payload, mime: &str) -> Option<Arc<Vec<u8>>> {
         }
         ("text/html", "text/plain") => {
             let html = String::from_utf8_lossy(&payload.bytes);
-            Some(Arc::new(
-                super::history::html_to_text(&html).into_bytes(),
-            ))
+            Some(Arc::new(super::history::html_to_text(&html).into_bytes()))
         }
         _ => None,
     }
@@ -640,7 +638,12 @@ mod tests {
 
     #[test]
     fn the_richest_offering_wins() {
-        let offer = |mimes: &[&str]| mimes.iter().map(|mime| (*mime).to_owned()).collect::<Vec<_>>();
+        let offer = |mimes: &[&str]| {
+            mimes
+                .iter()
+                .map(|mime| (*mime).to_owned())
+                .collect::<Vec<_>>()
+        };
         // Rich text is preferred over its own plain rendering.
         assert_eq!(
             pick_mime(&offer(&[
@@ -667,7 +670,12 @@ mod tests {
             Some("video/mp4")
         );
         assert_eq!(
-            pick_mime(&offer(&["TARGETS", "TIMESTAMP", "text/plain;charset=utf-8"])).as_deref(),
+            pick_mime(&offer(&[
+                "TARGETS",
+                "TIMESTAMP",
+                "text/plain;charset=utf-8"
+            ]))
+            .as_deref(),
             Some("text/plain")
         );
         assert_eq!(pick_mime(&[]), None);
@@ -677,9 +685,7 @@ mod tests {
     fn rich_text_also_answers_as_plain_text() {
         let payload = Payload {
             mime: "text/html".into(),
-            bytes: Arc::new(
-                b"<p>Hello <b>world</b></p><p>second &amp; last</p>".to_vec(),
-            ),
+            bytes: Arc::new(b"<p>Hello <b>world</b></p><p>second &amp; last</p>".to_vec()),
             screenshot: false,
             file_path: None,
         };

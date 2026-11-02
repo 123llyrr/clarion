@@ -43,7 +43,9 @@ pub(super) struct History {
 pub(super) fn state_dir() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))?;
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state"))
+        })?;
     Some(base.join("clarion-shell").join("clipboard"))
 }
 
@@ -158,11 +160,7 @@ impl History {
             None if payload.mime == "text/html" => html_to_text(&raw),
             None => raw,
         };
-        let id = format!(
-            "{}:{:x}",
-            prefix,
-            Sha256::digest(payload.bytes.as_slice())
-        );
+        let id = format!("{}:{:x}", prefix, Sha256::digest(payload.bytes.as_slice()));
         let existing = self.entries.get(&id);
         let pinned = existing.is_some_and(|entry| entry.pinned);
         let screenshot = payload.screenshot

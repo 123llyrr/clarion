@@ -151,9 +151,10 @@ pub(crate) fn dock_surface_origin(
     h: f32,
 ) -> (f32, f32) {
     match state.prefs.dock_position {
-        DockPosition::Bottom => {
-            ((w - metrics.surface_width) / 2., h - 8. - metrics.surface_height)
-        }
+        DockPosition::Bottom => (
+            (w - metrics.surface_width) / 2.,
+            h - 8. - metrics.surface_height,
+        ),
         DockPosition::Left | DockPosition::Right => {
             let bar = state.prefs.bar_height as f32;
             let y = bar + (h - bar - metrics.surface_height) / 2.;
@@ -191,10 +192,7 @@ pub(crate) fn dock_tile_center(
     match state.prefs.dock_position {
         DockPosition::Bottom => (surface_x + main, surface_y + metrics.cross_padding + cross),
         DockPosition::Left => (surface_x + cross, surface_y + main),
-        DockPosition::Right => (
-            surface_x + metrics.surface_width - cross,
-            surface_y + main,
-        ),
+        DockPosition::Right => (surface_x + metrics.surface_width - cross, surface_y + main),
     }
 }
 
@@ -257,9 +255,7 @@ fn folder_popup_size(
     let available = (h - (state.prefs.bar_height as f32 + 8.) - 12.).max(100.);
     (
         width,
-        height
-            .min(h * FOLDER_POPUP_MAX_SCREEN_SHARE)
-            .min(available),
+        height.min(h * FOLDER_POPUP_MAX_SCREEN_SHARE).min(available),
     )
 }
 
@@ -467,7 +463,10 @@ fn modal_popup(w: f32, h: f32, x: f32, y: f32, width: f32, height: f32) -> Place
         margins: LayerShellMargins::default(),
         normal: false,
         arrow: None,
-        popup: Some(Bounds::new(point(px(x), px(y)), size(px(width), px(height)))),
+        popup: Some(Bounds::new(
+            point(px(x), px(y)),
+            size(px(width), px(height)),
+        )),
     }
 }
 
@@ -537,7 +536,8 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
                 DockPosition::Bottom => {
                     // The triangle points down at the tile from the popup bottom.
                     let x = (tile_x - width / 2.).clamp(8., (w - width - 8.).max(8.));
-                    let offset = (tile_x - x).clamp(DOCK_ARROW, (width - DOCK_ARROW).max(DOCK_ARROW));
+                    let offset =
+                        (tile_x - x).clamp(DOCK_ARROW, (width - DOCK_ARROW).max(DOCK_ARROW));
                     (
                         width,
                         height,
@@ -555,9 +555,9 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
                     // height.
                     let width = width + DOCK_ARROW;
                     let height = height - DOCK_ARROW;
-                    let y = (tile_y - height / 2.)
-                        .clamp(top, (h - height - 8.).max(top));
-                    let offset = (tile_y - y).clamp(DOCK_ARROW, (height - DOCK_ARROW).max(DOCK_ARROW));
+                    let y = (tile_y - height / 2.).clamp(top, (h - height - 8.).max(top));
+                    let offset =
+                        (tile_y - y).clamp(DOCK_ARROW, (height - DOCK_ARROW).max(DOCK_ARROW));
                     let (x, arrow) = if state.prefs.dock_position == DockPosition::Left {
                         (
                             edge - DOCK_ARROW,
@@ -586,7 +586,10 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
                 margins: LayerShellMargins::default(),
                 normal: false,
                 arrow,
-                popup: Some(Bounds::new(point(px(x), px(y)), size(px(width), px(height)))),
+                popup: Some(Bounds::new(
+                    point(px(x), px(y)),
+                    size(px(width), px(height)),
+                )),
             };
         }
         Panel::DockFolder { root } => {
@@ -604,25 +607,27 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
             let apps = state.dock_apps();
             let metrics = dock_metrics(state, &apps, w, h);
             let (width, height) = folder_popup_size(state, root, layout, w, h);
-            let (tile_x, tile_y) = folder_tile_center(state, root, w, h)
-                .unwrap_or((w / 2., h / 2.));
-            let (width, height, x, y, arrow) = dock_popup_geometry(
-                state, &metrics, tile_x, tile_y, width, height, w, h, top,
-            );
+            let (tile_x, tile_y) =
+                folder_tile_center(state, root, w, h).unwrap_or((w / 2., h / 2.));
+            let (width, height, x, y, arrow) =
+                dock_popup_geometry(state, &metrics, tile_x, tile_y, width, height, w, h, top);
             return Placement {
                 bounds: Bounds::new(point(px(0.), px(0.)), size(px(w), px(h))),
                 anchor: LayerShellAnchor::ALL,
                 margins: LayerShellMargins::default(),
                 normal: false,
                 arrow: Some(arrow),
-                popup: Some(Bounds::new(point(px(x), px(y)), size(px(width), px(height)))),
+                popup: Some(Bounds::new(
+                    point(px(x), px(y)),
+                    size(px(width), px(height)),
+                )),
             };
         }
         Panel::DockFolderMenu { path } => {
             let apps = state.dock_apps();
             let metrics = dock_metrics(state, &apps, w, h);
-            let (tile_x, tile_y) = folder_tile_center(state, path, w, h)
-                .unwrap_or((w / 2., h / 2.));
+            let (tile_x, tile_y) =
+                folder_tile_center(state, path, w, h).unwrap_or((w / 2., h / 2.));
             let menu_height = folder_menu_window_height()
                 .min(h * FOLDER_POPUP_MAX_SCREEN_SHARE)
                 .min(available);
@@ -643,7 +648,10 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
                 margins: LayerShellMargins::default(),
                 normal: false,
                 arrow: Some(arrow),
-                popup: Some(Bounds::new(point(px(x), px(y)), size(px(width), px(height)))),
+                popup: Some(Bounds::new(
+                    point(px(x), px(y)),
+                    size(px(width), px(height)),
+                )),
             };
         }
         Panel::DockOverflow { ids, icon_size } => {
@@ -685,8 +693,7 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
                 }
                 DockPosition::Left | DockPosition::Right => {
                     let width = width + DOCK_ARROW;
-                    let y = (tile_y - height / 2.)
-                        .clamp(top, (h - height - 8.).max(top));
+                    let y = (tile_y - height / 2.).clamp(top, (h - height - 8.).max(top));
                     let offset =
                         (tile_y - y).clamp(DOCK_ARROW, (height - DOCK_ARROW).max(DOCK_ARROW));
                     let (x, arrow) = if state.prefs.dock_position == DockPosition::Left {
@@ -715,7 +722,10 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
                 margins: LayerShellMargins::default(),
                 normal: false,
                 arrow,
-                popup: Some(Bounds::new(point(px(x), px(y)), size(px(width), px(height)))),
+                popup: Some(Bounds::new(
+                    point(px(x), px(y)),
+                    size(px(width), px(height)),
+                )),
             };
         }
         Panel::Controls => {
@@ -865,9 +875,7 @@ mod tests {
     use crate::app::testing;
 
     #[gpui::test]
-    fn the_launcher_palette_is_a_centred_modal_with_a_visible_rectangle(
-        cx: &mut TestAppContext,
-    ) {
+    fn the_launcher_palette_is_a_centred_modal_with_a_visible_rectangle(cx: &mut TestAppContext) {
         let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
         let state = host.read_with(cx, |host, _| host.snapshot());
         let palette = placement(&state, &Panel::Spotlight, 1440., 900.);
@@ -919,9 +927,14 @@ mod tests {
             controls.bounds,
             Bounds::new(point(px(0.), px(0.)), size(px(1440.), px(900.)))
         );
-        let popup = controls.popup.expect("the control center reports its popup");
+        let popup = controls
+            .popup
+            .expect("the control center reports its popup");
         assert_eq!(f32::from(popup.origin.x), 1440. - 360. - 12.);
-        assert_eq!(f32::from(popup.origin.y), state.prefs.bar_height as f32 + 8.);
+        assert_eq!(
+            f32::from(popup.origin.y),
+            state.prefs.bar_height as f32 + 8.
+        );
         assert!(controls.anchor.top && controls.anchor.right);
         let capture = placement(&state, &Panel::Screenshot, 1440., 900.);
         assert!(capture.anchor.bottom);
@@ -1094,7 +1107,9 @@ mod tests {
                     1440.,
                     height,
                 );
-                let popup = placement.popup.expect("the folder menu reports its visible rect");
+                let popup = placement
+                    .popup
+                    .expect("the folder menu reports its visible rect");
                 let popup_height = f32::from(popup.size.height);
                 assert!(
                     popup_height <= height * FOLDER_POPUP_MAX_SCREEN_SHARE + 0.01,
@@ -1106,9 +1121,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn the_folder_popup_never_covers_more_than_most_of_the_screen(
-        cx: &mut TestAppContext,
-    ) {
+    fn the_folder_popup_never_covers_more_than_most_of_the_screen(cx: &mut TestAppContext) {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap();
         let child = root.join("crowded");
@@ -1207,7 +1220,10 @@ mod tests {
             (f32::from(card.size.height) - height).abs() < 0.01,
             "the card is the content plus its border, with no arrow band"
         );
-        assert!((y - 270.).abs() < 0.01, "the card drops below the click: {y}");
+        assert!(
+            (y - 270.).abs() < 0.01,
+            "the card drops below the click: {y}"
+        );
         assert!(
             x <= 420. && x + width > 420.,
             "the click stays over the card: x={x}"
@@ -1386,7 +1402,9 @@ mod tests {
             let arrow = placement.arrow.expect("the drawer points at its tile");
             assert_eq!(f32::from(placement.bounds.size.width), 1440.);
             assert_eq!(f32::from(placement.bounds.size.height), 900.);
-            let popup = placement.popup.expect("the drawer reports its visible rect");
+            let popup = placement
+                .popup
+                .expect("the drawer reports its visible rect");
             let want = match position {
                 DockPosition::Bottom => ArrowEdge::Bottom,
                 DockPosition::Left => ArrowEdge::Left,

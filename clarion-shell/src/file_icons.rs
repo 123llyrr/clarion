@@ -94,12 +94,8 @@ pub(crate) fn kind(path: &Path, is_dir: bool) -> FileKind {
         "desktop" => FileKind::Application,
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff" | "heic" | "avif"
         | "ico" | "svg" => FileKind::Image,
-        "mp4" | "mkv" | "webm" | "mov" | "avi" | "m4v" | "mpg" | "mpeg" | "flv" => {
-            FileKind::Video
-        }
-        "mp3" | "flac" | "wav" | "ogg" | "m4a" | "opus" | "aac" | "wma" | "aiff" => {
-            FileKind::Audio
-        }
+        "mp4" | "mkv" | "webm" | "mov" | "avi" | "m4v" | "mpg" | "mpeg" | "flv" => FileKind::Video,
+        "mp3" | "flac" | "wav" | "ogg" | "m4a" | "opus" | "aac" | "wma" | "aiff" => FileKind::Audio,
         "pdf" => FileKind::Pdf,
         "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "7z" | "rar" | "zst" | "lz4" => {
             FileKind::Archive
@@ -262,28 +258,18 @@ pub(crate) fn icon(
     let draw_width = artwork.canvas.0 as f32 * scale;
     let draw_height = artwork.canvas.1 as f32 * scale;
     // A preview card is 4:3, so its lower edge sits above the square's.
-    let card_height = if preview {
-        card_width * 3. / 4.
-    } else {
-        size
-    };
+    let card_height = if preview { card_width * 3. / 4. } else { size };
     let card_bottom = (size - card_height) / 2.;
-    let mut stack = div()
-        .relative()
-        .w(px(size))
-        .h(px(size))
-        .child(
-            img(artwork.image)
-                .absolute()
-                .left(px((size - draw_width) / 2.))
-                .top(px((size - draw_height) / 2.))
-                .w(px(draw_width))
-                .h(px(draw_height))
-                .object_fit(ObjectFit::Contain)
-                .with_fallback(move || {
-                    desktop_icons::icon(fallback(kind), size * 0.86)
-                }),
-        );
+    let mut stack = div().relative().w(px(size)).h(px(size)).child(
+        img(artwork.image)
+            .absolute()
+            .left(px((size - draw_width) / 2.))
+            .top(px((size - draw_height) / 2.))
+            .w(px(draw_width))
+            .h(px(draw_height))
+            .object_fit(ObjectFit::Contain)
+            .with_fallback(move || desktop_icons::icon(fallback(kind), size * 0.86)),
+    );
     if tags.is_empty() {
         return stack.into_any_element();
     }
@@ -345,10 +331,8 @@ fn artwork(path: Option<&Path>, kind: FileKind) -> (String, Arc<Vec<u8>>, bool) 
     let name = icon_name(kind);
     let theme = crate::view::current_icon_theme();
     let key = format!("theme:{theme}:{name}");
-    let bytes = cached_bytes(&key, || {
-        resolve(name).and_then(|path| rasterize(&path))
-    })
-    .unwrap_or_else(|| embedded_bytes(fallback(kind)));
+    let bytes = cached_bytes(&key, || resolve(name).and_then(|path| rasterize(&path)))
+        .unwrap_or_else(|| embedded_bytes(fallback(kind)));
     (key, bytes, false)
 }
 
@@ -484,7 +468,10 @@ fn preview_png(bytes: Vec<u8>) -> Vec<u8> {
     );
     round_corners(&mut scaled, raster_h as f32 * PREVIEW_RADIUS);
     let mut encoded = Cursor::new(Vec::new());
-    if scaled.write_to(&mut encoded, ::image::ImageFormat::Png).is_ok() {
+    if scaled
+        .write_to(&mut encoded, ::image::ImageFormat::Png)
+        .is_ok()
+    {
         encoded.into_inner()
     } else {
         bytes
@@ -542,7 +529,10 @@ fn page_png(bytes: Vec<u8>) -> Vec<u8> {
         ((raster - target_height) / 2) as i64,
     );
     let mut encoded = Cursor::new(Vec::new());
-    if canvas.write_to(&mut encoded, ::image::ImageFormat::Png).is_ok() {
+    if canvas
+        .write_to(&mut encoded, ::image::ImageFormat::Png)
+        .is_ok()
+    {
         encoded.into_inner()
     } else {
         bytes
@@ -561,9 +551,9 @@ fn md5_hex(bytes: &[u8]) -> String {
 
 fn md5(input: &[u8]) -> [u8; 16] {
     const SHIFTS: [u32; 64] = [
-        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20,
-        5, 9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
-        6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5,
+        9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10,
+        15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
     ];
     let mut constants = [0u32; 64];
     for (index, constant) in constants.iter_mut().enumerate() {
@@ -714,10 +704,7 @@ fn rotated_artwork(key: &str, bytes: Arc<Vec<u8>>, angle: f32) -> Rotated {
     }
     let source = png_size(&bytes).unwrap_or((RASTER as u32, RASTER as u32));
     let (image, canvas) = match rotate_expanded(&bytes, degrees as f32) {
-        Some((png, canvas)) => (
-            Arc::new(Image::from_bytes(ImageFormat::Png, png)),
-            canvas,
-        ),
+        Some((png, canvas)) => (Arc::new(Image::from_bytes(ImageFormat::Png, png)), canvas),
         None => (
             Arc::new(Image::from_bytes(ImageFormat::Png, bytes.as_ref().clone())),
             source,
@@ -779,7 +766,9 @@ fn rotate_expanded(bytes: &[u8], degrees: f32) -> Option<(Vec<u8>, (u32, u32))> 
         }
     }
     let mut encoded = Cursor::new(Vec::new());
-    canvas.write_to(&mut encoded, ::image::ImageFormat::Png).ok()?;
+    canvas
+        .write_to(&mut encoded, ::image::ImageFormat::Png)
+        .ok()?;
     Some((encoded.into_inner(), (canvas_width, canvas_height)))
 }
 
@@ -864,7 +853,8 @@ mod tests {
         // corners off (the octagon), so the canvas has to grow with the tilt.
         let card = ::image::RgbaImage::from_pixel(64, 48, ::image::Rgba([200, 100, 50, 255]));
         let mut encoded = Cursor::new(Vec::new());
-        card.write_to(&mut encoded, ::image::ImageFormat::Png).unwrap();
+        card.write_to(&mut encoded, ::image::ImageFormat::Png)
+            .unwrap();
         let degrees = 16.;
         let (png, (canvas_width, canvas_height)) =
             rotate_expanded(&encoded.into_inner(), degrees).expect("the card rotates");
@@ -886,14 +876,20 @@ mod tests {
             })
         });
         assert!(ink_near_corner, "the card's corner survives the rotation");
-        assert_eq!(rotated.get_pixel(0, 0).0[3], 0, "the canvas corner stays empty");
+        assert_eq!(
+            rotated.get_pixel(0, 0).0[3],
+            0,
+            "the canvas corner stays empty"
+        );
     }
 
     #[test]
     fn document_pages_fit_inside_the_icon_box() {
         let source = ::image::RgbaImage::from_pixel(100, 141, ::image::Rgba([250, 250, 250, 255]));
         let mut encoded = Cursor::new(Vec::new());
-        source.write_to(&mut encoded, ::image::ImageFormat::Png).unwrap();
+        source
+            .write_to(&mut encoded, ::image::ImageFormat::Png)
+            .unwrap();
         let decoded = ::image::load_from_memory_with_format(
             &page_png(encoded.into_inner()),
             ::image::ImageFormat::Png,
@@ -931,7 +927,9 @@ mod tests {
             let source =
                 ::image::RgbaImage::from_pixel(width, height, ::image::Rgba([200, 100, 50, 255]));
             let mut encoded = Cursor::new(Vec::new());
-            source.write_to(&mut encoded, ::image::ImageFormat::Png).unwrap();
+            source
+                .write_to(&mut encoded, ::image::ImageFormat::Png)
+                .unwrap();
             let decoded = ::image::load_from_memory_with_format(
                 &preview_png(encoded.into_inner()),
                 ::image::ImageFormat::Png,
@@ -941,7 +939,10 @@ mod tests {
             let (framed_width, framed_height) = decoded.dimensions();
             assert_eq!(framed_width, RASTER as u32);
             assert_eq!(framed_height, (RASTER * 3. / 4.).round() as u32);
-            assert_eq!(decoded.get_pixel(framed_width / 2, framed_height / 2).0[3], 255);
+            assert_eq!(
+                decoded.get_pixel(framed_width / 2, framed_height / 2).0[3],
+                255
+            );
             assert_eq!(decoded.get_pixel(0, 0).0[3], 0);
         }
     }

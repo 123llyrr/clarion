@@ -133,7 +133,10 @@ enum PaletteBody {
 fn implemented(command: &Command) -> bool {
     match command.kind {
         CommandKind::Mode => {
-            matches!(command.value, Some("search" | "apps" | "commands" | "clipboard"))
+            matches!(
+                command.value,
+                Some("search" | "apps" | "commands" | "clipboard")
+            )
         }
         // The action catalog and the web page have a body behind them so far.
         CommandKind::Tool => matches!(command.value, Some("actions" | "web")),
@@ -543,13 +546,9 @@ impl ShellView {
         }
         match self.palette.mode {
             Mode::Commands => self.themed_glyph_path("layers-button-symbolic", "terminal.svg"),
-            Mode::Clipboard => {
-                self.themed_glyph_path("category-search-symbolic", "clipboard.svg")
-            }
+            Mode::Clipboard => self.themed_glyph_path("category-search-symbolic", "clipboard.svg"),
             Mode::Files => self.themed_glyph_path("folder-symbolic", "generic-folder.svg"),
-            Mode::Wallpapers => {
-                self.themed_glyph_path("image-round-symbolic", "wallpaper.svg")
-            }
+            Mode::Wallpapers => self.themed_glyph_path("image-round-symbolic", "wallpaper.svg"),
             Mode::Search | Mode::Apps => {
                 if matches!(
                     self.palette.route(&self.query),
@@ -805,8 +804,7 @@ impl ShellView {
                 } else {
                     return;
                 };
-                self.scroll
-                    .set_offset(point(px(0.), px(-offset.max(0.))));
+                self.scroll.set_offset(point(px(0.), px(-offset.max(0.))));
                 return;
             }
         }
@@ -978,9 +976,7 @@ impl ShellView {
                 };
                 match commands::resolve(&name, &arguments, self.palette.mode, self.palette.tool) {
                     Ok(entry) => self.palette_run_checked(entry, &arguments, host, cx),
-                    Err(ResolveError::Scope) => {
-                        self.palette_reject("该命令只在对应模式下可用", cx)
-                    }
+                    Err(ResolveError::Scope) => self.palette_reject("该命令只在对应模式下可用", cx),
                     Err(ResolveError::Arguments) => self.palette_reject("该命令不接受参数", cx),
                     Err(ResolveError::Unknown) => {
                         // A partial name runs the highlighted completion. A
@@ -1100,13 +1096,11 @@ impl ShellView {
                 "settings.launcher.fullscreen" => Some(Action::LauncherPresentation(
                     LauncherPresentation::Fullscreen,
                 )),
-                "settings.launcher.palette" => Some(Action::LauncherPresentation(
-                    LauncherPresentation::Palette,
-                )),
-                "settings.wallpaper" => Some(Action::PickWallpaper),
-                "settings.reduce-motion" => {
-                    Some(Action::ReduceMotion(!host.prefs.reduce_motion))
+                "settings.launcher.palette" => {
+                    Some(Action::LauncherPresentation(LauncherPresentation::Palette))
                 }
+                "settings.wallpaper" => Some(Action::PickWallpaper),
+                "settings.reduce-motion" => Some(Action::ReduceMotion(!host.prefs.reduce_motion)),
                 "settings.dock-autohide" => Some(Action::AutoHide(!host.prefs.dock_auto_hide)),
                 "shell.screenshot" => Some(Action::Panel(Panel::Screenshot)),
                 "shell.notifications" => Some(Action::Panel(Panel::Notifications)),
@@ -1204,22 +1198,15 @@ impl ShellView {
                                 p.muted,
                                 cx,
                             ))
-                            .child(
-                                div().text_size(px(10.)).child(menu_text(
-                                    format!(
-                                        "Alt+{}",
-                                        filter
-                                            .key()
-                                            .chars()
-                                            .next()
-                                            .unwrap_or(' ')
-                                            .to_uppercase()
-                                    ),
-                                    FontWeight::NORMAL,
-                                    p.muted,
-                                    cx,
-                                )),
-                            ),
+                            .child(div().text_size(px(10.)).child(menu_text(
+                                format!(
+                                    "Alt+{}",
+                                    filter.key().chars().next().unwrap_or(' ').to_uppercase()
+                                ),
+                                FontWeight::NORMAL,
+                                p.muted,
+                                cx,
+                            ))),
                     );
                 }
                 Some(
@@ -1255,14 +1242,12 @@ impl ShellView {
                                     p.muted,
                                     cx,
                                 ))
-                                .child(
-                                    div().text_size(px(10.)).child(menu_text(
-                                        "Alt+D".to_owned(),
-                                        FontWeight::NORMAL,
-                                        p.muted,
-                                        cx,
-                                    )),
-                                ),
+                                .child(div().text_size(px(10.)).child(menu_text(
+                                    "Alt+D".to_owned(),
+                                    FontWeight::NORMAL,
+                                    p.muted,
+                                    cx,
+                                ))),
                         )
                         .into_any_element(),
                 )
@@ -1333,7 +1318,10 @@ impl ShellView {
             let selector = format!("spotlight-tag-{}", category.key());
             tags = tags.child(
                 div()
-                    .id(SharedString::from(format!("spotlight-tag-{}", category.key())))
+                    .id(SharedString::from(format!(
+                        "spotlight-tag-{}",
+                        category.key()
+                    )))
                     .debug_selector(move || selector.clone())
                     .h(px(24.))
                     .px(px(10.))
@@ -1457,12 +1445,7 @@ impl ShellView {
                                         .whitespace_nowrap()
                                         .overflow_hidden()
                                         .text_ellipsis()
-                                        .child(menu_text(
-                                            generic,
-                                            FontWeight::MEDIUM,
-                                            p.muted,
-                                            cx,
-                                        )),
+                                        .child(menu_text(generic, FontWeight::MEDIUM, p.muted, cx)),
                                 )
                             }),
                     )
@@ -1535,12 +1518,8 @@ impl ShellView {
             None => {
                 // A query filters the grid into one flat block.
                 for (row_index, chunk) in found.chunks(GRID_COLUMNS).enumerate() {
-                    grid = grid.child(self.spotlight_tile_row(
-                        chunk,
-                        row_index * GRID_COLUMNS,
-                        p,
-                        cx,
-                    ));
+                    grid =
+                        grid.child(self.spotlight_tile_row(chunk, row_index * GRID_COLUMNS, p, cx));
                 }
             }
         }
@@ -1593,9 +1572,7 @@ impl ShellView {
                             // fullscreen launcher: the label below never takes
                             // the tint.
                             div()
-                                .id(SharedString::from(format!(
-                                    "spotlight-tile-plate-{id}"
-                                )))
+                                .id(SharedString::from(format!("spotlight-tile-plate-{id}")))
                                 .size(px(GRID_PLATE))
                                 .flex_shrink_0()
                                 .rounded(px(20.))
@@ -1671,22 +1648,18 @@ impl ShellView {
         cx: &Context<Self>,
     ) -> AnyElement {
         let overflow = section.category.is_some() && section.total > GRID_COLUMNS;
-        let mut trailing = div()
-            .flex()
-            .items_center()
-            .gap(px(8.))
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .text_color(p.muted)
-                    .whitespace_nowrap()
-                    .child(menu_text(
-                        format!("{} 项", section.total),
-                        FontWeight::MEDIUM,
-                        p.muted,
-                        cx,
-                    )),
-            );
+        let mut trailing = div().flex().items_center().gap(px(8.)).child(
+            div()
+                .text_size(px(12.))
+                .text_color(p.muted)
+                .whitespace_nowrap()
+                .child(menu_text(
+                    format!("{} 项", section.total),
+                    FontWeight::MEDIUM,
+                    p.muted,
+                    cx,
+                )),
+        );
         if overflow {
             let view = cx.entity().downgrade();
             let category = section.category.expect("overflow implies a category");
@@ -1715,11 +1688,12 @@ impl ShellView {
             .flex()
             .items_center()
             .justify_between()
-            .child(
-                div()
-                    .text_size(px(15.))
-                    .child(menu_text(section.title.to_owned(), FontWeight::BOLD, p.fg, cx)),
-            )
+            .child(div().text_size(px(15.)).child(menu_text(
+                section.title.to_owned(),
+                FontWeight::BOLD,
+                p.fg,
+                cx,
+            )))
             .child(trailing)
             .into_any_element()
     }
@@ -2076,9 +2050,12 @@ impl ShellView {
                             .child(menu_text(title, FontWeight::NORMAL, p.muted, cx)),
                     )
                     .when(pinned, |row| {
-                        row.child(div().text_size(px(10.)).text_color(p.accent).child(
-                            menu_text("已置顶".into(), FontWeight::BOLD, p.accent, cx),
-                        ))
+                        row.child(
+                            div()
+                                .text_size(px(10.))
+                                .text_color(p.accent)
+                                .child(menu_text("已置顶".into(), FontWeight::BOLD, p.accent, cx)),
+                        )
                     }),
             );
         match entry.kind {
@@ -2110,17 +2087,12 @@ impl ShellView {
                         .justify_center()
                         .gap(px(8.))
                         .child(self.glyph(&glyph, 44., p))
-                        .child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(p.fg)
-                                .child(menu_text(
-                                    binary_label(&entry.mime).to_owned(),
-                                    FontWeight::SEMIBOLD,
-                                    p.fg,
-                                    cx,
-                                )),
-                        )
+                        .child(div().text_size(px(12.)).text_color(p.fg).child(menu_text(
+                            binary_label(&entry.mime).to_owned(),
+                            FontWeight::SEMIBOLD,
+                            p.fg,
+                            cx,
+                        )))
                         .child(
                             div()
                                 .text_size(px(11.))
@@ -2261,12 +2233,7 @@ impl ShellView {
     fn spotlight_commands(&self, p: Palette, cx: &Context<Self>) -> AnyElement {
         let found = self.palette_commands();
         if found.is_empty() {
-            return palette_empty(
-                "没有匹配的命令",
-                "输入 /commands 查看全部命令",
-                p,
-                cx,
-            );
+            return palette_empty("没有匹配的命令", "输入 /commands 查看全部命令", p, cx);
         }
         let mut list = div().flex().flex_col().gap(px(LIST_GAP)).pb(px(2.));
         for (index, entry) in found.iter().enumerate() {
@@ -2420,12 +2387,7 @@ impl ShellView {
                                     .whitespace_nowrap()
                                     .overflow_hidden()
                                     .text_ellipsis()
-                                    .child(menu_text(
-                                        title,
-                                        FontWeight::SEMIBOLD,
-                                        p.fg,
-                                        cx,
-                                    )),
+                                    .child(menu_text(title, FontWeight::SEMIBOLD, p.fg, cx)),
                             )
                             .child(
                                 div()
@@ -2435,12 +2397,7 @@ impl ShellView {
                                     .whitespace_nowrap()
                                     .overflow_hidden()
                                     .text_ellipsis()
-                                    .child(menu_text(
-                                        subtitle,
-                                        FontWeight::MEDIUM,
-                                        p.muted,
-                                        cx,
-                                    )),
+                                    .child(menu_text(subtitle, FontWeight::MEDIUM, p.muted, cx)),
                             ),
                     )
                     .child(
@@ -2474,12 +2431,7 @@ impl ShellView {
     fn spotlight_actions(&self, p: Palette, cx: &Context<Self>) -> AnyElement {
         let found = self.palette_actions();
         if found.is_empty() {
-            return palette_empty(
-                "没有匹配的动作",
-                "输入 /actions 浏览全部动作",
-                p,
-                cx,
-            );
+            return palette_empty("没有匹配的动作", "输入 /actions 浏览全部动作", p, cx);
         }
         let fallback = self.actions_glyph_path();
         let mut list = div().flex().flex_col().gap(px(LIST_GAP)).pb(px(2.));
@@ -2576,9 +2528,7 @@ impl ShellView {
                     )
                     .on_click(move |_, _, cx| {
                         cx.stop_propagation();
-                        h.update(cx, |h, cx| {
-                            h.handle(Action::RunCatalog(id.to_owned()), cx)
-                        });
+                        h.update(cx, |h, cx| h.handle(Action::RunCatalog(id.to_owned()), cx));
                     }),
             );
         }

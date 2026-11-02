@@ -288,17 +288,26 @@ mod tests {
 
     #[test]
     fn malformed_or_foreign_stores_read_as_empty() {
-        assert_eq!(LaunchHistory::from_json("not json"), LaunchHistory::default());
         assert_eq!(
-            LaunchHistory::from_json(r#"{"schemaVersion":2,"applications":{"a":{"launchCount":1}}}"#),
+            LaunchHistory::from_json("not json"),
             LaunchHistory::default()
         );
         assert_eq!(
-            LaunchHistory::from_json(r#"{"schemaVersion":1,"applications":{"": {"launchCount":3}}}"#),
+            LaunchHistory::from_json(
+                r#"{"schemaVersion":2,"applications":{"a":{"launchCount":1}}}"#
+            ),
             LaunchHistory::default()
         );
         assert_eq!(
-            LaunchHistory::from_json(r#"{"schemaVersion":1,"applications":{"a": {"launchCount":0}}}"#),
+            LaunchHistory::from_json(
+                r#"{"schemaVersion":1,"applications":{"": {"launchCount":3}}}"#
+            ),
+            LaunchHistory::default()
+        );
+        assert_eq!(
+            LaunchHistory::from_json(
+                r#"{"schemaVersion":1,"applications":{"a": {"launchCount":0}}}"#
+            ),
             LaunchHistory::default()
         );
     }
@@ -332,10 +341,16 @@ mod tests {
             launch_count: 4,
             last_launched_at: now.saturating_sub(40 * 24 * 3_600_000),
         };
-        assert!(usage_score(AppOrder::Smart, Some(&fresh), now) > usage_score(AppOrder::Smart, Some(&stale), now));
+        assert!(
+            usage_score(AppOrder::Smart, Some(&fresh), now)
+                > usage_score(AppOrder::Smart, Some(&stale), now)
+        );
         assert_eq!(usage_score(AppOrder::Name, Some(&fresh), now), 0.);
         assert_eq!(usage_score(AppOrder::MostUsed, Some(&fresh), now), 4.);
-        assert_eq!(usage_score(AppOrder::RecentlyUsed, Some(&fresh), now), fresh.last_launched_at as f64);
+        assert_eq!(
+            usage_score(AppOrder::RecentlyUsed, Some(&fresh), now),
+            fresh.last_launched_at as f64
+        );
         assert!(usage_score(AppOrder::Smart, None, now).is_finite());
     }
 
@@ -347,6 +362,8 @@ mod tests {
         }
         assert_eq!(history.len(), ENTRY_LIMIT);
         assert!(history.get("app0.desktop").is_none());
-        assert!(history.get(&format!("app{}.desktop", ENTRY_LIMIT + 3)).is_some());
+        assert!(history
+            .get(&format!("app{}.desktop", ENTRY_LIMIT + 3))
+            .is_some());
     }
 }

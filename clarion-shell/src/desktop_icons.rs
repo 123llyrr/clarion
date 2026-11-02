@@ -43,12 +43,7 @@ pub(crate) fn image(kind: DesktopIconKind) -> Arc<Image> {
         DesktopIconKind::Application => &APPLICATION,
     };
     cache
-        .get_or_init(|| {
-            Arc::new(Image::from_bytes(
-                ImageFormat::Png,
-                embedded(kind).to_vec(),
-            ))
-        })
+        .get_or_init(|| Arc::new(Image::from_bytes(ImageFormat::Png, embedded(kind).to_vec())))
         .clone()
 }
 

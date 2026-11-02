@@ -58,9 +58,7 @@ impl DisplayControls {
     }
 
     pub(super) fn arrangement_pending(&self) -> bool {
-        self.arrangement
-            .as_ref()
-            .is_some_and(Arrangement::dirty)
+        self.arrangement.as_ref().is_some_and(Arrangement::dirty)
     }
 
     pub(super) fn pending(&self) -> bool {
@@ -326,11 +324,8 @@ impl ClarionSettingsApp {
             let mut positions = Vec::new();
             if let Some(arrangement) = &mut self.display.arrangement {
                 if resize.is_some() || arrangement_dirty {
-                    positions = arrangement.reflow_for(
-                        resize
-                            .as_ref()
-                            .map(|(name, size)| (name, *size)),
-                    );
+                    positions =
+                        arrangement.reflow_for(resize.as_ref().map(|(name, size)| (name, *size)));
                 }
             }
             DisplayRequest { target, positions }
@@ -448,19 +443,15 @@ impl ClarionSettingsApp {
             }
             let reload = self.config_mgr.reload_from_disk();
             let already_saved = reload.is_ok()
-                && self
-                    .display
-                    .retry
-                    .as_ref()
-                    .is_some_and(|request| {
-                        request.target.as_ref().is_some_and(|(target, _, after)| {
-                            OutputSettings::read(&self.config_mgr, target).is_ok_and(|mut actual| {
-                                // Arrangement positions are written separately.
-                                actual.position = after.position;
-                                &actual == after
-                            })
+                && self.display.retry.as_ref().is_some_and(|request| {
+                    request.target.as_ref().is_some_and(|(target, _, after)| {
+                        OutputSettings::read(&self.config_mgr, target).is_ok_and(|mut actual| {
+                            // Arrangement positions are written separately.
+                            actual.position = after.position;
+                            &actual == after
                         })
-                    });
+                    })
+                });
             self.display.settings = None;
             self.display.baseline = None;
             self.display.source = None;

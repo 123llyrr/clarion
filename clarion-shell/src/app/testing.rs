@@ -94,7 +94,9 @@ pub(crate) fn open_folder(
     cx: &mut App,
 ) -> WindowHandle<ShellView> {
     host.update(cx, |host, cx| host.apply(Action::OpenFolder(root), cx));
-    host.read(cx).popup.expect("test folder panel was not created")
+    host.read(cx)
+        .popup
+        .expect("test folder panel was not created")
 }
 
 pub(crate) fn popup(host: &Entity<Host>, cx: &App) -> WindowHandle<ShellView> {

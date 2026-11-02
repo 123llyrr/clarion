@@ -301,7 +301,13 @@ pub const ENTRIES: &[Command] = &[
         slash: "notifications",
         aliases: &["notification-center"],
         title: "通知中心",
-        keywords: &["notifications", "notification", "notification center", "通知", "通知中心"],
+        keywords: &[
+            "notifications",
+            "notification",
+            "notification center",
+            "通知",
+            "通知中心",
+        ],
         kind: CommandKind::Action,
         value: None,
         scope: None,
@@ -500,9 +506,9 @@ pub enum ResolveError {
 
 pub fn exact(name: &str) -> Option<&'static Command> {
     let name = name.to_lowercase();
-    ENTRIES.iter().find(|entry| {
-        entry.slash == name || entry.aliases.iter().any(|alias| *alias == name)
-    })
+    ENTRIES
+        .iter()
+        .find(|entry| entry.slash == name || entry.aliases.iter().any(|alias| *alias == name))
 }
 
 pub fn by_id(id: &str) -> Option<&'static Command> {
@@ -613,10 +619,34 @@ mod tests {
     #[test]
     fn the_table_matches_the_reference_count() {
         assert_eq!(ENTRIES.len(), 38);
-        assert_eq!(ENTRIES.iter().filter(|entry| entry.kind == CommandKind::Mode).count(), 6);
-        assert_eq!(ENTRIES.iter().filter(|entry| entry.kind == CommandKind::Tool).count(), 6);
-        assert_eq!(ENTRIES.iter().filter(|entry| entry.kind == CommandKind::Action).count(), 18);
-        assert_eq!(ENTRIES.iter().filter(|entry| entry.kind == CommandKind::Override).count(), 8);
+        assert_eq!(
+            ENTRIES
+                .iter()
+                .filter(|entry| entry.kind == CommandKind::Mode)
+                .count(),
+            6
+        );
+        assert_eq!(
+            ENTRIES
+                .iter()
+                .filter(|entry| entry.kind == CommandKind::Tool)
+                .count(),
+            6
+        );
+        assert_eq!(
+            ENTRIES
+                .iter()
+                .filter(|entry| entry.kind == CommandKind::Action)
+                .count(),
+            18
+        );
+        assert_eq!(
+            ENTRIES
+                .iter()
+                .filter(|entry| entry.kind == CommandKind::Override)
+                .count(),
+            8
+        );
     }
 
     #[test]
@@ -642,8 +672,14 @@ mod tests {
             );
         }
         // Slash resolution covers the new names and their aliases.
-        assert_eq!(resolve("poweroff", "", Mode::Search, None).unwrap().id, "system.shutdown");
-        assert_eq!(resolve("lock", "", Mode::Search, None).unwrap().id, "system.lock");
+        assert_eq!(
+            resolve("poweroff", "", Mode::Search, None).unwrap().id,
+            "system.shutdown"
+        );
+        assert_eq!(
+            resolve("lock", "", Mode::Search, None).unwrap().id,
+            "system.lock"
+        );
     }
 
     #[test]
@@ -660,13 +696,22 @@ mod tests {
             resolve("grid", "", Mode::Search, None),
             Err(ResolveError::Scope)
         );
-        assert_eq!(resolve("grid", "", Mode::Apps, None).unwrap().id, "apps.grid");
+        assert_eq!(
+            resolve("grid", "", Mode::Apps, None).unwrap().id,
+            "apps.grid"
+        );
         assert_eq!(
             resolve("grid", "", Mode::Apps, Some(Tool::Web)),
             Err(ResolveError::Scope)
         );
-        assert_eq!(resolve("compact", "", Mode::Clipboard, None).unwrap().id, "clipboard.compact");
-        assert_eq!(resolve("grid", "", Mode::Clipboard, None), Err(ResolveError::Scope));
+        assert_eq!(
+            resolve("compact", "", Mode::Clipboard, None).unwrap().id,
+            "clipboard.compact"
+        );
+        assert_eq!(
+            resolve("grid", "", Mode::Clipboard, None),
+            Err(ResolveError::Scope)
+        );
     }
 
     #[test]
@@ -688,7 +733,9 @@ mod tests {
     #[test]
     fn the_command_list_skips_overrides_and_ranks_prefixes_first() {
         let ids: Vec<&str> = listable().map(|entry| entry.id).collect();
-        assert!(!ids.iter().any(|id| id.starts_with("apps.") || id.starts_with("clipboard.")));
+        assert!(!ids
+            .iter()
+            .any(|id| id.starts_with("apps.") || id.starts_with("clipboard.")));
         assert_eq!(ids.len(), 30);
         let found = search("calc", Mode::Search, None);
         assert_eq!(found.first().unwrap().id, "tool.calculator");

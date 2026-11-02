@@ -78,7 +78,11 @@ impl WebSearch {
         if self.literal {
             self.url.clone()
         } else if self.query.is_empty() {
-            format!("关键词 {} · 回车打开 {}", self.engine.keyword, host(&self.url))
+            format!(
+                "关键词 {} · 回车打开 {}",
+                self.engine.keyword,
+                host(&self.url)
+            )
         } else {
             self.query.clone()
         }
@@ -149,9 +153,8 @@ pub const ENGINES: &[Engine] = &[
 pub fn literal_url(query: &str) -> Option<String> {
     let query = query.trim();
     let lower = query.to_lowercase();
-    let explicit = lower.starts_with("https://")
-        || lower.starts_with("http://")
-        || lower.starts_with("www.");
+    let explicit =
+        lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("www.");
     if !explicit || query.contains(char::is_whitespace) {
         return None;
     }
@@ -223,10 +226,7 @@ mod tests {
         let rows = searches("rust wayland");
         assert_eq!(rows.len(), ENGINES.len());
         assert_eq!(rows[0].engine.id, "google");
-        assert_eq!(
-            rows[0].url,
-            "https://www.google.com/search?q=rust+wayland"
-        );
+        assert_eq!(rows[0].url, "https://www.google.com/search?q=rust+wayland");
         assert_eq!(rows[0].title(), "用 Google 搜索");
         assert_eq!(rows[0].subtitle(), "rust wayland");
     }

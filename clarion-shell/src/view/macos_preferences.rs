@@ -530,7 +530,11 @@ impl ShellView {
                 "全屏",
                 "prefs-launcher-fullscreen",
             ),
-            (LauncherPresentation::Palette, "弹窗", "prefs-launcher-palette"),
+            (
+                LauncherPresentation::Palette,
+                "弹窗",
+                "prefs-launcher-palette",
+            ),
         ] {
             let h = self.host.clone();
             let selected = host.prefs.launcher_presentation == key;
@@ -950,7 +954,9 @@ mod tests {
             );
             visual.run_until_parked();
             host.read_with(&visual, |host, _| match id {
-                "slider-dock-opacity" => assert!((host.prefs.dock_opacity - expected).abs() < 0.001),
+                "slider-dock-opacity" => {
+                    assert!((host.prefs.dock_opacity - expected).abs() < 0.001)
+                }
                 "slider-surface-opacity" => {
                     assert!((host.prefs.surface_opacity - expected).abs() < 0.001)
                 }
