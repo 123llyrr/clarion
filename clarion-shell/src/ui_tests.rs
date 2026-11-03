@@ -424,6 +424,38 @@ fn the_bar_battery_indicator_opens_the_control_center(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_bar_icon_slots_leave_breathing_room(cx: &mut TestAppContext) {
+    let (_fixture, host, view, _visual, _window) = panel(cx, Panel::Preferences);
+    host.update(cx, |host, cx| {
+        host.prefs.bar_height = 40.;
+        host.system.battery = Some(0.42);
+        host.system.battery_status = crate::backend::BatteryStatus::Discharging;
+        host.changed(cx);
+    });
+    let state = view.read_with(cx, |view, _| view.state.clone());
+    let bar = cx.add_window(|window, cx| {
+        window.resize(gpui::size(px(1000.), px(40.)));
+        ShellView::new(host.clone(), super::Surface::Bar, "test".into(), state, cx)
+    });
+    let mut bar_visual = VisualTestContext::from_window(*bar, cx);
+    bar_visual.run_until_parked();
+    let spotlight = bar_visual
+        .debug_bounds("menu-spotlight")
+        .expect("the bar carries the launcher button");
+    assert!(
+        f32::from(spotlight.size.width) >= 36.,
+        "a status slot must be wider than the glyph it centres: {spotlight:?}"
+    );
+    let battery = bar_visual
+        .debug_bounds("menu-battery")
+        .expect("the laptop bar carries the battery indicator");
+    assert!(
+        f32::from(battery.size.width) >= 40.,
+        "the battery indicator needs the same roomy slot: {battery:?}"
+    );
+}
+
+#[gpui::test]
 fn the_bar_spotlight_button_opens_the_popup_launcher(cx: &mut TestAppContext) {
     let (_fixture, host, view, _visual, _window) = panel(cx, Panel::Preferences);
     let state = view.read_with(cx, |view, _| view.state.clone());

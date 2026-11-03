@@ -1041,7 +1041,10 @@ impl ShellView {
         // bar height (40pt is the reference), macOS menu-bar style.
         let bar = host.prefs.bar_height as f32;
         let scale = (bar / 40.).clamp(0.7, 2.);
-        let tile = (bar * 0.8).round().clamp(24., 44.);
+        // Status icons read as separate controls only when their hit area is
+        // wider than the glyph. Keep the slot close to a square at the
+        // reference height and give narrow bars a usable minimum.
+        let tile = (bar * 0.92).round().clamp(26., 50.);
         let tray_glyph = (bar * 0.5).round().clamp(14., 26.);
         let status_glyph = (bar * 0.44).round().clamp(12., 22.);
         let text = (14. * scale).clamp(11., 20.);
@@ -1162,7 +1165,7 @@ impl ShellView {
                             move || selector.clone()
                         })
                         .w(px(tile))
-                        .mr(px(5.))
+                        .mr(px(6.))
                         .h_full()
                         .flex()
                         .items_center()
@@ -1261,7 +1264,7 @@ impl ShellView {
                     .id("menu-battery")
                     .debug_selector(|| "menu-battery".into())
                     .h_full()
-                    .px(px(6. * scale))
+                    .px(px(8. * scale))
                     .flex()
                     .items_center()
                     .gap(px(5. * scale))
@@ -1334,7 +1337,7 @@ impl ShellView {
             div()
                 .id("menu-clock")
                 .h_full()
-                .px(px(8. * scale))
+                .px(px(10. * scale))
                 .flex()
                 .items_center()
                 .text_size(px(text))
@@ -1410,7 +1413,7 @@ impl ShellView {
         div()
             .id(SharedString::from(id.to_owned()))
             .w(px(tile))
-            .mr(px(3.))
+            .mr(px(4.))
             .h_full()
             .flex()
             .items_center()
