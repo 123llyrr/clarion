@@ -648,16 +648,7 @@ fn perform(
                 path.is_absolute() && !path.as_os_str().as_bytes().contains(&0),
                 "Invalid location"
             );
-            run_tool(
-                "gio",
-                &[
-                    "open",
-                    "--",
-                    path.to_str().context("Location is not UTF-8")?,
-                ],
-                &options.environment,
-                Duration::from_secs(3),
-            )?;
+            open_location(&path, &options.environment)?;
         }
         Command::OpenUrl(url) => {
             let scheme = url.to_ascii_lowercase();
@@ -795,6 +786,119 @@ fn run_system_action(action: crate::app::SystemAction, options: &Options) -> Res
         }
     }
     Ok(())
+}
+
+/// Open a local location the way a file manager's double click would: a
+/// directory goes to the desktop file manager, while a file goes to the
+/// application registered for its content type.
+///
+/// `gio open` cannot do the file case here: it turns the path into a `file:`
+/// URI and therefore follows `x-scheme-handler/file`. On systems where that
+/// scheme points at the file manager, every local file (an image, a PDF, an
+/// archive) would open the containing folder instead of its own application.
+fn open_location(path: &Path, environment: &Environment) -> Result<()> {
+    let location = path.to_str().context("Location is not UTF-8")?;
+    if path.is_dir() {
+        run_tool(
+            "gio",
+            &["open", "--", location],
+            environment,
+            Duration::from_secs(3),
+        )?;
+        return Ok(());
+    }
+    if let Some(desktop) = default_desktop_file(path, environment) {
+        return clarion_launcher::launch::launch_desktop_file_with_paths(
+            &desktop,
+            &[path.to_path_buf()],
+            environment,
+        );
+    }
+    // No application claims this type: let GIO show the location so the click
+    // still does something visible instead of failing silently.
+    run_tool(
+        "gio",
+        &["open", "--", location],
+        environment,
+        Duration::from_secs(3),
+    )?;
+    Ok(())
+}
+
+/// Resolve the application registered for `path`'s content type, without
+/// consulting the `file:` scheme handler that `gio open` would use.
+fn default_desktop_file(path: &Path, environment: &Environment) -> Option<PathBuf> {
+    let mime = mime_guess::from_path(path).first_raw()?;
+    let id = default_handler_id(mime, environment)?;
+    resolve_desktop_file(&id, environment)
+}
+
+fn default_handler_id(mime: &str, environment: &Environment) -> Option<String> {
+    let mut environment = environment.clone();
+    // The sentence around the desktop id is localized; C keeps one stable
+    // shape, and the id is always the last whitespace-separated token.
+    environment.insert("LC_ALL".into(), "C".into());
+    let output = run_tool("gio", &["mime", mime], &environment, Duration::from_secs(2)).ok()?;
+    parse_default_handler(&output)
+}
+
+fn parse_default_handler(output: &str) -> Option<String> {
+    let id = output.lines().next()?.split_whitespace().last()?;
+    id.ends_with(".desktop").then(|| id.to_owned())
+}
+
+/// Find a desktop entry by the id GIO reports. Entries in subdirectories are
+/// addressed with the directory separator folded into a hyphen, e.g.
+/// `applications/foo/bar.desktop` becomes `foo-bar.desktop`.
+fn resolve_desktop_file(id: &str, environment: &Environment) -> Option<PathBuf> {
+    if id.contains('/') || id.contains('\\') || id == "." || id == ".." || !id.ends_with(".desktop")
+    {
+        return None;
+    }
+    let mut roots = Vec::new();
+    if let Some(data_home) = environment.get("XDG_DATA_HOME") {
+        roots.push(PathBuf::from(data_home));
+    } else if let Some(home) = environment.get("HOME") {
+        roots.push(PathBuf::from(home).join(".local/share"));
+    }
+    let data_dirs = environment
+        .get("XDG_DATA_DIRS")
+        .map(String::as_str)
+        .unwrap_or("/usr/local/share:/usr/share");
+    roots.extend(
+        data_dirs
+            .split(':')
+            .filter(|dir| !dir.is_empty())
+            .map(PathBuf::from),
+    );
+    roots
+        .into_iter()
+        .find_map(|root| desktop_file_in(&root.join("applications"), id))
+}
+
+fn desktop_file_in(applications: &Path, id: &str) -> Option<PathBuf> {
+    let direct = applications.join(id);
+    if direct.is_file() {
+        return Some(direct);
+    }
+    let mut pending = vec![(applications.to_path_buf(), String::new())];
+    while let Some((directory, prefix)) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if file_type.is_dir() {
+                pending.push((entry.path(), format!("{prefix}{name}-")));
+            } else if format!("{prefix}{name}") == id {
+                return Some(entry.path());
+            }
+        }
+    }
+    None
 }
 
 fn run_tool(
@@ -1551,5 +1655,67 @@ mod tests {
             .unwrap()
                 == std::path::Path::new("/stale")
         );
+    }
+    #[test]
+    fn the_content_type_handler_is_the_last_token_of_the_gio_line() {
+        assert_eq!(
+            parse_default_handler(
+                "Default application for “image/png”: feh.desktop\nRegistered applications:\n"
+            )
+            .as_deref(),
+            Some("feh.desktop")
+        );
+        assert_eq!(
+            parse_default_handler("No default applications for “application/octet-stream”\n"),
+            None
+        );
+        assert_eq!(parse_default_handler(""), None);
+    }
+    #[test]
+    fn desktop_entry_ids_resolve_direct_and_nested_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let applications = directory.path().join("applications");
+        fs::create_dir_all(applications.join("nested")).unwrap();
+        fs::write(applications.join("feh.desktop"), b"[Desktop Entry]\n").unwrap();
+        fs::write(
+            applications.join("nested").join("thing.desktop"),
+            b"[Desktop Entry]\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            desktop_file_in(&applications, "feh.desktop"),
+            Some(applications.join("feh.desktop"))
+        );
+        assert_eq!(
+            desktop_file_in(&applications, "nested-thing.desktop"),
+            Some(applications.join("nested").join("thing.desktop"))
+        );
+        assert_eq!(desktop_file_in(&applications, "missing.desktop"), None);
+        assert_eq!(desktop_file_in(&applications, "../escape.desktop"), None);
+    }
+    #[test]
+    fn the_default_handler_is_looked_up_in_the_xdg_data_directories() {
+        let directory = tempfile::tempdir().unwrap();
+        let share = directory.path().join("share");
+        let applications = share.join("applications");
+        fs::create_dir_all(&applications).unwrap();
+        fs::write(applications.join("feh.desktop"), b"[Desktop Entry]\n").unwrap();
+        let environment: Environment = [
+            (
+                "HOME".into(),
+                directory.path().to_string_lossy().into_owned(),
+            ),
+            ("XDG_DATA_HOME".into(), share.to_string_lossy().into_owned()),
+            ("XDG_DATA_DIRS".into(), "/nonexistent".into()),
+        ]
+        .into();
+
+        assert_eq!(
+            resolve_desktop_file("feh.desktop", &environment),
+            Some(applications.join("feh.desktop"))
+        );
+        assert_eq!(resolve_desktop_file("other.desktop", &environment), None);
+        assert_eq!(resolve_desktop_file("../feh.desktop", &environment), None);
     }
 }
