@@ -22,6 +22,7 @@ futures-lite = "2.6"
 wayland-client = "0.31.15"
 wayland-protocols = { version = "0.32.13", features = ["client", "staging"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+walkdir = "2.5"
 mime_guess = "2.0.5"
 # Rasterize the icon theme's file-type artwork (themes ship full-colour SVGs
 # the single-palette element renderer cannot honour).

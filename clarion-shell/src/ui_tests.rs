@@ -10,6 +10,8 @@ use gpui::{
 
 use super::{Action, Host, LauncherPresentation, Panel, ShellView};
 use crate::app::testing;
+use crate::backend;
+use clarion_launcher::session::Mode;
 
 /// A closing bar popup keeps its surface alive for the exit fade and a
 /// background release timer. The test clock must run to that timer before the
@@ -1605,6 +1607,14 @@ fn clipboard_commands_lead_with_the_search_mark() {
         crate::view::spotlight::command_symbol("mode.clipboard"),
         Some("category-search-symbolic")
     );
+    assert_eq!(
+        crate::view::spotlight::command_symbol("mode.wallpapers"),
+        Some("image-round-symbolic")
+    );
+    assert_eq!(
+        crate::view::spotlight::command_symbol("mode.files"),
+        Some("folder-symbolic")
+    );
 }
 
 #[gpui::test]
@@ -2161,5 +2171,170 @@ fn right_clicking_a_launchpad_tile_keeps_the_launchpad_closeable(cx: &mut TestAp
     host.read_with(cx, |host, _| {
         assert!(host.panel_exit, "the launchpad rides its fade out");
         assert_eq!(host.panel, Some(Panel::Apps));
+    });
+}
+
+#[gpui::test]
+fn mode_shortcuts_switch_all_four_pages_and_tab_walks_them(cx: &mut TestAppContext) {
+    let (_fixture, _host, view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    visual.run_until_parked();
+    let mode = |visual: &mut VisualTestContext| {
+        view.read_with(visual, |view, _| view.palette.mode)
+    };
+
+    visual.simulate_keystrokes("ctrl-2");
+    visual.run_until_parked();
+    assert_eq!(mode(&mut visual), Mode::Wallpapers);
+    visual.simulate_keystrokes("ctrl-3");
+    visual.run_until_parked();
+    assert_eq!(mode(&mut visual), Mode::Clipboard);
+    visual.simulate_keystrokes("ctrl-4");
+    visual.run_until_parked();
+    assert_eq!(mode(&mut visual), Mode::Files);
+
+    visual.simulate_keystrokes("tab");
+    visual.run_until_parked();
+    assert_eq!(mode(&mut visual), Mode::Apps, "Tab wraps to the first button");
+    visual.simulate_keystrokes("shift-tab");
+    visual.run_until_parked();
+    assert_eq!(mode(&mut visual), Mode::Files, "Shift+Tab walks backwards");
+
+    visual.simulate_keystrokes("ctrl-0");
+    visual.run_until_parked();
+    assert_eq!(mode(&mut visual), Mode::Search);
+    visual.simulate_keystrokes("tab");
+    visual.run_until_parked();
+    assert_eq!(
+        mode(&mut visual),
+        Mode::Apps,
+        "a mode outside the rail enters it at the front"
+    );
+}
+
+#[gpui::test]
+fn file_rows_render_and_enter_opens_while_ctrl_enter_reveals(cx: &mut TestAppContext) {
+    use clarion_launcher::files::FileHit;
+    let (_fixture, host, view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    let commands = cx.update(|cx| testing::capture_backend(&host, cx));
+    visual.simulate_keystrokes("ctrl-4");
+    visual.run_until_parked();
+
+    let report = std::path::PathBuf::from("/home/test/Documents/report.txt");
+    let notes = std::path::PathBuf::from("/home/test/Documents/notes.md");
+    host.update(cx, |host, cx| {
+        host.file_query = "notes".into();
+        host.file_hits = Arc::new(vec![
+            FileHit {
+                path: report.clone(),
+                name: "report.txt".into(),
+                parent: report.parent().unwrap().to_path_buf(),
+                is_dir: false,
+                extension: "txt".into(),
+                size: 2048,
+                modified: None,
+            },
+            FileHit {
+                path: notes.clone(),
+                name: "notes.md".into(),
+                parent: notes.parent().unwrap().to_path_buf(),
+                is_dir: false,
+                extension: "md".into(),
+                size: 512,
+                modified: None,
+            },
+        ]);
+        host.changed(cx);
+    });
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("spotlight-file-0").is_some());
+    assert!(visual.debug_bounds("spotlight-file-1").is_some());
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.query.clone()),
+        "",
+        "the fixture injected rows without typing"
+    );
+
+    visual.simulate_keystrokes("down");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    let mut opened = None;
+    while let Ok(command) = commands.try_recv() {
+        if let backend::Command::OpenPath(path) = command {
+            opened = Some(path);
+        }
+    }
+    assert_eq!(opened.as_deref(), Some(notes.as_path()), "Enter opens the row");
+
+    // Ctrl+Enter opens the containing folder instead.
+    let (_fixture, host, _view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    let commands = cx.update(|cx| testing::capture_backend(&host, cx));
+    visual.simulate_keystrokes("ctrl-4");
+    visual.run_until_parked();
+    host.update(cx, |host, cx| {
+        host.file_query = "report".into();
+        host.file_hits = Arc::new(vec![FileHit {
+            path: report.clone(),
+            name: "report.txt".into(),
+            parent: report.parent().unwrap().to_path_buf(),
+            is_dir: false,
+            extension: "txt".into(),
+            size: 2048,
+            modified: None,
+        }]);
+        host.changed(cx);
+    });
+    visual.run_until_parked();
+    visual.simulate_keystrokes("ctrl-enter");
+    visual.run_until_parked();
+    let mut revealed = None;
+    while let Ok(command) = commands.try_recv() {
+        if let backend::Command::OpenPath(path) = command {
+            revealed = Some(path);
+        }
+    }
+    assert_eq!(
+        revealed.as_deref(),
+        Some(std::path::Path::new("/home/test/Documents")),
+        "Ctrl+Enter reveals the containing folder"
+    );
+}
+
+#[gpui::test]
+fn the_wallpaper_gallery_marks_the_current_image_and_clicking_applies_one(
+    cx: &mut TestAppContext,
+) {
+    use crate::wallpapers::WallpaperEntry;
+    let (_fixture, host, view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    let current = std::path::PathBuf::from("/home/test/Pictures/current.png");
+    let other = std::path::PathBuf::from("/home/test/Pictures/other.png");
+    let entry = |path: &std::path::Path| WallpaperEntry {
+        path: path.to_path_buf(),
+        name: path.file_name().unwrap().to_string_lossy().into_owned(),
+        parent: path.parent().unwrap().to_path_buf(),
+        modified: None,
+        thumbnail: None,
+    };
+    host.update(cx, |host, cx| {
+        host.wallpapers = Arc::new(vec![entry(&current), entry(&other)]);
+        host.current_wallpaper = Some(current.clone());
+        host.changed(cx);
+    });
+    visual.simulate_keystrokes("ctrl-2");
+    visual.run_until_parked();
+    assert_eq!(view.read_with(&visual, |view, _| view.palette.mode), Mode::Wallpapers);
+    assert!(visual.debug_bounds("spotlight-wallpaper-0").is_some());
+    assert!(
+        visual.debug_bounds("spotlight-wallpaper-current").is_some(),
+        "the applied wallpaper carries the current mark"
+    );
+
+    let tile = visual
+        .debug_bounds("spotlight-wallpaper-1")
+        .expect("the second preview is painted")
+        .center();
+    visual.simulate_click(tile, Modifiers::default());
+    visual.run_until_parked();
+    host.read_with(cx, |host, _| {
+        assert_eq!(host.current_wallpaper.as_deref(), Some(other.as_path()));
     });
 }

@@ -2,6 +2,7 @@
 pub mod actions;
 pub mod catalog;
 pub mod commands;
+pub mod files;
 mod icons;
 pub mod launch;
 pub mod preferences;

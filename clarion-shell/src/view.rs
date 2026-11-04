@@ -38,6 +38,12 @@ actions!(
         Next,
         PaletteSearch,
         PaletteApps,
+        PaletteWallpapers,
+        PaletteClipboard,
+        PaletteFiles,
+        PaletteNextMode,
+        PalettePreviousMode,
+        PaletteReveal,
         PaletteClipboardText,
         PaletteClipboardImage,
         PaletteClipboardFiles,
@@ -64,6 +70,12 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("alt-d", PaletteClipboardLayout, Some("ClarionPanel")),
         KeyBinding::new("ctrl-0", PaletteSearch, Some("ClarionPanel")),
         KeyBinding::new("ctrl-1", PaletteApps, Some("ClarionPanel")),
+        KeyBinding::new("ctrl-2", PaletteWallpapers, Some("ClarionPanel")),
+        KeyBinding::new("ctrl-3", PaletteClipboard, Some("ClarionPanel")),
+        KeyBinding::new("ctrl-4", PaletteFiles, Some("ClarionPanel")),
+        KeyBinding::new("tab", PaletteNextMode, Some("ClarionPanel")),
+        KeyBinding::new("shift-tab", PalettePreviousMode, Some("ClarionPanel")),
+        KeyBinding::new("ctrl-enter", PaletteReveal, Some("ClarionPanel")),
     ]);
 }
 #[derive(Clone, Debug)]
@@ -471,6 +483,7 @@ impl ShellView {
             this.selection = 0;
             this.palette_error = None;
             this.scroll.set_offset(point(px(0.), px(0.)));
+            this.palette_sync_sources(cx);
             cx.notify();
         })
         .detach();
@@ -702,6 +715,15 @@ impl ShellView {
         for entry in &self.state.history {
             if let Some(bytes) = &entry.thumbnail_png {
                 let key = format!("history:{}", entry.id);
+                keep.insert(key.clone());
+                self.image_cache.entry(key).or_insert_with(|| {
+                    Arc::new(Image::from_bytes(ImageFormat::Png, bytes.clone()))
+                });
+            }
+        }
+        for entry in self.state.wallpapers.iter() {
+            if let Some(bytes) = &entry.thumbnail {
+                let key = format!("wallpaper:{}", entry.path.display());
                 keep.insert(key.clone());
                 self.image_cache.entry(key).or_insert_with(|| {
                     Arc::new(Image::from_bytes(ImageFormat::Png, bytes.clone()))
@@ -2856,6 +2878,43 @@ impl Render for ShellView {
                 if this.state.panel == Some(Panel::Spotlight) && !this.input.read(cx).has_preedit()
                 {
                     this.palette_switch_mode(Mode::Apps, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PaletteWallpapers, _, cx| {
+                if this.state.panel == Some(Panel::Spotlight) && !this.input.read(cx).has_preedit()
+                {
+                    this.palette_switch_mode(Mode::Wallpapers, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PaletteClipboard, _, cx| {
+                if this.state.panel == Some(Panel::Spotlight) && !this.input.read(cx).has_preedit()
+                {
+                    this.palette_switch_mode(Mode::Clipboard, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PaletteFiles, _, cx| {
+                if this.state.panel == Some(Panel::Spotlight) && !this.input.read(cx).has_preedit()
+                {
+                    this.palette_switch_mode(Mode::Files, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PaletteNextMode, _, cx| {
+                if this.state.panel == Some(Panel::Spotlight) && !this.input.read(cx).has_preedit()
+                {
+                    this.palette_cycle_mode(true, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PalettePreviousMode, _, cx| {
+                if this.state.panel == Some(Panel::Spotlight) && !this.input.read(cx).has_preedit()
+                {
+                    this.palette_cycle_mode(false, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PaletteReveal, _, cx| {
+                if this.state.panel == Some(Panel::Spotlight) && !this.input.read(cx).has_preedit()
+                {
+                    let host = this.state.clone();
+                    this.palette_reveal_selected(&host, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &PaletteClipboardText, _, cx| {

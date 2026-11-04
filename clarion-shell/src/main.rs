@@ -14,6 +14,7 @@ mod mime;
 mod preferences;
 mod services;
 mod view;
+mod wallpapers;
 
 use clap::Parser;
 

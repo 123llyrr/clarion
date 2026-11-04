@@ -8,8 +8,8 @@
 //! the menus use.
 //!
 //! Scope of the current slice: search, apps (grid/list, ordering), the command
-//! list and the clipboard. Wallpapers, files and the tool pages arrive with
-//! their backends; until then their commands are filtered out instead of
+//! list, the clipboard, the wallpaper gallery and the file search. The tool
+//! pages (calculator, time, currency) are still filtered out instead of
 //! offering dead entries.
 use super::*;
 use clarion_launcher::actions::{self, PaletteAction};
@@ -39,6 +39,14 @@ const GRID_PLATE: f32 = 92.;
 /// stepping has a known viewport.
 const CLIPBOARD_LIST_W: f32 = 292.;
 const CLIPBOARD_LIST_H: f32 = 486.;
+/// The wallpaper gallery: three preview cards per row, sized to the sheet's
+/// inner width. `WALLPAPER_PITCH` includes the label under each preview.
+const WALLPAPER_COLUMNS: usize = 3;
+const WALLPAPER_TILE_W: f32 = 220.;
+const WALLPAPER_PREVIEW_H: f32 = 132.;
+const WALLPAPER_TILE_H: f32 = 164.;
+const WALLPAPER_GAP: f32 = 8.;
+const WALLPAPER_PITCH: f32 = WALLPAPER_TILE_H + WALLPAPER_GAP;
 
 /// The mark that names the `/actions` category. The command row, the header's
 /// animated prefix and the actions page's shared fallback all resolve through
@@ -118,7 +126,9 @@ struct PaletteSection<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PaletteBody {
     Apps,
+    Wallpapers,
     Clipboard,
+    Files,
     Commands,
     Slash,
     /// The `/actions` catalog: compositor actions and shell toggles.
@@ -135,7 +145,7 @@ fn implemented(command: &Command) -> bool {
         CommandKind::Mode => {
             matches!(
                 command.value,
-                Some("search" | "apps" | "commands" | "clipboard")
+                Some("search" | "apps" | "wallpapers" | "commands" | "clipboard" | "files")
             )
         }
         // The action catalog and the web page have a body behind them so far.
@@ -420,6 +430,8 @@ pub(crate) fn command_symbol(id: &str) -> Option<&'static str> {
         "settings.launcher.palette" => "window-new-symbolic",
         "tool.web" => "web-browser-symbolic",
         "tool.actions" => ACTIONS_SYMBOL,
+        "mode.wallpapers" => "image-round-symbolic",
+        "mode.files" => "folder-symbolic",
         "mode.clipboard" | "shell.recent" => "category-search-symbolic",
         _ => return None,
     })
@@ -528,7 +540,9 @@ impl ShellView {
         match self.palette.mode {
             Mode::Commands => PaletteBody::Commands,
             Mode::Clipboard => PaletteBody::Clipboard,
-            _ => PaletteBody::Apps,
+            Mode::Wallpapers => PaletteBody::Wallpapers,
+            Mode::Files => PaletteBody::Files,
+            Mode::Search | Mode::Apps => PaletteBody::Apps,
         }
     }
 
@@ -683,7 +697,9 @@ impl ShellView {
                 _ => String::new(),
             },
             PaletteBody::Apps
+            | PaletteBody::Wallpapers
             | PaletteBody::Clipboard
+            | PaletteBody::Files
             | PaletteBody::Actions
             | PaletteBody::Web => return Vec::new(),
         };
@@ -725,6 +741,8 @@ impl ShellView {
             }
             PaletteBody::Commands | PaletteBody::Slash => self.palette_commands().len(),
             PaletteBody::Clipboard => self.palette_clipboard(host).len(),
+            PaletteBody::Wallpapers => self.palette_wallpapers(host).len(),
+            PaletteBody::Files => host.file_hits.len(),
         }
     }
 
@@ -732,8 +750,10 @@ impl ShellView {
     fn palette_metrics(&self, host: &ViewState) -> (usize, f32) {
         match self.palette_body() {
             PaletteBody::Apps if self.palette_grid(host) => (GRID_COLUMNS, GRID_PITCH),
+            PaletteBody::Wallpapers => (WALLPAPER_COLUMNS, WALLPAPER_PITCH),
             PaletteBody::Apps
             | PaletteBody::Clipboard
+            | PaletteBody::Files
             | PaletteBody::Commands
             | PaletteBody::Slash
             | PaletteBody::Actions
@@ -852,7 +872,41 @@ impl ShellView {
         if text != self.query {
             self.palette_set_query(text, cx);
         }
+        self.palette_sync_sources(cx);
         cx.notify();
+    }
+
+    /// Walk the four mode buttons with `Tab` / `Shift+Tab`, wrapping at the
+    /// ends. A mode outside the rail (scored search, the command list) enters
+    /// the rail at its first or last button.
+    pub(super) fn palette_cycle_mode(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let rail = Mode::RAIL;
+        let next = match rail.iter().position(|mode| *mode == self.palette.mode) {
+            Some(index) if forward => rail[(index + 1) % rail.len()],
+            Some(index) => rail[(index + rail.len() - 1) % rail.len()],
+            None if forward => rail[0],
+            None => rail[rail.len() - 1],
+        };
+        self.palette_switch_mode(next, cx);
+    }
+
+    /// Ask the host for the data the current page needs. File search follows
+    /// every draft edit; the wallpaper scan is refreshed when its page opens.
+    pub(super) fn palette_sync_sources(&self, cx: &mut Context<Self>) {
+        if self.state.panel != Some(Panel::Spotlight) {
+            return;
+        }
+        match self.palette_body() {
+            PaletteBody::Files => self.invoke(Action::SearchFiles(self.palette.query.clone()), cx),
+            // Typing only narrows the gallery, so a populated scan stays; an
+            // empty one (first visit or a failed pass) is retried.
+            PaletteBody::Wallpapers
+                if self.state.wallpapers.is_empty() && !self.state.wallpaper_scanning =>
+            {
+                self.invoke(Action::ScanWallpapers, cx)
+            }
+            _ => {}
+        }
     }
 
     /// Unwind one palette level: the command editor, a tool page or the last
@@ -873,6 +927,7 @@ impl ShellView {
         if text != self.query {
             self.palette_set_query(text, cx);
         }
+        self.palette_sync_sources(cx);
         self.palette_selection_into_view(host);
         cx.notify();
     }
@@ -951,6 +1006,23 @@ impl ShellView {
                     self.invoke(Action::Close, cx);
                 }
             }
+            PaletteBody::Files => {
+                let Some(entry) = host.file_hits.get(self.selection) else {
+                    return;
+                };
+                let path = entry.path.clone();
+                self.invoke(Action::Backend(backend::Command::OpenPath(path)), cx);
+                if !keep_open {
+                    self.invoke(Action::Close, cx);
+                }
+            }
+            PaletteBody::Wallpapers => {
+                let found = self.palette_wallpapers(host);
+                let Some(entry) = found.get(self.selection) else {
+                    return;
+                };
+                self.invoke(Action::ApplyWallpaper(entry.path.clone()), cx);
+            }
             PaletteBody::Commands => {
                 if let Some(entry) = self.palette_commands().get(self.selection).copied() {
                     self.palette_run_checked(entry, "", host, cx);
@@ -995,6 +1067,19 @@ impl ShellView {
                 }
             }
         }
+    }
+
+    /// Ctrl+Enter on a file row: open the containing folder and close the
+    /// sheet, matching the reference implementation's reveal action.
+    pub(super) fn palette_reveal_selected(&mut self, host: &ViewState, cx: &mut Context<Self>) {
+        if self.palette_body() != PaletteBody::Files {
+            return;
+        }
+        let Some(entry) = host.file_hits.get(self.selection) else {
+            return;
+        };
+        let path = entry.path.clone();
+        self.invoke(Action::RevealFile(path), cx);
     }
 
     /// Rows of the action catalog are clicked from inside the surface: look
@@ -1086,6 +1171,7 @@ impl ShellView {
         if text != self.query {
             self.palette_set_query(text, cx);
         }
+        self.palette_sync_sources(cx);
         if entry.kind == CommandKind::Action {
             // The session consumed the draft; the actual effect is the shell
             // action the entry names.
@@ -1252,6 +1338,9 @@ impl ShellView {
                         .into_any_element(),
                 )
             }
+            // The rail already names these pages; a second chip would only
+            // repeat the label and push the gallery down.
+            PaletteBody::Wallpapers | PaletteBody::Files => None,
             PaletteBody::Commands => Some(self.spotlight_chip("命令", true, p, cx)),
             PaletteBody::Slash => Some(self.spotlight_chip("命令补全", true, p, cx)),
             PaletteBody::Actions => Some(self.spotlight_chip("动作", true, p, cx)),
@@ -1375,6 +1464,8 @@ impl ShellView {
                 }
             }
             PaletteBody::Clipboard => self.spotlight_clipboard(host, p, cx),
+            PaletteBody::Wallpapers => self.spotlight_wallpapers(host, p, cx),
+            PaletteBody::Files => self.spotlight_files(host, p, cx),
             PaletteBody::Commands | PaletteBody::Slash => self.spotlight_commands(p, cx),
             PaletteBody::Actions => self.spotlight_actions(p, cx),
             PaletteBody::Web => self.spotlight_web(p, cx),
@@ -1713,6 +1804,283 @@ impl ShellView {
                     .bg(p.line),
             )
             .into_any_element()
+    }
+
+    /// The wallpaper gallery rows, filtered by the draft. The scan itself is
+    /// already sorted; filtering only compares the name and its folder.
+    fn palette_wallpapers<'a>(
+        &self,
+        host: &'a ViewState,
+    ) -> Vec<&'a crate::wallpapers::WallpaperEntry> {
+        let query = self.query.trim().to_lowercase();
+        host.wallpapers
+            .iter()
+            .filter(|entry| {
+                query.is_empty()
+                    || entry.name.to_lowercase().contains(&query)
+                    || entry.path.to_string_lossy().to_lowercase().contains(&query)
+            })
+            .collect()
+    }
+
+    /// The mark for a file row, resolved through the theme first and the
+    /// bundled glyphs second. Directories and media types get their own
+    /// marks; everything else shares the document sheet.
+    fn file_glyph(&self, hit: &clarion_launcher::files::FileHit) -> PathBuf {
+        let (symbol, fallback) = if hit.is_dir {
+            ("folder-symbolic", "generic-folder.svg")
+        } else {
+            match hit.extension.as_str() {
+                "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" => {
+                    ("image-x-generic-symbolic", "desktop-image.svg")
+                }
+                "mp3" | "flac" | "ogg" | "wav" | "m4a" => {
+                    ("audio-x-generic-symbolic", "speaker.svg")
+                }
+                "mp4" | "mkv" | "webm" | "mov" | "avi" => {
+                    ("video-x-generic-symbolic", "generic-document.svg")
+                }
+                "pdf" | "doc" | "docx" | "odt" | "xls" | "xlsx" | "ppt" | "pptx" => {
+                    ("x-office-document-symbolic", "generic-document.svg")
+                }
+                "txt" | "md" | "rs" | "toml" | "json" | "yaml" | "yml" | "sh" | "py"
+                | "js" | "ts" | "css" | "html" | "xml" | "log" => {
+                    ("text-x-generic-symbolic", "textedit.svg")
+                }
+                _ => ("text-x-generic-symbolic", "generic-document.svg"),
+            }
+        };
+        self.themed_glyph_path(symbol, fallback)
+    }
+
+    /// The files body: loading, idle, empty and result states all share the
+    /// same list geometry. A row opens by default; Ctrl+Enter reveals it.
+    fn spotlight_files(&self, host: &ViewState, p: Palette, cx: &Context<Self>) -> AnyElement {
+        if host.file_searching && host.file_hits.is_empty() {
+            return palette_empty("正在搜索文件", "搜索在主线程之外进行，结果会陆续出现", p, cx);
+        }
+        if let Some(error) = &host.file_search_error {
+            return palette_empty("文件搜索失败", error.clone(), p, cx);
+        }
+        if host.file_query.trim().is_empty() {
+            return palette_empty("搜索文件", "输入文件名或路径片段，Ctrl+Enter 在文件夹中显示", p, cx);
+        }
+        if host.file_hits.is_empty() {
+            return palette_empty("没有匹配的文件", "试试更短的文件名，或搜索父文件夹", p, cx);
+        }
+        let mut list = div().flex().flex_col().gap(px(LIST_GAP)).pb(px(2.));
+        for (index, hit) in host.file_hits.iter().enumerate() {
+            let selected = index == self.selection;
+            let open_path = hit.path.clone();
+            let name = hit.name.clone();
+            let meta = file_metadata(hit, &host.home);
+            let glyph = self.file_glyph(hit);
+            let row_selector = format!("spotlight-file-{index}");
+            let name_selector = format!("spotlight-file-name-{index}");
+            let row_host = self.host.clone();
+            list = list.child(
+                div()
+                    .id(SharedString::from(row_selector.clone()))
+                    .debug_selector(move || row_selector.clone())
+                    .h(px(LIST_ROW_H))
+                    .flex_shrink_0()
+                    .px(px(12.))
+                    .rounded(px(14.))
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .when(selected, |row| row.bg(p.accent.opacity(0.20)))
+                    .hover(move |row| row.bg(p.line))
+                    .cursor_pointer()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .size(px(36.))
+                            .rounded(px(10.))
+                            .bg(p.card)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(self.glyph(&glyph, 21., p)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(1.))
+                            .child(
+                                div()
+                                    .debug_selector(move || name_selector.clone())
+                                    .text_size(px(14.))
+                                    .text_color(p.fg)
+                                    .whitespace_nowrap()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .child(menu_text(name, FontWeight::SEMIBOLD, p.fg, cx)),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(p.muted)
+                                    .whitespace_nowrap()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .child(menu_text(meta, FontWeight::MEDIUM, p.muted, cx)),
+                            ),
+                    )
+                    .when(selected, |row| {
+                        row.child(
+                            div()
+                                .text_size(px(10.))
+                                .text_color(p.muted)
+                                .child(menu_text("↵".into(), FontWeight::NORMAL, p.muted, cx)),
+                        )
+                    })
+                    .on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        let path = open_path.clone();
+                        row_host.update(cx, |host, cx| {
+                            host.handle(Action::Backend(backend::Command::OpenPath(path)), cx);
+                            host.handle(Action::Close, cx);
+                        });
+                    }),
+            );
+        }
+        list.into_any_element()
+    }
+
+    /// The wallpaper gallery. Every row renders three equal slots so partial
+    /// rows stay symmetric, and the selected card gets an accent plate.
+    fn spotlight_wallpapers(&self, host: &ViewState, p: Palette, cx: &Context<Self>) -> AnyElement {
+        let found = self.palette_wallpapers(host);
+        if found.is_empty() {
+            if host.wallpaper_scanning {
+                return palette_empty("正在扫描壁纸", "正在读取图片文件夹并生成缩略图", p, cx);
+            }
+            if self.query.trim().is_empty() {
+                return palette_empty(
+                    "还没有壁纸",
+                    "把图片放进 ~/Pictures/Wallpapers，再输入 /wallpaper 重试",
+                    p,
+                    cx,
+                );
+            }
+            return palette_empty("没有匹配的壁纸", "试试更短的图片名称", p, cx);
+        }
+        let mut grid = div().flex().flex_col().gap(px(WALLPAPER_GAP)).pb(px(2.));
+        for (row_index, chunk) in found.chunks(WALLPAPER_COLUMNS).enumerate() {
+            let mut row = div().flex_shrink_0().flex().gap(px(WALLPAPER_GAP));
+            for column in 0..WALLPAPER_COLUMNS {
+                let Some(entry) = chunk.get(column) else {
+                    row = row.child(div().flex_1().min_w_0());
+                    continue;
+                };
+                let index = row_index * WALLPAPER_COLUMNS + column;
+                let selected = index == self.selection;
+                let is_current = host.current_wallpaper.as_deref() == Some(entry.path.as_path());
+                let open_path = entry.path.clone();
+                let name = entry.name.clone();
+                let image = self
+                    .image_cache
+                    .get(&format!("wallpaper:{}", entry.path.display()))
+                    .cloned();
+                let tile_selector = format!("spotlight-wallpaper-{index}");
+                let name_selector = format!("spotlight-wallpaper-name-{index}");
+                let tile_host = self.host.clone();
+                row = row.child(
+                    div().flex_1().min_w_0().flex().justify_center().child(
+                        div()
+                            .id(SharedString::from(tile_selector.clone()))
+                            .debug_selector(move || tile_selector.clone())
+                            .w(px(WALLPAPER_TILE_W))
+                            .h(px(WALLPAPER_TILE_H))
+                            .flex_shrink_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(6.))
+                            .p(px(6.))
+                            .rounded(px(14.))
+                            .when(selected, |tile| tile.bg(p.accent.opacity(0.20)))
+                            .hover(move |tile| tile.bg(p.line))
+                            .cursor_pointer()
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .child(
+                                div()
+                                    .w_full()
+                                    .h(px(WALLPAPER_PREVIEW_H))
+                                    .rounded(px(10.))
+                                    .overflow_hidden()
+                                    .bg(p.card)
+                                    .relative()
+                                    .when(selected, |preview| preview.border_1().border_color(p.accent))
+                                    .when(is_current, |preview| {
+                                        preview.child(
+                                            div()
+                                                .absolute()
+                                                .left(px(8.))
+                                                .bottom(px(8.))
+                                                .h(px(18.))
+                                                .px(px(7.))
+                                                .rounded(px(9.))
+                                                .bg(p.accent)
+                                                .flex()
+                                                .items_center()
+                                                .debug_selector(|| "spotlight-wallpaper-current".to_owned())
+                                                .child(menu_text(
+                                                    "当前".to_owned(),
+                                                    FontWeight::BOLD,
+                                                    p.panel,
+                                                    cx,
+                                                )),
+                                        )
+                                    })
+                                    .child(match image {
+                                        Some(image) => img(image)
+                                            .size_full()
+                                            .object_fit(ObjectFit::Cover)
+                                            .into_any_element(),
+                                        None => div()
+                                            .size_full()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .child(self.glyph(
+                                                &self.themed_glyph_path(
+                                                    "image-x-generic-symbolic",
+                                                    "wallpaper.svg",
+                                                ),
+                                                34.,
+                                                p,
+                                            ))
+                                            .into_any_element(),
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .debug_selector(move || name_selector.clone())
+                                    .text_size(px(12.))
+                                    .line_height(px(15.))
+                                    .text_color(p.fg)
+                                    .whitespace_nowrap()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .text_center()
+                                    .child(menu_text(name, FontWeight::MEDIUM, p.fg, cx)),
+                            )
+                            .on_click(move |_, _, cx| {
+                                cx.stop_propagation();
+                                tile_host.update(cx, |host, cx| {
+                                    host.handle(Action::ApplyWallpaper(open_path.clone()), cx);
+                                });
+                            }),
+                    ),
+                );
+            }
+            grid = grid.child(row);
+        }
+        grid.into_any_element()
     }
 
     /// The clipboard entries the palette offers. The service already sorts
@@ -2538,7 +2906,7 @@ impl ShellView {
 
 fn palette_empty(
     title: impl Into<String>,
-    hint: &'static str,
+    hint: impl Into<String>,
     p: Palette,
     cx: &Context<ShellView>,
 ) -> AnyElement {
@@ -2556,6 +2924,41 @@ fn palette_empty(
                 .child(menu_text(hint.into(), FontWeight::MEDIUM, p.muted, cx)),
         )
         .into_any_element()
+}
+
+/// The quiet line under a file row: what it is, how big it is, and the full
+/// path of its folder (home shortened to `~`). The row's title carries the
+/// name, so the path supplies the context a name alone cannot.
+fn file_metadata(hit: &clarion_launcher::files::FileHit, home: &Path) -> String {
+    let kind = if hit.is_dir {
+        "文件夹".to_owned()
+    } else if hit.extension.is_empty() {
+        "文件".to_owned()
+    } else {
+        format!("{} 文件", hit.extension.to_uppercase())
+    };
+    let location = hit.compact_path(home);
+    if hit.is_dir {
+        format!("{kind} · {location}")
+    } else {
+        format!("{kind} · {} · {location}", human_size(hit.size))
+    }
+}
+
+fn human_size(bytes: u64) -> String {
+    const KB: f64 = 1024.;
+    const MB: f64 = KB * 1024.;
+    const GB: f64 = MB * 1024.;
+    let bytes = bytes as f64;
+    if bytes >= GB {
+        format!("{:.1} GB", bytes / GB)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes / MB)
+    } else if bytes >= KB {
+        format!("{:.0} KB", bytes / KB)
+    } else {
+        format!("{bytes:.0} B")
+    }
 }
 
 #[cfg(test)]

@@ -12,6 +12,7 @@ use crate::{
 };
 use clarion_ipc::{Action as CoreAction, DockEdge, DockTarget, MinimizeEffect};
 use clarion_launcher::catalog::{AppCatalog, AppCategory, DesktopApp};
+use clarion_launcher::files::FileHit;
 use clarion_launcher::usage::{unix_millis, LaunchHistory};
 use gpui::{prelude::*, *};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -94,6 +95,14 @@ pub enum Action {
     },
     /// Open a web URL through the desktop handler (the `/web` page).
     OpenUrl(String),
+    /// Start (or replace) the palette's built-in file search.
+    SearchFiles(String),
+    /// Gather the wallpaper library for the gallery.
+    ScanWallpapers,
+    /// Apply one gallery wallpaper to every output.
+    ApplyWallpaper(PathBuf),
+    /// Open the directory that contains a palette file row.
+    RevealFile(PathBuf),
     Core(CoreAction),
     Service(services::Command),
     Backend(backend::Command),
@@ -193,6 +202,17 @@ pub struct ViewState {
     pub catalog: Arc<AppCatalog>,
     /// Launch counts used by the palette's usage-aware ordering.
     pub launch_history: Arc<LaunchHistory>,
+    /// The user's home directory, used to shorten palette file paths to `~`.
+    pub home: PathBuf,
+    /// Built-in file search results, newest generation only.
+    pub file_hits: Arc<Vec<FileHit>>,
+    pub file_query: String,
+    pub file_searching: bool,
+    pub file_search_error: Option<String>,
+    /// Wallpapers scanned from the user's picture folders.
+    pub wallpapers: Arc<Vec<crate::wallpapers::WallpaperEntry>>,
+    pub wallpaper_scanning: bool,
+    pub current_wallpaper: Option<PathBuf>,
     pub notifications: Vec<services::Notification>,
     pub tray: Vec<services::TrayItem>,
     pub history: Vec<services::HistoryEntry>,
@@ -251,6 +271,13 @@ pub struct Host {
     pub system: backend::SystemSnapshot,
     pub catalog: Arc<AppCatalog>,
     pub launch_history: Arc<LaunchHistory>,
+    pub file_hits: Arc<Vec<FileHit>>,
+    pub file_query: String,
+    pub file_searching: bool,
+    pub file_search_error: Option<String>,
+    pub wallpapers: Arc<Vec<crate::wallpapers::WallpaperEntry>>,
+    pub wallpaper_scanning: bool,
+    pub current_wallpaper: Option<PathBuf>,
     pub notifications: Vec<services::Notification>,
     pub tray: Vec<services::TrayItem>,
     pub history: Vec<services::HistoryEntry>,
@@ -285,6 +312,8 @@ pub struct Host {
     pub folder_drop_preview: bool,
     pub revision: u64,
     backend: backend::Backend,
+    /// Newest file-search generation; a late worker result is dropped.
+    file_search_generation: u64,
     service: services::ServiceHandle,
     desktop_actions: async_channel::Sender<DesktopAction>,
     local_preferences: bool,
@@ -353,6 +382,13 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 system: Default::default(),
                 catalog: Arc::new(AppCatalog::default()),
                 launch_history,
+                file_hits: Arc::default(),
+                file_query: String::new(),
+                file_searching: false,
+                file_search_error: None,
+                wallpapers: Arc::default(),
+                wallpaper_scanning: false,
+                current_wallpaper: None,
                 notifications: vec![],
                 tray: vec![],
                 history: vec![],
@@ -373,6 +409,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 folder_drop_preview: false,
                 revision: 0,
                 backend,
+                file_search_generation: 0,
                 service,
                 desktop_actions,
                 local_preferences: false,
@@ -500,6 +537,18 @@ impl Host {
             system: self.system.clone(),
             catalog: self.catalog.clone(),
             launch_history: self.launch_history.clone(),
+            home: self
+                .environment
+                .get("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_default(),
+            file_hits: self.file_hits.clone(),
+            file_query: self.file_query.clone(),
+            file_searching: self.file_searching,
+            file_search_error: self.file_search_error.clone(),
+            wallpapers: self.wallpapers.clone(),
+            wallpaper_scanning: self.wallpaper_scanning,
+            current_wallpaper: self.current_wallpaper.clone(),
             notifications: self.notifications.clone(),
             tray: self.tray.clone(),
             history: self.history.clone(),
@@ -821,6 +870,78 @@ impl Host {
             });
         }
     }
+    /// Debounce a palette query, then walk the home directory off the UI
+    /// thread. Results carry the generation they were requested under, so a
+    /// slower walk cannot overwrite a newer query's rows.
+    fn search_files(&mut self, query: String, cx: &mut Context<Self>) {
+        self.file_search_generation = self.file_search_generation.wrapping_add(1);
+        let generation = self.file_search_generation;
+        self.file_query = query.clone();
+        self.file_search_error = None;
+        if query.trim().is_empty() {
+            self.file_hits = Arc::default();
+            self.file_searching = false;
+            self.changed(cx);
+            return;
+        }
+        self.file_searching = true;
+        self.changed(cx);
+        let root = self
+            .environment
+            .get("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/"));
+        if !root.is_dir() {
+            self.file_searching = false;
+            self.file_search_error = Some("找不到可搜索的主目录".to_owned());
+            self.changed(cx);
+            return;
+        }
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |host, cx| {
+            executor.timer(Duration::from_millis(140)).await;
+            let hits = executor
+                .spawn(async move { clarion_launcher::files::search(&root, &query, 50) })
+                .await;
+            let _ = host.update(cx, |host, cx| {
+                if host.file_search_generation != generation {
+                    return;
+                }
+                host.file_hits = Arc::new(hits);
+                host.file_searching = false;
+                host.changed(cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Scan the picture folders once per gallery visit. The existing scan is
+    /// kept on screen while a refresh runs, so entering the mode never blinks.
+    fn scan_wallpapers(&mut self, cx: &mut Context<Self>) {
+        if self.wallpaper_scanning {
+            return;
+        }
+        self.wallpaper_scanning = true;
+        self.changed(cx);
+        let environment = self.environment.clone();
+        let current = crate::wallpapers::current_wallpaper(&environment);
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |host, cx| {
+            let entries = executor
+                .spawn(async move { crate::wallpapers::scan(&environment) })
+                .await;
+            let _ = host.update(cx, |host, cx| {
+                host.wallpapers = Arc::new(entries);
+                host.wallpaper_scanning = false;
+                if current.is_some() {
+                    host.current_wallpaper = current;
+                }
+                host.changed(cx);
+            });
+        })
+        .detach();
+    }
+
     pub fn core(&self, action: CoreAction) {
         let _ = self.backend.send(backend::Command::Action(action));
     }
@@ -982,6 +1103,24 @@ impl Host {
             }
             Action::OpenUrl(url) => {
                 let _ = self.backend.send(backend::Command::OpenUrl(url));
+            }
+            Action::SearchFiles(query) => self.search_files(query, cx),
+            Action::ScanWallpapers => self.scan_wallpapers(cx),
+            Action::ApplyWallpaper(path) => {
+                self.current_wallpaper = Some(path.clone());
+                self.desktop_action(DesktopAction::Wallpaper(Some(path)), cx);
+                self.close(cx);
+            }
+            Action::RevealFile(path) => {
+                // `gio open` on the containing folder is the portable reveal:
+                // every desktop handler can open a directory, and the user
+                // lands one step away from the selected row.
+                let parent = path
+                    .parent()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from("/"));
+                let _ = self.backend.send(backend::Command::OpenPath(parent));
+                self.close(cx);
             }
             Action::RefreshFolder(path) => self.request_folder_scan(path, cx),
             Action::SetFolderDisplay(path, display) => {

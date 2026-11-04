@@ -1525,6 +1525,7 @@ dependencies = [
  "tempfile",
  "unicode-segmentation",
  "uuid",
+ "walkdir",
  "wayland-client",
  "wayland-protocols 0.32.13",
  "zbus",
