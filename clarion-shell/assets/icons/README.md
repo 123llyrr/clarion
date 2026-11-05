@@ -64,6 +64,13 @@ are not shipped as alternative styles.
 `wallpaper.svg` are also original Clarion action marks under GPL-3.0-or-later,
 used by the native Control Center. They contain no Apple artwork.
 
+`power-saver.svg`, `balanced.svg` and `performance.svg` are original Clarion
+marks for the battery popup's power-profile buttons. The popup always draws
+these bundled files: the icon themes' `power-profile-*-symbolic` artwork is
+drawn for 16 px status trays and turns into mush at the popup's 26 px.
+`power-spinner.svg` and `power-check.svg` are the original confirmation ring
+and completion badge for the same popup.
+
 `capture-screen.svg`, `capture-window.svg`, and `capture-region.svg` are original capture-toolbar glyphs under GPL-3.0-or-later.
 
 ## Desktop file icons

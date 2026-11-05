@@ -2,6 +2,7 @@
 use crate::{
     backend,
     desktop::{DesktopAction, DesktopView},
+    power::PowerProfile,
     preferences::{
         DockFolderPreference, DockPosition, FolderDisplay, FolderLayout, FolderSort,
         LauncherPresentation, Preferences,
@@ -34,6 +35,8 @@ pub enum Panel {
     Recent,
     Notifications,
     Controls,
+    /// The standalone battery popup opened from the menu-bar indicator.
+    Battery,
     Preferences,
     Screenshot,
     Tray(String),
@@ -146,6 +149,9 @@ pub enum Action {
     DockEdgeHover(bool),
     DoNotDisturb(bool),
     PickWallpaper,
+    /// Switch the machine's ACPI/daemon power profile. The battery popup
+    /// keeps its active mark in sync optimistically, then the worker confirms.
+    PowerProfile(PowerProfile),
     /// Lock, suspend or power the session off. The worker owns the bus
     /// round-trip so a slow logind/systemd never blocks the UI.
     System(SystemAction),
@@ -199,6 +205,9 @@ pub struct ViewState {
     pub prefs: Preferences,
     pub desktop: backend::DesktopSnapshot,
     pub system: backend::SystemSnapshot,
+    /// The power profile the worker is still confirming, if any. The battery
+    /// popup paints its spinner from this until the read-back settles it.
+    pub power_profile_pending: Option<PowerProfile>,
     pub catalog: Arc<AppCatalog>,
     /// Launch counts used by the palette's usage-aware ordering.
     pub launch_history: Arc<LaunchHistory>,
@@ -269,6 +278,12 @@ pub struct Host {
     pub prefs: Preferences,
     pub desktop: backend::DesktopSnapshot,
     pub system: backend::SystemSnapshot,
+    /// The profile the user just picked, kept until the worker reads the
+    /// platform back. Stale heartbeat snapshots cannot undo it meanwhile.
+    power_profile_pending: Option<PowerProfile>,
+    /// Highest power-profile stamp accepted. Polls that began before a switch
+    /// stay below it, so they cannot repaint the old mode after the read-back.
+    power_profile_epoch: u64,
     pub catalog: Arc<AppCatalog>,
     pub launch_history: Arc<LaunchHistory>,
     pub file_hits: Arc<Vec<FileHit>>,
@@ -380,6 +395,8 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 prefs,
                 desktop: Default::default(),
                 system: Default::default(),
+                power_profile_pending: None,
+                power_profile_epoch: 0,
                 catalog: Arc::new(AppCatalog::default()),
                 launch_history,
                 file_hits: Arc::default(),
@@ -535,6 +552,7 @@ impl Host {
             prefs: self.prefs.clone(),
             desktop: self.desktop.clone(),
             system: self.system.clone(),
+            power_profile_pending: self.power_profile_pending,
             catalog: self.catalog.clone(),
             launch_history: self.launch_history.clone(),
             home: self
@@ -613,7 +631,7 @@ impl Host {
             }
         }
     }
-    fn backend_event(&mut self, event: backend::Event, cx: &mut Context<Self>) {
+    pub(crate) fn backend_event(&mut self, event: backend::Event, cx: &mut Context<Self>) {
         match event {
             backend::Event::Desktop(snapshot) => {
                 if snapshot.generation != self.desktop.generation
@@ -649,10 +667,40 @@ impl Host {
                 if !self.prefs.clock_show_seconds {
                     snapshot.clock.truncate(5);
                 }
+                // Power profiles have their own event. The one-second
+                // heartbeat can carry a snapshot cached before a switch, so it
+                // must never be allowed to paint the old mode back.
+                if !self.system.power_profiles.is_empty() || self.system.power_profile.is_some() {
+                    snapshot.power_profile = self.system.power_profile;
+                    snapshot.power_profiles = self.system.power_profiles.clone();
+                }
                 if snapshot == self.system {
                     return;
                 }
                 self.system = snapshot;
+            }
+            backend::Event::PowerProfile {
+                profile,
+                profiles,
+                settled,
+                epoch,
+            } => {
+                if epoch < self.power_profile_epoch {
+                    // A poll that started before the latest switch finished.
+                    return;
+                }
+                // While a switch is in flight, ignore a poll that still sees
+                // the old profile. The explicit read-back (`settled`) always
+                // wins, including when the switch failed.
+                let waiting = self.power_profile_pending;
+                if settled || waiting.is_none() || waiting == profile {
+                    self.power_profile_epoch = epoch;
+                    self.system.power_profile = profile;
+                    self.system.power_profiles = profiles;
+                    if settled || waiting == profile {
+                        self.power_profile_pending = None;
+                    }
+                }
             }
             backend::Event::Preferences(prefs) => {
                 if !self.local_preferences && self.prefs != prefs {
@@ -680,6 +728,7 @@ impl Host {
                 "control-center" | "quick-settings" => {
                     self.handle(Action::Panel(Panel::Controls), cx)
                 }
+                "battery" => self.handle(Action::Panel(Panel::Battery), cx),
                 "notifications" => self.handle(Action::Panel(Panel::Notifications), cx),
                 "clipboard" | "recent" | "recent-content" => {
                     self.handle(Action::Panel(Panel::Recent), cx)
@@ -1323,6 +1372,23 @@ impl Host {
                     });
                 })
                 .detach();
+            }
+            Action::PowerProfile(profile) => {
+                // The accent fill waits for the read-back; until then only the
+                // progress ring on the chosen button marks the request.
+                if self.power_profile_pending.is_none() && self.system.power_profile != Some(profile)
+                {
+                    self.power_profile_pending = Some(profile);
+                    if self
+                        .backend
+                        .send(backend::Command::SetPowerProfile(profile))
+                        .is_err()
+                    {
+                        // The queue refused the request, so no read-back will
+                        // ever settle it.
+                        self.power_profile_pending = None;
+                    }
+                }
             }
             Action::System(action) => {
                 // The worker owns the bus round-trip; the palette just hands
@@ -2849,6 +2915,9 @@ fn themed_dock_icons() -> &'static HashMap<&'static str, std::path::PathBuf> {
 
 #[cfg(test)]
 mod dock_preferences_tests;
+
+#[cfg(test)]
+mod power_profile_tests;
 
 #[cfg(test)]
 mod notification_lifecycle_tests {

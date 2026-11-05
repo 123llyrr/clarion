@@ -56,8 +56,9 @@ fn rounded_card(p: Palette, radius: f32) -> Div {
 }
 
 /// The control center's own card recipe: the shared fill with the larger
-/// radius that matches the popup.
-fn control_card(p: Palette) -> Div {
+/// radius that matches the popup. The standalone battery popup shares it so
+/// the two popups read as one family.
+pub(super) fn control_card(p: Palette) -> Div {
     rounded_card(p, CONTROL_CARD_RADIUS)
 }
 
@@ -128,7 +129,7 @@ impl ShellView {
             footer = footer.child(self.control_entry(id, label, icon, action, p));
         }
 
-        let mut controls = div()
+        let controls = div()
             .w_full()
             .flex()
             .flex_col()
@@ -205,9 +206,6 @@ impl ShellView {
                         p,
                     )),
             );
-        if host.system.battery.is_some() {
-            controls = controls.child(self.control_battery(host, dark, p));
-        }
         controls
             .child(self.control_slider(
                 "brightness",
@@ -242,78 +240,6 @@ impl ShellView {
                 p,
             ))
             .child(footer)
-            .into_any_element()
-    }
-
-    /// The battery summary card. The bar already carries the state icon; the
-    /// popup adds the wear figure and spells out the same state.
-    fn control_battery(&self, host: &ViewState, dark: bool, p: Palette) -> AnyElement {
-        let Some(percent) = host.system.battery else {
-            return div().into_any_element();
-        };
-        let state = crate::battery::state(
-            host.system.battery,
-            host.system.battery_status,
-            host.system.ac_online,
-        );
-        let tone = crate::battery::tone(state);
-        let icon = crate::battery::icon(state, host.system.battery);
-        let detail = match host
-            .system
-            .battery_health
-            .filter(|health| health.is_finite())
-        {
-            Some(health) => format!(
-                "{} · 健康度 {:.0}%",
-                crate::battery::label(state),
-                (health * 100.).round()
-            ),
-            None => crate::battery::label(state).to_owned(),
-        };
-        control_card(p)
-            .id("controls-battery")
-            .debug_selector(|| "controls-battery".into())
-            .w_full()
-            .h(px(70.))
-            .px(px(12.))
-            .flex()
-            .items_center()
-            .gap(px(10.))
-            .child(
-                div()
-                    .size(px(34.))
-                    .flex_shrink_0()
-                    .rounded_full()
-                    .bg(if dark {
-                        rgba(0xffffff20)
-                    } else {
-                        rgba(0xffffffb3)
-                    })
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(self.battery_icon(&icon, percent, tone, 28., p)),
-            )
-            .child(
-                div()
-                    .min_w_0()
-                    .flex_1()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    .child(text("电池", 13., FontWeight::SEMIBOLD, p.fg))
-                    .child(text(detail, 11., FontWeight::NORMAL, p.muted)),
-            )
-            .child(
-                div()
-                    .debug_selector(|| "controls-battery-percent".into())
-                    .child(text(
-                        crate::battery::percent_text(percent),
-                        15.,
-                        FontWeight::SEMIBOLD,
-                        p.fg,
-                    )),
-            )
             .into_any_element()
     }
 
@@ -889,16 +815,8 @@ mod tests {
     }
 
     #[gpui::test]
-    fn controls_show_the_battery_summary_only_with_a_battery(cx: &mut TestAppContext) {
+    fn controls_leave_the_battery_details_to_the_standalone_popup(cx: &mut TestAppContext) {
         let (_root, host) = private_host(cx);
-        let window = cx.update(|cx| testing::open_panel(&host, Panel::Controls, cx));
-        let mut visual = VisualTestContext::from_window(*window, cx);
-        activate(&mut visual, 320., 500.);
-        assert!(
-            visual.debug_bounds("controls-battery").is_none(),
-            "a machine without a battery keeps the compact dialog"
-        );
-
         host.update(cx, |host, cx| {
             host.system.battery = Some(0.07);
             host.system.battery_status = crate::backend::BatteryStatus::Discharging;
@@ -906,14 +824,16 @@ mod tests {
             host.system.ac_online = false;
             host.changed(cx);
         });
-        visual.run_until_parked();
+        let window = cx.update(|cx| testing::open_panel(&host, Panel::Controls, cx));
+        let mut visual = VisualTestContext::from_window(*window, cx);
+        activate(&mut visual, 320., 510.);
         assert!(
-            visual.debug_bounds("controls-battery").is_some(),
-            "the battery card joins the control center"
+            visual.debug_bounds("controls-battery").is_none(),
+            "the control center no longer carries a battery card"
         );
         assert!(
-            visual.debug_bounds("controls-battery-percent").is_some(),
-            "the card shows the charge percentage"
+            visual.debug_bounds("battery-summary").is_none(),
+            "the battery summary belongs to its own popup"
         );
     }
 
@@ -993,8 +913,8 @@ mod tests {
         ] {
             let window = cx.update(|cx| testing::open_panel(&host, Panel::Controls, cx));
             let mut visual = VisualTestContext::from_window(*window, cx);
-            // The control center now carries two tile rows, the battery card
-            // and the sliders; the footer entries need the real height.
+            // The control center carries two tile rows and two sliders; the
+            // footer entries need the real height.
             activate(&mut visual, 320., 510.);
             focus_without_click(&mut visual, selector);
             host.read_with(cx, |host, _| assert_eq!(host.panel, Some(Panel::Controls)));

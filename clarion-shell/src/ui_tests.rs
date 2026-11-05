@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use gpui::{
-    point, px, Entity, EntityInputHandler, Modifiers, MouseButton, TestAppContext,
+    point, px, size, Entity, EntityInputHandler, Modifiers, MouseButton, TestAppContext,
     VisualTestContext, WindowHandle,
 };
 
@@ -315,6 +315,7 @@ fn every_non_search_panel_has_a_real_escape_dispatch_path(cx: &mut TestAppContex
         .update(|cx| testing::test_host(cx, fixture.catalog.clone(), fixture.environment.clone()));
     for kind in [
         Panel::Controls,
+        Panel::Battery,
         Panel::Preferences,
         Panel::Notifications,
         Panel::Screenshot,
@@ -399,7 +400,7 @@ fn preferences_wm_close_clears_host_and_one_real_bar_click_opens_it_again(cx: &m
 }
 
 #[gpui::test]
-fn the_bar_battery_indicator_opens_the_control_center(cx: &mut TestAppContext) {
+fn the_bar_battery_indicator_opens_the_standalone_battery_popup(cx: &mut TestAppContext) {
     let (_fixture, host, view, _visual, _window) = panel(cx, Panel::Preferences);
     host.update(cx, |host, cx| {
         host.system.battery = Some(0.42);
@@ -421,8 +422,166 @@ fn the_bar_battery_indicator_opens_the_control_center(cx: &mut TestAppContext) {
     bar_visual.simulate_click(battery.center(), Modifiers::default());
     bar_visual.run_until_parked();
     host.read_with(cx, |host, _| {
-        assert_eq!(host.panel, Some(Panel::Controls));
+        assert_eq!(host.panel, Some(Panel::Battery));
     });
+}
+
+#[gpui::test]
+fn the_battery_popup_carries_the_summary_and_every_power_profile(cx: &mut TestAppContext) {
+    let (_fixture, host, _view, mut visual, _window) = panel(cx, Panel::Battery);
+    host.update(cx, |host, cx| {
+        host.system.battery = Some(0.42);
+        host.system.battery_status = crate::backend::BatteryStatus::Discharging;
+        host.system.battery_health = Some(0.84);
+        host.system.ac_online = false;
+        host.system.power_profile = Some(crate::power::PowerProfile::Balanced);
+        host.system.power_profiles = crate::power::PowerProfile::ALL.to_vec();
+        host.changed(cx);
+    });
+    visual.update(|window, _| {
+        window.resize(size(px(344.), px(252.)));
+        window.refresh();
+    });
+    visual.run_until_parked();
+    for id in [
+        "battery-summary",
+        "battery-modes",
+        "battery-health",
+        "battery-source",
+        "battery-profile-low-power",
+        "battery-profile-balanced",
+        "battery-profile-performance",
+    ] {
+        assert!(
+            visual.debug_bounds(id).is_some(),
+            "the battery popup paints {id}"
+        );
+    }
+    // The summary is a compact three-column block: the icon, the percentage
+    // with its state subtitle, and the two aligned metric rows.
+    let summary = visual.debug_bounds("battery-summary").expect("summary");
+    let modes = visual.debug_bounds("battery-modes").expect("modes");
+    let health = visual.debug_bounds("battery-health").expect("health");
+    let source = visual.debug_bounds("battery-source").expect("source");
+    assert!(
+        (73. ..=75.).contains(&f32::from(summary.size.height)),
+        "the summary keeps its compact height: {}",
+        f32::from(summary.size.height)
+    );
+    assert!(
+        summary.bottom() <= modes.top(),
+        "the summary must not overlap the profile card"
+    );
+    assert!(
+        source.right() <= summary.right() - px(8.),
+        "the metrics must stay inside the card: {source:?} vs {summary:?}"
+    );
+    assert!(
+        health.left() == source.left(),
+        "health and power source share one column: {health:?} {source:?}"
+    );
+    assert!(
+        health.bottom() <= source.top(),
+        "the metric rows stack without overlapping: {health:?} {source:?}"
+    );
+    assert!(
+        f32::from(modes.size.height) <= 141.,
+        "the profile card stays at its compact height: {}",
+        f32::from(modes.size.height)
+    );
+    assert!(
+        modes.bottom() <= summary.top() + px(224.01),
+        "the whole sheet fits without a scroll: {}",
+        f32::from(modes.bottom())
+    );
+}
+
+#[gpui::test]
+fn clicking_a_power_profile_waits_for_confirmation_and_sends_the_switch(
+    cx: &mut TestAppContext,
+) {
+    let (_fixture, host, _view, mut visual, _window) = panel(cx, Panel::Battery);
+    host.update(cx, |host, cx| {
+        host.system.battery = Some(0.42);
+        host.system.battery_status = crate::backend::BatteryStatus::Discharging;
+        host.system.power_profile = Some(crate::power::PowerProfile::Balanced);
+        host.system.power_profiles = crate::power::PowerProfile::ALL.to_vec();
+        host.changed(cx);
+    });
+    visual.update(|window, _| {
+        window.resize(size(px(344.), px(252.)));
+        window.refresh();
+    });
+    visual.run_until_parked();
+    let commands = cx.update(|cx| testing::capture_backend(&host, cx));
+    let performance = visual
+        .debug_bounds("battery-profile-performance")
+        .expect("the performance button");
+    visual.simulate_click(performance.center(), Modifiers::default());
+    visual.run_until_parked();
+    host.read_with(cx, |host, _| {
+        assert_eq!(
+            host.system.power_profile,
+            Some(crate::power::PowerProfile::Balanced),
+            "the accent fill waits for the read-back"
+        );
+        assert_eq!(host.panel, Some(Panel::Battery));
+    });
+    assert!(
+        visual.debug_bounds("battery-profile-spinner").is_some(),
+        "the pending switch paints its ring outside the button"
+    );
+    let mut sent = Vec::new();
+    while let Ok(command) = commands.try_recv() {
+        if matches!(command, backend::Command::SetPowerProfile(_)) {
+            sent.push(command);
+        }
+    }
+    assert!(
+        matches!(
+            sent.as_slice(),
+            [backend::Command::SetPowerProfile(
+                crate::power::PowerProfile::Performance
+            )]
+        ),
+        "the popup must send exactly one profile switch: {sent:?}"
+    );
+
+    // The worker's read-back settles the switch and only now turns the chosen
+    // button's fill on, with the completion burst.
+    host.update(cx, |host, cx| {
+        host.backend_event(
+            backend::Event::PowerProfile {
+                profile: Some(crate::power::PowerProfile::Performance),
+                profiles: crate::power::PowerProfile::ALL.to_vec(),
+                settled: true,
+                epoch: 1,
+            },
+            cx,
+        );
+    });
+    visual.update(|window, _| window.refresh());
+    visual.run_until_parked();
+    host.read_with(cx, |host, _| {
+        assert_eq!(
+            host.system.power_profile,
+            Some(crate::power::PowerProfile::Performance)
+        );
+    });
+    assert!(
+        visual.debug_bounds("battery-profile-success").is_some(),
+        "the settled switch paints its completion ring"
+    );
+    assert!(
+        visual.debug_bounds("battery-profile-check").is_some(),
+        "the settled switch paints its check badge"
+    );
+    assert!(
+        visual
+            .debug_bounds("battery-profile-spinner")
+            .is_none(),
+        "the pending ring gives way to the completion burst"
+    );
 }
 
 #[gpui::test]

@@ -9,7 +9,7 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -20,6 +20,7 @@ use clarion_ipc::state::{EventStreamState, EventStreamStatePart};
 use clarion_ipc::{Action, KeyboardLayouts, Output, Reply, Request, Response, Window, Workspace};
 use clarion_launcher::catalog::AppCatalog;
 
+use crate::power::PowerProfile;
 use crate::preferences::{Environment, Preferences};
 
 const IPC_TIMEOUT: Duration = Duration::from_millis(900);
@@ -33,6 +34,7 @@ const PANEL_COMMANDS: &[&str] = &[
     "mission-control",
     "control-center",
     "quick-settings",
+    "battery",
     "notifications",
     "overview",
     "recent-content",
@@ -70,6 +72,10 @@ pub struct SystemSnapshot {
     /// Mains present. Inferred from a charging/full battery when the platform
     /// exposes no AC device of its own.
     pub ac_online: bool,
+    /// The active platform power profile, when the machine exposes one.
+    pub power_profile: Option<PowerProfile>,
+    /// The profiles this machine advertises, in canonical order.
+    pub power_profiles: Vec<PowerProfile>,
     pub trash_full: bool,
     pub clock: String,
     pub date: String,
@@ -103,6 +109,19 @@ pub struct BatterySnapshot {
 pub enum Event {
     Desktop(DesktopSnapshot),
     System(SystemSnapshot),
+    /// The machine's power profile, kept out of the one-second `System`
+    /// heartbeat so a cached snapshot can never undo a fresh switch.
+    PowerProfile {
+        profile: Option<PowerProfile>,
+        profiles: Vec<PowerProfile>,
+        /// True for the read-back that immediately follows a user request;
+        /// false for the ordinary three-second poll.
+        settled: bool,
+        /// Monotonic stamp shared by both workers. A poll that started before
+        /// a switch finishes carries an older stamp and must not paint the old
+        /// mode back after the settled read-back.
+        epoch: u64,
+    },
     Catalog(AppCatalog),
     Preferences(Preferences),
     Command(String),
@@ -135,6 +154,8 @@ pub enum Command {
         output: String,
         value: f64,
     },
+    /// Switch the machine's ACPI/daemon power profile.
+    SetPowerProfile(PowerProfile),
     RefreshCatalog,
     SavePreferences(Preferences),
     /// Count one successful application launch in the palette history.
@@ -194,10 +215,12 @@ impl Backend {
             None
         };
         let (commands, incoming) = mpsc::sync_channel(64);
+        let power_epoch = Arc::new(AtomicU64::new(0));
         {
             let options = options.clone();
             let events = events.clone();
             let alive = alive.clone();
+            let power_epoch = power_epoch.clone();
             thread::Builder::new()
                 .name("clarion-shell-commands".into())
                 .spawn(move || {
@@ -219,7 +242,9 @@ impl Backend {
                             Err(mpsc::RecvTimeoutError::Timeout) => continue,
                             Err(_) => break,
                         };
-                        if let Err(error) = perform(command, &options, &events, &alive) {
+                        if let Err(error) =
+                            perform(command, &options, &events, &alive, &power_epoch)
+                        {
                             emit(
                                 &events,
                                 Event::Error(format!("操作未完成：{error:#}")),
@@ -240,9 +265,10 @@ impl Backend {
         {
             let events = events.clone();
             let alive = alive.clone();
+            let power_epoch = power_epoch.clone();
             thread::Builder::new()
                 .name("clarion-shell-system".into())
-                .spawn(move || system_worker(options, events, alive))?;
+                .spawn(move || system_worker(options, events, alive, power_epoch))?;
         }
         Ok((
             Self {
@@ -585,6 +611,7 @@ fn perform(
     options: &Options,
     events: &Sender<Event>,
     alive: &AtomicBool,
+    power_epoch: &AtomicU64,
 ) -> Result<()> {
     if options.preview
         && !matches!(
@@ -730,6 +757,27 @@ fn perform(
                 )?;
             }
         }
+        Command::SetPowerProfile(profile) => {
+            let result = set_power_profile(profile, &options.environment);
+            // Everything polled before the switch is now stale. Bump the
+            // shared stamp, then read the platform back so the popup learns
+            // whether the switch actually took effect, even when the tool
+            // exits successfully but the daemon keeps the old profile.
+            let epoch = power_epoch.fetch_add(1, Ordering::SeqCst) + 1;
+            let (profile, profiles) =
+                power_profile_snapshot(Path::new("/sys/firmware/acpi"), &options.environment);
+            emit(
+                events,
+                Event::PowerProfile {
+                    profile,
+                    profiles,
+                    settled: true,
+                    epoch,
+                },
+                alive,
+            );
+            result?;
+        }
         Command::RefreshCatalog => load_catalog(&options.environment, events, alive),
         Command::SavePreferences(preferences) => {
             preferences.save(&options.environment, options.preview)?;
@@ -742,6 +790,49 @@ fn perform(
         }
     }
     Ok(())
+}
+
+/// Route a profile switch through power-profiles-daemon first; it is the
+/// unprivileged path every distribution ships. Kernels that expose the ACPI
+/// attribute directly are the fallback, which may require a writable profile
+/// (a udev rule or root-owned shell).
+fn set_power_profile(profile: PowerProfile, environment: &Environment) -> Result<()> {
+    if run_tool(
+        "powerprofilesctl",
+        &["set", profile.id()],
+        environment,
+        Duration::from_secs(3),
+    )
+    .is_ok()
+    {
+        return Ok(());
+    }
+    fs::write(
+        Path::new("/sys/firmware/acpi/platform_profile"),
+        profile.sysfs_name(),
+    )
+    .with_context(|| format!("无法切换到{}电源模式", profile.label()))
+}
+
+/// Read the ACPI platform profile, falling back to power-profiles-daemon.
+/// `powerprofilesctl list` carries both the active star and the available
+/// names, so one process call answers the whole question.
+fn power_profile_snapshot(
+    root: &Path,
+    environment: &Environment,
+) -> (Option<PowerProfile>, Vec<PowerProfile>) {
+    if let Some(snapshot) = crate::power::sysfs_snapshot(root) {
+        return snapshot;
+    }
+    match run_tool(
+        "powerprofilesctl",
+        &["list"],
+        environment,
+        TOOL_TIMEOUT,
+    ) {
+        Ok(text) => crate::power::parse_powerprofilesctl_list(&text),
+        Err(_) => (None, Vec::new()),
+    }
 }
 
 /// Run one of the session's power actions. `loginctl`/`systemctl` return once
@@ -979,11 +1070,19 @@ fn run_tool(
     }
 }
 
-fn system_worker(options: Options, events: Sender<Event>, alive: Arc<AtomicBool>) {
+fn system_worker(
+    options: Options,
+    events: Sender<Event>,
+    alive: Arc<AtomicBool>,
+    power_epoch: Arc<AtomicU64>,
+) {
     let mut hardware = SystemSnapshot::default();
     let mut hardware_due = Instant::now();
     while alive.load(Ordering::Relaxed) {
         if !options.preview && Instant::now() >= hardware_due {
+            // Stamp the poll before it reads anything. A switch that finishes
+            // while this pass is running bumps the epoch past it.
+            let poll_epoch = power_epoch.load(Ordering::SeqCst);
             hardware.volume = None;
             hardware.muted = false;
             hardware.brightness = None;
@@ -1016,6 +1115,20 @@ fn system_worker(options: Options, events: Sender<Event>, alive: Arc<AtomicBool>
             hardware.battery_status = battery.status;
             hardware.battery_health = battery.health;
             hardware.ac_online = battery.ac_online;
+            let (profile, profiles) =
+                power_profile_snapshot(Path::new("/sys/firmware/acpi"), &options.environment);
+            hardware.power_profile = profile;
+            hardware.power_profiles = profiles.clone();
+            emit(
+                &events,
+                Event::PowerProfile {
+                    profile,
+                    profiles,
+                    settled: false,
+                    epoch: poll_epoch,
+                },
+                &alive,
+            );
             let data = options
                 .environment
                 .get("XDG_DATA_HOME")
@@ -1573,7 +1686,15 @@ mod tests {
         };
         let (tx, _) = async_channel::bounded(8);
         let alive = AtomicBool::new(true);
-        assert!(perform(Command::SetVolume(f64::NAN), &options, &tx, &alive).is_err());
+        let power_epoch = AtomicU64::new(0);
+        assert!(perform(
+            Command::SetVolume(f64::NAN),
+            &options,
+            &tx,
+            &alive,
+            &power_epoch
+        )
+        .is_err());
         assert!(perform(
             Command::SetOutputBrightness {
                 output: "fixture-output".into(),
@@ -1581,7 +1702,8 @@ mod tests {
             },
             &options,
             &tx,
-            &alive
+            &alive,
+            &power_epoch
         )
         .is_err());
         let before = Instant::now();
@@ -1637,11 +1759,13 @@ mod tests {
         };
         let (tx, _) = async_channel::bounded(8);
         let alive = AtomicBool::new(true);
+        let power_epoch = AtomicU64::new(0);
         assert!(perform(
             Command::Action(Action::CloseWindow { id: Some(123) }),
             &options,
             &tx,
-            &alive
+            &alive,
+            &power_epoch
         )
         .is_err());
         assert!(

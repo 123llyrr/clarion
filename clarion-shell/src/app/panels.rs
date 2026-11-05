@@ -735,16 +735,20 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
             // on the button that opened it; the clamp pulls the rectangle
             // back inside the output when the click sits near an edge.
             let ceiling = available.min(h * BAR_POPUP_MAX_HEIGHT_SHARE);
-            // The battery card lives only on machines that have one; the
-            // dialog grows by exactly that card rather than leaving a gap on
-            // desktops. The second tile row carries the appearance and
-            // launcher switches.
-            let natural: f32 = if state.system.battery.is_some() {
-                590.
-            } else {
-                510.
-            };
-            let (width, height): (f32, f32) = (360f32.min(w - 24.), natural.min(ceiling));
+            let (width, height): (f32, f32) = (360f32.min(w - 24.), 510f32.min(ceiling));
+            let x = state.anchored.map_or(w - width - 12., |x| {
+                (x - width / 2.).clamp(8., (w - width - 8.).max(8.))
+            });
+            return modal_popup(w, h, x, top, width, height);
+        }
+        Panel::Battery => {
+            // The battery popup is its own compact modal, dropped from the
+            // menu-bar indicator that opened it rather than the control center.
+            // Its height is the summary (74) + the gap (10) + the profile card
+            // (140) + the body padding and border (26) + two points of
+            // rounding slack: the sheet never needs to scroll.
+            let ceiling = available.min(h * BAR_POPUP_MAX_HEIGHT_SHARE);
+            let (width, height): (f32, f32) = (344f32.min(w - 24.), 252f32.min(ceiling));
             let x = state.anchored.map_or(w - width - 12., |x| {
                 (x - width / 2.).clamp(8., (w - width - 8.).max(8.))
             });
@@ -860,6 +864,7 @@ pub(crate) fn popup_exit_panel(panel: &Panel) -> bool {
         panel,
         Panel::Tray(_)
             | Panel::Controls
+            | Panel::Battery
             | Panel::Recent
             | Panel::Spotlight
             | Panel::Apps
@@ -956,6 +961,7 @@ mod tests {
         assert_eq!(popup.size.height, px(1080. * 0.90));
         for panel in [
             Panel::Controls,
+            Panel::Battery,
             Panel::Notifications,
             Panel::Recent,
             Panel::Screenshot,

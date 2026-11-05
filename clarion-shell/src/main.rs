@@ -11,6 +11,7 @@ mod dock_motion;
 mod file_icons;
 mod input;
 mod mime;
+mod power;
 mod preferences;
 mod services;
 mod view;

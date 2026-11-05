@@ -26,6 +26,7 @@ pub(crate) mod macos_dock;
 mod macos_launchpad;
 mod macos_notifications;
 mod macos_preferences;
+mod power;
 mod spotlight;
 
 actions!(
@@ -107,6 +108,16 @@ struct NotificationDrag {
     start: Point<Pixels>,
     dx: f32,
     dy: f32,
+}
+/// The battery popup's switch feedback. The view watches the pending profile
+/// across renders: a spinner runs while the worker confirms, then the chosen
+/// button gets a short success burst (or a red failure ring).
+#[derive(Default)]
+struct PowerSwitchAnim {
+    seen_pending: Option<crate::power::PowerProfile>,
+    spinner_start: Option<std::time::Instant>,
+    /// The settled target, when its burst began, and whether it succeeded.
+    burst: Option<(crate::power::PowerProfile, std::time::Instant, bool)>,
 }
 pub struct ShellView {
     pub host: Entity<Host>,
@@ -201,6 +212,8 @@ pub struct ShellView {
     /// The painted popup rectangle's height, sprung between the placement
     /// heights the expanding and folding submenus produce.
     popup_height_motion: Option<crate::dock_motion::Elastic>,
+    /// The battery popup's power-switch spinner and completion burst.
+    power_switch: RefCell<PowerSwitchAnim>,
     /// An application menu opened from a launcher tile. The card is its own
     /// surface over the launcher; the launcher itself stays open underneath.
     launcher_menu: Option<LauncherMenu>,
@@ -539,6 +552,7 @@ impl ShellView {
             launchpad_slide: None,
             palette_glyph: None,
             popup_epoch: std::time::Instant::now(),
+            power_switch: RefCell::new(PowerSwitchAnim::default()),
             folder_drag_layer: false,
             dock_drag_seen: false,
             notification_drag: None,
@@ -1278,8 +1292,8 @@ impl ShellView {
                 );
                 let tone = battery::tone(state);
                 let icon = battery::icon(state, host.system.battery);
-                // The indicator is also the fastest way into the control
-                // center: it carries the same anchored click as the buttons.
+                // The indicator opens the dedicated battery popup, anchored
+                // under the clicked icon like the other status buttons.
                 let h = self.host.clone();
                 let bar_output = self.output.clone();
                 let mut indicator = div()
@@ -1299,7 +1313,7 @@ impl ShellView {
                             h.handle(
                                 Action::on_output(
                                     bar_output.clone(),
-                                    Action::AnchoredPanel(Panel::Controls, x),
+                                    Action::AnchoredPanel(Panel::Battery, x),
                                 ),
                                 cx,
                             )
@@ -2251,6 +2265,7 @@ impl ShellView {
                 | Panel::DockFolder { .. }
                 | Panel::DockFolderMenu { .. }
                 | Panel::Controls
+                | Panel::Battery
                 | Panel::Recent
                 | Panel::Spotlight
                 | Panel::Tray(_)
@@ -2275,7 +2290,7 @@ impl ShellView {
         // a bigger radius; the rest keep their proven values.
         let popup_radius = if panel == Panel::Spotlight {
             crate::app::panels::SPOTLIGHT_RADIUS
-        } else if panel == Panel::Controls {
+        } else if panel == Panel::Controls || panel == Panel::Battery {
             crate::app::panels::CONTROLS_RADIUS
         } else if menu {
             12.
@@ -2348,6 +2363,7 @@ impl ShellView {
             Panel::Recent => self.recent(host, p, cx),
             Panel::Spotlight => self.spotlight_results(host, p, cx),
             Panel::Controls => self.macos_controls(host, p),
+            Panel::Battery => self.macos_battery(host, p, window),
             Panel::Tray(_) => self.tray_menu(host, p),
             Panel::Dock(id) => self.dock_menu(host, id, p),
             Panel::DockFolder { .. } => self.dock_folder_content(host, width, height, p, cx),
@@ -2358,8 +2374,12 @@ impl ShellView {
             _ => unreachable!(),
         };
         body = body.flex().flex_col().gap(px(8.));
-        body = if panel == Panel::Controls || matches!(panel, Panel::Tray(_)) {
-            // The control center and the tray menus share one surface recipe.
+        body = if panel == Panel::Controls
+            || panel == Panel::Battery
+            || matches!(panel, Panel::Tray(_))
+        {
+            // The control center, battery popup and tray menus share one
+            // surface recipe.
             body.p(px(12.))
         } else if panel == Panel::Spotlight {
             // The palette keeps a real margin around its grid and list, and
@@ -2464,17 +2484,23 @@ impl ShellView {
             let pw = f32::from(popup.size.width);
             let ph = f32::from(popup.size.height);
             if arrow.is_none() {
-                // A bar dashboard sizes its popup and keeps an inner scroll, so
-                // a list longer than the rectangle scrolls instead of clipping.
-                body = body.child(
-                    div()
-                        .id("panel-scroll")
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_y_scroll()
-                        .track_scroll(&self.scroll)
-                        .child(content),
-                );
+                // The battery sheet is a fixed, compact card stack: its height
+                // is derived from the rows, so it must not sprout a scrollbar
+                // over a point of rounding. Other bar dashboards keep the inner
+                // scroll so a long list clips instead of growing the window.
+                if panel == Panel::Battery {
+                    body = body.child(content);
+                } else {
+                    body = body.child(
+                        div()
+                            .id("panel-scroll")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.scroll)
+                            .child(content),
+                    );
+                }
             } else {
                 body = body.child(content);
             }
@@ -2674,6 +2700,7 @@ impl Render for ShellView {
                     | Panel::DockFolder { .. }
                     | Panel::DockFolderMenu { .. }
                     | Panel::Controls
+                    | Panel::Battery
                     | Panel::Recent
                     | Panel::Spotlight
                     | Panel::Tray(_)
@@ -2718,7 +2745,7 @@ impl Render for ShellView {
                     // region lets the blur poke past the rounded corners.
                     let radius = if matches!(panel, Panel::Spotlight) {
                         crate::app::panels::SPOTLIGHT_RADIUS
-                    } else if matches!(panel, Panel::Controls) {
+                    } else if matches!(panel, Panel::Controls | Panel::Battery) {
                         crate::app::panels::CONTROLS_RADIUS
                     } else {
                         POPUP_RADIUS
@@ -3687,6 +3714,19 @@ mod tests {
             assert!(rounded_region(w, h, 16.)
                 .iter()
                 .all(|r| f32::from(r.size.width) >= 0. && f32::from(r.size.height) >= 0.));
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn power_profiles_keep_the_bundled_marks() {
+        // The theme's 16 px status marks turn to mush in the 26 px popup, so
+        // these three must always resolve to their bundled files.
+        for asset in ["power-saver.svg", "balanced.svg", "performance.svg"] {
+            assert_eq!(
+                symbolic_name(asset),
+                None,
+                "{asset} must not borrow the theme's status-tray mark"
+            );
         }
     }
 
