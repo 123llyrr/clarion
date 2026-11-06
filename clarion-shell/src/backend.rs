@@ -145,6 +145,9 @@ pub enum Command {
     LaunchDesktop(PathBuf),
     LaunchDesktopWithPaths(PathBuf, Vec<PathBuf>),
     OpenPath(PathBuf),
+    /// Show one local file in the desktop's quick previewer (GNOME Sushi, the
+    /// previewer Nautilus itself opens on space).
+    PreviewFile(PathBuf),
     /// Open a web URL through the desktop handler.
     OpenUrl(String),
     OpenSettings,
@@ -677,6 +680,13 @@ fn perform(
             );
             open_location(&path, &options.environment)?;
         }
+        Command::PreviewFile(path) => {
+            anyhow::ensure!(
+                path.is_absolute() && !path.as_os_str().as_bytes().contains(&0),
+                "Invalid location"
+            );
+            preview_location(&path, &options.environment)?;
+        }
         Command::OpenUrl(url) => {
             let scheme = url.to_ascii_lowercase();
             anyhow::ensure!(
@@ -914,6 +924,20 @@ fn open_location(path: &Path, environment: &Environment) -> Result<()> {
         Duration::from_secs(3),
     )?;
     Ok(())
+}
+
+/// Show a local file in the desktop's quick previewer. Nautilus itself shells
+/// out to GNOME Sushi, so launching that previewer's desktop entry gives the
+/// same window without depending on the binary name or `PATH`.
+fn preview_location(path: &Path, environment: &Environment) -> Result<()> {
+    anyhow::ensure!(path.is_file(), "File is not available");
+    let previewer = resolve_desktop_file("org.gnome.NautilusPreviewer.desktop", environment)
+        .context("未安装文件快速预览（GNOME Sushi）")?;
+    clarion_launcher::launch::launch_desktop_file_with_paths(
+        &previewer,
+        &[path.to_path_buf()],
+        environment,
+    )
 }
 
 /// Resolve the application registered for `path`'s content type, without
@@ -1818,6 +1842,16 @@ mod tests {
         assert_eq!(desktop_file_in(&applications, "missing.desktop"), None);
         assert_eq!(desktop_file_in(&applications, "../escape.desktop"), None);
     }
+    #[test]
+    fn the_quick_previewer_only_accepts_existing_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let environment = Environment::new();
+        assert!(
+            preview_location(&directory.path().join("missing.png"), &environment).is_err(),
+            "a preview never opens a path that is not there"
+        );
+    }
+
     #[test]
     fn the_default_handler_is_looked_up_in_the_xdg_data_directories() {
         let directory = tempfile::tempdir().unwrap();

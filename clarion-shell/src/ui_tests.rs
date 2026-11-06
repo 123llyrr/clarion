@@ -35,6 +35,19 @@ fn header_mark(view: &Entity<ShellView>, visual: &mut VisualTestContext) -> Stri
     })
 }
 
+/// The `Ctrl+B` card is a surface of its own over the sheet, so its rows live
+/// in a second window: hand back that window and a context that draws it.
+fn spotlight_menu(
+    host: &Entity<Host>,
+    cx: &mut TestAppContext,
+) -> (WindowHandle<ShellView>, VisualTestContext) {
+    let window = host
+        .read_with(cx, |host, _| host.spotlight_menu)
+        .expect("the action card is its own surface");
+    (window, VisualTestContext::from_window(window.into(), cx))
+}
+
+
 /// One clipboard history entry for the palette tests: no thumbnail and plain
 /// text metadata, so the row layout is what the assertions see.
 fn clipboard_entry(
@@ -1608,8 +1621,8 @@ fn palette_enter_opens_the_selected_tile_after_hidden_category_apps(cx: &mut Tes
     ];
     let (_fixture, host, view, mut visual, _window) = panel_with_apps(cx, Panel::Spotlight, &apps);
 
-    // The Utilities section shows five tiles and hides utility-6/7 behind
-    // "更多". The next visible tile is Office 1, at flat selection 5.
+    // The Utilities section shows six tiles and hides utility-7 behind
+    // "更多". The next visible tile is Office 1, at flat selection 6.
     assert!(
         visual.debug_bounds("spotlight-more-utilities").is_some(),
         "the Utilities header still advertises its hidden apps"
@@ -1617,14 +1630,14 @@ fn palette_enter_opens_the_selected_tile_after_hidden_category_apps(cx: &mut Tes
     let state = view.read_with(&visual, |view, _| view.state.clone());
     assert_eq!(
         view.read_with(&visual, |view, _| view.palette_row_count(&state)),
-        8,
+        9,
         "keyboard navigation must not reach tiles hidden behind 更多"
     );
-    for _ in 0..5 {
+    for _ in 0..6 {
         visual.simulate_keystrokes("down");
     }
     visual.run_until_parked();
-    assert_eq!(view.read_with(&visual, |view, _| view.selection), 5);
+    assert_eq!(view.read_with(&visual, |view, _| view.selection), 6);
 
     visual.simulate_keystrokes("enter");
     visual.run_until_parked();
@@ -2261,6 +2274,423 @@ fn selecting_a_category_tag_filters_the_grid_tiles(cx: &mut TestAppContext) {
             Some(Panel::Spotlight),
             "tag filtering keeps the palette open"
         );
+    });
+}
+
+#[gpui::test]
+fn the_wide_grid_fits_six_tiles_on_one_row(cx: &mut TestAppContext) {
+    let apps = [
+        ("t1", "Tile 1", "Utility;"),
+        ("t2", "Tile 2", "Utility;"),
+        ("t3", "Tile 3", "Utility;"),
+        ("t4", "Tile 4", "Utility;"),
+        ("t5", "Tile 5", "Utility;"),
+        ("t6", "Tile 6", "Utility;"),
+    ];
+    let (_fixture, _host, _view, mut visual, _window) =
+        panel_with_apps(cx, Panel::Spotlight, &apps);
+    visual.run_until_parked();
+
+    let mut tiles = Vec::new();
+    for selector in [
+        "spotlight-tile-t1.desktop",
+        "spotlight-tile-t2.desktop",
+        "spotlight-tile-t3.desktop",
+        "spotlight-tile-t4.desktop",
+        "spotlight-tile-t5.desktop",
+        "spotlight-tile-t6.desktop",
+    ] {
+        let tile = visual
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} is painted"));
+        assert_eq!(f32::from(tile.size.width), 128.);
+        tiles.push(tile);
+    }
+    let row = tiles[0].origin.y;
+    assert!(
+        tiles.iter().all(|tile| tile.origin.y == row),
+        "all six tiles sit on the same row"
+    );
+    assert!(
+        tiles
+            .windows(2)
+            .all(|pair| pair[0].origin.x < pair[1].origin.x),
+        "the row lays the tiles out left to right"
+    );
+}
+
+#[gpui::test]
+fn ctrl_b_opens_a_dynamic_action_card_for_the_selection(cx: &mut TestAppContext) {
+    use crate::services::HistoryKind;
+    let (_fixture, host, view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    host.update(cx, |host, cx| {
+        host.history = vec![clipboard_entry("text:one", HistoryKind::Text, "one", 1)];
+        host.clipboard_available = true;
+        host.changed(cx);
+    });
+    visual.run_until_parked();
+
+    assert!(
+        visual.debug_bounds("spotlight-status-bar").is_some(),
+        "the sheet always carries its status strip"
+    );
+    assert!(visual.debug_bounds("spotlight-actions-menu").is_none());
+
+    visual.simulate_keystrokes("ctrl-b");
+    visual.run_until_parked();
+    let (menu_window, mut menu) = spotlight_menu(&host, cx);
+    assert!(menu.debug_bounds("spotlight-actions-menu").is_some());
+    assert!(
+        menu.debug_bounds("spotlight-action-open").is_some(),
+        "an application offers its primary launch action"
+    );
+    assert!(
+        menu.debug_bounds("spotlight-action-reveal").is_some(),
+        "and can reveal its desktop entry"
+    );
+    assert!(
+        menu.debug_bounds("spotlight-action-copy").is_none(),
+        "clipboard actions do not leak into the application page"
+    );
+
+    // Up/Down walk the card, not the palette underneath.
+    menu.simulate_keystrokes("down");
+    menu.run_until_parked();
+    assert_eq!(
+        menu_window
+            .update(cx, |view, _, _| view.spotlight_menu_selection)
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.selection),
+        0,
+        "the highlighted application stays put"
+    );
+
+    // Ctrl+J / Ctrl+K walk the card with the same reach as the arrow keys.
+    menu.simulate_keystrokes("ctrl-k");
+    menu.run_until_parked();
+    assert_eq!(
+        menu_window
+            .update(cx, |view, _, _| view.spotlight_menu_selection)
+            .unwrap(),
+        0,
+        "Ctrl+K steps back up the card"
+    );
+    menu.simulate_keystrokes("ctrl-j");
+    menu.run_until_parked();
+    assert_eq!(
+        menu_window
+            .update(cx, |view, _, _| view.spotlight_menu_selection)
+            .unwrap(),
+        1,
+        "Ctrl+J steps down the card"
+    );
+
+    // The card is a second window now, so a sheet that still holds the
+    // keyboard must forward the step instead of walking its hidden selection.
+    visual.simulate_keystrokes("ctrl-k");
+    visual.run_until_parked();
+    assert_eq!(
+        menu_window
+            .update(cx, |view, _, _| view.spotlight_menu_selection)
+            .unwrap(),
+        0,
+        "the sheet forwards Ctrl+K to the card"
+    );
+    visual.simulate_keystrokes("ctrl-j");
+    visual.run_until_parked();
+    assert_eq!(
+        menu_window
+            .update(cx, |view, _, _| view.spotlight_menu_selection)
+            .unwrap(),
+        1,
+        "and forwards Ctrl+J too"
+    );
+
+    // Escape folds only the card.
+    menu.simulate_keystrokes("escape");
+    menu.run_until_parked();
+    assert!(host.read_with(cx, |host, _| host.spotlight_menu.is_none()));
+    assert!(visual.debug_bounds("spotlight-status-bar").is_some());
+    host.read_with(cx, |host, _| {
+        assert_eq!(
+            host.panel,
+            Some(Panel::Spotlight),
+            "the launcher stays up behind the card"
+        );
+    });
+
+    // The clipboard body derives a different list from its own selection.
+    visual.simulate_keystrokes("ctrl-3");
+    visual.run_until_parked();
+    visual.simulate_keystrokes("ctrl-b");
+    visual.run_until_parked();
+    let (_, mut menu) = spotlight_menu(&host, cx);
+    assert!(menu.debug_bounds("spotlight-action-copy").is_some());
+    assert!(menu.debug_bounds("spotlight-action-pin").is_some());
+    assert!(menu.debug_bounds("spotlight-action-delete").is_some());
+    assert!(menu.debug_bounds("spotlight-action-layout").is_some());
+    assert!(menu.debug_bounds("spotlight-action-open").is_none());
+}
+
+#[gpui::test]
+fn the_action_card_runs_the_clicked_row(cx: &mut TestAppContext) {
+    use crate::services::HistoryKind;
+    let (_fixture, host, view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    host.update(cx, |host, cx| {
+        host.history = vec![clipboard_entry("text:one", HistoryKind::Text, "one", 1)];
+        host.clipboard_available = true;
+        host.changed(cx);
+    });
+    visual.simulate_keystrokes("ctrl-3");
+    visual.simulate_keystrokes("ctrl-b");
+    visual.run_until_parked();
+
+    let (_, mut menu) = spotlight_menu(&host, cx);
+    let row = menu
+        .debug_bounds("spotlight-action-layout")
+        .expect("the details switch is offered");
+    let center = row.center();
+    menu.simulate_mouse_down(center, MouseButton::Left, Modifiers::none());
+    menu.simulate_mouse_up(center, MouseButton::Left, Modifiers::none());
+    menu.run_until_parked();
+
+    view.read_with(&visual, |view, _| {
+        assert_eq!(
+            view.palette.effective("clipboardLayout", "default"),
+            "details",
+            "the clicked row runs the same command as Alt+D"
+        );
+        assert!(!view.spotlight_menu_open, "the card folds after a run");
+    });
+    assert!(
+        host.read_with(cx, |host, _| host.spotlight_menu.is_none()),
+        "the card surface folds away after a run"
+    );
+    assert!(
+        visual.debug_bounds("spotlight-clipboard-list").is_some(),
+        "and the sheet repaints into the details layout"
+    );
+}
+
+#[gpui::test]
+fn the_status_strip_is_full_bleed_and_balanced(cx: &mut TestAppContext) {
+    let (_fixture, host, view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    visual.run_until_parked();
+    let bar = visual
+        .debug_bounds("spotlight-status-bar")
+        .expect("the sheet carries its status strip");
+    let chip = visual
+        .debug_bounds("spotlight-status-actions")
+        .expect("the strip carries its action trigger");
+    let title = visual
+        .debug_bounds("spotlight-status-title")
+        .expect("the strip names the selection");
+    // The strip ignores the content margin: it spans the sheet's full inner
+    // width so its top hairline reaches both rounded edges.
+    assert_eq!(
+        f32::from(bar.size.width),
+        crate::app::panels::SPOTLIGHT_WIDTH - 4.,
+        "the strip runs edge to edge inside the sheet rim"
+    );
+    let left_inset = f32::from(title.left()) - f32::from(bar.left());
+    let right_inset = f32::from(bar.right()) - f32::from(chip.right());
+    assert!(
+        (left_inset - 24.).abs() <= 0.5 && (right_inset - 24.).abs() <= 0.5,
+        "the strip's contents keep the content margin ({left_inset} / {right_inset})"
+    );
+    let divider = 1.;
+    let above = f32::from(chip.top()) - f32::from(bar.top()) - divider;
+    let below = f32::from(bar.bottom()) - f32::from(chip.bottom());
+    assert!(
+        (above - below).abs() <= 1.,
+        "the trigger sits centred in the strip ({above} above, {below} below)"
+    );
+
+    visual.simulate_keystrokes("ctrl-b");
+    visual.run_until_parked();
+    let (_, mut menu) = spotlight_menu(&host, cx);
+    let card = menu
+        .debug_bounds("spotlight-actions-menu")
+        .expect("Ctrl+B opens the card");
+    assert!(
+        (f32::from(card.right()) - f32::from(chip.right())).abs() <= 0.5,
+        "the card lines up with the trigger's right edge"
+    );
+    // Both windows cover the same output, so their coordinates share an origin.
+    // The strip itself is still riding its opening spring at this point, so
+    // compare against its settled top from the placement: the card keeps an
+    // 8px gap above the strip and the same 24px inset as its control.
+    let state = view.read_with(&visual, |view, _| view.state.clone());
+    let viewport = visual.update(|window, _| window.viewport_size());
+    let popup = crate::app::panels::placement(
+        &state,
+        &Panel::Spotlight,
+        f32::from(viewport.width),
+        f32::from(viewport.height),
+    )
+    .popup
+    .expect("the sheet has a visible rectangle");
+    let strip_top = f32::from(popup.origin.y) + f32::from(popup.size.height) - 2. - 42.;
+    assert!(
+        (f32::from(card.bottom()) - (strip_top - 8.)).abs() <= 0.5,
+        "the card floats 8px above the strip ({} vs {})",
+        f32::from(card.bottom()),
+        strip_top
+    );
+    assert!(
+        (f32::from(card.right())
+            - (f32::from(popup.origin.x) + f32::from(popup.size.width) - 2. - 24.))
+            .abs()
+            <= 0.5,
+        "the card's right edge sits on the strip's content inset"
+    );
+}
+
+#[gpui::test]
+fn the_resting_grid_hides_the_rule_below_its_third_row(cx: &mut TestAppContext) {
+    let apps = [
+        ("util-1", "Utility One", "Utility;"),
+        ("util-2", "Utility Two", "Utility;"),
+        ("office-1", "Office One", "Office;"),
+        ("office-2", "Office Two", "Office;"),
+        ("social-1", "Social One", "Network;"),
+        ("social-2", "Social Two", "Network;"),
+        ("graphics-1", "Graphics One", "Graphics;"),
+        ("graphics-2", "Graphics Two", "Graphics;"),
+    ];
+    let (_fixture, _host, _view, mut visual, _window) =
+        panel_with_apps(cx, Panel::Spotlight, &apps);
+    visual.run_until_parked();
+
+    let bar = visual
+        .debug_bounds("spotlight-status-bar")
+        .expect("the sheet carries its status strip");
+    // The results scroll ends one body gap above the strip.
+    let viewport_bottom = f32::from(bar.top()) - 8.;
+    let third_row = visual
+        .debug_bounds("spotlight-tile-social-1.desktop")
+        .expect("the third category row is painted");
+    assert!(
+        f32::from(third_row.bottom()) <= viewport_bottom,
+        "the third row ({}) stays above the viewport edge ({viewport_bottom})",
+        f32::from(third_row.bottom())
+    );
+    let rule = visual
+        .debug_bounds("spotlight-rule-section")
+        .expect("the last category divider is painted");
+    assert!(
+        f32::from(rule.top()) >= viewport_bottom,
+        "the rule below the third row ({}) stays clipped behind the strip edge ({viewport_bottom})",
+        f32::from(rule.top())
+    );
+}
+
+#[gpui::test]
+fn the_file_action_card_previews_the_selected_file(cx: &mut TestAppContext) {
+    use clarion_launcher::files::FileHit;
+    let (_fixture, host, _view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    let commands = cx.update(|cx| testing::capture_backend(&host, cx));
+    visual.simulate_keystrokes("ctrl-4");
+    visual.run_until_parked();
+
+    let image = std::path::PathBuf::from("/home/test/Pictures/photo.png");
+    host.update(cx, |host, cx| {
+        host.file_query = "photo".into();
+        host.file_hits = Arc::new(vec![FileHit {
+            path: image.clone(),
+            name: "photo.png".into(),
+            parent: image.parent().unwrap().to_path_buf(),
+            is_dir: false,
+            extension: "png".into(),
+            size: 1024,
+            modified: None,
+        }]);
+        host.changed(cx);
+    });
+    visual.run_until_parked();
+
+    visual.simulate_keystrokes("ctrl-b");
+    visual.run_until_parked();
+    let (_, mut menu) = spotlight_menu(&host, cx);
+    assert!(
+        menu.debug_bounds("spotlight-action-reveal").is_some(),
+        "a file keeps its reveal action"
+    );
+    let row = menu
+        .debug_bounds("spotlight-action-preview")
+        .expect("images and files offer the quick preview");
+    let center = row.center();
+    menu.simulate_mouse_down(center, MouseButton::Left, Modifiers::none());
+    menu.simulate_mouse_up(center, MouseButton::Left, Modifiers::none());
+    menu.run_until_parked();
+
+    let mut previewed = None;
+    while let Ok(command) = commands.try_recv() {
+        if let backend::Command::PreviewFile(path) = command {
+            previewed = Some(path);
+        }
+    }
+    assert_eq!(
+        previewed.as_deref(),
+        Some(image.as_path()),
+        "the row asks Sushi for the selected file"
+    );
+    host.read_with(cx, |host, _| {
+        assert!(host.panel_exit, "the sheet folds away for the previewer");
+    });
+}
+
+#[gpui::test]
+fn a_copied_file_offers_open_and_preview_in_the_clipboard_card(cx: &mut TestAppContext) {
+    use crate::services::HistoryKind;
+    let (_fixture, host, _view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    let commands = cx.update(|cx| testing::capture_backend(&host, cx));
+    let file = std::path::PathBuf::from("/home/test/Downloads/report.pdf");
+    let mut entry = clipboard_entry(
+        "files:one",
+        HistoryKind::Files,
+        &file.display().to_string(),
+        1,
+    );
+    entry.file_path = Some(file.clone());
+    host.update(cx, |host, cx| {
+        host.history = vec![entry];
+        host.clipboard_available = true;
+        host.changed(cx);
+    });
+    visual.simulate_keystrokes("ctrl-3");
+    visual.simulate_keystrokes("ctrl-b");
+    visual.run_until_parked();
+
+    let (_, mut menu) = spotlight_menu(&host, cx);
+    assert!(
+        menu.debug_bounds("spotlight-action-preview").is_some(),
+        "a copied file can be previewed too"
+    );
+    let row = menu
+        .debug_bounds("spotlight-action-open-file")
+        .expect("a file-list capture offers its own open action");
+    let center = row.center();
+    menu.simulate_mouse_down(center, MouseButton::Left, Modifiers::none());
+    menu.simulate_mouse_up(center, MouseButton::Left, Modifiers::none());
+    menu.run_until_parked();
+
+    let mut opened = None;
+    while let Ok(command) = commands.try_recv() {
+        if let backend::Command::OpenPath(path) = command {
+            opened = Some(path);
+        }
+    }
+    assert_eq!(
+        opened.as_deref(),
+        Some(file.as_path()),
+        "opening the copied file follows the desktop handler"
+    );
+    host.read_with(cx, |host, _| {
+        assert!(host.panel_exit, "the sheet folds away after opening");
     });
 }
 

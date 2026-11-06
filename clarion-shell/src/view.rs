@@ -28,6 +28,7 @@ mod macos_notifications;
 mod macos_preferences;
 mod power;
 mod spotlight;
+pub(crate) use spotlight::SpotlightMenuSnapshot;
 
 actions!(
     shell,
@@ -48,7 +49,8 @@ actions!(
         PaletteClipboardText,
         PaletteClipboardImage,
         PaletteClipboardFiles,
-        PaletteClipboardLayout
+        PaletteClipboardLayout,
+        PaletteActions
     ]
 );
 pub fn bind_keys(cx: &mut App) {
@@ -77,6 +79,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("tab", PaletteNextMode, Some("ClarionPanel")),
         KeyBinding::new("shift-tab", PalettePreviousMode, Some("ClarionPanel")),
         KeyBinding::new("ctrl-enter", PaletteReveal, Some("ClarionPanel")),
+        // The status bar's contextual action card.
+        KeyBinding::new("ctrl-b", PaletteActions, Some("ClarionPanel")),
     ]);
 }
 #[derive(Clone, Debug)]
@@ -89,6 +93,9 @@ pub enum Surface {
     /// lies *behind* it, so a card painted into the launcher's window would
     /// show the tiles underneath without any blur.
     LauncherMenu,
+    /// The `Ctrl+B` action card, also on its own surface for the same reason:
+    /// inside the sheet it would only tint the rows beneath it.
+    SpotlightMenu,
     Toast(u32),
     DockEdge,
 }
@@ -141,6 +148,12 @@ pub struct ShellView {
     /// Set once the keyboard walks the slash completion list, so Enter on a
     /// bare `/` runs the highlighted row instead of explaining the syntax.
     palette_slash_picked: bool,
+    /// The status bar's `Ctrl+B` action card is up. The card lives in the
+    /// sheet itself, so it can reuse the frosted surface instead of opening a
+    /// second window; its rows are derived from the live selection.
+    spotlight_menu_open: bool,
+    /// The row the action card's keyboard walk points at.
+    spotlight_menu_selection: usize,
     filter: u8,
     selection: usize,
     scroll: ScrollHandle,
@@ -486,6 +499,9 @@ impl ShellView {
             // A page slide describes the old result set; a new query starts
             // its pages from a clean slate.
             this.launchpad_slide = None;
+            // A different draft means different rows under the card.
+            this.spotlight_menu_open = false;
+            this.spotlight_menu_selection = 0;
             // Every edit starts the slash completion over: Enter only runs the
             // highlighted row once the keyboard has actually moved in it.
             this.palette_slash_picked = false;
@@ -538,6 +554,8 @@ impl ShellView {
             palette_category: None,
             palette_clipboard_filter: None,
             palette_slash_picked: false,
+            spotlight_menu_open: false,
+            spotlight_menu_selection: 0,
             filter: 0,
             selection: 0,
             scroll: ScrollHandle::new(),
@@ -588,6 +606,49 @@ impl ShellView {
         let mut view = Self::new(host, Surface::LauncherMenu, output, state, cx);
         view.launcher_menu = Some(LauncherMenu { id, anchor });
         view
+    }
+    /// The `Ctrl+B` card as its own surface over the sheet. The sheet's live
+    /// selection, draft and mode come along in the snapshot, so the card shows
+    /// exactly the commands the keyboard would have run.
+    pub(crate) fn new_spotlight_menu(
+        host: Entity<Host>,
+        state: Arc<ViewState>,
+        menu: spotlight::SpotlightMenuSnapshot,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut view = Self::new(host, Surface::SpotlightMenu, menu.output, state, cx);
+        view.query = menu.query;
+        view.palette = menu.palette;
+        view.selection = menu.selection;
+        view.palette_category = menu.category;
+        view.palette_clipboard_filter = menu.clipboard_filter;
+        view.spotlight_menu_open = true;
+        view.spotlight_menu_selection = 0;
+        view
+    }
+    /// Host-side entry for a row clicked on the card's own surface: run it on
+    /// the sheet, whose palette owns the live selection and results.
+    pub(crate) fn run_spotlight_action(
+        &mut self,
+        index: usize,
+        host: &ViewState,
+        cx: &mut Context<Self>,
+    ) {
+        self.spotlight_run_action(index, host, cx);
+    }
+    /// Host-side entry for a step that arrived while the sheet, not the card,
+    /// held the keyboard.
+    pub(crate) fn step_spotlight_action(
+        &mut self,
+        forward: bool,
+        host: &ViewState,
+        cx: &mut Context<Self>,
+    ) {
+        self.spotlight_step_actions(host, forward, cx);
+    }
+    /// The card row the keyboard currently highlights.
+    pub(crate) fn spotlight_menu_selection(&self) -> usize {
+        self.spotlight_menu_selection
     }
     /// The visible card of the open launcher menu, if this surface shows one.
     fn launcher_menu_card(
@@ -673,6 +734,86 @@ impl ShellView {
             .child(card)
             .into_any_element()
     }
+    /// The action card's rectangle on its fullscreen surface: tucked into the
+    /// sheet's bottom-right corner, aligned with the `快捷操作` trigger.
+    fn spotlight_menu_rect(
+        &self,
+        host: &ViewState,
+        width: f32,
+        height: f32,
+    ) -> Option<Bounds<Pixels>> {
+        if !matches!(self.kind, Surface::SpotlightMenu) {
+            return None;
+        }
+        let placement = crate::app::panels::placement(host, &Panel::Spotlight, width, height);
+        let popup = placement.popup?;
+        let w = spotlight::ACTION_MENU_W;
+        let h = self.spotlight_action_card_height(host);
+        // The sheet's 2px rim plus the strip's 24px content inset put the
+        // card's right edge on the trigger's; the bottom clears the 42px
+        // strip and its 8px gap.
+        let rim = 2.;
+        Some(Bounds::new(
+            point(
+                popup.origin.x + popup.size.width
+                    - px(rim + spotlight::ACTION_CARD_INSET)
+                    - px(w),
+                popup.origin.y + popup.size.height
+                    - px(rim + spotlight::ACTION_MENU_GAP)
+                    - px(h),
+            ),
+            size(px(w), px(h)),
+        ))
+    }
+    /// The `Ctrl+B` surface: a transparent catcher over the output and the
+    /// frosted card itself. The card is a window because the compositor blurs
+    /// only what lies behind a surface; painted inside the sheet it would show
+    /// the result rows without any blur.
+    fn spotlight_menu_surface(
+        &self,
+        host: &ViewState,
+        p: Palette,
+        width: f32,
+        height: f32,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let Some(rect) = self.spotlight_menu_rect(host, width, height) else {
+            return div().size_full().into_any_element();
+        };
+        let view = cx.entity().downgrade();
+        let dismiss = {
+            let view = view.clone();
+            move |_: &MouseDownEvent, _: &mut Window, cx: &mut App| {
+                cx.stop_propagation();
+                let _ = view.update(cx, |view, cx| view.invoke(Action::CloseSpotlightMenu, cx));
+            }
+        };
+        let backdrop = div()
+            .id("spotlight-menu-backdrop")
+            .absolute()
+            .left(px(0.))
+            .top(px(0.))
+            .w(px(width))
+            .h(px(height))
+            .bg(rgba(0x00000001))
+            .on_mouse_down(MouseButton::Left, dismiss.clone())
+            .on_mouse_down(MouseButton::Right, dismiss);
+        let card = div()
+            .id("spotlight-menu-card")
+            .absolute()
+            .left(rect.origin.x)
+            .top(rect.origin.y)
+            .w(rect.size.width)
+            .text_color(p.fg)
+            .text_size(px(13.))
+            .child(self.spotlight_action_card(host, p, cx));
+        div()
+            .id("spotlight-menu-layer")
+            .size_full()
+            .child(backdrop)
+            .child(card)
+            .into_any_element()
+    }
     pub fn observe_activation(&self, window: &mut Window, cx: &mut Context<Self>) {
         cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
@@ -689,7 +830,10 @@ impl ShellView {
                     // keyboard; that is not the user leaving the launcher.
                     let menu_up = {
                         let host = host.read(cx);
-                        host.menu.is_some() || host.menu_opening
+                        host.menu.is_some()
+                            || host.menu_opening
+                            || host.spotlight_menu.is_some()
+                            || host.spotlight_menu_opening
                     };
                     if menu_up {
                         return;
@@ -711,7 +855,7 @@ impl ShellView {
         if matches!(
             self.state.panel,
             Some(Panel::Apps | Panel::Spotlight | Panel::Recent)
-        ) && !matches!(self.kind, Surface::LauncherMenu)
+        ) && !matches!(self.kind, Surface::LauncherMenu | Surface::SpotlightMenu)
         {
             window.focus(&self.input.focus_handle(cx));
         } else {
@@ -2382,10 +2526,12 @@ impl ShellView {
             // surface recipe.
             body.p(px(12.))
         } else if panel == Panel::Spotlight {
-            // The palette keeps a real margin around its grid and list, and
-            // reads a point larger than the menus. The sheet grows by the same
-            // six points as the padding so the content area stays put.
-            body.px(px(24.)).py(px(16.)).text_size(px(14.))
+            // The palette's rows keep a real margin around the grid and list,
+            // and read a point larger than the menus. The status strip is a
+            // full-bleed bottom bar, so the margin lives on the content
+            // children instead of the sheet: its divider can then reach both
+            // rounded edges.
+            body.pt(px(16.)).text_size(px(14.))
         } else {
             body.p(px(10.))
         };
@@ -2421,6 +2567,7 @@ impl ShellView {
                         .flex()
                         .items_center()
                         .gap(px(12.))
+                        .px(px(24.))
                         .font_weight(FontWeight::MEDIUM)
                         .child(glyph)
                         .child(
@@ -2447,22 +2594,26 @@ impl ShellView {
                     div()
                         .h(px(1.))
                         .my(px(3.))
+                        .mx(px(24.))
                         .debug_selector(|| "spotlight-rule-search".to_owned())
                         .bg(p.line),
                 );
             if let Some(pills) = self.spotlight_pills(host, p, cx) {
-                body = body.child(pills).child(
-                    div()
-                        .h(px(1.))
-                        .my(px(3.))
-                        .debug_selector(|| "spotlight-rule-pills".to_owned())
-                        .bg(p.line),
-                );
+                body = body
+                    .child(div().px(px(24.)).child(pills))
+                    .child(
+                        div()
+                            .h(px(1.))
+                            .my(px(3.))
+                            .mx(px(24.))
+                            .debug_selector(|| "spotlight-rule-pills".to_owned())
+                            .bg(p.line),
+                    );
             }
             if let Some(error) = &self.palette_error {
                 body = body.child(
                     div()
-                        .px(px(2.))
+                        .px(px(26.))
                         .text_size(px(12.))
                         .text_color(rgb(0xe5a87f))
                         .child(error.clone()),
@@ -2491,18 +2642,24 @@ impl ShellView {
                 if panel == Panel::Battery {
                     body = body.child(content);
                 } else {
-                    body = body.child(
-                        div()
-                            .id("panel-scroll")
-                            .flex_1()
-                            .min_h_0()
-                            .overflow_y_scroll()
-                            .track_scroll(&self.scroll)
-                            .child(content),
-                    );
+                    let mut scroll = div()
+                        .id("panel-scroll")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .track_scroll(&self.scroll);
+                    if panel == Panel::Spotlight {
+                        // The status strip is full-bleed; the results keep the
+                        // sheet's side margin themselves.
+                        scroll = scroll.px(px(24.));
+                    }
+                    body = body.child(scroll.child(content));
                 }
             } else {
                 body = body.child(content);
+            }
+            if panel == Panel::Spotlight {
+                body = body.child(self.spotlight_status_bar(host, p, cx));
             }
             let mut inner = body;
             if let Some(arrow) = arrow {
@@ -2664,6 +2821,7 @@ impl Render for ShellView {
             Surface::Dock => self.macos_dock(host, p, window, cx),
             Surface::Panel => self.panel(host, p, window, cx),
             Surface::LauncherMenu => self.launcher_menu_surface(host, p, width, height, cx),
+            Surface::SpotlightMenu => self.spotlight_menu_surface(host, p, width, height, cx),
             Surface::Toast(id) => {
                 if let Some(item) = host.notifications.iter().find(|n| n.id == id) {
                     self.macos_toast(item, host, p, window, cx)
@@ -2706,7 +2864,35 @@ impl Render for ShellView {
                     | Panel::Tray(_)
             )
         );
-        if matches!(self.kind, Surface::LauncherMenu) {
+        if matches!(self.kind, Surface::SpotlightMenu) {
+            // Only the card is frosted; the full-output backdrop stays clear
+            // so the sheet behind it keeps its own glass.
+            let full = vec![Bounds::new(
+                point(px(0.), px(0.)),
+                size(px(width), px(height)),
+            )];
+            let regions = if p.frosted() {
+                self.spotlight_menu_rect(host, width, height)
+                    .map(|card| {
+                        let mut regions = rounded_region(
+                            f32::from(card.size.width),
+                            f32::from(card.size.height),
+                            11.,
+                        );
+                        translate_regions(
+                            &mut regions,
+                            f32::from(card.origin.x),
+                            f32::from(card.origin.y),
+                        );
+                        regions
+                    })
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            window.set_glass_region(Some(&regions));
+            window.set_input_region(Some(&full));
+        } else if matches!(self.kind, Surface::LauncherMenu) {
             // The menu window is transparent except for its card: the catcher
             // covers the output for clicks, the frost only the card itself.
             let full = vec![Bounds::new(
@@ -2830,6 +3016,12 @@ impl Render for ShellView {
                 if this.input.read(cx).has_preedit() {
                     return;
                 }
+                if this.spotlight_menu_open || this.state.spotlight_menu_open {
+                    // The action card is the topmost layer; the draft and the
+                    // selection underneath are untouched.
+                    this.spotlight_close_actions(cx);
+                    return;
+                }
                 if this.launcher_menu.is_some() {
                     // The menu is its own surface: escape folds it away and
                     // leaves the launcher and its draft alone.
@@ -2869,6 +3061,10 @@ impl Render for ShellView {
                     return;
                 }
                 if this.state.panel == Some(Panel::Spotlight) {
+                    if this.spotlight_menu_open || this.state.spotlight_menu_open {
+                        this.invoke(Action::SpotlightMenuActivate, cx);
+                        return;
+                    }
                     let host = this.state.clone();
                     this.palette_activate(&host, false, cx);
                     return;
@@ -2891,6 +3087,10 @@ impl Render for ShellView {
                     return;
                 }
                 if this.state.panel == Some(Panel::Spotlight) {
+                    if this.spotlight_menu_open || this.state.spotlight_menu_open {
+                        this.invoke(Action::SpotlightMenuActivate, cx);
+                        return;
+                    }
                     let host = this.state.clone();
                     this.palette_activate(&host, true, cx);
                 }
@@ -2944,6 +3144,12 @@ impl Render for ShellView {
                     this.palette_reveal_selected(&host, cx);
                 }
             }))
+            .on_action(cx.listener(|this, _: &PaletteActions, _, cx| {
+                if this.state.panel == Some(Panel::Spotlight) && !this.input.read(cx).has_preedit()
+                {
+                    this.spotlight_toggle_actions(cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &PaletteClipboardText, _, cx| {
                 if !this.input.read(cx).has_preedit() {
                     this.palette_clipboard_shortcut(spotlight::ClipboardFilter::Text, cx);
@@ -2970,6 +3176,17 @@ impl Render for ShellView {
             }))
             .on_action(cx.listener(|this, _: &Previous, window, cx| {
                 if !this.input.read(cx).has_preedit() {
+                    if this.state.panel == Some(Panel::Spotlight)
+                        && (this.spotlight_menu_open || this.state.spotlight_menu_open)
+                    {
+                        if matches!(this.kind, Surface::SpotlightMenu) {
+                            let host = this.state.clone();
+                            this.spotlight_step_actions(&host, false, cx);
+                        } else {
+                            this.invoke(Action::SpotlightMenuStep(false), cx);
+                        }
+                        return;
+                    }
                     let before = this.selection;
                     this.selection = this.selection.saturating_sub(1);
                     this.launchpad_note_page_change(before, window);
@@ -2982,6 +3199,17 @@ impl Render for ShellView {
             }))
             .on_action(cx.listener(|this, _: &Next, window, cx| {
                 if !this.input.read(cx).has_preedit() {
+                    if this.state.panel == Some(Panel::Spotlight)
+                        && (this.spotlight_menu_open || this.state.spotlight_menu_open)
+                    {
+                        if matches!(this.kind, Surface::SpotlightMenu) {
+                            let host = this.state.clone();
+                            this.spotlight_step_actions(&host, true, cx);
+                        } else {
+                            this.invoke(Action::SpotlightMenuStep(true), cx);
+                        }
+                        return;
+                    }
                     let count = match this.state.panel {
                         Some(Panel::Spotlight) => this.palette_row_count(&this.state),
                         _ => this.state.catalog.search(&this.query).len(),

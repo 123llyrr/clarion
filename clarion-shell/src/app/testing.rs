@@ -59,6 +59,8 @@ pub(crate) fn test_host(
         popup: None,
         menu: None,
         menu_opening: false,
+        spotlight_menu: None,
+        spotlight_menu_opening: false,
         dispatch_output: None,
         exiting: None,
         exit_generation: 0,

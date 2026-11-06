@@ -51,11 +51,11 @@ pub(crate) const SPOTLIGHT_RADIUS: f32 = 31.;
 /// The control center's painted corner radius. Its inner cards step down from
 /// this value so the nested surfaces read as one family.
 pub(crate) const CONTROLS_RADIUS: f32 = 24.;
-/// The launcher sheet's resting size. The extra six points on each axis
-/// offset the six-point increase in the inner body padding, so the content
-/// area keeps the same width and height.
-pub(crate) const SPOTLIGHT_WIDTH: f32 = 746.;
-pub(crate) const SPOTLIGHT_HEIGHT: f32 = 635.;
+/// The launcher sheet's resting size. The width gives the grid six equal
+/// slots at the original 128-point tile size; the height carries the extra
+/// status bar under the results without shrinking the scrollable body.
+pub(crate) const SPOTLIGHT_WIDTH: f32 = 886.;
+pub(crate) const SPOTLIGHT_HEIGHT: f32 = 668.;
 /// Keep the sheet's proportions when a small output clamps its width.
 const SPOTLIGHT_ASPECT: f32 = SPOTLIGHT_HEIGHT / SPOTLIGHT_WIDTH;
 pub(crate) const FOLDER_LIST_WIDTH: f32 = 300.;
@@ -911,7 +911,7 @@ mod tests {
         let state = host.read_with(cx, |host, _| host.snapshot());
         let palette = placement(&state, &Panel::Spotlight, 1440., 900.);
         let popup = palette.popup.expect("the palette reports its popup");
-        assert_eq!(popup.size, size(px(746.), px(635.)));
+        assert_eq!(popup.size, size(px(886.), px(668.)));
     }
 
     #[gpui::test]

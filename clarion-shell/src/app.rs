@@ -8,7 +8,7 @@ use crate::{
         LauncherPresentation, Preferences,
     },
     services,
-    view::{ShellView, Surface},
+    view::{ShellView, SpotlightMenuSnapshot, Surface},
     Options,
 };
 use clarion_ipc::{Action as CoreAction, DockEdge, DockTarget, MinimizeEffect};
@@ -106,6 +106,8 @@ pub enum Action {
     ApplyWallpaper(PathBuf),
     /// Open the directory that contains a palette file row.
     RevealFile(PathBuf),
+    /// Show one file in the desktop's quick previewer (Nautilus/Sushi).
+    PreviewFile(PathBuf),
     Core(CoreAction),
     Service(services::Command),
     Backend(backend::Command),
@@ -135,6 +137,20 @@ pub enum Action {
     /// Fold the launcher's application menu away and hand the keyboard back to
     /// the launcher it belongs to.
     CloseMenu,
+    /// Open the palette's `Ctrl+B` card on its own frosted surface. The
+    /// snapshot carries the sheet's live selection, draft and mode.
+    OpenSpotlightMenu(SpotlightMenuSnapshot),
+    /// Fold the palette's action card away and hand the keyboard back.
+    CloseSpotlightMenu,
+    /// Run one row of the palette's action card on the sheet that owns it. The
+    /// card's own surface cannot mutate the sheet's palette, so it forwards.
+    SpotlightAction(usize),
+    /// Walk the palette's action card. The card lives on a second surface, so
+    /// whichever window holds the keyboard forwards the step to it.
+    SpotlightMenuStep(bool),
+    /// Run the highlighted row of the palette's action card, wherever the
+    /// keyboard focus sits.
+    SpotlightMenuActivate,
     MagnificationScale(f64),
     AnimateOpeningApplications(bool),
     ReduceMotion(bool),
@@ -254,6 +270,8 @@ pub struct ViewState {
     pub anchored: Option<f32>,
     /// The popup surface is being kept alive for its closing fade.
     pub panel_exit: bool,
+    /// The palette's `Ctrl+B` card is up on its own surface.
+    pub spotlight_menu_open: bool,
     dock_apps: Vec<DockApp>,
 }
 impl ViewState {
@@ -342,6 +360,10 @@ pub struct Host {
     /// and the launcher's deactivation must not read that as a click elsewhere
     /// before `menu` itself lands.
     pub(crate) menu_opening: bool,
+    /// The palette's `Ctrl+B` card, likewise a surface over the sheet so the
+    /// compositor can frost it.
+    pub(crate) spotlight_menu: Option<WindowHandle<ShellView>>,
+    pub(crate) spotlight_menu_opening: bool,
     /// The monitor whose surface dispatched the action currently being
     /// applied. A bar or Dock click can land on a monitor that does not hold
     /// keyboard focus; its popup still belongs to that monitor, not to the
@@ -435,6 +457,8 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 popup: None,
                 menu: None,
                 menu_opening: false,
+                spotlight_menu: None,
+                spotlight_menu_opening: false,
                 dispatch_output: None,
                 exiting: None,
                 exit_generation: 0,
@@ -588,6 +612,7 @@ impl Host {
             folder_errors: self.dock_folder_errors.clone(),
             anchored: self.anchored,
             panel_exit: self.panel_exit,
+            spotlight_menu_open: self.spotlight_menu.is_some(),
             dock_apps: self.dock_apps(),
         }
     }
@@ -918,6 +943,14 @@ impl Host {
                 cx.notify()
             });
         }
+        if let Some(menu) = self.spotlight_menu {
+            // Keep the card's host view current (e.g. a clipboard read-back)
+            // and let its trigger state settle after the window lands.
+            let _ = menu.update(cx, |v, _, cx| {
+                v.state = state.clone();
+                cx.notify()
+            });
+        }
     }
     /// Debounce a palette query, then walk the home directory off the UI
     /// thread. Results carry the generation they were requested under, so a
@@ -1057,6 +1090,30 @@ impl Host {
             }
             Action::OpenMenu { id, anchor } => self.open_menu(id, anchor, cx),
             Action::CloseMenu => self.close_menu(cx),
+            Action::OpenSpotlightMenu(menu) => self.open_spotlight_menu(menu, cx),
+            Action::CloseSpotlightMenu => self.close_spotlight_menu(cx),
+            Action::SpotlightAction(index) => {
+                self.run_spotlight_action(index, cx);
+                self.close_spotlight_menu(cx);
+            }
+            Action::SpotlightMenuStep(forward) => {
+                if let Some(menu) = self.spotlight_menu {
+                    let state = Arc::new(self.snapshot());
+                    let _ = menu.update(cx, |view, _, cx| {
+                        view.state = state.clone();
+                        view.step_spotlight_action(forward, &state, cx);
+                    });
+                }
+            }
+            Action::SpotlightMenuActivate => {
+                let index = self
+                    .spotlight_menu
+                    .and_then(|menu| menu.read(cx).ok())
+                    .map(|view| view.spotlight_menu_selection())
+                    .unwrap_or(0);
+                self.run_spotlight_action(index, cx);
+                self.close_spotlight_menu(cx);
+            }
             Action::AnchoredPanel(panel, x) => {
                 self.anchored = Some(x);
                 if self.panel.as_ref() == Some(&panel) {
@@ -1169,6 +1226,10 @@ impl Host {
                     .map(PathBuf::from)
                     .unwrap_or_else(|| PathBuf::from("/"));
                 let _ = self.backend.send(backend::Command::OpenPath(parent));
+                self.close(cx);
+            }
+            Action::PreviewFile(path) => {
+                let _ = self.backend.send(backend::Command::PreviewFile(path));
                 self.close(cx);
             }
             Action::RefreshFolder(path) => self.request_folder_scan(path, cx),
@@ -1475,6 +1536,7 @@ impl Host {
         // The launcher's menu is not part of the panel's exit ride; it folds
         // away at once and its launcher keeps focus for the fade.
         self.dismiss_menu(cx);
+        self.dismiss_spotlight_menu(cx);
         // A fading bar popup repaints and rides out before its surface is
         // released; anything else dismisses as before, right away.
         let animate = self
@@ -1520,6 +1582,7 @@ impl Host {
         self.cancel_popup_exit(cx);
         // The menu is a surface of its own; it never outlives its launcher.
         self.dismiss_menu(cx);
+        self.dismiss_spotlight_menu(cx);
         self.panel = None;
         self.panel_output = None;
         self.folder_drag_layer = false;
@@ -1791,6 +1854,84 @@ impl Host {
                 true
             }
             None => false,
+        }
+    }
+    /// Open the palette's `Ctrl+B` card as a frosted surface over the sheet.
+    /// The card's list is derived from the sheet's snapshot, so it answers the
+    /// live selection without a second command table.
+    fn open_spotlight_menu(
+        &mut self,
+        menu: SpotlightMenuSnapshot,
+        cx: &mut Context<Self>,
+    ) {
+        self.dismiss_spotlight_menu(cx);
+        if self.panel != Some(Panel::Spotlight) {
+            return;
+        }
+        let output = menu.output.clone();
+        let view = self.outputs.get(&output);
+        let display = view.map(|v| v.display);
+        let (w, h) = view.map(|v| (v.width, v.height)).unwrap_or((1200., 800.));
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(w), px(h)));
+        let options = window_options(
+            "clarion-panel",
+            display,
+            bounds,
+            self.preview,
+            LayerShellAnchor::ALL,
+            -1,
+            LayerShellKeyboardInteractivity::Exclusive,
+            LayerShellMargins::default(),
+            LayerShellLayer::Overlay,
+        );
+        let host = cx.entity();
+        let state = Arc::new(self.snapshot());
+        self.spotlight_menu_opening = true;
+        let opened = cx.open_window(options, move |window, cx| {
+            let view = cx.new(|cx| ShellView::new_spotlight_menu(host, state, menu, cx));
+            view.read(cx).focus(window, cx);
+            view
+        });
+        self.spotlight_menu_opening = false;
+        match opened {
+            Ok(window) => {
+                self.spotlight_menu = Some(window);
+                // The sheet's window must not read the menu's keyboard grab as
+                // "the user left the launcher".
+                let _ = window.update(cx, |_, window, _| window.activate_window());
+                self.changed(cx);
+            }
+            Err(error) => self.show_error(format!("无法打开快捷操作：{error}"), cx),
+        }
+    }
+    /// Fold the card and hand the keyboard back to the sheet.
+    fn close_spotlight_menu(&mut self, cx: &mut Context<Self>) {
+        if self.dismiss_spotlight_menu(cx) {
+            if let Some(popup) = self.popup {
+                let _ = popup.update(cx, |_, window, _| window.activate_window());
+            }
+            self.changed(cx);
+        }
+    }
+    /// Release the card surface without touching the sheet's focus.
+    fn dismiss_spotlight_menu(&mut self, cx: &mut Context<Self>) -> bool {
+        match self.spotlight_menu.take() {
+            Some(window) => {
+                let _ = window.update(cx, |_, window, _| window.remove_window());
+                true
+            }
+            None => false,
+        }
+    }
+    /// Run the card's row `index` on the sheet. The card surface mirrors the
+    /// sheet's selection, so the index is the same list the keyboard walks.
+    fn run_spotlight_action(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(popup) = self.popup {
+            let state = Arc::new(self.snapshot());
+            let _ = popup.update(cx, |view, _, cx| {
+                view.state = state.clone();
+                view.run_spotlight_action(index, &state, cx);
+            });
         }
     }
     fn show_toast(&mut self, id: u32, cx: &mut Context<Self>) {

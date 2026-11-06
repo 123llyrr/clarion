@@ -16,7 +16,7 @@ use clarion_launcher::actions::{self, PaletteAction};
 use clarion_launcher::catalog::{AppCategory, DesktopApp};
 use clarion_launcher::commands::{self, Command, CommandKind, ResolveError};
 use clarion_launcher::search::{ranked_apps, AppOrder};
-use clarion_launcher::session::{Mode, Route, SavedStyles, Tool};
+use clarion_launcher::session::{Mode, Route, SavedStyles, Session, Tool};
 use clarion_launcher::usage::unix_millis;
 use clarion_launcher::web;
 
@@ -25,10 +25,10 @@ use clarion_launcher::web;
 const LIST_ROW_H: f32 = 54.;
 const LIST_GAP: f32 = 4.;
 const LIST_PITCH: f32 = LIST_ROW_H + LIST_GAP;
-/// Five tiles per grid row. Every row renders five equal slots across the
+/// Six tiles per grid row. Every row renders six equal slots across the
 /// sheet's full inner width — full and partial rows alike stay symmetric —
 /// and each tile sits centred in its slot. `GRID_GAP` is the vertical gutter.
-const GRID_COLUMNS: usize = 5;
+const GRID_COLUMNS: usize = 6;
 const GRID_TILE_W: f32 = 128.;
 const GRID_TILE_H: f32 = 128.;
 /// The plate behind a grid icon: 10px of air around the 72px icon, so the
@@ -54,11 +54,110 @@ const WALLPAPER_PITCH: f32 = WALLPAPER_TILE_H + WALLPAPER_GAP;
 const ACTIONS_SYMBOL: &str = "dialog-rows-and-columns-symbolic";
 const ACTIONS_FALLBACK: &str = "activity-monitor.svg";
 
+/// The status strip under the results and the contextual action card it opens
+/// with `Ctrl+B`. The card floats above the strip, aligned with its trailing
+/// edge, so the shortcut control and its menu share one corner.
+const STATUS_BAR_H: f32 = 42.;
+/// Width of the `Ctrl+B` card and the insets that keep it tucked into the
+/// sheet's bottom-right corner. The card is painted by its own surface, so
+/// these values also place its frost region.
+pub(super) const ACTION_MENU_W: f32 = 242.;
+pub(super) const ACTION_MENU_GAP: f32 = 50.;
+pub(super) const ACTION_CARD_INSET: f32 = 24.;
+const ACTION_ROW_H: f32 = 27.;
+
+/// The measured height of the action card for `rows` entries: its one-point
+/// border, its padding, the fixed row rhythm and the one-point gutters.
+pub(super) fn action_card_height(rows: usize) -> f32 {
+    let rows = rows.max(1);
+    4. * 2. + 2. + rows as f32 * ACTION_ROW_H + rows.saturating_sub(1) as f32
+}
+
+/// What the `Ctrl+B` surface needs from the sheet that opened it. The card is
+/// its own window so the compositor can frost the sheet behind it, and the
+/// palette's live selection, draft and mode travel with the snapshot.
+#[derive(Clone)]
+pub(crate) struct SpotlightMenuSnapshot {
+    pub output: String,
+    pub query: String,
+    pub palette: Session,
+    pub selection: usize,
+    pub category: Option<AppCategory>,
+    pub clipboard_filter: Option<ClipboardFilter>,
+}
+
+/// One row of the status bar's action card. The list is rebuilt from the
+/// current selection every render, so moving to another row (or another body)
+/// changes the available commands without storing a second command table.
+struct SpotlightAction {
+    /// Stable id for the debug selector and the click routing.
+    key: &'static str,
+    label: String,
+    /// The shortcut that already performs this row from the palette.
+    hint: &'static str,
+    /// A desktop symbolic name and the bundled fallback asset.
+    icon: (&'static str, &'static str),
+    kind: SpotlightActionKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SpotlightActionKind {
+    /// Run the highlighted row exactly like Enter.
+    Primary,
+    OpenFile(PathBuf),
+    Preview(PathBuf),
+    Reveal(PathBuf),
+    PinApp(String),
+    PinClipboard(String),
+    DeleteClipboard,
+    ToggleClipboardLayout,
+}
+
+fn palette_action_item(
+    key: &'static str,
+    label: impl Into<String>,
+    hint: &'static str,
+    icon: (&'static str, &'static str),
+    kind: SpotlightActionKind,
+) -> SpotlightAction {
+    SpotlightAction {
+        key,
+        label: label.into(),
+        hint,
+        icon,
+        kind,
+    }
+}
+
+/// The short human name of a clipboard payload type, shared by the preview
+/// header and the status strip.
+fn clipboard_kind_label(kind: services::HistoryKind) -> &'static str {
+    match kind {
+        services::HistoryKind::Text => "文字",
+        services::HistoryKind::Image => "图片",
+        services::HistoryKind::Screenshot => "截图",
+        services::HistoryKind::Files | services::HistoryKind::Binary => "文件",
+    }
+}
+
+/// The local file a clipboard entry points at: a file-list capture stores its
+/// first path on the entry, while an older index may keep only the text list.
+fn clipboard_path(entry: &services::HistoryEntry) -> Option<PathBuf> {
+    entry.file_path.clone().or_else(|| {
+        entry
+            .text
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .map(PathBuf::from)
+    })
+}
+
 /// The content-type tags above the clipboard body. `Image` covers screenshots
 /// too, the way the Recent panel groups them; `Text` is only text, so a file
 /// list (which also answers `text/plain`) does not drown the text tag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ClipboardFilter {
+pub(crate) enum ClipboardFilter {
     Text,
     Image,
     Files,
@@ -101,7 +200,7 @@ impl ClipboardFilter {
         }
     }
 }
-const GRID_GAP: f32 = 5.;
+const GRID_GAP: f32 = 4.;
 /// Row pitch, including the gutter under each row.
 const GRID_PITCH: f32 = GRID_TILE_H + GRID_GAP;
 /// A categorized section's header block and its divider, both fixed so the
@@ -866,6 +965,8 @@ impl ShellView {
         self.selection = 0;
         self.palette_error = None;
         self.palette_category = None;
+        self.spotlight_menu_open = false;
+        self.spotlight_menu_selection = 0;
         // The type tags belong to the clipboard body, so switching modes
         // starts it unfiltered.
         self.palette_clipboard_filter = None;
@@ -921,6 +1022,8 @@ impl ShellView {
         self.selection = 0;
         self.palette_error = None;
         self.palette_category = None;
+        self.spotlight_menu_open = false;
+        self.spotlight_menu_selection = 0;
         if self.palette.mode != Mode::Clipboard {
             self.palette_clipboard_filter = None;
         }
@@ -967,6 +1070,8 @@ impl ShellView {
         };
         self.selection = 0;
         self.scroll.set_offset(point(px(0.), px(0.)));
+        self.spotlight_menu_open = false;
+        self.spotlight_menu_selection = 0;
         cx.notify();
     }
 
@@ -1164,6 +1269,8 @@ impl ShellView {
         self.selection = 0;
         self.palette_error = None;
         self.palette_category = None;
+        self.spotlight_menu_open = false;
+        self.spotlight_menu_selection = 0;
         if self.palette.mode != Mode::Clipboard {
             self.palette_clipboard_filter = None;
         }
@@ -1445,6 +1552,668 @@ impl ShellView {
             );
         }
         Some(tags.into_any_element())
+    }
+
+    /// The left half of the status strip: the highlighted row's own name and
+    /// context, falling back to the body's count when nothing is selected.
+    fn spotlight_status_summary(&self, host: &ViewState) -> (String, String) {
+        match self.palette_body() {
+            PaletteBody::Apps => match self.palette_app_at(host, self.selection) {
+                Some(app) => {
+                    let detail = if app.generic_name.is_empty() {
+                        app.category.title().to_owned()
+                    } else {
+                        app.generic_name.clone()
+                    };
+                    (app.name.clone(), format!("应用 · {detail}"))
+                }
+                None => (
+                    "应用".to_owned(),
+                    format!("{} 个应用", self.palette_visible_apps(host).len()),
+                ),
+            },
+            PaletteBody::Clipboard => {
+                let found = self.palette_clipboard(host);
+                match found.get(self.selection) {
+                    Some(entry) => (
+                        clipboard_title(entry),
+                        format!("剪贴板 · {}", clipboard_kind_label(entry.kind)),
+                    ),
+                    None => ("剪贴板".to_owned(), format!("{} 条记录", found.len())),
+                }
+            }
+            PaletteBody::Files => match host.file_hits.get(self.selection) {
+                Some(hit) => (hit.name.clone(), file_metadata(hit, &host.home)),
+                None => (
+                    "文件".to_owned(),
+                    if host.file_searching {
+                        "正在搜索…".to_owned()
+                    } else {
+                        format!("{} 个结果", host.file_hits.len())
+                    },
+                ),
+            },
+            PaletteBody::Wallpapers => {
+                let found = self.palette_wallpapers(host);
+                match found.get(self.selection) {
+                    Some(entry) => (entry.name.clone(), "壁纸".to_owned()),
+                    None => ("壁纸".to_owned(), format!("{} 张", found.len())),
+                }
+            }
+            PaletteBody::Commands | PaletteBody::Slash => {
+                let found = self.palette_commands();
+                match found.get(self.selection) {
+                    Some(entry) => (entry.title.to_owned(), format!("命令 · /{}", entry.slash)),
+                    None => ("命令".to_owned(), format!("{} 条命令", found.len())),
+                }
+            }
+            PaletteBody::Actions => {
+                let found = self.palette_actions();
+                match found.get(self.selection) {
+                    Some(entry) => (entry.title.to_owned(), format!("动作 · {}", entry.group)),
+                    None => ("动作".to_owned(), format!("{} 个动作", found.len())),
+                }
+            }
+            PaletteBody::Web => {
+                let found = self.palette_web();
+                match found.get(self.selection) {
+                    Some(entry) => (
+                        entry.title(),
+                        if entry.literal {
+                            "网址".to_owned()
+                        } else {
+                            "网页搜索".to_owned()
+                        },
+                    ),
+                    None => ("网页".to_owned(), format!("{} 个结果", found.len())),
+                }
+            }
+        }
+    }
+
+    /// The rows of the `Ctrl+B` card for whatever the palette highlights right
+    /// now. The list is derived, never stored: an application offers open,
+    /// reveal and a Dock pin, while a clipboard entry offers copy, pin, remove
+    /// and the layout switch.
+    fn spotlight_action_items(&self, host: &ViewState) -> Vec<SpotlightAction> {
+        const OPEN: (&str, &str) = ("document-open-symbolic", "menu-open.svg");
+        const PREVIEW: (&str, &str) = ("document-print-preview-symbolic", "menu-eye.svg");
+        const REVEAL: (&str, &str) = ("folder-open-symbolic", "menu-folder-open.svg");
+        const PIN: (&str, &str) = ("pinned-symbolic", "menu-check.svg");
+        const COPY: (&str, &str) = ("edit-copy-symbolic", "clipboard.svg");
+        const DELETE: (&str, &str) = ("user-trash-symbolic", "menu-trash.svg");
+        const LAYOUT: (&str, &str) = ("view-grid-symbolic", "grid.svg");
+        const WALLPAPER: (&str, &str) = (
+            "preferences-desktop-wallpaper-symbolic",
+            "wallpaper.svg",
+        );
+        const RUN: (&str, &str) = ("system-run-symbolic", "terminal.svg");
+        const WEB: (&str, &str) = ("web-browser-symbolic", "safari.svg");
+
+        match self.palette_body() {
+            PaletteBody::Apps => {
+                let Some(app) = self.palette_app_at(host, self.selection) else {
+                    return Vec::new();
+                };
+                let pinned = host
+                    .dock_apps()
+                    .iter()
+                    .any(|dock| dock.id == app.id && dock.pinned);
+                vec![
+                    palette_action_item(
+                        "spotlight-action-open",
+                        "打开",
+                        "↵",
+                        OPEN,
+                        SpotlightActionKind::Primary,
+                    ),
+                    palette_action_item(
+                        "spotlight-action-reveal",
+                        "在文件夹中显示",
+                        "",
+                        REVEAL,
+                        SpotlightActionKind::Reveal(app.desktop_file.clone()),
+                    ),
+                    palette_action_item(
+                        "spotlight-action-pin",
+                        if pinned {
+                            "从 Dock 取消固定"
+                        } else {
+                            "固定到 Dock"
+                        },
+                        "",
+                        PIN,
+                        SpotlightActionKind::PinApp(app.id.clone()),
+                    ),
+                ]
+            }
+            PaletteBody::Clipboard => {
+                let found = self.palette_clipboard(host);
+                let Some(entry) = found.get(self.selection) else {
+                    return Vec::new();
+                };
+                let file = clipboard_path(entry);
+                let mut items = vec![palette_action_item(
+                    "spotlight-action-copy",
+                    "复制",
+                    "↵",
+                    COPY,
+                    SpotlightActionKind::Primary,
+                )];
+                if entry.kind == services::HistoryKind::Files {
+                    if let Some(path) = file.clone() {
+                        items.push(palette_action_item(
+                            "spotlight-action-open-file",
+                            "打开",
+                            "",
+                            OPEN,
+                            SpotlightActionKind::OpenFile(path),
+                        ));
+                    }
+                }
+                if matches!(
+                    entry.kind,
+                    services::HistoryKind::Files
+                        | services::HistoryKind::Image
+                        | services::HistoryKind::Screenshot
+                ) {
+                    if let Some(path) = file {
+                        items.push(palette_action_item(
+                            "spotlight-action-preview",
+                            "预览",
+                            "",
+                            PREVIEW,
+                            SpotlightActionKind::Preview(path),
+                        ));
+                    }
+                }
+                items.extend([
+                    palette_action_item(
+                        "spotlight-action-pin",
+                        if entry.pinned { "取消置顶" } else { "置顶" },
+                        "",
+                        PIN,
+                        SpotlightActionKind::PinClipboard(entry.id.clone()),
+                    ),
+                    palette_action_item(
+                        "spotlight-action-delete",
+                        "移除",
+                        "",
+                        DELETE,
+                        SpotlightActionKind::DeleteClipboard,
+                    ),
+                    palette_action_item(
+                        "spotlight-action-layout",
+                        if self.palette_clipboard_details() {
+                            "紧凑视图"
+                        } else {
+                            "详情视图"
+                        },
+                        "Alt+D",
+                        LAYOUT,
+                        SpotlightActionKind::ToggleClipboardLayout,
+                    ),
+                ]);
+                items
+            }
+            PaletteBody::Files => {
+                let Some(hit) = host.file_hits.get(self.selection) else {
+                    return Vec::new();
+                };
+                let mut items = vec![palette_action_item(
+                    "spotlight-action-open",
+                    "打开",
+                    "↵",
+                    OPEN,
+                    SpotlightActionKind::Primary,
+                )];
+                if !hit.is_dir {
+                    items.push(palette_action_item(
+                        "spotlight-action-preview",
+                        "预览",
+                        "",
+                        PREVIEW,
+                        SpotlightActionKind::Preview(hit.path.clone()),
+                    ));
+                }
+                items.push(palette_action_item(
+                    "spotlight-action-reveal",
+                    "在文件夹中显示",
+                    "Ctrl ↵",
+                    REVEAL,
+                    SpotlightActionKind::Reveal(hit.path.clone()),
+                ));
+                items
+            }
+            PaletteBody::Wallpapers => {
+                let found = self.palette_wallpapers(host);
+                let Some(entry) = found.get(self.selection) else {
+                    return Vec::new();
+                };
+                vec![
+                    palette_action_item(
+                        "spotlight-action-apply",
+                        "设为壁纸",
+                        "↵",
+                        WALLPAPER,
+                        SpotlightActionKind::Primary,
+                    ),
+                    palette_action_item(
+                        "spotlight-action-preview",
+                        "预览",
+                        "",
+                        PREVIEW,
+                        SpotlightActionKind::Preview(entry.path.clone()),
+                    ),
+                    palette_action_item(
+                        "spotlight-action-reveal",
+                        "在文件夹中显示",
+                        "",
+                        REVEAL,
+                        SpotlightActionKind::Reveal(entry.path.clone()),
+                    ),
+                ]
+            }
+            PaletteBody::Commands | PaletteBody::Slash => {
+                if self.palette_commands().get(self.selection).is_none() {
+                    return Vec::new();
+                }
+                vec![palette_action_item(
+                    "spotlight-action-run",
+                    "运行命令",
+                    "↵",
+                    RUN,
+                    SpotlightActionKind::Primary,
+                )]
+            }
+            PaletteBody::Actions => {
+                if self.palette_actions().get(self.selection).is_none() {
+                    return Vec::new();
+                }
+                vec![palette_action_item(
+                    "spotlight-action-execute",
+                    "执行动作",
+                    "↵",
+                    (ACTIONS_SYMBOL, ACTIONS_FALLBACK),
+                    SpotlightActionKind::Primary,
+                )]
+            }
+            PaletteBody::Web => {
+                let found = self.palette_web();
+                let Some(entry) = found.get(self.selection) else {
+                    return Vec::new();
+                };
+                vec![palette_action_item(
+                    "spotlight-action-url",
+                    if entry.literal {
+                        "打开网址"
+                    } else {
+                        "打开搜索结果"
+                    },
+                    "↵",
+                    WEB,
+                    SpotlightActionKind::Primary,
+                )]
+            }
+        }
+    }
+
+    /// `Ctrl+B`: open the contextual action card on its own frosted surface,
+    /// or fold the one that is already up.
+    pub(super) fn spotlight_toggle_actions(&mut self, cx: &mut Context<Self>) {
+        if self.state.spotlight_menu_open {
+            self.invoke(Action::CloseSpotlightMenu, cx);
+            return;
+        }
+        let snapshot = SpotlightMenuSnapshot {
+            output: self.output.clone(),
+            query: self.query.clone(),
+            palette: self.palette.clone(),
+            selection: self.selection,
+            category: self.palette_category,
+            clipboard_filter: self.palette_clipboard_filter,
+        };
+        self.invoke(Action::OpenSpotlightMenu(snapshot), cx);
+    }
+
+    /// Fold the card without touching the palette's own selection, draft or
+    /// mode. Escape and a click outside the card both use this path.
+    pub(super) fn spotlight_close_actions(&mut self, cx: &mut Context<Self>) {
+        let open = matches!(self.kind, Surface::SpotlightMenu)
+            || self.state.spotlight_menu_open
+            || self.spotlight_menu_open;
+        if open {
+            self.invoke(Action::CloseSpotlightMenu, cx);
+        }
+        self.spotlight_menu_open = false;
+        self.spotlight_menu_selection = 0;
+        cx.notify();
+    }
+
+    /// Walk the card's rows with the same Up/Down keys that walk the palette
+    /// behind it.
+    pub(super) fn spotlight_step_actions(
+        &mut self,
+        host: &ViewState,
+        forward: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let count = self.spotlight_action_items(host).len();
+        if count == 0 {
+            return;
+        }
+        let current = self.spotlight_menu_selection.min(count - 1);
+        self.spotlight_menu_selection = if forward {
+            (current + 1).min(count - 1)
+        } else {
+            current.saturating_sub(1)
+        };
+        cx.notify();
+    }
+
+    /// Run one row of the derived card. `Primary` takes the same path as Enter;
+    /// the rest map onto the existing one-shot host actions.
+    /// Run the card's row `index`. On the card's own surface the click must be
+    /// executed by the sheet underneath: state-mutating actions (delete,
+    /// layout) live in the sheet's palette, and the sheet also owns the
+    /// results behind the card. On the sheet itself this is a plain run.
+    pub(super) fn spotlight_commit_action(
+        &mut self,
+        index: usize,
+        host: &ViewState,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(self.kind, Surface::SpotlightMenu) {
+            self.invoke(Action::SpotlightAction(index), cx);
+            return;
+        }
+        self.spotlight_run_action(index, host, cx);
+    }
+
+    pub(super) fn spotlight_run_action(
+        &mut self,
+        index: usize,
+        host: &ViewState,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(kind) = self
+            .spotlight_action_items(host)
+            .get(index)
+            .map(|item| item.kind.clone())
+        else {
+            return;
+        };
+        self.spotlight_menu_open = false;
+        self.spotlight_menu_selection = 0;
+        match kind {
+            SpotlightActionKind::Primary => self.palette_activate(host, false, cx),
+            SpotlightActionKind::OpenFile(path) => {
+                self.invoke(Action::Backend(backend::Command::OpenPath(path)), cx);
+                self.invoke(Action::Close, cx);
+            }
+            SpotlightActionKind::Preview(path) => self.invoke(Action::PreviewFile(path), cx),
+            SpotlightActionKind::Reveal(path) => self.invoke(Action::RevealFile(path), cx),
+            SpotlightActionKind::PinApp(id) => self.invoke(Action::PinApp(id), cx),
+            SpotlightActionKind::PinClipboard(id) => {
+                self.invoke(Action::Service(services::Command::Pin(id)), cx)
+            }
+            SpotlightActionKind::DeleteClipboard => self.palette_delete_selected(host, cx),
+            SpotlightActionKind::ToggleClipboardLayout => {
+                self.palette_toggle_clipboard_layout(host, cx)
+            }
+        }
+        if matches!(self.kind, Surface::SpotlightMenu) {
+            // The card is its own surface; hand the pointer back to the sheet
+            // unless the action already closed it.
+            self.invoke(Action::CloseSpotlightMenu, cx);
+        }
+        cx.notify();
+    }
+
+    /// The measured height of the card this view would paint for `host`, used
+    /// by the menu surface's frost and click regions.
+    pub(super) fn spotlight_action_card_height(&self, host: &ViewState) -> f32 {
+        action_card_height(self.spotlight_action_items(host).len())
+    }
+
+    /// The bottom status strip. The left half names the highlighted row; the
+    /// right half is the `Ctrl+B` control and the card it opens.
+    pub(super) fn spotlight_status_bar(
+        &self,
+        host: &ViewState,
+        p: Palette,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let (title, detail) = self.spotlight_status_summary(host);
+        let open = self.state.spotlight_menu_open;
+        let trigger_view = cx.entity().downgrade();
+        let close_view = cx.entity().downgrade();
+        let actions_icon = self.actions_glyph_path();
+
+        let summary = div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .child(
+                div()
+                    .debug_selector(|| "spotlight-status-title".to_owned())
+                    .min_w_0()
+                    .flex_shrink()
+                    .text_size(px(12.))
+                    .text_color(p.fg)
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .child(menu_text(title, FontWeight::SEMIBOLD, p.fg, cx)),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(10.))
+                    .text_color(p.muted)
+                    .child("·"),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "spotlight-status-detail".to_owned())
+                    .min_w_0()
+                    .flex_shrink()
+                    .text_size(px(11.))
+                    .text_color(p.muted)
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .child(menu_text(detail, FontWeight::MEDIUM, p.muted, cx)),
+            );
+
+        let trigger = div()
+            .id("spotlight-status-actions")
+            .debug_selector(|| "spotlight-status-actions".to_owned())
+            .h(px(26.))
+            .px(px(10.))
+            .rounded(px(13.))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .cursor_pointer()
+            .when(open, |chip| chip.bg(p.accent.opacity(0.20)))
+            .when(!open, |chip| chip.bg(p.fg.opacity(0.06)))
+            .hover(move |chip| {
+                chip.bg(if open {
+                    p.accent.opacity(0.28)
+                } else {
+                    p.fg.opacity(0.11)
+                })
+            })
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(move |_, _, cx| {
+                cx.stop_propagation();
+                let _ = trigger_view.update(cx, |view, cx| view.spotlight_toggle_actions(cx));
+            })
+            .child(self.glyph(&actions_icon, 13., p))
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .child(menu_text(
+                        "快捷操作".to_owned(),
+                        FontWeight::SEMIBOLD,
+                        if open { p.accent } else { p.fg },
+                        cx,
+                    )),
+            )
+            .child(
+                div()
+                    .h(px(16.))
+                    .px(px(5.))
+                    .rounded(px(4.))
+                    .bg(p.fg.opacity(0.07))
+                    .flex()
+                    .items_center()
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(p.muted)
+                            .child(menu_text("Ctrl B".to_owned(), FontWeight::NORMAL, p.muted, cx)),
+                    ),
+            );
+
+        let bar = div()
+            .id("spotlight-status-bar")
+            .debug_selector(|| "spotlight-status-bar".to_owned())
+            .relative()
+            .h(px(STATUS_BAR_H))
+            .flex_none()
+            .px(px(24.))
+            .border_t_1()
+            .border_color(p.line.opacity(0.45))
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(10.))
+            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                cx.stop_propagation();
+                let _ = close_view.update(cx, |view, cx| view.spotlight_close_actions(cx));
+            })
+            .child(summary)
+            .child(trigger);
+        bar.into_any_element()
+    }
+
+    /// The card above the status strip. It is painted by its own surface, so
+    /// the compositor can frost the sheet (and the rows under the card) behind
+    /// it; an in-window card could only tint them.
+    pub(super) fn spotlight_action_card(
+        &self,
+        host: &ViewState,
+        p: Palette,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let items = self.spotlight_action_items(host);
+        // A separate surface can take the ordinary panel fill: the compositor
+        // blurs the sheet beneath it, exactly like the Dock and launcher menus.
+        let fill = p.panel;
+        let mut card = div()
+            .id("spotlight-actions-menu")
+            .debug_selector(|| "spotlight-actions-menu".to_owned())
+            .w(px(ACTION_MENU_W))
+            .rounded(px(11.))
+            .bg(fill)
+            .border_1()
+            .border_color(p.line)
+            .p(px(4.))
+            .flex()
+            .flex_col()
+            .gap(px(1.))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+            .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation());
+        if items.is_empty() {
+            card = card.child(
+                div()
+                    .h(px(ACTION_ROW_H))
+                    .px(px(7.))
+                    .flex()
+                    .items_center()
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(p.muted)
+                            .child(menu_text(
+                                "当前项目没有可用操作".to_owned(),
+                                FontWeight::NORMAL,
+                                p.muted,
+                                cx,
+                            )),
+                    ),
+            );
+        } else {
+            for (index, item) in items.iter().enumerate() {
+                card = card.child(self.spotlight_action_row(index, item, p, cx));
+            }
+        }
+        card.into_any_element()
+    }
+
+    /// One row of the contextual action card. The row reports its index, not a
+    /// captured command, so the same list the keyboard walks is the list the
+    /// pointer runs.
+    fn spotlight_action_row(
+        &self,
+        index: usize,
+        item: &SpotlightAction,
+        p: Palette,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let selected = index == self.spotlight_menu_selection;
+        let view = cx.entity().downgrade();
+        let state = self.state.clone();
+        let key = item.key;
+        let label = item.label.clone();
+        let hint = item.hint;
+        let icon = self.themed_glyph_path(item.icon.0, item.icon.1);
+        div()
+            .id(key)
+            .debug_selector(move || key.to_owned())
+            .h(px(ACTION_ROW_H))
+            .px(px(7.))
+            .rounded(px(5.))
+            .flex()
+            .items_center()
+            .gap(px(7.))
+            .cursor_pointer()
+            .when(selected, |row| row.bg(p.accent.opacity(0.18)))
+            .hover(move |row| row.bg(p.line))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(self.glyph(&icon, 15., p))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(px(12.))
+                    .text_color(p.fg)
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .child(menu_text(label, FontWeight::MEDIUM, p.fg, cx)),
+            )
+            .when(!hint.is_empty(), |row| {
+                row.child(
+                    div()
+                        .text_size(px(9.))
+                        .text_color(p.muted)
+                        .whitespace_nowrap()
+                        .child(menu_text(hint.to_owned(), FontWeight::NORMAL, p.muted, cx)),
+                )
+            })
+            .on_click(move |_, _, cx| {
+                cx.stop_propagation();
+                let _ =
+                    view.update(cx, |view, cx| view.spotlight_commit_action(index, &state, cx));
+            })
+            .into_any_element()
     }
 
     /// Result rows for the palette. Every row is a direct child of the
@@ -2378,12 +3147,7 @@ impl ShellView {
         p: Palette,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let kind = match entry.kind {
-            services::HistoryKind::Text => "文字",
-            services::HistoryKind::Image => "图片",
-            services::HistoryKind::Screenshot => "截图",
-            services::HistoryKind::Files | services::HistoryKind::Binary => "文件",
-        };
+        let kind = clipboard_kind_label(entry.kind);
         let title = clipboard_title(entry);
         let id = entry.id.clone();
         let pinned = entry.pinned;
