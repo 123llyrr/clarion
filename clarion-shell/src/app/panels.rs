@@ -744,11 +744,12 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
         Panel::Battery => {
             // The battery popup is its own compact modal, dropped from the
             // menu-bar indicator that opened it rather than the control center.
-            // Its height is the summary (74) + the gap (10) + the profile card
-            // (140) + the body padding and border (26) + two points of
-            // rounding slack: the sheet never needs to scroll.
+            // Its height is the summary (74) + the profile card (140) + the
+            // charge-limit card (86) + two body gaps (10 each) + the body
+            // padding and border (26) + two points of rounding slack: the
+            // sheet never needs to scroll.
             let ceiling = available.min(h * BAR_POPUP_MAX_HEIGHT_SHARE);
-            let (width, height): (f32, f32) = (344f32.min(w - 24.), 252f32.min(ceiling));
+            let (width, height): (f32, f32) = (344f32.min(w - 24.), 348f32.min(ceiling));
             let x = state.anchored.map_or(w - width - 12., |x| {
                 (x - width / 2.).clamp(8., (w - width - 8.).max(8.))
             });

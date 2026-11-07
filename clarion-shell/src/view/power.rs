@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! The standalone battery popup: one summary card followed by the circular
 //! platform-profile switcher. The popup owns its outer glass and shadow.
-use super::macos_controls::control_card;
+use super::macos_controls::{control_card, ControlSlider};
 use super::*;
 use crate::power::PowerProfile;
+
+/// The range the charge-limit slider offers. Drivers commonly accept 40, but
+/// 50 is the floor every implementation understands; 100 means no ceiling.
+const CHARGE_LIMIT_MIN: u8 = 50;
+const CHARGE_LIMIT_MAX: u8 = 100;
 
 /// One turn of the confirmation ring.
 const POWER_SPIN_PERIOD: f32 = 0.9;
@@ -270,7 +275,102 @@ impl ShellView {
             .gap(px(10.))
             .child(summary)
             .child(modes)
+            .child(self.battery_charge_limit_card(host, p))
             .into_any_element()
+    }
+
+    /// The charge ceiling. Supported machines get the same slim slider as the
+    /// Control Center's brightness and volume; unsupported ones keep the card
+    /// at the default 100% and say so instead of hiding the row.
+    fn battery_charge_limit_card(&self, host: &ViewState, p: Palette) -> AnyElement {
+        let supported = host.battery_charge_limit.is_some();
+        let limit = host.battery_charge_limit.unwrap_or(1.).clamp(0., 1.);
+        let percent = format!("{}%", (limit * 100.).round());
+        let value_debug = format!("battery-charge-limit-value-{percent}");
+        let percent_color = if supported { p.fg } else { p.muted };
+        let state = crate::battery::state(
+            host.system.battery,
+            host.system.battery_status,
+            host.system.ac_online,
+        );
+        let tone = crate::battery::tone(state);
+        let icon = crate::battery::icon(state, host.system.battery);
+        let card = control_card(p)
+            .debug_selector(|| "battery-charge-limit".into())
+            .h(px(86.))
+            .w_full()
+            .px(px(12.))
+            .py(px(11.))
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(
+                div()
+                    .h(px(19.))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(text("充电上限", 13., FontWeight::SEMIBOLD, p.fg))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(
+                                div()
+                                    .debug_selector(move || value_debug.clone())
+                                    .child(text(percent, 11., FontWeight::NORMAL, percent_color)),
+                            )
+                            .when(!supported, |row| {
+                                row.child(
+                                    div()
+                                        .debug_selector(|| {
+                                            "battery-charge-limit-unavailable".into()
+                                        })
+                                        .child(text("不可用", 10., FontWeight::NORMAL, p.muted)),
+                                )
+                            }),
+                    ),
+            );
+        if !supported {
+            return card
+                .child(
+                    div()
+                        .h(px(26.))
+                        .w_full()
+                        .rounded_full()
+                        .bg(if host.dark() {
+                            rgba(0x00000022)
+                        } else {
+                            rgba(0x00000010)
+                        })
+                        .px(px(9.))
+                        .flex()
+                        .items_center()
+                        .child(self.battery_icon(&icon, limit, tone, 15., p)),
+                )
+                .into_any_element();
+        }
+        // The gesture is 0–1 across the track; map it onto the percentage
+        // range the firmware accepts.
+        let normalized = ((limit * 100. - f64::from(CHARGE_LIMIT_MIN))
+            / f64::from(CHARGE_LIMIT_MAX - CHARGE_LIMIT_MIN))
+            .clamp(0., 1.);
+        card.child(ControlSlider {
+            key: SharedString::from("battery-charge-limit-slider"),
+            selector: "slider-battery-charge-limit".into(),
+            host: self.host.clone(),
+            action: std::rc::Rc::new(|value: f64| {
+                let span = f64::from(CHARGE_LIMIT_MAX - CHARGE_LIMIT_MIN);
+                let percent = f64::from(CHARGE_LIMIT_MIN) + value.clamp(0., 1.) * span;
+                Action::BatteryChargeLimit(percent.round() as u8)
+            }),
+            value: normalized,
+            dark: host.dark(),
+            p,
+            icon: self.battery_icon(&icon, limit, tone, 15., p),
+        })
+        .into_any_element()
     }
 
     /// Draws the confirmation ring outside the 58 px button and the short

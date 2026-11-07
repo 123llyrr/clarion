@@ -168,6 +168,9 @@ pub enum Action {
     /// Switch the machine's ACPI/daemon power profile. The battery popup
     /// keeps its active mark in sync optimistically, then the worker confirms.
     PowerProfile(PowerProfile),
+    /// Adjust the battery's charge ceiling, in percent. The popup only offers
+    /// it when the platform exposes a writable end-threshold attribute.
+    BatteryChargeLimit(u8),
     /// Lock, suspend or power the session off. The worker owns the bus
     /// round-trip so a slow logind/systemd never blocks the UI.
     System(SystemAction),
@@ -224,6 +227,9 @@ pub struct ViewState {
     /// The power profile the worker is still confirming, if any. The battery
     /// popup paints its spinner from this until the read-back settles it.
     pub power_profile_pending: Option<PowerProfile>,
+    /// The battery's charge ceiling, 0–1, or `None` when the platform exposes
+    /// no writable end-threshold attribute.
+    pub battery_charge_limit: Option<f64>,
     pub catalog: Arc<AppCatalog>,
     /// Launch counts used by the palette's usage-aware ordering.
     pub launch_history: Arc<LaunchHistory>,
@@ -302,6 +308,11 @@ pub struct Host {
     /// Highest power-profile stamp accepted. Polls that began before a switch
     /// stay below it, so they cannot repaint the old mode after the read-back.
     power_profile_epoch: u64,
+    /// The battery's charge ceiling, owned by the dedicated event so the
+    /// heartbeat cannot undo a slider write with a stale sample.
+    battery_charge_limit: Option<f64>,
+    /// Highest charge-limit stamp accepted, same rule as the profile epoch.
+    battery_charge_epoch: u64,
     pub catalog: Arc<AppCatalog>,
     pub launch_history: Arc<LaunchHistory>,
     pub file_hits: Arc<Vec<FileHit>>,
@@ -419,6 +430,8 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 system: Default::default(),
                 power_profile_pending: None,
                 power_profile_epoch: 0,
+                battery_charge_limit: None,
+                battery_charge_epoch: 0,
                 catalog: Arc::new(AppCatalog::default()),
                 launch_history,
                 file_hits: Arc::default(),
@@ -577,6 +590,7 @@ impl Host {
             desktop: self.desktop.clone(),
             system: self.system.clone(),
             power_profile_pending: self.power_profile_pending,
+            battery_charge_limit: self.battery_charge_limit,
             catalog: self.catalog.clone(),
             launch_history: self.launch_history.clone(),
             home: self
@@ -726,6 +740,15 @@ impl Host {
                         self.power_profile_pending = None;
                     }
                 }
+            }
+            backend::Event::BatteryChargeLimit { limit, epoch } => {
+                // Polls and write read-backs each take a fresh stamp, so the
+                // newest sample always wins.
+                if epoch <= self.battery_charge_epoch {
+                    return;
+                }
+                self.battery_charge_epoch = epoch;
+                self.battery_charge_limit = limit;
             }
             backend::Event::Preferences(prefs) => {
                 if !self.local_preferences && self.prefs != prefs {
@@ -1448,6 +1471,23 @@ impl Host {
                         // The queue refused the request, so no read-back will
                         // ever settle it.
                         self.power_profile_pending = None;
+                    }
+                }
+            }
+            Action::BatteryChargeLimit(limit) => {
+                // Only meaningful where the platform exposes a writable
+                // end threshold; the popup hides the slider otherwise.
+                let limit = limit.min(100);
+                if let Some(before) = self.battery_charge_limit {
+                    // Move the thumb at once; the worker's read-back settles
+                    // the value the firmware actually kept.
+                    self.battery_charge_limit = Some(f64::from(limit) / 100.);
+                    if self
+                        .backend
+                        .send(backend::Command::SetBatteryChargeLimit(limit))
+                        .is_err()
+                    {
+                        self.battery_charge_limit = Some(before);
                     }
                 }
             }

@@ -103,6 +103,10 @@ pub struct BatterySnapshot {
     pub status: BatteryStatus,
     pub health: Option<f64>,
     pub ac_online: bool,
+    /// The charge ceiling the firmware stops at, 0–1, but only when the
+    /// platform exposes a writable end-threshold attribute. `None` means the
+    /// popup cannot adjust it on this machine.
+    pub charge_limit: Option<f64>,
 }
 
 #[derive(Debug)]
@@ -120,6 +124,16 @@ pub enum Event {
         /// Monotonic stamp shared by both workers. A poll that started before
         /// a switch finishes carries an older stamp and must not paint the old
         /// mode back after the settled read-back.
+        epoch: u64,
+    },
+    /// The battery's charge ceiling, owned by its own event for the same
+    /// reason as the power profile: the one-second heartbeat may carry a
+    /// sample taken before a slider write finished.
+    BatteryChargeLimit {
+        /// 0–1, or `None` when the platform has no writable threshold.
+        limit: Option<f64>,
+        /// Unique sample stamp. Every poll and every read-back takes a fresh
+        /// one, so an older sample can never overwrite a newer value.
         epoch: u64,
     },
     Catalog(AppCatalog),
@@ -159,6 +173,8 @@ pub enum Command {
     },
     /// Switch the machine's ACPI/daemon power profile.
     SetPowerProfile(PowerProfile),
+    /// Write the battery's charge ceiling, in percent (0–100).
+    SetBatteryChargeLimit(u8),
     RefreshCatalog,
     SavePreferences(Preferences),
     /// Count one successful application launch in the palette history.
@@ -219,11 +235,13 @@ impl Backend {
         };
         let (commands, incoming) = mpsc::sync_channel(64);
         let power_epoch = Arc::new(AtomicU64::new(0));
+        let charge_epoch = Arc::new(AtomicU64::new(0));
         {
             let options = options.clone();
             let events = events.clone();
             let alive = alive.clone();
             let power_epoch = power_epoch.clone();
+            let charge_epoch = charge_epoch.clone();
             thread::Builder::new()
                 .name("clarion-shell-commands".into())
                 .spawn(move || {
@@ -245,9 +263,14 @@ impl Backend {
                             Err(mpsc::RecvTimeoutError::Timeout) => continue,
                             Err(_) => break,
                         };
-                        if let Err(error) =
-                            perform(command, &options, &events, &alive, &power_epoch)
-                        {
+                        if let Err(error) = perform(
+                            command,
+                            &options,
+                            &events,
+                            &alive,
+                            &power_epoch,
+                            &charge_epoch,
+                        ) {
                             emit(
                                 &events,
                                 Event::Error(format!("操作未完成：{error:#}")),
@@ -269,9 +292,10 @@ impl Backend {
             let events = events.clone();
             let alive = alive.clone();
             let power_epoch = power_epoch.clone();
+            let charge_epoch = charge_epoch.clone();
             thread::Builder::new()
                 .name("clarion-shell-system".into())
-                .spawn(move || system_worker(options, events, alive, power_epoch))?;
+                .spawn(move || system_worker(options, events, alive, power_epoch, charge_epoch))?;
         }
         Ok((
             Self {
@@ -615,6 +639,7 @@ fn perform(
     events: &Sender<Event>,
     alive: &AtomicBool,
     power_epoch: &AtomicU64,
+    charge_epoch: &AtomicU64,
 ) -> Result<()> {
     if options.preview
         && !matches!(
@@ -784,6 +809,21 @@ fn perform(
                     settled: true,
                     epoch,
                 },
+                alive,
+            );
+            result?;
+        }
+        Command::SetBatteryChargeLimit(limit) => {
+            let result =
+                set_battery_charge_limit(Path::new("/sys/class/power_supply"), limit.min(100));
+            // Stamp the read-back after the write finished: a poll that began
+            // before this point carries an older stamp and cannot paint the
+            // old ceiling back over it.
+            let epoch = charge_epoch.fetch_add(1, Ordering::SeqCst) + 1;
+            let limit = battery_snapshot(Path::new("/sys/class/power_supply")).charge_limit;
+            emit(
+                events,
+                Event::BatteryChargeLimit { limit, epoch },
                 alive,
             );
             result?;
@@ -1099,6 +1139,7 @@ fn system_worker(
     events: Sender<Event>,
     alive: Arc<AtomicBool>,
     power_epoch: Arc<AtomicU64>,
+    charge_epoch: Arc<AtomicU64>,
 ) {
     let mut hardware = SystemSnapshot::default();
     let mut hardware_due = Instant::now();
@@ -1107,6 +1148,9 @@ fn system_worker(
             // Stamp the poll before it reads anything. A switch that finishes
             // while this pass is running bumps the epoch past it.
             let poll_epoch = power_epoch.load(Ordering::SeqCst);
+            // The charge-limit poll takes a fresh stamp: a write's read-back
+            // that completes later owns a newer one and wins.
+            let poll_charge_epoch = charge_epoch.fetch_add(1, Ordering::SeqCst) + 1;
             hardware.volume = None;
             hardware.muted = false;
             hardware.brightness = None;
@@ -1150,6 +1194,16 @@ fn system_worker(
                     profiles,
                     settled: false,
                     epoch: poll_epoch,
+                },
+                &alive,
+            );
+            // The charge ceiling has its own event so the one-second heartbeat
+            // can never overwrite a slider read-back with a stale sample.
+            emit(
+                &events,
+                Event::BatteryChargeLimit {
+                    limit: battery.charge_limit,
+                    epoch: poll_charge_epoch,
                 },
                 &alive,
             );
@@ -1233,6 +1287,9 @@ fn battery_snapshot(root: &Path) -> BatterySnapshot {
             continue;
         }
         present = true;
+        if snapshot.charge_limit.is_none() {
+            snapshot.charge_limit = battery_charge_limit(&path);
+        }
         let number = |key: &str| {
             fs::read_to_string(path.join(key))
                 .ok()
@@ -1289,6 +1346,78 @@ fn battery_snapshot(root: &Path) -> BatterySnapshot {
         snapshot.health = Some(healths.iter().sum::<f64>() / healths.len() as f64);
     }
     snapshot
+}
+
+/// End-of-charge attributes drivers expose. Newer kernels use
+/// `charge_control_end_threshold`; older thinkpad_acpi packs use
+/// `charge_stop_threshold`.
+const CHARGE_LIMIT_ATTRS: [&str; 2] = ["charge_control_end_threshold", "charge_stop_threshold"];
+
+/// The current end threshold of one battery, but only when the attribute is
+/// writable by this process. A driver that exposes the number but not the
+/// permission is not adjustable from the shell, so it reads as unsupported.
+fn battery_charge_limit(dir: &Path) -> Option<f64> {
+    for attr in CHARGE_LIMIT_ATTRS {
+        let path = dir.join(attr);
+        if OpenOptions::new().write(true).open(&path).is_err() {
+            continue;
+        }
+        if let Some(value) = fs::read_to_string(&path)
+            .ok()
+            .and_then(|value| value.trim().parse::<u8>().ok())
+            .filter(|value| *value <= 100)
+        {
+            return Some(f64::from(value) / 100.);
+        }
+    }
+    None
+}
+
+/// Write the end threshold to the first battery that exposes a writable
+/// attribute. The caller re-reads the value afterwards so the popup shows what
+/// the firmware actually kept.
+fn set_battery_charge_limit(root: &Path, limit: u8) -> Result<()> {
+    let Ok(entries) = fs::read_dir(root) else {
+        bail!("当前系统不支持电池充电阈值调节");
+    };
+    let mut last_error = None;
+    for entry in entries.flatten().take(32) {
+        let dir = entry.path();
+        let battery =
+            fs::read_to_string(dir.join("type")).is_ok_and(|kind| kind.trim() == "Battery");
+        if !battery {
+            continue;
+        }
+        // Match `battery_snapshot`: an absent pack and a HID/pen battery are
+        // not the system battery, so never write their ceiling.
+        let present = fs::read_to_string(dir.join("present"))
+            .ok()
+            .and_then(|present| present.trim().parse::<u8>().ok());
+        if present == Some(0) {
+            continue;
+        }
+        let peripheral =
+            fs::read_to_string(dir.join("scope")).is_ok_and(|scope| scope.trim() == "Device");
+        if peripheral {
+            continue;
+        }
+        for attr in CHARGE_LIMIT_ATTRS {
+            let path = dir.join(attr);
+            if !path.exists() {
+                continue;
+            }
+            match fs::write(&path, format!("{limit}\n")) {
+                Ok(()) => return Ok(()),
+                Err(error) => last_error = Some((path, error)),
+            }
+        }
+    }
+    match last_error {
+        Some((path, error)) => {
+            Err(error).with_context(|| format!("无法写入 {}", path.display()))
+        }
+        None => bail!("当前系统不支持电池充电阈值调节"),
+    }
 }
 
 fn wait_alive(alive: &AtomicBool, duration: Duration) {
@@ -1550,6 +1679,72 @@ mod tests {
         assert_eq!(snapshot.health, None);
     }
     #[test]
+    fn battery_snapshot_reads_a_writable_charge_ceiling() {
+        let directory = tempfile::tempdir().unwrap();
+        let battery = directory.path().join("BAT0");
+        fs::create_dir_all(&battery).unwrap();
+        for (file, value) in [
+            ("type", "Battery\n"),
+            ("present", "1\n"),
+            ("capacity", "60\n"),
+            ("status", "Charging\n"),
+            ("charge_control_end_threshold", "80\n"),
+        ] {
+            fs::write(battery.join(file), value).unwrap();
+        }
+        let snapshot = battery_snapshot(directory.path());
+        assert_eq!(
+            snapshot.charge_limit,
+            Some(0.8),
+            "the writable end threshold is the charge ceiling"
+        );
+
+        // Writing through the helper moves the ceiling, and the next poll sees
+        // exactly what the firmware kept.
+        set_battery_charge_limit(directory.path(), 65).unwrap();
+        assert_eq!(
+            fs::read_to_string(battery.join("charge_control_end_threshold"))
+                .unwrap()
+                .trim(),
+            "65"
+        );
+        assert_eq!(battery_snapshot(directory.path()).charge_limit, Some(0.65));
+    }
+
+    #[test]
+    fn battery_without_a_threshold_reads_as_unsupported() {
+        let directory = tempfile::tempdir().unwrap();
+        let battery = directory.path().join("BAT0");
+        fs::create_dir_all(&battery).unwrap();
+        for (file, value) in [
+            ("type", "Battery\n"),
+            ("present", "1\n"),
+            ("capacity", "60\n"),
+            ("status", "Charging\n"),
+        ] {
+            fs::write(battery.join(file), value).unwrap();
+        }
+        // A peripheral battery may expose its own threshold; it must never be
+        // mistaken for the system pack.
+        let pen = directory.path().join("hid-pen-battery");
+        fs::create_dir_all(&pen).unwrap();
+        for (file, value) in [
+            ("type", "Battery\n"),
+            ("present", "1\n"),
+            ("capacity", "20\n"),
+            ("scope", "Device\n"),
+            ("charge_control_end_threshold", "70\n"),
+        ] {
+            fs::write(pen.join(file), value).unwrap();
+        }
+        assert_eq!(battery_snapshot(directory.path()).charge_limit, None);
+        assert!(
+            set_battery_charge_limit(directory.path(), 80).is_err(),
+            "no writable attribute means no adjustable ceiling"
+        );
+    }
+
+    #[test]
     fn new_generation_never_retains_previous_windows_or_outputs() {
         let mut state = EventStreamState::default();
         state.apply(clarion_ipc::Event::KeyboardLayoutsChanged {
@@ -1711,12 +1906,14 @@ mod tests {
         let (tx, _) = async_channel::bounded(8);
         let alive = AtomicBool::new(true);
         let power_epoch = AtomicU64::new(0);
+        let charge_epoch = AtomicU64::new(0);
         assert!(perform(
             Command::SetVolume(f64::NAN),
             &options,
             &tx,
             &alive,
-            &power_epoch
+            &power_epoch,
+            &charge_epoch
         )
         .is_err());
         assert!(perform(
@@ -1727,7 +1924,8 @@ mod tests {
             &options,
             &tx,
             &alive,
-            &power_epoch
+            &power_epoch,
+            &charge_epoch
         )
         .is_err());
         let before = Instant::now();
@@ -1784,12 +1982,14 @@ mod tests {
         let (tx, _) = async_channel::bounded(8);
         let alive = AtomicBool::new(true);
         let power_epoch = AtomicU64::new(0);
+        let charge_epoch = AtomicU64::new(0);
         assert!(perform(
             Command::Action(Action::CloseWindow { id: Some(123) }),
             &options,
             &tx,
             &alive,
-            &power_epoch
+            &power_epoch,
+            &charge_epoch
         )
         .is_err());
         assert!(

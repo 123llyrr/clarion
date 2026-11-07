@@ -21,6 +21,8 @@ pub(crate) fn test_host(
         system: Default::default(),
         power_profile_pending: None,
         power_profile_epoch: 0,
+        battery_charge_limit: None,
+        battery_charge_epoch: 0,
         catalog: Arc::new(catalog),
         launch_history: Arc::new(Default::default()),
         file_hits: Arc::default(),

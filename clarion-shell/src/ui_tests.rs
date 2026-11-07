@@ -452,7 +452,7 @@ fn the_battery_popup_carries_the_summary_and_every_power_profile(cx: &mut TestAp
         host.changed(cx);
     });
     visual.update(|window, _| {
-        window.resize(size(px(344.), px(252.)));
+        window.resize(size(px(344.), px(348.)));
         window.refresh();
     });
     visual.run_until_parked();
@@ -464,6 +464,7 @@ fn the_battery_popup_carries_the_summary_and_every_power_profile(cx: &mut TestAp
         "battery-profile-low-power",
         "battery-profile-balanced",
         "battery-profile-performance",
+        "battery-charge-limit",
     ] {
         assert!(
             visual.debug_bounds(id).is_some(),
@@ -474,6 +475,9 @@ fn the_battery_popup_carries_the_summary_and_every_power_profile(cx: &mut TestAp
     // with its state subtitle, and the two aligned metric rows.
     let summary = visual.debug_bounds("battery-summary").expect("summary");
     let modes = visual.debug_bounds("battery-modes").expect("modes");
+    let charge = visual
+        .debug_bounds("battery-charge-limit")
+        .expect("charge limit card");
     let health = visual.debug_bounds("battery-health").expect("health");
     let source = visual.debug_bounds("battery-source").expect("source");
     assert!(
@@ -507,6 +511,33 @@ fn the_battery_popup_carries_the_summary_and_every_power_profile(cx: &mut TestAp
         "the whole sheet fits without a scroll: {}",
         f32::from(modes.bottom())
     );
+    assert!(
+        modes.bottom() <= charge.top(),
+        "the charge-limit card sits below the profile card: {modes:?} {charge:?}"
+    );
+    assert!(
+        charge.bottom() <= summary.top() + px(320.01),
+        "the charge-limit card still fits inside the taller sheet: {}",
+        f32::from(charge.bottom())
+    );
+    assert!(
+        visual
+            .debug_bounds("battery-charge-limit-value-100%")
+            .is_some(),
+        "an unsupported platform still shows the 100% default"
+    );
+    assert!(
+        visual
+            .debug_bounds("battery-charge-limit-unavailable")
+            .is_some(),
+        "an unsupported platform says the ceiling is unavailable"
+    );
+    assert!(
+        visual
+            .debug_bounds("slider-battery-charge-limit")
+            .is_none(),
+        "no slider is offered when the platform cannot write a threshold"
+    );
 }
 
 #[gpui::test]
@@ -522,7 +553,7 @@ fn clicking_a_power_profile_waits_for_confirmation_and_sends_the_switch(
         host.changed(cx);
     });
     visual.update(|window, _| {
-        window.resize(size(px(344.), px(252.)));
+        window.resize(size(px(344.), px(348.)));
         window.refresh();
     });
     visual.run_until_parked();
@@ -595,6 +626,75 @@ fn clicking_a_power_profile_waits_for_confirmation_and_sends_the_switch(
             .is_none(),
         "the pending ring gives way to the completion burst"
     );
+}
+
+#[gpui::test]
+fn a_supported_charge_ceiling_paints_the_slider_and_writes_the_threshold(
+    cx: &mut TestAppContext,
+) {
+    let (_fixture, host, view, mut visual, _window) = panel(cx, Panel::Battery);
+    host.update(cx, |host, cx| {
+        host.system.battery = Some(0.42);
+        host.system.battery_status = crate::backend::BatteryStatus::Charging;
+        host.backend_event(
+            backend::Event::BatteryChargeLimit {
+                limit: Some(0.8),
+                epoch: 1,
+            },
+            cx,
+        );
+        host.changed(cx);
+    });
+    visual.update(|window, _| {
+        window.resize(size(px(344.), px(348.)));
+        window.refresh();
+    });
+    visual.run_until_parked();
+    assert!(
+        visual.debug_bounds("battery-charge-limit").is_some(),
+        "the charge-limit card is painted on a supported platform"
+    );
+    assert!(
+        visual
+            .debug_bounds("battery-charge-limit-value-80%")
+            .is_some(),
+        "the card names the firmware's current ceiling"
+    );
+    assert!(
+        visual
+            .debug_bounds("battery-charge-limit-unavailable")
+            .is_none(),
+        "a writable threshold is not labelled unavailable"
+    );
+    let slider = visual
+        .debug_bounds("slider-battery-charge-limit")
+        .expect("the adjustable charge slider");
+    let commands = cx.update(|cx| testing::capture_backend(&host, cx));
+    // The track maps the middle of its bounds to 50% of the 50–100 span, so a
+    // centre click asks the firmware for 75%.
+    visual.simulate_click(slider.center(), Modifiers::default());
+    visual.run_until_parked();
+    let mut sent = Vec::new();
+    while let Ok(command) = commands.try_recv() {
+        sent.push(command);
+    }
+    assert!(
+        matches!(
+            sent.as_slice(),
+            [backend::Command::SetBatteryChargeLimit(75)]
+        ),
+        "the slider must write exactly the clicked ceiling: {sent:?}"
+    );
+    host.read_with(cx, |host, _| {
+        assert_eq!(host.panel, Some(Panel::Battery));
+    });
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.state.battery_charge_limit,
+            Some(0.75),
+            "the thumb moves at once while the worker confirms"
+        );
+    });
 }
 
 #[gpui::test]

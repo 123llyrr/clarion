@@ -375,7 +375,7 @@ impl ShellView {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn control_slider(
+    pub(super) fn control_slider(
         &self,
         id: &'static str,
         label: &'static str,
@@ -497,15 +497,15 @@ impl ShellView {
 }
 
 #[derive(IntoElement)]
-struct ControlSlider {
-    key: SharedString,
-    selector: String,
-    host: Entity<Host>,
-    action: std::rc::Rc<dyn Fn(f64) -> Action>,
-    value: f64,
-    dark: bool,
-    p: Palette,
-    icon: AnyElement,
+pub(super) struct ControlSlider {
+    pub(super) key: SharedString,
+    pub(super) selector: String,
+    pub(super) host: Entity<Host>,
+    pub(super) action: std::rc::Rc<dyn Fn(f64) -> Action>,
+    pub(super) value: f64,
+    pub(super) dark: bool,
+    pub(super) p: Palette,
+    pub(super) icon: AnyElement,
 }
 
 #[allow(clippy::too_many_arguments)]
