@@ -151,6 +151,11 @@ pub enum Action {
     /// Run the highlighted row of the palette's action card, wherever the
     /// keyboard focus sits.
     SpotlightMenuActivate,
+    /// Submit the password typed into the polkit dialog. The host attaches the
+    /// current cookie so a stale surface cannot answer a new request.
+    AuthSubmit(String),
+    /// Dismiss and cancel the current polkit request.
+    AuthCancel,
     MagnificationScale(f64),
     AnimateOpeningApplications(bool),
     ReduceMotion(bool),
@@ -278,6 +283,8 @@ pub struct ViewState {
     pub panel_exit: bool,
     /// The palette's `Ctrl+B` card is up on its own surface.
     pub spotlight_menu_open: bool,
+    /// The polkit authentication dialog, if one is waiting for the user.
+    pub auth: Option<services::AuthView>,
     dock_apps: Vec<DockApp>,
 }
 impl ViewState {
@@ -375,6 +382,12 @@ pub struct Host {
     /// compositor can frost it.
     pub(crate) spotlight_menu: Option<WindowHandle<ShellView>>,
     pub(crate) spotlight_menu_opening: bool,
+    /// The polkit dialog is its own exclusive overlay, so a pending launcher
+    /// or settings panel is not discarded by `Host::open`.
+    pub(crate) auth: Option<services::AuthView>,
+    pub(crate) auth_window: Option<WindowHandle<ShellView>>,
+    /// The window that held the keyboard before the modal dialog appeared.
+    auth_return: Option<WindowHandle<ShellView>>,
     /// The monitor whose surface dispatched the action currently being
     /// applied. A bar or Dock click can land on a monitor that does not hold
     /// keyboard focus; its popup still belongs to that monitor, not to the
@@ -472,6 +485,9 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 menu_opening: false,
                 spotlight_menu: None,
                 spotlight_menu_opening: false,
+                auth: None,
+                auth_window: None,
+                auth_return: None,
                 dispatch_output: None,
                 exiting: None,
                 exit_generation: 0,
@@ -627,6 +643,7 @@ impl Host {
             anchored: self.anchored,
             panel_exit: self.panel_exit,
             spotlight_menu_open: self.spotlight_menu.is_some(),
+            auth: self.auth.clone(),
             dock_apps: self.dock_apps(),
         }
     }
@@ -851,6 +868,69 @@ impl Host {
                     self.tray_menu = self.remap_expanded(items);
                 }
             }
+            services::Event::AuthRequest(request) => {
+                if self.auth.is_none() {
+                    let prompt = String::new();
+                    self.auth = Some(services::AuthView {
+                        request,
+                        prompt,
+                        echo: false,
+                        error: None,
+                        info: None,
+                        submitting: false,
+                    });
+                    self.show_auth(cx);
+                }
+            }
+            services::Event::AuthPrompt {
+                cookie,
+                text,
+                echo,
+            } => {
+                if let Some(auth) = self.auth.as_mut().filter(|a| a.request.cookie == cookie) {
+                    auth.prompt = text;
+                    auth.echo = echo;
+                    auth.submitting = false;
+                }
+                self.changed(cx);
+            }
+            services::Event::AuthInfo { cookie, text } => {
+                if let Some(auth) = self.auth.as_mut().filter(|a| a.request.cookie == cookie) {
+                    auth.info = Some(text);
+                }
+                self.changed(cx);
+            }
+            services::Event::AuthError { cookie, text } => {
+                if let Some(auth) = self.auth.as_mut().filter(|a| a.request.cookie == cookie) {
+                    auth.error = Some(text);
+                    auth.submitting = false;
+                }
+                self.changed(cx);
+            }
+            services::Event::AuthFailed { cookie, text } => {
+                if let Some(auth) = self.auth.as_mut().filter(|a| a.request.cookie == cookie) {
+                    auth.error = Some(text);
+                    auth.submitting = false;
+                }
+                self.changed(cx);
+            }
+            services::Event::AuthClosed { cookie } => {
+                if self
+                    .auth
+                    .as_ref()
+                    .is_some_and(|auth| auth.request.cookie == cookie)
+                {
+                    self.dismiss_auth(cx);
+                }
+            }
+            services::Event::AuthStatus(status) => {
+                // P1 keeps the diagnostic quiet; the preferences surface will
+                // show it in P2. A conflict is the usual reason a third-party
+                // agent still owns the dialogs.
+                if let Some(reason) = status.reason {
+                    eprintln!("polkit: {reason}");
+                }
+            }
             services::Event::Error(error) => self.show_error(error, cx),
         }
         self.changed(cx);
@@ -970,6 +1050,15 @@ impl Host {
             // Keep the card's host view current (e.g. a clipboard read-back)
             // and let its trigger state settle after the window lands.
             let _ = menu.update(cx, |v, _, cx| {
+                v.state = state.clone();
+                cx.notify()
+            });
+        }
+        if let Some(window) = self.auth_window {
+            // Prompts, PAM errors and the submitting flag all live in the
+            // snapshot; the dialog repaints from the same state as every other
+            // surface.
+            let _ = window.update(cx, |v, _, cx| {
                 v.state = state.clone();
                 cx.notify()
             });
@@ -1136,6 +1225,28 @@ impl Host {
                     .unwrap_or(0);
                 self.run_spotlight_action(index, cx);
                 self.close_spotlight_menu(cx);
+            }
+            Action::AuthSubmit(secret) => {
+                let Some(auth) = self.auth.as_mut() else {
+                    return;
+                };
+                if auth.submitting {
+                    return;
+                }
+                let cookie = auth.request.cookie.clone();
+                auth.submitting = true;
+                auth.error = None;
+                self.service
+                    .send(services::Command::AuthSubmit { cookie, secret });
+            }
+            Action::AuthCancel => {
+                let Some(auth) = self.auth.as_ref() else {
+                    return;
+                };
+                let cookie = auth.request.cookie.clone();
+                self.service
+                    .send(services::Command::AuthCancel { cookie });
+                self.dismiss_auth(cx);
             }
             Action::AnchoredPanel(panel, x) => {
                 self.anchored = Some(x);
@@ -1895,6 +2006,102 @@ impl Host {
             }
             None => false,
         }
+    }
+    /// Present the polkit dialog as its own exclusive overlay. This is a modal
+    /// independent of `popup`: a permission prompt must not discard the
+    /// launcher or settings panel the user was working in.
+    fn show_auth(&mut self, cx: &mut Context<Self>) {
+        if self.auth_window.is_some() {
+            self.changed(cx);
+            return;
+        }
+        let output = self.active_output();
+        let view = self.outputs.get(&output);
+        let display = view.map(|v| v.display);
+        let (w, h) = view.map(|v| (v.width, v.height)).unwrap_or((1200., 800.));
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(w), px(h)));
+        let options = window_options(
+            "clarion-auth",
+            display,
+            bounds,
+            self.preview,
+            LayerShellAnchor::ALL,
+            -1,
+            LayerShellKeyboardInteractivity::Exclusive,
+            LayerShellMargins::default(),
+            LayerShellLayer::Overlay,
+        );
+        let host = cx.entity();
+        let state = Arc::new(self.snapshot());
+        self.auth_return = self.spotlight_menu.or(self.menu).or(self.popup);
+        let opened = cx.open_window(options, move |window, cx| {
+            let close_host = host.downgrade();
+            let view = cx.new(|cx| ShellView::new_auth(host, output, state, cx));
+            view.read(cx).focus(window, cx);
+            // A platform close (preview mode or a compositor taking the
+            // surface away) must cancel the pending request; otherwise the
+            // service keeps it at the head of the queue forever. Leave the
+            // close callback before touching the Host, as the panel window
+            // does, so the window lease is not held while it is replaced.
+            window.on_window_should_close(cx, move |_, cx| {
+                let close_host = close_host.clone();
+                cx.spawn(async move |cx| {
+                    let _ = close_host.update(cx, |host, cx| host.auth_window_closed(cx));
+                })
+                .detach();
+                false
+            });
+            view
+        });
+        match opened {
+            Ok(window) => {
+                self.auth_window = Some(window);
+                // Focus again after the platform activation: some backends
+                // reset the in-window focus when the surface takes the
+                // keyboard, which would leave the password field deaf to keys.
+                let _ = window.update(cx, |view, window, cx| {
+                    window.activate_window();
+                    view.focus(window, cx);
+                });
+                self.changed(cx);
+            }
+            Err(error) => {
+                self.auth = None;
+                self.auth_return = None;
+                self.show_error(format!("无法打开认证窗口：{error}"), cx);
+            }
+        }
+    }
+    /// The platform took the dialog's surface away without the user answering.
+    /// Cancel the request so the authority is not left waiting and a new
+    /// prompt can take the queue.
+    fn auth_window_closed(&mut self, cx: &mut Context<Self>) {
+        self.auth_window = None;
+        self.auth_return = None;
+        if let Some(auth) = self.auth.take() {
+            self.service.send(services::Command::AuthCancel {
+                cookie: auth.request.cookie,
+            });
+            self.changed(cx);
+        }
+    }
+    /// Fold the dialog away and hand the keyboard back to whatever owned it.
+    fn dismiss_auth(&mut self, cx: &mut Context<Self>) -> bool {
+        self.auth = None;
+        let removed = match self.auth_window.take() {
+            Some(window) => {
+                let _ = window.update(cx, |_, window, _| window.remove_window());
+                true
+            }
+            None => false,
+        };
+        if let Some(previous) = self.auth_return.take() {
+            let _ = previous.update(cx, |_, window, _| window.activate_window());
+        }
+        if removed {
+            self.changed(cx);
+        }
+        removed
     }
     /// Open the palette's `Ctrl+B` card as a frosted surface over the sheet.
     /// The card's list is derived from the sheet's snapshot, so it answers the

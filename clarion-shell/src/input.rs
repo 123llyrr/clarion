@@ -55,6 +55,12 @@ pub struct TextInput {
     /// Draw no field of its own, because the surface around it is the control
     /// (the fullscreen launcher's search capsule). Keeps the compact metrics.
     boxless: bool,
+    /// Mask every non-empty character on screen. The real text still drives
+    /// editing and IME; copy and cut are disabled while this is set.
+    secure: bool,
+    /// Override the compact/standard type size. Password fields use a larger
+    /// face so the mask glyphs are legible.
+    font_size: Option<f32>,
 }
 
 pub struct QueryChanged(pub String);
@@ -130,6 +136,31 @@ impl TextInput {
         self.light = !dark;
         self
     }
+    /// Mask the value like a password field. The surface still owns the real
+    /// text for PAM and IME.
+    pub fn with_secure(mut self) -> Self {
+        self.secure = true;
+        self
+    }
+    /// Use a specific type size instead of the compact/standard metric.
+    pub fn with_font_size(mut self, size: f32) -> Self {
+        self.font_size = Some(size);
+        self
+    }
+    /// The real value, not the masked display. Callers must treat it as a
+    /// secret: never log it or put it on the clipboard.
+    pub fn text(&self) -> String {
+        self.content.to_string()
+    }
+    /// What the last frame actually shaped. Secure fields report bullets, so a
+    /// UI test can prove the mask reached the renderer without exposing the
+    /// secret.
+    #[cfg(test)]
+    pub(crate) fn shaped_text(&self) -> Option<String> {
+        self.last_layout
+            .as_ref()
+            .map(|line| line.text.to_string())
+    }
     /// Keep the text ink in step with the surface's light or dark theme.
     pub fn set_dark(&mut self, dark: bool, cx: &mut Context<Self>) {
         let light = !dark;
@@ -159,6 +190,8 @@ impl TextInput {
             light: false,
             bare: false,
             boxless: false,
+            secure: false,
+            font_size: None,
         }
     }
 
@@ -284,6 +317,9 @@ impl TextInput {
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        if self.secure {
+            return;
+        }
         if !self.selected_range.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(
                 self.content[self.selected_range.clone()].to_string(),
@@ -291,11 +327,32 @@ impl TextInput {
         }
     }
     fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
+        if self.secure {
+            return;
+        }
         if !self.selected_range.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(
                 self.content[self.selected_range.clone()].to_string(),
             ));
             self.replace_text_in_range(None, "", window, cx)
+        }
+    }
+
+    /// What the element actually shapes. Secure fields substitute one bullet
+    /// per character; offsets are mapped separately so the caret still tracks
+    /// the real text.
+    fn display_text(&self) -> SharedString {
+        if self.secure {
+            masked_text(&self.content).into()
+        } else {
+            self.content.clone()
+        }
+    }
+    fn display_offset(&self, offset: usize) -> usize {
+        if self.secure {
+            masked_offset(&self.content, offset)
+        } else {
+            offset
         }
     }
 
@@ -322,7 +379,7 @@ impl TextInput {
         else {
             return 0;
         };
-        if line.text != self.content {
+        if line.text != self.display_text() {
             return self.cursor_offset();
         }
         if position.y < bounds.top() {
@@ -331,7 +388,12 @@ impl TextInput {
         if position.y > bounds.bottom() {
             return self.content.len();
         }
-        line.closest_index_for_x(position.x - bounds.left() + self.horizontal_offset)
+        let index = line.closest_index_for_x(position.x - bounds.left() + self.horizontal_offset);
+        if self.secure {
+            content_offset(&self.content, index)
+        } else {
+            index
+        }
     }
 
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
@@ -474,13 +536,15 @@ impl EntityInputHandler for TextInput {
         let range = self.range_from_utf16(&range_utf16);
         let bounds = self.last_bounds.unwrap_or(bounds);
         // text-input-v3 asks for coordinates immediately after changing preedit,
-        // before a repaint can refresh last_layout. Shape current content using
-        // the field's painted font instead of returning no cursor rectangle.
-        let fresh_layout = if last_layout.text != self.content {
+        // before a repaint can refresh last_layout. Shape current display text
+        // using the field's painted font instead of returning no cursor
+        // rectangle.
+        let display_text = self.display_text();
+        let fresh_layout = if last_layout.text != display_text {
             let mut run = self.last_text_run.clone()?;
-            run.len = self.content.len();
+            run.len = display_text.len();
             Some(window.text_system().shape_line(
-                self.content.clone(),
+                display_text,
                 last_layout.font_size,
                 &[run],
                 None,
@@ -489,19 +553,22 @@ impl EntityInputHandler for TextInput {
             None
         };
         let layout = fresh_layout.as_ref().unwrap_or(last_layout);
+        let cursor = self.display_offset(self.cursor_offset());
         let horizontal_offset = visible_horizontal_offset(
             layout.width,
-            layout.x_for_index(self.cursor_offset()),
+            layout.x_for_index(cursor),
             bounds.size.width,
             self.horizontal_offset,
         );
+        let start = self.display_offset(range.start);
+        let end = self.display_offset(range.end);
         Some(Bounds::from_corners(
             point(
-                bounds.left() + layout.x_for_index(range.start) - horizontal_offset,
+                bounds.left() + layout.x_for_index(start) - horizontal_offset,
                 bounds.top(),
             ),
             point(
-                bounds.left() + layout.x_for_index(range.end) - horizontal_offset,
+                bounds.left() + layout.x_for_index(end) - horizontal_offset,
                 bounds.bottom(),
             ),
         ))
@@ -519,11 +586,15 @@ impl EntityInputHandler for TextInput {
         if self.content.is_empty() {
             return Some(0);
         }
-        if last_layout.text != self.content {
+        if last_layout.text != self.display_text() {
             return None;
         }
         let utf8_index = last_layout.index_for_x(line_point.x + self.horizontal_offset)?;
-        Some(self.offset_to_utf16(utf8_index))
+        if self.secure {
+            Some(self.offset_to_utf16(content_offset(&self.content, utf8_index)))
+        } else {
+            Some(self.offset_to_utf16(utf8_index))
+        }
     }
 }
 
@@ -596,8 +667,21 @@ impl Element for SpikeTextElement {
                     rgba(0xffffffb3).into()
                 },
             )
+        } else if input.secure {
+            (masked_text(&content).into(), style.color)
         } else {
-            (content, style.color)
+            (content.clone(), style.color)
+        };
+        let display_selection = if input.secure {
+            masked_offset(&content, selected_range.start)
+                ..masked_offset(&content, selected_range.end)
+        } else {
+            selected_range.clone()
+        };
+        let display_cursor = if input.secure {
+            masked_offset(&content, cursor)
+        } else {
+            cursor
         };
 
         let run = TextRun {
@@ -609,7 +693,14 @@ impl Element for SpikeTextElement {
             strikethrough: None,
         };
         let geometry_run = run.clone();
-        let runs = if let Some(marked_range) = input.marked_range.as_ref() {
+        let marked_range = input.marked_range.as_ref().map(|range| {
+            if input.secure {
+                masked_offset(&content, range.start)..masked_offset(&content, range.end)
+            } else {
+                range.clone()
+            }
+        });
+        let runs = if let Some(marked_range) = marked_range.as_ref() {
             vec![
                 TextRun {
                     len: marked_range.start,
@@ -641,7 +732,7 @@ impl Element for SpikeTextElement {
             .text_system()
             .shape_line(display_text, font_size, &runs, None);
 
-        let cursor_pos = line.x_for_index(cursor);
+        let cursor_pos = line.x_for_index(display_cursor);
         let horizontal_offset = visible_horizontal_offset(
             line.width,
             cursor_pos,
@@ -665,11 +756,11 @@ impl Element for SpikeTextElement {
                 Some(fill(
                     Bounds::from_corners(
                         point(
-                            text_left + line.x_for_index(selected_range.start),
+                            text_left + line.x_for_index(display_selection.start),
                             bounds.top(),
                         ),
                         point(
-                            text_left + line.x_for_index(selected_range.end),
+                            text_left + line.x_for_index(display_selection.end),
                             bounds.bottom(),
                         ),
                     ),
@@ -789,28 +880,26 @@ impl Render for TextInput {
             // The bare style is a headline, not a form control: it draws no
             // box and sets its own larger type (the launcher sheet's title
             // line).
-            .line_height(px(if self.bare {
-                38.
-            } else if self.compact {
-                18.
-            } else {
-                30.
+            .line_height(px(match self.font_size {
+                Some(size) => size + 5.,
+                None if self.bare => 38.,
+                None if self.compact => 18.,
+                None => 30.,
             }))
-            .text_size(px(if self.bare {
+            .text_size(px(self.font_size.unwrap_or(if self.bare {
                 22.
             } else if self.compact {
                 13.
             } else {
                 18.
-            }))
+            })))
             .child(
                 div()
-                    .h(px(if self.bare {
-                        40.
-                    } else if self.compact {
-                        28.
-                    } else {
-                        54.
+                    .h(px(match self.font_size {
+                        Some(size) => size + 11.,
+                        None if self.bare => 40.,
+                        None if self.compact => 28.,
+                        None => 54.,
                     }))
                     .w_full()
                     .px(px(if self.bare {
@@ -820,12 +909,11 @@ impl Render for TextInput {
                     } else {
                         18.
                     }))
-                    .py(px(if self.bare {
-                        0.
-                    } else if self.compact {
-                        5.
-                    } else {
-                        12.
+                    .py(px(match self.font_size {
+                        Some(_) => 2.,
+                        None if self.bare => 0.,
+                        None if self.compact => 5.,
+                        None => 12.,
                     }))
                     .child(SpikeTextElement { input: cx.entity() }),
             )
@@ -854,6 +942,45 @@ fn visible_horizontal_offset(
     } else {
         offset
     }
+}
+
+// Secure fields shape the same number of glyphs as the real value but show
+// large solid dots. Offsets are mapped between the two byte spaces so the
+// caret, selection and IME rectangles stay on the real text.
+const SECURE_GLYPH: char = '●';
+
+fn masked_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for _ in text.chars() {
+        out.push(SECURE_GLYPH);
+    }
+    out
+}
+
+fn masked_offset(text: &str, offset: usize) -> usize {
+    let mut utf8 = 0;
+    let mut masked = 0;
+    for character in text.chars() {
+        if utf8 >= offset {
+            break;
+        }
+        utf8 += character.len_utf8();
+        masked += SECURE_GLYPH.len_utf8();
+    }
+    masked
+}
+
+fn content_offset(text: &str, masked: usize) -> usize {
+    let mut utf8 = 0;
+    let mut seen = 0;
+    for character in text.chars() {
+        if seen >= masked {
+            break;
+        }
+        seen += SECURE_GLYPH.len_utf8();
+        utf8 += character.len_utf8();
+    }
+    utf8
 }
 
 // Offsets at an invalid half-surrogate are rounded forward to a complete
@@ -966,5 +1093,23 @@ mod tests {
         assert_eq!(next_boundary(text, combining_end), family_end);
         assert_eq!(previous_boundary(text, family_end), combining_end);
         assert_eq!(previous_boundary(text, combining_end), 0);
+    }
+
+    #[test]
+    fn secure_masking_replaces_every_character_and_maps_offsets_back() {
+        let text = "pä😀ss";
+        assert_eq!(masked_text(text), "●●●●●");
+        // UTF-8 offsets count bytes; the masked space counts one bullet per
+        // character, so CJK and emoji must be mapped, not copied.
+        for (byte, _) in text.char_indices() {
+            assert_eq!(content_offset(text, masked_offset(text, byte)), byte);
+        }
+        assert_eq!(content_offset(text, masked_offset(text, text.len())), text.len());
+        // A caret in the middle of a codepoint rounds to a whole character.
+        let emoji = text.find('😀').unwrap();
+        assert_eq!(
+            masked_offset(text, emoji),
+            "pä".chars().count() * SECURE_GLYPH.len_utf8()
+        );
     }
 }

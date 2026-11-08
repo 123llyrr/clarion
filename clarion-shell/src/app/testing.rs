@@ -63,6 +63,9 @@ pub(crate) fn test_host(
         menu_opening: false,
         spotlight_menu: None,
         spotlight_menu_opening: false,
+        auth: None,
+        auth_window: None,
+        auth_return: None,
         dispatch_output: None,
         exiting: None,
         exit_generation: 0,
@@ -172,6 +175,20 @@ pub(crate) fn open_dock(host: &Entity<Host>, cx: &mut App) -> WindowHandle<Shell
         .values()
         .find_map(|output| output.dock)
         .expect("test Dock was not created")
+}
+
+/// Replace the live service handle with a test channel so UI tests can assert
+/// the polkit commands a dialog emits.
+/// Deliver one service event exactly like the worker thread does, so a test
+/// can drive the polkit dialog without a session or system bus.
+pub(crate) fn service_event(host: &Entity<Host>, event: services::Event, cx: &mut App) {
+    host.update(cx, |host, cx| host.service_event(event, cx));
+}
+
+pub(crate) fn auth_window(host: &Entity<Host>, cx: &App) -> WindowHandle<ShellView> {
+    host.read(cx)
+        .auth_window
+        .expect("the auth dialog was not created")
 }
 
 pub(crate) fn capture_backend(

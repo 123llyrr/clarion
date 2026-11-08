@@ -26,6 +26,7 @@ pub(crate) mod macos_dock;
 mod macos_launchpad;
 mod macos_notifications;
 mod macos_preferences;
+mod polkit;
 mod power;
 mod spotlight;
 pub(crate) use spotlight::SpotlightMenuSnapshot;
@@ -96,6 +97,9 @@ pub enum Surface {
     /// The `Ctrl+B` action card, also on its own surface for the same reason:
     /// inside the sheet it would only tint the rows beneath it.
     SpotlightMenu,
+    /// The modal polkit authentication dialog. It is independent of `Panel`
+    /// so a pending permission prompt never discards the user's open panel.
+    Auth,
     Toast(u32),
     DockEdge,
 }
@@ -626,6 +630,26 @@ impl ShellView {
         view.spotlight_menu_selection = 0;
         view
     }
+    /// The polkit dialog's own surface. Its field is a secure capsule, so the
+    /// password is never shaped as itself and copy/cut are disabled.
+    pub(crate) fn new_auth(
+        host: Entity<Host>,
+        output: String,
+        state: Arc<ViewState>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let dark = state.dark();
+        let input = cx.new(|cx| {
+            TextInput::new(cx)
+                .with_capsule(dark)
+                .with_secure()
+                .with_font_size(17.)
+                .with_placeholder("密码")
+        });
+        let mut view = Self::new(host, Surface::Auth, output, state, cx);
+        view.input = input;
+        view
+    }
     /// Host-side entry for a row clicked on the card's own surface: run it on
     /// the sheet, whose palette owns the live selection and results.
     pub(crate) fn run_spotlight_action(
@@ -827,13 +851,17 @@ impl ShellView {
                 let panel = this.state.panel.clone();
                 cx.defer(move |cx| {
                     // A launcher's own menu surface sits over it and takes the
-                    // keyboard; that is not the user leaving the launcher.
+                    // keyboard; that is not the user leaving the launcher. The
+                    // same is true of the polkit dialog, which is modal over
+                    // whatever panel was open when a permission request arrived.
                     let menu_up = {
                         let host = host.read(cx);
                         host.menu.is_some()
                             || host.menu_opening
                             || host.spotlight_menu.is_some()
                             || host.spotlight_menu_opening
+                            || host.auth.is_some()
+                            || host.auth_window.is_some()
                     };
                     if menu_up {
                         return;
@@ -852,15 +880,32 @@ impl ShellView {
         .detach();
     }
     pub fn focus(&self, window: &mut Window, cx: &App) {
-        if matches!(
+        let palette_field = matches!(
             self.state.panel,
             Some(Panel::Apps | Panel::Spotlight | Panel::Recent)
-        ) && !matches!(self.kind, Surface::LauncherMenu | Surface::SpotlightMenu)
-        {
+        ) && !matches!(self.kind, Surface::LauncherMenu | Surface::SpotlightMenu | Surface::Auth);
+        if palette_field || matches!(self.kind, Surface::Auth) {
             window.focus(&self.input.focus_handle(cx));
         } else {
             window.focus(&self.focus);
         }
+    }
+    /// Submit the secure field. The host owns the request cookie, so the view
+    /// only hands over the secret and clears the field before the next frame.
+    fn auth_submit(&mut self, cx: &mut Context<Self>) {
+        let Some(auth) = self.state.auth.as_ref() else {
+            return;
+        };
+        if auth.submitting {
+            return;
+        }
+        let secret = self.input.read(cx).text();
+        if secret.is_empty() {
+            return;
+        }
+        self.input
+            .update(cx, |input, cx| input.set_text("", false, cx));
+        self.invoke(Action::AuthSubmit(secret), cx);
     }
     fn cache_images(&mut self) {
         use sha2::{Digest, Sha256};
@@ -2822,6 +2867,7 @@ impl Render for ShellView {
             Surface::Panel => self.panel(host, p, window, cx),
             Surface::LauncherMenu => self.launcher_menu_surface(host, p, width, height, cx),
             Surface::SpotlightMenu => self.spotlight_menu_surface(host, p, width, height, cx),
+            Surface::Auth => polkit::auth_surface(self, host, p, width, height, window, cx),
             Surface::Toast(id) => {
                 if let Some(item) = host.notifications.iter().find(|n| n.id == id) {
                     self.macos_toast(item, host, p, window, cx)
@@ -2887,6 +2933,30 @@ impl Render for ShellView {
                         regions
                     })
                     .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            window.set_glass_region(Some(&regions));
+            window.set_input_region(Some(&full));
+        } else if matches!(self.kind, Surface::Auth) {
+            // The dialog is semi-transparent: the compositor blurs exactly the
+            // card's rounded rectangle, while the full-output catcher keeps the
+            // surface modal. The scrim stays clear so the wallpaper and the
+            // panel behind it remain visible around the prompt.
+            let full = vec![Bounds::new(
+                point(px(0.), px(0.)),
+                size(px(width), px(height)),
+            )];
+            let regions = if p.frosted() {
+                let (card_width, card_height) = polkit::auth_card_size(host, width);
+                let mut regions =
+                    rounded_region(card_width, card_height, polkit::AUTH_RADIUS);
+                translate_regions(
+                    &mut regions,
+                    (width - card_width) / 2.,
+                    (height - card_height) / 2.,
+                );
+                regions
             } else {
                 Vec::new()
             };
@@ -3016,6 +3086,10 @@ impl Render for ShellView {
                 if this.input.read(cx).has_preedit() {
                     return;
                 }
+                if matches!(this.kind, Surface::Auth) {
+                    this.invoke(Action::AuthCancel, cx);
+                    return;
+                }
                 if this.spotlight_menu_open || this.state.spotlight_menu_open {
                     // The action card is the topmost layer; the draft and the
                     // selection underneath are untouched.
@@ -3058,6 +3132,10 @@ impl Render for ShellView {
             }))
             .on_action(cx.listener(|this, _: &Activate, _, cx| {
                 if this.input.read(cx).has_preedit() || matches!(this.kind, Surface::LauncherMenu) {
+                    return;
+                }
+                if matches!(this.kind, Surface::Auth) {
+                    this.auth_submit(cx);
                     return;
                 }
                 if this.state.panel == Some(Panel::Spotlight) {

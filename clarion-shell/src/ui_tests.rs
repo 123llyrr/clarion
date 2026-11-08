@@ -3027,3 +3027,498 @@ fn the_wallpaper_gallery_marks_the_current_image_and_clicking_applies_one(
         assert_eq!(host.current_wallpaper.as_deref(), Some(other.as_path()));
     });
 }
+
+/// One polkit request, reduced to the fields the dialog reads.
+fn auth_request(cookie: &str) -> crate::services::AuthRequest {
+    crate::services::AuthRequest {
+        cookie: cookie.to_owned(),
+        action_id: "org.freedesktop.policykit.exec".into(),
+        message: "需要认证才能继续".into(),
+        icon: Some("dialog-password-symbolic".into()),
+        app_name: Some("终端".into()),
+        app_icon: Some("utilities-terminal".into()),
+        details: vec![
+            ("polkit.caller-pid".into(), "1234".into()),
+            ("动作".into(), "org.freedesktop.policykit.exec".into()),
+        ],
+        identity: crate::services::AuthIdentity {
+            uid: 1000,
+            username: "tester".into(),
+        },
+        queued: 0,
+    }
+}
+
+/// Open the launcher first, then deliver a polkit request the way the service
+/// thread does. The dialog is a second window over it.
+fn open_auth_with(
+    cx: &mut TestAppContext,
+    request: crate::services::AuthRequest,
+) -> (
+    Fixture,
+    Entity<Host>,
+    VisualTestContext,
+    WindowHandle<ShellView>,
+) {
+    let (fixture, host, _view, _visual, _window) = panel(cx, Panel::Spotlight);
+    cx.update(|cx| {
+        testing::service_event(
+            &host,
+            crate::services::Event::AuthRequest(request),
+            cx,
+        )
+    });
+    let window = cx.update(|cx| testing::auth_window(&host, cx));
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    visual.update(|window, _| {
+        window.activate_window();
+        window.refresh();
+    });
+    visual.run_until_parked();
+    (fixture, host, visual, window)
+}
+
+fn open_auth(
+    cx: &mut TestAppContext,
+) -> (
+    Fixture,
+    Entity<Host>,
+    VisualTestContext,
+    WindowHandle<ShellView>,
+) {
+    open_auth_with(cx, auth_request("cookie-1"))
+}
+
+fn card_height(visual: &mut VisualTestContext) -> f32 {
+    visual
+        .debug_bounds("auth-card")
+        .expect("the auth card is painted")
+        .size
+        .height
+        .into()
+}
+
+fn assert_card_matches_glass(host: &Entity<Host>, visual: &mut VisualTestContext, cx: &mut TestAppContext) {
+    let card = visual.debug_bounds("auth-card").expect("auth card");
+    let viewport_width = visual.update(|window, _| f32::from(window.viewport_size().width));
+    let state = cx.update(|cx| testing::snapshot(host, cx));
+    let (expected_width, expected_height) = super::polkit::auth_card_size(&state, viewport_width);
+    assert!((f32::from(card.size.width) - expected_width).abs() < 0.01);
+    assert!((f32::from(card.size.height) - expected_height).abs() < 0.01);
+}
+
+#[gpui::test]
+fn a_polkit_request_opens_the_modal_card_over_the_open_panel(cx: &mut TestAppContext) {
+    let (_fixture, host, mut visual, window) = open_auth(cx);
+    visual.run_until_parked();
+
+    assert!(visual.debug_bounds("auth-card").is_some());
+    assert!(visual.debug_bounds("auth-field").is_some());
+    assert!(visual.debug_bounds("auth-submit").is_some());
+    assert!(visual.debug_bounds("auth-cancel").is_some());
+    assert!(
+        visual.debug_bounds("auth-details").is_some(),
+        "a non-technical detail gets its inset block"
+    );
+
+    // The compositor blurs a rounded region derived from the same size, so the
+    // painted card must not drift from `auth_card_size`.
+    let card = visual
+        .debug_bounds("auth-card")
+        .expect("the card is painted");
+    let viewport_width = visual.update(|window, _| {
+        let size = window.viewport_size();
+        f32::from(size.width)
+    });
+    let state = cx.update(|cx| testing::snapshot(&host, cx));
+    let (expected_width, expected_height) = super::polkit::auth_card_size(&state, viewport_width);
+    assert!((f32::from(card.size.width) - expected_width).abs() < 0.01);
+    assert!(
+        (f32::from(card.size.height) - expected_height).abs() < 0.01,
+        "the frosted region would miss the painted card"
+    );
+    assert!(
+        f32::from(card.size.height) > f32::from(card.size.width),
+        "the permission prompt is portrait, unlike the wide launcher surfaces"
+    );
+
+    // macOS alerts split a row evenly between the actions; both buttons share
+    // one line and one width.
+    let cancel = visual.debug_bounds("auth-cancel").expect("cancel button");
+    let submit = visual.debug_bounds("auth-submit").expect("primary button");
+    assert!((f32::from(cancel.origin.y) - f32::from(submit.origin.y)).abs() < 0.5);
+    assert!(
+        (f32::from(cancel.size.width) - f32::from(submit.size.width)).abs() < 0.5,
+        "two buttons share the row equally"
+    );
+    assert!((f32::from(cancel.size.height) - f32::from(submit.size.height)).abs() < 0.5);
+    assert!(
+        (f32::from(submit.size.height) - super::polkit::AUTH_BUTTON_H).abs() < 0.5,
+        "the buttons use the taller capsule metric"
+    );
+
+    host.read_with(cx, |host, _| {
+        assert!(
+            host.auth.is_some(),
+            "the dialog owns the pending request"
+        );
+        assert_eq!(
+            host.auth_window.map(|window| window.window_id()),
+            Some(window.window_id())
+        );
+        assert_eq!(
+            host.panel,
+            Some(Panel::Spotlight),
+            "a permission prompt must not discard the launcher underneath"
+        );
+    });
+}
+
+#[gpui::test]
+fn the_secure_field_keeps_the_real_secret_and_enter_submits_it(cx: &mut TestAppContext) {
+    let (_fixture, host, mut visual, window) = open_auth(cx);
+    let service = cx.update(|cx| testing::capture_service(&host, cx));
+    visual.run_until_parked();
+
+    let input = window
+        .update(cx, |view, _, _| view.input.clone())
+        .unwrap();
+    visual.simulate_input("hunter2");
+    visual.run_until_parked();
+    input.read_with(cx, |input, _| {
+        assert_eq!(
+            input.text(),
+            "hunter2",
+            "the model carries the real password, not bullets"
+        );
+        assert_eq!(
+            input.shaped_text().as_deref(),
+            Some("●●●●●●●"),
+            "the renderer must shape one bullet per character"
+        );
+    });
+
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    match service.try_recv().expect("Enter sends one password") {
+        crate::services::Command::AuthSubmit { cookie, secret } => {
+            assert_eq!(cookie, "cookie-1");
+            assert_eq!(secret, "hunter2");
+        }
+        other => panic!("unexpected command: {other:?}"),
+    }
+    input.read_with(cx, |input, _| {
+        assert_eq!(input.text(), "", "the field is cleared after submitting");
+    });
+    host.read_with(cx, |host, _| {
+        assert!(
+            host.auth.as_ref().expect("still pending").submitting,
+            "the card waits for the helper's verdict"
+        );
+    });
+}
+
+#[gpui::test]
+fn escape_cancels_the_request_and_removes_the_dialog(cx: &mut TestAppContext) {
+    let (_fixture, host, mut visual, window) = open_auth(cx);
+    let service = cx.update(|cx| testing::capture_service(&host, cx));
+    visual.run_until_parked();
+
+    visual.simulate_keystrokes("escape");
+    settle_exit(&mut visual);
+
+    match service.try_recv().expect("Escape cancels the request") {
+        crate::services::Command::AuthCancel { cookie } => assert_eq!(cookie, "cookie-1"),
+        other => panic!("unexpected command: {other:?}"),
+    }
+    host.read_with(cx, |host, _| {
+        assert!(host.auth.is_none());
+        assert!(host.auth_window.is_none());
+        assert_eq!(
+            host.panel,
+            Some(Panel::Spotlight),
+            "cancelling a prompt leaves the panel alone"
+        );
+    });
+    assert!(
+        !cx.read(|cx| cx
+            .windows()
+            .iter()
+            .any(|handle| handle.window_id() == window.window_id())),
+        "the dialog surface is really gone"
+    );
+}
+
+#[gpui::test]
+fn a_closed_request_dismisses_only_the_dialog(cx: &mut TestAppContext) {
+    let (_fixture, host, mut visual, window) = open_auth(cx);
+    visual.run_until_parked();
+
+    cx.update(|cx| {
+        testing::service_event(
+            &host,
+            crate::services::Event::AuthClosed {
+                cookie: "cookie-1".into(),
+            },
+            cx,
+        )
+    });
+    settle_exit(&mut visual);
+
+    host.read_with(cx, |host, _| {
+        assert!(host.auth.is_none(), "a finished request closes the card");
+        assert!(host.auth_window.is_none());
+        assert_eq!(host.panel, Some(Panel::Spotlight));
+    });
+    assert!(
+        !cx.read(|cx| cx
+            .windows()
+            .iter()
+            .any(|handle| handle.window_id() == window.window_id()))
+    );
+}
+
+#[gpui::test]
+fn a_prompt_and_a_rejected_password_update_the_open_card(cx: &mut TestAppContext) {
+    let (_fixture, host, mut visual, _window) = open_auth(cx);
+    visual.run_until_parked();
+
+    cx.update(|cx| {
+        testing::service_event(
+            &host,
+            crate::services::Event::AuthPrompt {
+                cookie: "cookie-1".into(),
+                text: "密码：".into(),
+                echo: false,
+            },
+            cx,
+        );
+        testing::service_event(
+            &host,
+            crate::services::Event::AuthFailed {
+                cookie: "cookie-1".into(),
+                text: "密码错误".into(),
+            },
+            cx,
+        );
+    });
+    visual.run_until_parked();
+
+    host.read_with(cx, |host, _| {
+        let auth = host
+            .auth
+            .as_ref()
+            .expect("a failed attempt keeps the dialog for a retry");
+        assert_eq!(auth.prompt, "密码：");
+        assert_eq!(auth.error.as_deref(), Some("密码错误"));
+        assert!(!auth.submitting);
+        assert!(host.auth_window.is_some());
+    });
+    assert!(
+        visual.debug_bounds("auth-card").is_some(),
+        "the card stays painted for the next attempt"
+    );
+}
+
+#[gpui::test]
+fn a_window_manager_close_cancels_the_pending_request(cx: &mut TestAppContext) {
+    let (_fixture, host, mut visual, _window) = open_auth(cx);
+    let service = cx.update(|cx| testing::capture_service(&host, cx));
+
+    assert!(
+        !visual.simulate_close(),
+        "Host owns destruction after the platform callback returns"
+    );
+    visual.run_until_parked();
+
+    match service.try_recv().expect("a platform close cancels the request") {
+        crate::services::Command::AuthCancel { cookie } => assert_eq!(cookie, "cookie-1"),
+        other => panic!("unexpected command: {other:?}"),
+    }
+    host.read_with(cx, |host, _| {
+        assert!(host.auth.is_none(), "the request no longer waits for input");
+        assert!(host.auth_window.is_none(), "the dead window is forgotten");
+        assert_eq!(host.panel, Some(Panel::Spotlight));
+    });
+}
+
+#[gpui::test]
+fn a_long_request_wraps_without_widening_the_card(cx: &mut TestAppContext) {
+    let mut request = auth_request("cookie-1");
+    request.message = "需要认证才能以超级用户身份运行一个非常长的命令 /usr/bin/some-very-long-tool --with --many --arguments，并显示一段足够长的说明文字".into();
+    let (_fixture, host, mut visual, _window) = open_auth_with(cx, request);
+
+    let card = visual.debug_bounds("auth-card").expect("auth card");
+    assert!((f32::from(card.size.width) - super::polkit::AUTH_WIDTH).abs() < 0.01);
+    assert!(
+        card_height(&mut visual) > super::polkit::AUTH_WIDTH,
+        "a three-line title keeps the portrait card taller than it is wide"
+    );
+    assert_card_matches_glass(&host, &mut visual, cx);
+
+    let icon = visual.debug_bounds("auth-icon").expect("icon tile");
+    assert_eq!(
+        f32::from(icon.size.width),
+        super::polkit::AUTH_ICON_BOX,
+        "the glyph grows inside the same tile; the background does not"
+    );
+}
+
+#[gpui::test]
+fn technical_details_leave_no_inset_block(cx: &mut TestAppContext) {
+    let mut request = auth_request("cookie-1");
+    request.details = vec![
+        ("polkit.caller-pid".into(), "1234".into()),
+        ("polkit.subject-pid".into(), "5678".into()),
+    ];
+    let (_fixture, host, mut visual, _window) = open_auth_with(cx, request);
+
+    assert!(
+        visual.debug_bounds("auth-details").is_none(),
+        "process bookkeeping is never shown"
+    );
+    assert_card_matches_glass(&host, &mut visual, cx);
+    let card = visual.debug_bounds("auth-card").expect("auth card");
+    assert!(f32::from(card.size.height) > f32::from(card.size.width));
+}
+
+#[gpui::test]
+fn an_echo_prompt_accepts_a_username_through_the_same_card(cx: &mut TestAppContext) {
+    let (_fixture, host, mut visual, _window) = open_auth(cx);
+    let service = cx.update(|cx| testing::capture_service(&host, cx));
+
+    cx.update(|cx| {
+        testing::service_event(
+            &host,
+            crate::services::Event::AuthPrompt {
+                cookie: "cookie-1".into(),
+                text: "用户名：".into(),
+                echo: true,
+            },
+            cx,
+        )
+    });
+    visual.run_until_parked();
+    host.read_with(cx, |host, _| {
+        assert!(
+            host.auth.as_ref().expect("dialog").echo,
+            "the PAM prompt says this field may echo"
+        );
+    });
+
+    visual.simulate_input("alice");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    match service.try_recv().expect("the username is submitted") {
+        crate::services::Command::AuthSubmit { cookie, secret } => {
+            assert_eq!(cookie, "cookie-1");
+            assert_eq!(secret, "alice");
+        }
+        other => panic!("unexpected command: {other:?}"),
+    }
+}
+
+#[gpui::test]
+fn a_rejected_attempt_keeps_the_request_and_accepts_another_password(cx: &mut TestAppContext) {
+    let (_fixture, host, mut visual, _window) = open_auth(cx);
+    let service = cx.update(|cx| testing::capture_service(&host, cx));
+
+    visual.simulate_input("wrong");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    match service.try_recv().expect("the first password is submitted") {
+        crate::services::Command::AuthSubmit { cookie, secret } => {
+            assert_eq!(cookie, "cookie-1");
+            assert_eq!(secret, "wrong");
+        }
+        other => panic!("unexpected command: {other:?}"),
+    }
+
+    cx.update(|cx| {
+        testing::service_event(
+            &host,
+            crate::services::Event::AuthFailed {
+                cookie: "cookie-1".into(),
+                text: "密码错误".into(),
+            },
+            cx,
+        )
+    });
+    visual.run_until_parked();
+    host.read_with(cx, |host, _| {
+        let auth = host.auth.as_ref().expect("the dialog stays for a retry");
+        assert!(!auth.submitting);
+        assert_eq!(auth.error.as_deref(), Some("密码错误"));
+    });
+
+    visual.simulate_input("right");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    match service.try_recv().expect("the retry is submitted") {
+        crate::services::Command::AuthSubmit { cookie, secret } => {
+            assert_eq!(cookie, "cookie-1", "the cookie is reused, not replaced");
+            assert_eq!(secret, "right");
+        }
+        other => panic!("unexpected command: {other:?}"),
+    }
+}
+
+#[gpui::test]
+fn info_error_and_queue_rows_grow_the_card(cx: &mut TestAppContext) {
+    let (_fixture, host, mut visual, _window) = open_auth(cx);
+    let before = card_height(&mut visual);
+
+    cx.update(|cx| {
+        testing::service_event(
+            &host,
+            crate::services::Event::AuthInfo {
+                cookie: "cookie-1".into(),
+                text: "密码即将过期".into(),
+            },
+            cx,
+        );
+        testing::service_event(
+            &host,
+            crate::services::Event::AuthError {
+                cookie: "cookie-1".into(),
+                text: "PAM 返回错误".into(),
+            },
+            cx,
+        );
+    });
+    host.update(cx, |host, cx| {
+        if let Some(auth) = host.auth.as_mut() {
+            auth.request.queued = 2;
+        }
+        host.changed(cx);
+    });
+    visual.run_until_parked();
+
+    assert!(
+        card_height(&mut visual) > before,
+        "info, error and queue rows add height"
+    );
+    assert_card_matches_glass(&host, &mut visual, cx);
+}
+
+#[gpui::test]
+fn enter_while_submitting_does_not_send_a_second_password(cx: &mut TestAppContext) {
+    let (_fixture, host, mut visual, _window) = open_auth(cx);
+    let service = cx.update(|cx| testing::capture_service(&host, cx));
+
+    visual.simulate_input("first");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    assert!(matches!(
+        service.try_recv().expect("the first submit lands"),
+        crate::services::Command::AuthSubmit { .. }
+    ));
+
+    visual.simulate_input("second");
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    assert!(
+        service.try_recv().is_err(),
+        "the card is waiting for the helper's verdict"
+    );
+}

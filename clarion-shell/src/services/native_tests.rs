@@ -105,6 +105,14 @@ impl Probe {
                 }
                 Event::Tray(items) => self.tray = items,
                 Event::TrayMenu { id, items } => self.menu = Some((id, items)),
+                // Native fixture never registers a polkit agent.
+                Event::AuthRequest(_)
+                | Event::AuthPrompt { .. }
+                | Event::AuthInfo { .. }
+                | Event::AuthError { .. }
+                | Event::AuthFailed { .. }
+                | Event::AuthClosed { .. }
+                | Event::AuthStatus(_) => {}
                 Event::Error(error) => {
                     eprintln!("service event: {error}");
                     self.errors.push(error);
