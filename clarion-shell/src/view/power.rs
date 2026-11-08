@@ -294,7 +294,10 @@ impl ShellView {
             host.system.ac_online,
         );
         let tone = crate::battery::tone(state);
-        let icon = crate::battery::icon(state, host.system.battery);
+        // The slider is a ceiling, not the current charge: a generic battery
+        // mark reads better than the state-tinted level icon beside a
+        // percentage that describes the limit.
+        let icon = self.battery_icon("battery-symbolic", limit, tone, 15., p);
         let card = control_card(p)
             .debug_selector(|| "battery-charge-limit".into())
             .h(px(86.))
@@ -347,7 +350,7 @@ impl ShellView {
                         .px(px(9.))
                         .flex()
                         .items_center()
-                        .child(self.battery_icon(&icon, limit, tone, 15., p)),
+                        .child(icon),
                 )
                 .into_any_element();
         }
@@ -368,7 +371,7 @@ impl ShellView {
             value: normalized,
             dark: host.dark(),
             p,
-            icon: self.battery_icon(&icon, limit, tone, 15., p),
+            icon,
         })
         .into_any_element()
     }
