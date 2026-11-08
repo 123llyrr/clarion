@@ -51,6 +51,12 @@ actions!(
         PaletteClipboardImage,
         PaletteClipboardFiles,
         PaletteClipboardLayout,
+        PaletteFileImage,
+        PaletteFileVideo,
+        PaletteFileAudio,
+        PaletteFileDocument,
+        PaletteFileFolder,
+        PaletteFileArchive,
         PaletteActions
     ]
 );
@@ -72,6 +78,14 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("alt-i", PaletteClipboardImage, Some("ClarionPanel")),
         KeyBinding::new("alt-f", PaletteClipboardFiles, Some("ClarionPanel")),
         KeyBinding::new("alt-d", PaletteClipboardLayout, Some("ClarionPanel")),
+        // File mode only: the type tags. Alt+digits keep the letters free for
+        // the clipboard body and the mode rail.
+        KeyBinding::new("alt-1", PaletteFileImage, Some("ClarionPanel")),
+        KeyBinding::new("alt-2", PaletteFileVideo, Some("ClarionPanel")),
+        KeyBinding::new("alt-3", PaletteFileAudio, Some("ClarionPanel")),
+        KeyBinding::new("alt-4", PaletteFileDocument, Some("ClarionPanel")),
+        KeyBinding::new("alt-5", PaletteFileFolder, Some("ClarionPanel")),
+        KeyBinding::new("alt-6", PaletteFileArchive, Some("ClarionPanel")),
         KeyBinding::new("ctrl-0", PaletteSearch, Some("ClarionPanel")),
         KeyBinding::new("ctrl-1", PaletteApps, Some("ClarionPanel")),
         KeyBinding::new("ctrl-2", PaletteWallpapers, Some("ClarionPanel")),
@@ -149,6 +163,8 @@ pub struct ShellView {
     palette_category: Option<AppCategory>,
     /// The clipboard body's content-type tag, or `None` for every entry.
     palette_clipboard_filter: Option<spotlight::ClipboardFilter>,
+    /// The file-type tag under the search field, or `None` for every type.
+    palette_file_filter: Option<spotlight::FileFilter>,
     /// Set once the keyboard walks the slash completion list, so Enter on a
     /// bare `/` runs the highlighted row instead of explaining the syntax.
     palette_slash_picked: bool,
@@ -557,6 +573,7 @@ impl ShellView {
             palette_error: None,
             palette_category: None,
             palette_clipboard_filter: None,
+            palette_file_filter: None,
             palette_slash_picked: false,
             spotlight_menu_open: false,
             spotlight_menu_selection: 0,
@@ -626,6 +643,7 @@ impl ShellView {
         view.selection = menu.selection;
         view.palette_category = menu.category;
         view.palette_clipboard_filter = menu.clipboard_filter;
+        view.palette_file_filter = menu.file_filter;
         view.spotlight_menu_open = true;
         view.spotlight_menu_selection = 0;
         view
@@ -3250,6 +3268,36 @@ impl Render for ShellView {
                 {
                     let host = this.state.clone();
                     this.palette_toggle_clipboard_layout(&host, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PaletteFileImage, _, cx| {
+                if !this.input.read(cx).has_preedit() {
+                    this.palette_file_shortcut(spotlight::FileFilter::Image, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PaletteFileVideo, _, cx| {
+                if !this.input.read(cx).has_preedit() {
+                    this.palette_file_shortcut(spotlight::FileFilter::Video, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PaletteFileAudio, _, cx| {
+                if !this.input.read(cx).has_preedit() {
+                    this.palette_file_shortcut(spotlight::FileFilter::Audio, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PaletteFileDocument, _, cx| {
+                if !this.input.read(cx).has_preedit() {
+                    this.palette_file_shortcut(spotlight::FileFilter::Document, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PaletteFileFolder, _, cx| {
+                if !this.input.read(cx).has_preedit() {
+                    this.palette_file_shortcut(spotlight::FileFilter::Folder, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PaletteFileArchive, _, cx| {
+                if !this.input.read(cx).has_preedit() {
+                    this.palette_file_shortcut(spotlight::FileFilter::Archive, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &Previous, window, cx| {

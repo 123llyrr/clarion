@@ -12,6 +12,7 @@
 //! pages (calculator, time, currency) are still filtered out instead of
 //! offering dead entries.
 use super::*;
+use crate::file_icons::{self, FileKind};
 use clarion_launcher::actions::{self, PaletteAction};
 use clarion_launcher::catalog::{AppCategory, DesktopApp};
 use clarion_launcher::commands::{self, Command, CommandKind, ResolveError};
@@ -84,6 +85,7 @@ pub(crate) struct SpotlightMenuSnapshot {
     pub selection: usize,
     pub category: Option<AppCategory>,
     pub clipboard_filter: Option<ClipboardFilter>,
+    pub file_filter: Option<FileFilter>,
 }
 
 /// One row of the status bar's action card. The list is rebuilt from the
@@ -197,6 +199,87 @@ impl ClipboardFilter {
                 kind,
                 services::HistoryKind::Files | services::HistoryKind::Binary
             ),
+        }
+    }
+}
+
+/// The file-type tags above the file list. They mirror the clipboard's content
+/// tags: every tag carries the count for the current query, clicking one
+/// filters the list, and a second click clears it. `Alt+1`…`Alt+6` do the same.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FileFilter {
+    Image,
+    Video,
+    Audio,
+    Document,
+    Folder,
+    Archive,
+}
+
+impl FileFilter {
+    /// Tag order on screen, and the order `Alt+1`…`Alt+6` name.
+    const ALL: [FileFilter; 6] = [
+        Self::Image,
+        Self::Video,
+        Self::Audio,
+        Self::Document,
+        Self::Folder,
+        Self::Archive,
+    ];
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::Image => "图片",
+            Self::Video => "视频",
+            Self::Audio => "音乐",
+            Self::Document => "文档",
+            Self::Folder => "文件夹",
+            Self::Archive => "压缩包",
+        }
+    }
+
+    /// The debug selector's suffix.
+    fn key(self) -> &'static str {
+        match self {
+            Self::Image => "image",
+            Self::Video => "video",
+            Self::Audio => "audio",
+            Self::Document => "document",
+            Self::Folder => "folder",
+            Self::Archive => "archive",
+        }
+    }
+
+    /// The numeric shortcut (`Alt+1`…). Position in `ALL` is the index.
+    fn hint(self) -> &'static str {
+        match self {
+            Self::Image => "Alt+1",
+            Self::Video => "Alt+2",
+            Self::Audio => "Alt+3",
+            Self::Document => "Alt+4",
+            Self::Folder => "Alt+5",
+            Self::Archive => "Alt+6",
+        }
+    }
+
+    fn accepts(self, kind: FileKind) -> bool {
+        match self {
+            Self::Image => kind == FileKind::Image,
+            Self::Video => kind == FileKind::Video,
+            Self::Audio => kind == FileKind::Audio,
+            // Office documents, PDFs, plain text and source code all read as
+            // "documents" in a launcher; spreadsheets and decks join them.
+            Self::Document => matches!(
+                kind,
+                FileKind::Pdf
+                    | FileKind::Document
+                    | FileKind::Text
+                    | FileKind::Code
+                    | FileKind::Spreadsheet
+                    | FileKind::Presentation
+            ),
+            Self::Folder => kind == FileKind::Folder,
+            Self::Archive => kind == FileKind::Archive,
         }
     }
 }
@@ -841,7 +924,7 @@ impl ShellView {
             PaletteBody::Commands | PaletteBody::Slash => self.palette_commands().len(),
             PaletteBody::Clipboard => self.palette_clipboard(host).len(),
             PaletteBody::Wallpapers => self.palette_wallpapers(host).len(),
-            PaletteBody::Files => host.file_hits.len(),
+            PaletteBody::Files => self.palette_files(host).len(),
         }
     }
 
@@ -967,9 +1050,10 @@ impl ShellView {
         self.palette_category = None;
         self.spotlight_menu_open = false;
         self.spotlight_menu_selection = 0;
-        // The type tags belong to the clipboard body, so switching modes
-        // starts it unfiltered.
+        // The type tags belong to their bodies, so switching modes starts
+        // both filter rows unfiltered.
         self.palette_clipboard_filter = None;
+        self.palette_file_filter = None;
         if text != self.query {
             self.palette_set_query(text, cx);
         }
@@ -1026,6 +1110,9 @@ impl ShellView {
         self.spotlight_menu_selection = 0;
         if self.palette.mode != Mode::Clipboard {
             self.palette_clipboard_filter = None;
+        }
+        if self.palette.mode != Mode::Files {
+            self.palette_file_filter = None;
         }
         if text != self.query {
             self.palette_set_query(text, cx);
@@ -1112,7 +1199,8 @@ impl ShellView {
                 }
             }
             PaletteBody::Files => {
-                let Some(entry) = host.file_hits.get(self.selection) else {
+                let files = self.palette_files(host);
+                let Some(entry) = files.get(self.selection) else {
                     return;
                 };
                 let path = entry.path.clone();
@@ -1180,7 +1268,8 @@ impl ShellView {
         if self.palette_body() != PaletteBody::Files {
             return;
         }
-        let Some(entry) = host.file_hits.get(self.selection) else {
+        let files = self.palette_files(host);
+        let Some(entry) = files.get(self.selection) else {
             return;
         };
         let path = entry.path.clone();
@@ -1273,6 +1362,9 @@ impl ShellView {
         self.spotlight_menu_selection = 0;
         if self.palette.mode != Mode::Clipboard {
             self.palette_clipboard_filter = None;
+        }
+        if self.palette.mode != Mode::Files {
+            self.palette_file_filter = None;
         }
         self.palette_slash_picked = false;
         if text != self.query {
@@ -1447,12 +1539,94 @@ impl ShellView {
             }
             // The rail already names these pages; a second chip would only
             // repeat the label and push the gallery down.
-            PaletteBody::Wallpapers | PaletteBody::Files => None,
+            PaletteBody::Wallpapers => None,
+            PaletteBody::Files => self.spotlight_file_tags(host, p, cx),
             PaletteBody::Commands => Some(self.spotlight_chip("命令", true, p, cx)),
             PaletteBody::Slash => Some(self.spotlight_chip("命令补全", true, p, cx)),
             PaletteBody::Actions => Some(self.spotlight_chip("动作", true, p, cx)),
             PaletteBody::Web => Some(self.spotlight_chip("网页", true, p, cx)),
         }
+    }
+
+    /// The file-type tags above the result list. Mirrors the clipboard's
+    /// content tags (`Alt+1`…`Alt+6`); a click filters, a second click clears.
+    /// The row stays hidden while the file body is idle or completely empty.
+    fn spotlight_file_tags(
+        &self,
+        host: &ViewState,
+        p: Palette,
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
+        if host.file_hits.is_empty() && self.palette_file_filter.is_none() {
+            return None;
+        }
+        let active = self.palette_file_filter;
+        let view = cx.entity().downgrade();
+        let mut tags = div()
+            .flex()
+            .flex_1()
+            .items_center()
+            .gap(px(6.))
+            .min_w_0()
+            .overflow_hidden();
+        for filter in FileFilter::ALL {
+            let selected = active == Some(filter);
+            let count = self.palette_file_count(host, filter);
+            let selector = format!("spotlight-file-tag-{}", filter.key());
+            let id = SharedString::from(format!("spotlight-file-tag-{}", filter.key()));
+            let view = view.clone();
+            tags = tags.child(
+                div()
+                    .id(id)
+                    .debug_selector(move || selector.clone())
+                    .h(px(24.))
+                    .px(px(10.))
+                    .rounded(px(12.))
+                    .flex()
+                    .items_center()
+                    .gap(px(5.))
+                    .flex_shrink_0()
+                    .text_size(px(12.))
+                    .bg(if selected {
+                        p.accent.opacity(0.20)
+                    } else {
+                        p.fg.opacity(0.06)
+                    })
+                    .hover(move |tag| {
+                        tag.bg(if selected {
+                            p.accent.opacity(0.28)
+                        } else {
+                            p.fg.opacity(0.11)
+                        })
+                    })
+                    .cursor_pointer()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(move |_, _, cx| {
+                        let _ = view.update(cx, |view, cx| {
+                            view.palette_toggle_file_filter(filter, cx)
+                        });
+                    })
+                    .child(menu_text(
+                        filter.title().to_owned(),
+                        FontWeight::BOLD,
+                        if selected { p.accent } else { p.muted },
+                        cx,
+                    ))
+                    .child(menu_text(
+                        count.to_string(),
+                        FontWeight::NORMAL,
+                        p.muted,
+                        cx,
+                    ))
+                    .child(div().text_size(px(10.)).child(menu_text(
+                        filter.hint().to_owned(),
+                        FontWeight::NORMAL,
+                        p.muted,
+                        cx,
+                    ))),
+            );
+        }
+        Some(tags.into_any_element())
     }
 
     /// One quiet status chip.
@@ -1582,17 +1756,20 @@ impl ShellView {
                     None => ("剪贴板".to_owned(), format!("{} 条记录", found.len())),
                 }
             }
-            PaletteBody::Files => match host.file_hits.get(self.selection) {
-                Some(hit) => (hit.name.clone(), file_metadata(hit, &host.home)),
-                None => (
-                    "文件".to_owned(),
-                    if host.file_searching {
-                        "正在搜索…".to_owned()
-                    } else {
-                        format!("{} 个结果", host.file_hits.len())
-                    },
-                ),
-            },
+            PaletteBody::Files => {
+                let files = self.palette_files(host);
+                match files.get(self.selection) {
+                    Some(hit) => (hit.name.clone(), file_metadata(hit, &host.home)),
+                    None => (
+                        "文件".to_owned(),
+                        if host.file_searching {
+                            "正在搜索…".to_owned()
+                        } else {
+                            format!("{} 个结果", files.len())
+                        },
+                    ),
+                }
+            }
             PaletteBody::Wallpapers => {
                 let found = self.palette_wallpapers(host);
                 match found.get(self.selection) {
@@ -1757,7 +1934,8 @@ impl ShellView {
                 items
             }
             PaletteBody::Files => {
-                let Some(hit) = host.file_hits.get(self.selection) else {
+                let files = self.palette_files(host);
+                let Some(hit) = files.get(self.selection) else {
                     return Vec::new();
                 };
                 let mut items = vec![palette_action_item(
@@ -1872,6 +2050,7 @@ impl ShellView {
             selection: self.selection,
             category: self.palette_category,
             clipboard_filter: self.palette_clipboard_filter,
+            file_filter: self.palette_file_filter,
         };
         self.invoke(Action::OpenSpotlightMenu(snapshot), cx);
     }
@@ -2637,8 +2816,17 @@ impl ShellView {
         if host.file_hits.is_empty() {
             return palette_empty("没有匹配的文件", "试试更短的文件名，或搜索父文件夹", p, cx);
         }
+        let files = self.palette_files(host);
+        if files.is_empty() {
+            return palette_empty(
+                "该类型没有匹配文件",
+                "点击已选中的类型标签取消筛选",
+                p,
+                cx,
+            );
+        }
         let mut list = div().flex().flex_col().gap(px(LIST_GAP)).pb(px(2.));
-        for (index, hit) in host.file_hits.iter().enumerate() {
+        for (index, hit) in files.iter().copied().enumerate() {
             let selected = index == self.selection;
             let open_path = hit.path.clone();
             let name = hit.name.clone();
@@ -2865,6 +3053,57 @@ impl ShellView {
                     .is_none_or(|filter| filter.accepts(entry.kind))
             })
             .collect()
+    }
+
+    /// File hits narrowed by the active type tag, in walker order so the
+    /// keyboard's selection means the same row across renders.
+    fn palette_files<'a>(
+        &self,
+        host: &'a ViewState,
+    ) -> Vec<&'a clarion_launcher::files::FileHit> {
+        host.file_hits
+            .iter()
+            .filter(|hit| {
+                self.palette_file_filter.is_none_or(|filter| {
+                    filter.accepts(file_icons::kind(&hit.path, hit.is_dir))
+                })
+            })
+            .collect()
+    }
+
+    /// How many hits a file-type tag would show. Counts follow the query but
+    /// not the active tag, so the other tags keep their numbers while one is
+    /// selected.
+    fn palette_file_count(&self, host: &ViewState, filter: FileFilter) -> usize {
+        host.file_hits
+            .iter()
+            .filter(|hit| filter.accepts(file_icons::kind(&hit.path, hit.is_dir)))
+            .count()
+    }
+
+    /// Clicking a file-type tag filters to it; a second click clears.
+    pub(super) fn palette_toggle_file_filter(
+        &mut self,
+        filter: FileFilter,
+        cx: &mut Context<Self>,
+    ) {
+        self.palette_file_filter = if self.palette_file_filter == Some(filter) {
+            None
+        } else {
+            Some(filter)
+        };
+        self.selection = 0;
+        self.scroll.set_offset(point(px(0.), px(0.)));
+        cx.notify();
+    }
+
+    /// `Alt+1`…`Alt+6` only mean something in the file body; other modes keep
+    /// the digits for themselves.
+    pub(super) fn palette_file_shortcut(&mut self, filter: FileFilter, cx: &mut Context<Self>) {
+        if self.state.panel != Some(Panel::Spotlight) || self.palette.mode != Mode::Files {
+            return;
+        }
+        self.palette_toggle_file_filter(filter, cx);
     }
 
     /// How many entries a type tag would show. Counts follow the query but not

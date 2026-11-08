@@ -3522,3 +3522,154 @@ fn enter_while_submitting_does_not_send_a_second_password(cx: &mut TestAppContex
         "the card is waiting for the helper's verdict"
     );
 }
+
+fn file_hit(path: &str, is_dir: bool) -> clarion_launcher::files::FileHit {
+    let path = std::path::PathBuf::from(path);
+    clarion_launcher::files::FileHit {
+        name: path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        parent: path
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default(),
+        extension: if is_dir {
+            String::new()
+        } else {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+        },
+        path,
+        is_dir,
+        size: 1024,
+        modified: None,
+    }
+}
+
+fn six_file_kinds() -> Vec<clarion_launcher::files::FileHit> {
+    vec![
+        file_hit("/home/test/Pictures/photo.jpg", false),
+        file_hit("/home/test/Videos/clip.mp4", false),
+        file_hit("/home/test/Music/song.flac", false),
+        file_hit("/home/test/Documents/report.pdf", false),
+        file_hit("/home/test/Projects", true),
+        file_hit("/home/test/backup.zip", false),
+    ]
+}
+
+#[gpui::test]
+fn file_type_tags_filter_the_list_and_enter_opens_the_filtered_row(cx: &mut TestAppContext) {
+    let (_fixture, host, view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    visual.simulate_keystrokes("ctrl-4");
+    visual.run_until_parked();
+    host.update(cx, |host, cx| {
+        host.file_query = "photo".into();
+        host.file_hits = Arc::new(six_file_kinds());
+        host.changed(cx);
+    });
+    visual.run_until_parked();
+
+    for selector in [
+        "spotlight-file-tag-image",
+        "spotlight-file-tag-video",
+        "spotlight-file-tag-audio",
+        "spotlight-file-tag-document",
+        "spotlight-file-tag-folder",
+        "spotlight-file-tag-archive",
+    ] {
+        assert!(
+            visual.debug_bounds(selector).is_some(),
+            "the {selector} tag is missing"
+        );
+    }
+    assert!(visual.debug_bounds("spotlight-file-5").is_some());
+
+    let image = visual
+        .debug_bounds("spotlight-file-tag-image")
+        .expect("image tag")
+        .center();
+    visual.simulate_click(image, Modifiers::default());
+    visual.run_until_parked();
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.palette_file_filter),
+        Some(super::spotlight::FileFilter::Image)
+    );
+    assert_eq!(view.read_with(&visual, |view, _| view.selection), 0);
+    assert!(visual.debug_bounds("spotlight-file-0").is_some());
+    assert!(
+        visual.debug_bounds("spotlight-file-1").is_none(),
+        "only the image row survives the tag"
+    );
+
+    let commands = cx.update(|cx| testing::capture_backend(&host, cx));
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    let mut opened = None;
+    while let Ok(command) = commands.try_recv() {
+        if let backend::Command::OpenPath(path) = command {
+            opened = Some(path);
+        }
+    }
+    assert_eq!(
+        opened.as_deref(),
+        Some(std::path::Path::new("/home/test/Pictures/photo.jpg")),
+        "Enter opens the row inside the filtered list"
+    );
+}
+
+#[gpui::test]
+fn file_type_tags_toggle_with_alt_digits_and_clear_on_mode_switch(cx: &mut TestAppContext) {
+    let (_fixture, host, view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    visual.simulate_keystrokes("ctrl-4");
+    visual.run_until_parked();
+    host.update(cx, |host, cx| {
+        host.file_query = "file".into();
+        host.file_hits = Arc::new(six_file_kinds());
+        host.changed(cx);
+    });
+    visual.run_until_parked();
+
+    visual.simulate_keystrokes("alt-1");
+    visual.run_until_parked();
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.palette_file_filter),
+        Some(super::spotlight::FileFilter::Image)
+    );
+    visual.simulate_keystrokes("alt-1");
+    visual.run_until_parked();
+    assert!(
+        view.read_with(&visual, |view, _| view.palette_file_filter).is_none(),
+        "a second Alt+1 clears the tag"
+    );
+
+    visual.simulate_keystrokes("alt-4");
+    visual.run_until_parked();
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.palette_file_filter),
+        Some(super::spotlight::FileFilter::Document)
+    );
+
+    // Leaving the file body drops its tag; returning starts unfiltered.
+    visual.simulate_keystrokes("ctrl-3");
+    visual.run_until_parked();
+    visual.simulate_keystrokes("ctrl-4");
+    visual.run_until_parked();
+    assert!(
+        view.read_with(&visual, |view, _| view.palette_file_filter).is_none(),
+        "switching modes resets the file type tag"
+    );
+}
+
+#[gpui::test]
+fn the_file_tag_row_stays_hidden_before_a_query(cx: &mut TestAppContext) {
+    let (_fixture, _host, _view, mut visual, _window) = panel(cx, Panel::Spotlight);
+    visual.simulate_keystrokes("ctrl-4");
+    visual.run_until_parked();
+    assert!(
+        visual.debug_bounds("spotlight-file-tag-image").is_none(),
+        "an idle file body has no type tags to filter"
+    );
+}
