@@ -103,6 +103,16 @@ pub struct Surface {
     next_semaphore: vk::Semaphore,
     swapchain: Swapchain,
     full_screen_exclusive: bool,
+    /// A configuration whose swapchain could not be created yet. Some drivers
+    /// (NVIDIA's Wayland WSI on fullscreen surfaces) intermittently answer
+    /// `vkCreateSwapchainKHR` with `VK_SUBOPTIMAL_KHR` and no handle; instead
+    /// of aborting the process the configuration is retried from the render
+    /// loop, which keeps the window alive.
+    pending_config: Option<crate::SurfaceConfig>,
+    /// Earliest instant for the next `pending_config` attempt.
+    pending_retry_at: Option<std::time::Instant>,
+    /// Delay before the next attempt, doubled on every failure up to a cap.
+    pending_backoff: Option<std::time::Duration>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

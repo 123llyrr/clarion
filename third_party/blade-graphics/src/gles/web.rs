@@ -23,6 +23,10 @@ impl super::Surface {
     pub fn info(&self) -> crate::SurfaceInfo {
         self.platform.info
     }
+    /// The web canvas always has a renderbuffer to render into.
+    pub fn has_swapchain(&self) -> bool {
+        true
+    }
     pub fn acquire_frame(&self) -> super::Frame {
         let size = self.platform.extent;
         super::Frame {
@@ -50,6 +54,9 @@ impl PlatformContext {
 }
 
 impl super::Context {
+    /// No deferred swapchain recovery on the web backend.
+    pub fn recover_surface(&self, _surface: &mut super::Surface) {}
+
     pub unsafe fn init(_desc: crate::ContextDesc) -> Result<Self, crate::NotSupportedError> {
         let canvas = web_sys::window()
             .and_then(|win| win.document())

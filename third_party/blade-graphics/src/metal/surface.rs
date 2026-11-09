@@ -19,6 +19,11 @@ impl super::Surface {
         self.info
     }
 
+    /// Metal always has a drawable to render into.
+    pub fn has_swapchain(&self) -> bool {
+        true
+    }
+
     pub fn acquire_frame(&self) -> super::Frame {
         use objc2_quartz_core::CAMetalDrawable as _;
         let (drawable, texture) = objc2::rc::autoreleasepool(|_| unsafe {
@@ -31,6 +36,9 @@ impl super::Surface {
 }
 
 impl super::Context {
+    /// No deferred swapchain recovery on Metal.
+    pub fn recover_surface(&self, _surface: &mut super::Surface) {}
+
     pub fn create_surface<I: raw_window_handle::HasWindowHandle>(
         &self,
         window: &I,

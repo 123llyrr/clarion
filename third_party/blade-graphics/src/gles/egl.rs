@@ -151,6 +151,9 @@ impl<'a> Drop for ContextLock<'a> {
 }
 
 impl super::Context {
+    /// No deferred swapchain recovery on GLES.
+    pub fn recover_surface(&self, _surface: &mut super::Surface) {}
+
     pub unsafe fn init(desc: crate::ContextDesc) -> Result<Self, crate::NotSupportedError> {
         let egl = unsafe {
             let egl_result = if cfg!(windows) {
@@ -523,6 +526,11 @@ impl PlatformContext {
 impl super::Surface {
     pub fn info(&self) -> crate::SurfaceInfo {
         self.platform.swapchain.as_ref().unwrap().info
+    }
+
+    /// GLES always has a renderbuffer to render into.
+    pub fn has_swapchain(&self) -> bool {
+        true
     }
 
     pub fn acquire_frame(&mut self) -> super::Frame {

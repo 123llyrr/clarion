@@ -9,6 +9,12 @@ impl super::Surface {
         }
     }
 
+    /// Whether a swapchain is installed. When it is not (the driver refused to
+    /// create one), the renderer skips the frame instead of aborting.
+    pub fn has_swapchain(&self) -> bool {
+        self.swapchain.raw != vk::SwapchainKHR::null() && !self.frames.is_empty()
+    }
+
     unsafe fn deinit_swapchain(&mut self, raw_device: &ash::Device) {
         let _ = raw_device.device_wait_idle();
         self.device
@@ -136,6 +142,9 @@ impl super::Context {
                 target_size: [0; 2],
             },
             full_screen_exclusive: fullscreen_exclusive_ext.full_screen_exclusive_supported != 0,
+            pending_config: None,
+            pending_retry_at: None,
+            pending_backoff: None,
         })
     }
 
@@ -151,7 +160,70 @@ impl super::Context {
         }
     }
 
+    /// Install a new configuration on the surface. A failure (including the
+    /// driver returning a success code without a swapchain) is kept as a
+    /// pending configuration and retried from the render loop rather than
+    /// aborting the process.
     pub fn reconfigure_surface(&self, surface: &mut super::Surface, config: crate::SurfaceConfig) {
+        match self.install_swapchain(surface, config) {
+            Ok(()) => {
+                surface.pending_config = None;
+                surface.pending_retry_at = None;
+                surface.pending_backoff = None;
+            }
+            Err(result) => {
+                eprintln!(
+                    "blade: swapchain creation failed at {}x{} ({result:?}); keeping the window alive and retrying",
+                    config.size.width, config.size.height
+                );
+                surface.pending_config = Some(config);
+                surface.pending_retry_at = Some(std::time::Instant::now());
+                surface.pending_backoff = None;
+            }
+        }
+    }
+
+    /// Retry a configuration that could not be installed. The renderer calls
+    /// this once per frame; repeated failures back off up to four seconds.
+    pub fn recover_surface(&self, surface: &mut super::Surface) {
+        let Some(config) = surface.pending_config else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        if surface.pending_retry_at.is_some_and(|at| now < at) {
+            return;
+        }
+        match self.install_swapchain(surface, config) {
+            Ok(()) => {
+                surface.pending_config = None;
+                surface.pending_retry_at = None;
+                surface.pending_backoff = None;
+                eprintln!(
+                    "blade: swapchain at {}x{} created after retry",
+                    config.size.width, config.size.height
+                );
+            }
+            Err(result) => {
+                let backoff = surface
+                    .pending_backoff
+                    .unwrap_or(std::time::Duration::from_millis(100));
+                let backoff = (backoff * 2).min(std::time::Duration::from_secs(4));
+                surface.pending_backoff = Some(backoff);
+                surface.pending_retry_at = Some(now + backoff);
+                log::warn!(
+                    "Swapchain retry at {}x{} still failed: {result:?}",
+                    config.size.width,
+                    config.size.height
+                );
+            }
+        }
+    }
+
+    fn install_swapchain(
+        &self,
+        surface: &mut super::Surface,
+        config: crate::SurfaceConfig,
+    ) -> Result<(), vk::Result> {
         let khr_surface = self.instance.surface.as_ref().unwrap();
 
         let capabilities = unsafe {
@@ -314,6 +386,8 @@ impl super::Context {
             ..Default::default()
         };
 
+        let target_size = [config.size.width as u16, config.size.height as u16];
+
         let mut create_info = vk::SwapchainCreateInfoKHR {
             surface: surface.raw,
             min_image_count: effective_frame_count,
@@ -349,6 +423,11 @@ impl super::Context {
         // here aborted the whole shell on that transient condition, so call
         // the entry point directly to keep the handle that `ash` discards when
         // it treats this success code as an error.
+        //
+        // The same driver also intermittently returns a success code *without*
+        // writing a handle, most visibly while a fullscreen surface is being
+        // created. There is nothing to install in that case: report it and let
+        // the caller retry from the render loop.
         let mut raw_swapchain = vk::SwapchainKHR::null();
         let create_result = unsafe {
             (surface.device.fp().create_swapchain_khr)(
@@ -360,16 +439,29 @@ impl super::Context {
         };
         match create_result {
             vk::Result::SUCCESS => {}
-            vk::Result::SUBOPTIMAL_KHR => {
+            vk::Result::SUBOPTIMAL_KHR if raw_swapchain != vk::SwapchainKHR::null() => {
                 eprintln!(
                     "blade: swapchain created suboptimal at {}x{}; presenting with scaling until the next resize",
                     config.size.width, config.size.height
                 );
             }
-            error => panic!("Failed to create swapchain: {error:?}"),
+            result => {
+                if surface.swapchain.raw == vk::SwapchainKHR::null() {
+                    // Keep `info()` honest for the renderer built from this
+                    // configuration: pipelines are created from the format and
+                    // alpha the retry will use.
+                    surface.swapchain = super::Swapchain {
+                        raw: vk::SwapchainKHR::null(),
+                        format,
+                        alpha,
+                        target_size,
+                    };
+                }
+                return Err(result);
+            }
         }
         if raw_swapchain == vk::SwapchainKHR::null() {
-            panic!("Swapchain creation reported {create_result:?} without returning a handle");
+            return Err(create_result);
         }
 
         unsafe {
@@ -377,7 +469,6 @@ impl super::Context {
         }
 
         let images = unsafe { surface.device.get_swapchain_images(raw_swapchain).unwrap() };
-        let target_size = [config.size.width as u16, config.size.height as u16];
         let subresource_range = vk::ImageSubresourceRange {
             aspect_mask: vk::ImageAspectFlags::COLOR,
             base_mip_level: 0,
@@ -425,5 +516,6 @@ impl super::Context {
             alpha,
             target_size,
         };
+        Ok(())
     }
 }

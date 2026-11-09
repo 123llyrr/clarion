@@ -43,6 +43,13 @@ Clarion additions:
   `dead_code` on Linux/FreeBSD. Only the X11, macOS and Windows backends query
   it; the Wayland backend never does, so a Wayland-only build warned about it.
 - Both manifests: optional `wayland-protocols-wlr` client dependency in `wayland`.
+- `platform/blade/blade_renderer.rs`: `draw` asks the backend to retry a
+  surface configuration whose swapchain the driver refused to create and skips
+  the frame while none exists, instead of rendering into a missing swapchain.
+  NVIDIA's Wayland WSI intermittently answers `vkCreateSwapchainKHR` with
+  `VK_SUBOPTIMAL_KHR` and no handle while a fullscreen surface is created,
+  which used to abort `clarion-shell`. The recovery itself lives in the
+  vendored `blade-graphics` (`Context::recover_surface`).
 - Manifest: `stacksafe` moves from `0.1` to `1.0`. The `0.1` macro pulled
   `proc-macro-error2`, whose private `proc_macro` re-export is a future
   incompatibility (`E0365`) reported on every build; `1.0.3` drops it. `StackSafe`
