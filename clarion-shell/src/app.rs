@@ -652,6 +652,9 @@ impl Host {
             DesktopAction::Open(path) => {
                 let _ = self.backend.send(backend::Command::OpenPath(path));
             }
+            DesktopAction::Preview(path) => {
+                let _ = self.backend.send(backend::Command::PreviewFile(path));
+            }
             DesktopAction::Settings => self.handle(Action::Settings, cx),
             DesktopAction::Wallpaper(Some(path)) => {
                 for output in self.outputs.values() {

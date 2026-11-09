@@ -29,7 +29,6 @@ const MAX_ENTRIES: usize = 500;
 const MAX_VISITED: usize = 4096;
 const MAX_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
 const CONFIG_LIMIT: u64 = 65536;
-const MAX_PREVIEW_TEXT: u64 = 256 * 1024;
 const MAX_OPEN_SELECTION: usize = 16;
 const DESKTOP_MARGIN: f32 = 16.;
 const DESKTOP_CELL_WIDTH: f32 = 112.;
@@ -66,6 +65,9 @@ actions!(
 #[derive(Clone, Debug)]
 pub enum DesktopAction {
     Open(PathBuf),
+    /// Show one file in the shell's quick previewer (GNOME Sushi, the same
+    /// window Nautilus opens on space).
+    Preview(PathBuf),
     Settings,
     /// None asks the host to choose an image; Some supplies a desktop image.
     Wallpaper(Option<PathBuf>),
@@ -99,15 +101,12 @@ struct DesktopSnapshot {
 struct Inspector {
     title: String,
     rows: Vec<(String, String)>,
-    image: Option<Arc<Image>>,
-    text: Option<String>,
 }
 
 enum Work {
     Inspect {
         generation: u64,
         paths: Vec<PathBuf>,
-        quick_look: bool,
     },
     CreateFolder(String),
     Refresh,
@@ -739,13 +738,20 @@ impl DesktopView {
         if self.rename.is_some() || self.new_folder {
             return;
         }
-        if quick_look && self.inspector.is_some() {
-            self.inspector = None;
-            self.inspection_generation = self.inspection_generation.wrapping_add(1);
-            cx.notify();
+        let paths = self.selection();
+        if quick_look {
+            // Quick Look belongs to GNOME Sushi, the previewer Nautilus opens
+            // on space. The shell never paints its own preview sheet, so a
+            // large file lands in a proper preview window (and an unsupported
+            // one is reported by the system notification service).
+            if paths.len() != 1 {
+                self.error = Some("快速查看一次只预览一个项目".into());
+                cx.notify();
+                return;
+            }
+            self.send(DesktopAction::Preview(paths[0].clone()), cx);
             return;
         }
-        let paths = self.selection();
         if paths.is_empty() {
             self.error = Some("请先选择桌面项目".into());
             cx.notify();
@@ -757,7 +763,6 @@ impl DesktopView {
             Work::Inspect {
                 generation: self.inspection_generation,
                 paths,
-                quick_look,
             },
             cx,
         );
@@ -1304,18 +1309,6 @@ impl Render for DesktopView {
                 .flex_col()
                 .gap_3()
                 .p_5();
-            if let Some(image) = &inspector.image {
-                content = content.child(
-                    img(image.clone())
-                        .w_full()
-                        .h(px((panel_height - 140.).max(80.)))
-                        .object_fit(ObjectFit::Contain),
-                );
-            }
-            if let Some(text) = &inspector.text {
-                content =
-                    content.child(div().text_sm().font_family("monospace").child(text.clone()));
-            }
             for (label, value) in &inspector.rows {
                 content = content.child(
                     div()
@@ -1485,7 +1478,7 @@ fn display_size(bytes: u64) -> String {
     }
 }
 
-fn inspect_paths(directory: &Path, paths: &[PathBuf], quick_look: bool) -> Result<Inspector> {
+fn inspect_paths(directory: &Path, paths: &[PathBuf]) -> Result<Inspector> {
     anyhow::ensure!(
         !paths.is_empty() && paths.len() <= MAX_ENTRIES,
         "请选择桌面项目"
@@ -1493,17 +1486,9 @@ fn inspect_paths(directory: &Path, paths: &[PathBuf], quick_look: bool) -> Resul
     for path in paths {
         validate_source(directory, path)?;
     }
-    if quick_look {
-        anyhow::ensure!(
-            paths.len() == 1,
-            "快速查看一次只预览一个项目，请缩小选择范围"
-        );
-    }
     let mut inspector = Inspector {
         title: "显示简介".into(),
         rows: Vec::new(),
-        image: None,
-        text: None,
     };
     if paths.len() > 1 {
         let mut bytes = 0u64;
@@ -1552,11 +1537,7 @@ fn inspect_paths(directory: &Path, paths: &[PathBuf], quick_look: bool) -> Resul
     } else {
         "特殊文件"
     };
-    inspector.title = if quick_look {
-        name.clone()
-    } else {
-        format!("{name} 简介")
-    };
+    inspector.title = format!("{name} 简介");
     inspector.rows = vec![
         ("名称".into(), name),
         ("种类".into(), kind.into()),
@@ -1591,35 +1572,6 @@ fn inspect_paths(directory: &Path, paths: &[PathBuf], quick_look: bool) -> Resul
             "链接目标".into(),
             fs::read_link(path)?.display().to_string(),
         ));
-    }
-    if quick_look {
-        anyhow::ensure!(
-            metadata.is_file(),
-            "快速查看支持普通图片和 UTF-8 文本；该项目是{kind}，可使用显示简介查看属性"
-        );
-        let extension = path
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        if matches!(extension.as_str(), "png" | "jpg" | "jpeg") {
-            inspector.image = Some(
-                decode_image(path, 16 * 1024 * 1024, 1600, 1000, libc::O_NOFOLLOW)
-                    .context("无法快速查看此图片")?,
-            );
-        } else {
-            let bytes = read_regular_with_flags(path, MAX_PREVIEW_TEXT, libc::O_NOFOLLOW)
-                .context("文本快速查看上限为256 KB；较大文件请使用默认应用打开")?;
-            let text = String::from_utf8(bytes)
-                .context("该格式不支持快速查看，目前支持 PNG、JPEG 和 UTF-8 文本")?;
-            anyhow::ensure!(
-                !text
-                    .chars()
-                    .any(|ch| ch.is_control() && !matches!(ch, '\n' | '\r' | '\t')),
-                "该文件包含二进制内容，不能作为文本快速查看"
-            );
-            inspector.text = Some(text);
-        }
     }
     Ok(inspector)
 }
@@ -1958,9 +1910,8 @@ fn worker(
                         Work::Inspect {
                             generation,
                             paths,
-                            quick_look,
                         } => {
-                            let result = inspect_paths(&directory, &paths, quick_look)
+                            let result = inspect_paths(&directory, &paths)
                                 .map_err(|error| format!("{error:#}"));
                             let _ = updates.send_blocking(Update::Inspector { generation, result });
                             continue;
@@ -2150,13 +2101,13 @@ mod tests {
         fs::write(folder.join("not-counted"), b"nested bytes").unwrap();
         let link = directory.join("external link");
         std::os::unix::fs::symlink(root.path().join("missing target"), &link).unwrap();
-        let info = inspect_paths(&directory, std::slice::from_ref(&link), false).unwrap();
+        let info = inspect_paths(&directory, std::slice::from_ref(&link)).unwrap();
         assert!(info
             .rows
             .iter()
             .any(|(label, value)| label == "种类" && value == "符号链接"));
         assert!(info.rows.iter().any(|(label, _)| label == "链接目标"));
-        let info = inspect_paths(&directory, &[file.clone(), folder, link.clone()], false).unwrap();
+        let info = inspect_paths(&directory, &[file.clone(), folder, link.clone()]).unwrap();
         assert!(info
             .rows
             .iter()
@@ -2165,43 +2116,8 @@ mod tests {
             .rows
             .iter()
             .any(|(label, value)| label == "文件大小" && value.starts_with("16 字节")));
-        assert!(inspect_paths(&directory, &[link], true).is_err());
-        assert!(inspect_paths(&directory, &[root.path().join("outside")], false).is_err());
+        assert!(inspect_paths(&directory, &[root.path().join("outside")]).is_err());
         assert_eq!(fs::read_to_string(file).unwrap(), "你好，Clarion");
-    }
-
-    #[::core::prelude::v1::test]
-    fn quick_look_previews_bounded_text_and_png_and_rejects_binary_special_and_large_files() {
-        let root = tempfile::tempdir().unwrap();
-        let directory = root.path().join("Desktop");
-        fs::create_dir(&directory).unwrap();
-        let text = directory.join("text.txt");
-        fs::write(&text, "Hello\n你好\tClarion").unwrap();
-        let preview = inspect_paths(&directory, std::slice::from_ref(&text), true).unwrap();
-        assert_eq!(preview.text.as_deref(), Some("Hello\n你好\tClarion"));
-        assert!(preview.image.is_none());
-        let image = directory.join("sample.png");
-        image::RgbaImage::from_pixel(4, 4, image::Rgba([20, 80, 100, 255]))
-            .save(&image)
-            .unwrap();
-        assert!(inspect_paths(&directory, &[image], true)
-            .unwrap()
-            .image
-            .is_some());
-        let binary = directory.join("binary.pdf");
-        fs::write(&binary, [0, 1, 2, 3]).unwrap();
-        assert!(inspect_paths(&directory, &[binary], true).is_err());
-        let large = directory.join("large.txt");
-        File::create(&large)
-            .unwrap()
-            .set_len(MAX_PREVIEW_TEXT + 1)
-            .unwrap();
-        assert!(inspect_paths(&directory, &[large], true).is_err());
-        let fifo = directory.join("fifo.txt");
-        let raw = CString::new(fifo.as_os_str().as_bytes()).unwrap();
-        assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
-        assert!(inspect_paths(&directory, &[fifo], true).is_err());
-        assert!(inspect_paths(&directory, &[text.clone(), text], true).is_err());
     }
 
     fn desktop_fixture<'a>(
@@ -2557,16 +2473,33 @@ mod tests {
         }
         visual.simulate_keystrokes("super-i");
         assert!(
-            matches!(received_work.try_recv(), Ok(Work::Inspect { quick_look: false, paths, .. }) if paths.len() == 2)
+            matches!(received_work.try_recv(), Ok(Work::Inspect { paths, .. }) if paths.len() == 2)
         );
         view.update(visual, |view, _| view.busy = false);
         visual.simulate_keystrokes("super-y");
-        assert!(
-            matches!(received_work.try_recv(), Ok(Work::Inspect { quick_look: true, paths, .. }) if paths.len() == 2)
+        assert_eq!(
+            view.read_with(visual, |view, _| view.error.clone()).as_deref(),
+            Some("快速查看一次只预览一个项目"),
+            "Quick Look previews one file at a time"
         );
         assert!(
             received_actions.try_recv().is_err(),
-            "Quick Look must not silently launch an app"
+            "Quick Look must not silently launch an app for a multi-selection"
+        );
+        visual.simulate_click(first_bounds.center(), Modifiers::default());
+        visual.simulate_keystrokes("super-y");
+        assert!(
+            matches!(received_actions.try_recv(), Ok(DesktopAction::Preview(path)) if path == directory.join("first.txt")),
+            "Quick Look hands the file to the system previewer"
+        );
+        assert!(
+            received_work.try_recv().is_err(),
+            "Quick Look never reads the file in the desktop worker"
+        );
+        visual.simulate_keystrokes("super-a");
+        assert_eq!(
+            view.read_with(visual, |view, _| view.selected_many.len()),
+            2
         );
         view.update(visual, |view, _| view.busy = false);
         visual.simulate_keystrokes("super-backspace");
@@ -2761,7 +2694,6 @@ mod tests {
         work.send(Work::Inspect {
             generation: 1,
             paths: vec![path.clone()],
-            quick_look: true,
         })
         .unwrap();
         let deadline = Instant::now() + Duration::from_secs(1);

@@ -703,14 +703,18 @@ fn perform(
                 path.is_absolute() && !path.as_os_str().as_bytes().contains(&0),
                 "Invalid location"
             );
-            open_location(&path, &options.environment)?;
+            if let Err(error) = open_location(&path, &options.environment) {
+                report_failure(&options.environment, "无法打开文件", &path, &error)?;
+            }
         }
         Command::PreviewFile(path) => {
             anyhow::ensure!(
                 path.is_absolute() && !path.as_os_str().as_bytes().contains(&0),
                 "Invalid location"
             );
-            preview_location(&path, &options.environment)?;
+            if let Err(error) = preview_location(&path, &options.environment) {
+                report_failure(&options.environment, "无法预览文件", &path, &error)?;
+            }
         }
         Command::OpenUrl(url) => {
             let scheme = url.to_ascii_lowercase();
@@ -978,6 +982,34 @@ fn preview_location(path: &Path, environment: &Environment) -> Result<()> {
         &[path.to_path_buf()],
         environment,
     )
+}
+
+/// Surface a failed open or preview through the session's notification service,
+/// the channel desktop applications already use. If the notification tool is
+/// unavailable the original error is returned so the shell can still show its
+/// own banner instead of failing silently.
+fn report_failure(
+    environment: &Environment,
+    summary: &str,
+    path: &Path,
+    error: &anyhow::Error,
+) -> Result<()> {
+    let name = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy();
+    let body = format!("{name}：{error:#}");
+    run_tool(
+        "notify-send",
+        &[
+            "--app-name=Clarion",
+            "--icon=dialog-error",
+            "--",
+            summary,
+            &body,
+        ],
+        environment,
+        Duration::from_millis(900),
+    )
+    .with_context(|| format!("无法发送系统通知（{error:#}）"))?;
+    Ok(())
 }
 
 /// Resolve the application registered for `path`'s content type, without
