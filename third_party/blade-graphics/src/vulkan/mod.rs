@@ -113,6 +113,10 @@ pub struct Surface {
     pending_retry_at: Option<std::time::Instant>,
     /// Delay before the next attempt, doubled on every failure up to a cap.
     pending_backoff: Option<std::time::Duration>,
+    /// The driver reported `VK_ERROR_SURFACE_LOST_KHR`. The swapchain cannot
+    /// be rebuilt and destroying its views may fault inside the driver, so
+    /// every later configuration is ignored.
+    lost: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

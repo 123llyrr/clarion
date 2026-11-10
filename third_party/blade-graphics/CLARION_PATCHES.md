@@ -39,6 +39,12 @@ implementations so the renderer stays backend-agnostic, and the failed
 configuration still records its format/alpha so pipelines built before the
 first successful creation stay valid.
 
+A `VK_ERROR_SURFACE_LOST_KHR` is *not* retried. Once the compositor has
+destroyed the surface (for example after killing the Wayland connection) the
+driver can fault while destroying the old swapchain's image views, so the
+surface is marked `lost`, later configurations are ignored, and the renderer
+stops drawing that window instead of touching the stale swapchain.
+
 ## Replaying
 
 ```sh

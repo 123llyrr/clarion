@@ -50,6 +50,11 @@ Clarion additions:
   `VK_SUBOPTIMAL_KHR` and no handle while a fullscreen surface is created,
   which used to abort `clarion-shell`. The recovery itself lives in the
   vendored `blade-graphics` (`Context::recover_surface`).
+- `platform/linux/wayland/client.rs`: the event loop no longer swallows its
+  final error. When the display connection dies (the compositor killed it
+  after a protocol error), the process exits with status 1 so the user service
+  restarts the shell instead of leaving a frozen desktop that `Restart=on-failure`
+  would never relaunch.
 - Manifest: `stacksafe` moves from `0.1` to `1.0`. The `0.1` macro pulled
   `proc-macro-error2`, whose private `proc_macro` re-export is a future
   incompatibility (`E0365`) reported on every build; `1.0.3` drops it. `StackSafe`

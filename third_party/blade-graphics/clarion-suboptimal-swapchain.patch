@@ -76,10 +76,10 @@ index 761206c..dbbd607 100644
          &self,
          window: &I,
 diff --git a/src/vulkan/mod.rs b/src/vulkan/mod.rs
-index b2bc594..eaf56b4 100644
+index b2bc594..b36c549 100644
 --- a/src/vulkan/mod.rs
 +++ b/src/vulkan/mod.rs
-@@ -103,6 +103,16 @@ pub struct Surface {
+@@ -103,6 +103,20 @@ pub struct Surface {
      next_semaphore: vk::Semaphore,
      swapchain: Swapchain,
      full_screen_exclusive: bool,
@@ -93,50 +93,84 @@ index b2bc594..eaf56b4 100644
 +    pending_retry_at: Option<std::time::Instant>,
 +    /// Delay before the next attempt, doubled on every failure up to a cap.
 +    pending_backoff: Option<std::time::Duration>,
++    /// The driver reported `VK_ERROR_SURFACE_LOST_KHR`. The swapchain cannot
++    /// be rebuilt and destroying its views may fault inside the driver, so
++    /// every later configuration is ignored.
++    lost: bool,
  }
  
  #[derive(Clone, Copy, Debug, PartialEq)]
 diff --git a/src/vulkan/surface.rs b/src/vulkan/surface.rs
-index c16c29f..8e1fcec 100644
+index c16c29f..33a95bc 100644
 --- a/src/vulkan/surface.rs
 +++ b/src/vulkan/surface.rs
-@@ -9,6 +9,12 @@ impl super::Surface {
+@@ -9,6 +9,13 @@ impl super::Surface {
          }
      }
  
 +    /// Whether a swapchain is installed. When it is not (the driver refused to
-+    /// create one), the renderer skips the frame instead of aborting.
++    /// create one, or the surface was lost), the renderer skips the frame
++    /// instead of aborting.
 +    pub fn has_swapchain(&self) -> bool {
-+        self.swapchain.raw != vk::SwapchainKHR::null() && !self.frames.is_empty()
++        !self.lost && self.swapchain.raw != vk::SwapchainKHR::null() && !self.frames.is_empty()
 +    }
 +
      unsafe fn deinit_swapchain(&mut self, raw_device: &ash::Device) {
          let _ = raw_device.device_wait_idle();
          self.device
-@@ -136,6 +142,9 @@ impl super::Context {
+@@ -136,12 +143,22 @@ impl super::Context {
                  target_size: [0; 2],
              },
              full_screen_exclusive: fullscreen_exclusive_ext.full_screen_exclusive_supported != 0,
 +            pending_config: None,
 +            pending_retry_at: None,
 +            pending_backoff: None,
++            lost: false,
          })
      }
  
-@@ -151,7 +160,70 @@ impl super::Context {
+     pub fn destroy_surface(&self, surface: &mut super::Surface) {
++        // A lost surface may fault inside the driver while its swapchain views
++        // are destroyed; leave that state to process exit.
++        if !surface.lost {
++            unsafe {
++                surface.deinit_swapchain(&self.device.core);
++            }
++        }
+         unsafe {
+-            surface.deinit_swapchain(&self.device.core);
+             self.device
+                 .core
+                 .destroy_semaphore(surface.next_semaphore, None)
+@@ -151,7 +168,98 @@ impl super::Context {
          }
      }
  
 +    /// Install a new configuration on the surface. A failure (including the
 +    /// driver returning a success code without a swapchain) is kept as a
 +    /// pending configuration and retried from the render loop rather than
-+    /// aborting the process.
++    /// aborting the process. A surface the driver reports as lost is never
++    /// touched again: its swapchain cannot be recreated, and NVIDIA's driver
++    /// faults while destroying views that belong to it.
      pub fn reconfigure_surface(&self, surface: &mut super::Surface, config: crate::SurfaceConfig) {
++        if surface.lost {
++            return;
++        }
 +        match self.install_swapchain(surface, config) {
 +            Ok(()) => {
 +                surface.pending_config = None;
 +                surface.pending_retry_at = None;
 +                surface.pending_backoff = None;
++            }
++            Err(vk::Result::ERROR_SURFACE_LOST_KHR) => {
++                surface.lost = true;
++                surface.pending_config = None;
++                surface.pending_retry_at = None;
++                surface.pending_backoff = None;
++                eprintln!(
++                    "blade: surface lost at {}x{}; stopping rendering for this window",
++                    config.size.width, config.size.height
++                );
 +            }
 +            Err(result) => {
 +                eprintln!(
@@ -153,6 +187,9 @@ index c16c29f..8e1fcec 100644
 +    /// Retry a configuration that could not be installed. The renderer calls
 +    /// this once per frame; repeated failures back off up to four seconds.
 +    pub fn recover_surface(&self, surface: &mut super::Surface) {
++        if surface.lost {
++            return;
++        }
 +        let Some(config) = surface.pending_config else {
 +            return;
 +        };
@@ -167,6 +204,16 @@ index c16c29f..8e1fcec 100644
 +                surface.pending_backoff = None;
 +                eprintln!(
 +                    "blade: swapchain at {}x{} created after retry",
++                    config.size.width, config.size.height
++                );
++            }
++            Err(vk::Result::ERROR_SURFACE_LOST_KHR) => {
++                surface.lost = true;
++                surface.pending_config = None;
++                surface.pending_retry_at = None;
++                surface.pending_backoff = None;
++                eprintln!(
++                    "blade: surface lost at {}x{} while retrying; stopping rendering for this window",
 +                    config.size.width, config.size.height
 +                );
 +            }
@@ -194,7 +241,7 @@ index c16c29f..8e1fcec 100644
          let khr_surface = self.instance.surface.as_ref().unwrap();
  
          let capabilities = unsafe {
-@@ -314,6 +386,8 @@ impl super::Context {
+@@ -314,6 +422,8 @@ impl super::Context {
              ..Default::default()
          };
  
@@ -203,7 +250,7 @@ index c16c29f..8e1fcec 100644
          let mut create_info = vk::SwapchainCreateInfoKHR {
              surface: surface.raw,
              min_image_count: effective_frame_count,
-@@ -341,14 +415,60 @@ impl super::Context {
+@@ -341,14 +451,60 @@ impl super::Context {
                  config.allow_exclusive_full_screen
              );
          }
@@ -266,7 +313,7 @@ index c16c29f..8e1fcec 100644
          let subresource_range = vk::ImageSubresourceRange {
              aspect_mask: vk::ImageAspectFlags::COLOR,
              base_mip_level: 0,
-@@ -396,5 +516,6 @@ impl super::Context {
+@@ -396,5 +552,6 @@ impl super::Context {
              alpha,
              target_size,
          };

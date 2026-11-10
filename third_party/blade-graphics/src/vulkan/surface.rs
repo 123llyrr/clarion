@@ -10,9 +10,10 @@ impl super::Surface {
     }
 
     /// Whether a swapchain is installed. When it is not (the driver refused to
-    /// create one), the renderer skips the frame instead of aborting.
+    /// create one, or the surface was lost), the renderer skips the frame
+    /// instead of aborting.
     pub fn has_swapchain(&self) -> bool {
-        self.swapchain.raw != vk::SwapchainKHR::null() && !self.frames.is_empty()
+        !self.lost && self.swapchain.raw != vk::SwapchainKHR::null() && !self.frames.is_empty()
     }
 
     unsafe fn deinit_swapchain(&mut self, raw_device: &ash::Device) {
@@ -145,12 +146,19 @@ impl super::Context {
             pending_config: None,
             pending_retry_at: None,
             pending_backoff: None,
+            lost: false,
         })
     }
 
     pub fn destroy_surface(&self, surface: &mut super::Surface) {
+        // A lost surface may fault inside the driver while its swapchain views
+        // are destroyed; leave that state to process exit.
+        if !surface.lost {
+            unsafe {
+                surface.deinit_swapchain(&self.device.core);
+            }
+        }
         unsafe {
-            surface.deinit_swapchain(&self.device.core);
             self.device
                 .core
                 .destroy_semaphore(surface.next_semaphore, None)
@@ -163,13 +171,28 @@ impl super::Context {
     /// Install a new configuration on the surface. A failure (including the
     /// driver returning a success code without a swapchain) is kept as a
     /// pending configuration and retried from the render loop rather than
-    /// aborting the process.
+    /// aborting the process. A surface the driver reports as lost is never
+    /// touched again: its swapchain cannot be recreated, and NVIDIA's driver
+    /// faults while destroying views that belong to it.
     pub fn reconfigure_surface(&self, surface: &mut super::Surface, config: crate::SurfaceConfig) {
+        if surface.lost {
+            return;
+        }
         match self.install_swapchain(surface, config) {
             Ok(()) => {
                 surface.pending_config = None;
                 surface.pending_retry_at = None;
                 surface.pending_backoff = None;
+            }
+            Err(vk::Result::ERROR_SURFACE_LOST_KHR) => {
+                surface.lost = true;
+                surface.pending_config = None;
+                surface.pending_retry_at = None;
+                surface.pending_backoff = None;
+                eprintln!(
+                    "blade: surface lost at {}x{}; stopping rendering for this window",
+                    config.size.width, config.size.height
+                );
             }
             Err(result) => {
                 eprintln!(
@@ -186,6 +209,9 @@ impl super::Context {
     /// Retry a configuration that could not be installed. The renderer calls
     /// this once per frame; repeated failures back off up to four seconds.
     pub fn recover_surface(&self, surface: &mut super::Surface) {
+        if surface.lost {
+            return;
+        }
         let Some(config) = surface.pending_config else {
             return;
         };
@@ -200,6 +226,16 @@ impl super::Context {
                 surface.pending_backoff = None;
                 eprintln!(
                     "blade: swapchain at {}x{} created after retry",
+                    config.size.width, config.size.height
+                );
+            }
+            Err(vk::Result::ERROR_SURFACE_LOST_KHR) => {
+                surface.lost = true;
+                surface.pending_config = None;
+                surface.pending_retry_at = None;
+                surface.pending_backoff = None;
+                eprintln!(
+                    "blade: surface lost at {}x{} while retrying; stopping rendering for this window",
                     config.size.width, config.size.height
                 );
             }

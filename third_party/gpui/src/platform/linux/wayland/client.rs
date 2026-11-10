@@ -831,13 +831,19 @@ impl LinuxClient for WaylandClient {
             .take()
             .expect("App is already running");
 
-        event_loop
-            .run(
-                None,
-                &mut WaylandClientStatePtr(Rc::downgrade(&self.0)),
-                |_| {},
-            )
-            .log_err();
+        if let Err(error) = event_loop.run(
+            None,
+            &mut WaylandClientStatePtr(Rc::downgrade(&self.0)),
+            |_| {},
+        ) {
+            // The shell cannot work without its Wayland connection. A
+            // protocol error on the display (for example a compositor
+            // rejecting a driver request) closes it for good; exiting with a
+            // failure lets the user service restart the shell instead of
+            // leaving a frozen window behind.
+            log::error!("Wayland event loop stopped: {error:?}");
+            std::process::exit(1);
+        }
     }
 
     fn write_to_primary(&self, item: crate::ClipboardItem) {
