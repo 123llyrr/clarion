@@ -20,6 +20,7 @@ use std::{
     sync::Arc,
 };
 
+mod about;
 mod dock_folder;
 mod macos_controls;
 pub(crate) mod macos_dock;
@@ -29,6 +30,7 @@ mod macos_preferences;
 mod polkit;
 mod power;
 mod spotlight;
+mod system_menu;
 pub(crate) use spotlight::SpotlightMenuSnapshot;
 
 actions!(
@@ -1311,6 +1313,10 @@ impl ShellView {
         } else {
             "clarion-mark-black.png"
         });
+        // The mark now owns a menu like a tray icon, so it keeps the pressed
+        // background while that menu is up on this monitor.
+        let mark_menu_open = host.panel == Some(Panel::System)
+            && host.panel_output.as_deref() == Some(self.output.as_str());
         let h = self.host.clone();
         let bar_output = self.output.clone();
         let mut row = div()
@@ -1339,6 +1345,7 @@ impl ShellView {
                     .rounded(px(4.))
                     .cursor_pointer()
                     .hover(move |s| s.bg(p.line))
+                    .when(mark_menu_open, |this| this.bg(p.line))
                     .child(
                         img(mark)
                             .w(px(24.5 * scale))
@@ -1346,12 +1353,13 @@ impl ShellView {
                             .flex_shrink_0()
                             .object_fit(ObjectFit::Contain),
                     )
-                    .on_click(move |_, _, cx| {
+                    .on_click(move |event: &ClickEvent, _, cx| {
+                        let x = f32::from(event.position().x);
                         h.update(cx, |h, cx| {
                             h.handle(
                                 Action::on_output(
                                     bar_output.clone(),
-                                    Action::Panel(Panel::Preferences),
+                                    Action::AnchoredPanel(Panel::System, x),
                                 ),
                                 cx,
                             )
@@ -2457,6 +2465,7 @@ impl ShellView {
             &panel,
             Panel::Dock(_)
                 | Panel::Tray(_)
+                | Panel::System
                 | Panel::DockFolder { .. }
                 | Panel::DockFolderMenu { .. }
         );
@@ -2476,6 +2485,8 @@ impl ShellView {
                 | Panel::Recent
                 | Panel::Spotlight
                 | Panel::Tray(_)
+                | Panel::System
+                | Panel::About
         );
         let placement = if modal {
             Some(crate::app::panels::placement(host, &panel, width, height))
@@ -2572,6 +2583,8 @@ impl ShellView {
             Panel::Controls => self.macos_controls(host, p),
             Panel::Battery => self.macos_battery(host, p, window),
             Panel::Tray(_) => self.tray_menu(host, p),
+            Panel::System => self.system_menu(host, p),
+            Panel::About => self.about_card(host, p),
             Panel::Dock(id) => self.dock_menu(host, id, p),
             Panel::DockFolder { .. } => self.dock_folder_content(host, width, height, p, cx),
             Panel::DockFolderMenu { path } => self.dock_folder_menu_content(host, path, p),
@@ -2583,11 +2596,14 @@ impl ShellView {
         body = body.flex().flex_col().gap(px(8.));
         body = if panel == Panel::Controls
             || panel == Panel::Battery
-            || matches!(panel, Panel::Tray(_))
+            || matches!(panel, Panel::Tray(_) | Panel::System)
         {
-            // The control center, battery popup and tray menus share one
-            // surface recipe.
+            // The control center, battery popup and menus share one surface
+            // recipe.
             body.p(px(12.))
+        } else if panel == Panel::About {
+            // The About card paints its own traffic lights and inner margins.
+            body.p(px(0.))
         } else if panel == Panel::Spotlight {
             // The palette's rows keep a real margin around the grid and list,
             // and read a point larger than the menus. The status strip is a
@@ -2926,6 +2942,8 @@ impl Render for ShellView {
                     | Panel::Recent
                     | Panel::Spotlight
                     | Panel::Tray(_)
+                    | Panel::System
+                    | Panel::About
             )
         );
         if matches!(self.kind, Surface::SpotlightMenu) {
@@ -3021,6 +3039,8 @@ impl Render for ShellView {
                         crate::app::panels::SPOTLIGHT_RADIUS
                     } else if matches!(panel, Panel::Controls | Panel::Battery) {
                         crate::app::panels::CONTROLS_RADIUS
+                    } else if matches!(panel, Panel::About) {
+                        16.
                     } else {
                         POPUP_RADIUS
                     };

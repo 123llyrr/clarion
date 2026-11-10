@@ -775,6 +775,21 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
             });
             return modal_popup(w, h, x, top, width, height);
         }
+        Panel::System => {
+            // The leading mark's menu sits in the corner, left aligned with
+            // the bar's own padding instead of centring under the click.
+            let ceiling = available.min(h * BAR_POPUP_MAX_HEIGHT_SHARE);
+            let height = system_menu_height().min(ceiling);
+            let width = 260f32.min(w - 24.);
+            return modal_popup(w, h, 8., top, width, height);
+        }
+        Panel::About => {
+            // A tall, narrow card like the reference About window; the height
+            // follows its width until a short output clamps it.
+            let width = 360f32.min(w - 24.);
+            let height = (width * 1.7).min(available);
+            return modal_popup(w, h, (w - width) / 2., (h - height) / 2., width, height);
+        }
         Panel::Notifications => {
             // A full-output catcher lets a click anywhere outside the column
             // dismiss the center; only the column itself is visible. The
@@ -812,6 +827,22 @@ const NESTED_GAP: f32 = 3.;
 const NESTED_CONTAINER: f32 = 8.;
 /// The 6pt rhythm between the popup's top-level entries.
 const TOP_GAP: f32 = 6.;
+
+/// The system menu's fixed content: eight action rows split by two rules.
+/// Keep these counts in step with `view::system_menu`'s table; the UI test
+/// asserts the painted rows fit the popup.
+const SYSTEM_MENU_ACTIONS: f32 = 8.;
+const SYSTEM_MENU_SEPARATORS: f32 = 2.;
+
+/// The exact height of the bar mark's menu, using the same row, separator,
+/// gap and padding rhythm as the tray menu.
+pub(crate) fn system_menu_height() -> f32 {
+    (SYSTEM_MENU_ACTIONS * TRAY_MENU_ROW
+        + SYSTEM_MENU_SEPARATORS * TRAY_MENU_SEPARATOR
+        + (SYSTEM_MENU_ACTIONS + SYSTEM_MENU_SEPARATORS - 1.) * TOP_GAP
+        + TRAY_MENU_PAD)
+        .max(20.)
+}
 
 /// The exact height the view paints for the tray menu rows. Every `visible`
 /// entry renders (nested child lists ride their own rounded panels and stay
@@ -913,6 +944,34 @@ mod tests {
         let palette = placement(&state, &Panel::Spotlight, 1440., 900.);
         let popup = palette.popup.expect("the palette reports its popup");
         assert_eq!(popup.size, size(px(886.), px(668.)));
+    }
+
+    #[gpui::test]
+    fn the_system_menu_drops_under_the_mark_and_about_is_centred(cx: &mut TestAppContext) {
+        let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
+        let state = host.read_with(cx, |host, _| host.snapshot());
+        let menu = placement(&state, &Panel::System, 1440., 900.);
+        assert_eq!(
+            menu.bounds,
+            Bounds::new(point(px(0.), px(0.)), size(px(1440.), px(900.)))
+        );
+        assert!(!menu.normal);
+        let popup = menu.popup.expect("the system menu reports its popup");
+        assert_eq!(
+            popup.origin,
+            point(px(8.), px(state.prefs.bar_height as f32 + 8.))
+        );
+        assert_eq!(
+            popup.size,
+            size(px(260.), px(super::system_menu_height()))
+        );
+        let about = placement(&state, &Panel::About, 1440., 900.);
+        let popup = about.popup.expect("the About card reports its popup");
+        assert_eq!(
+            popup.origin,
+            point(px((1440. - 360.) / 2.), px((900. - 612.) / 2.))
+        );
+        assert_eq!(popup.size, size(px(360.), px(612.)));
     }
 
     #[gpui::test]

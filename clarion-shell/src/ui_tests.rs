@@ -8,7 +8,7 @@ use gpui::{
     VisualTestContext, WindowHandle,
 };
 
-use super::{Action, Host, LauncherPresentation, Panel, ShellView};
+use super::{Action, Host, LauncherPresentation, Panel, ShellView, SystemAction};
 use crate::app::testing;
 use crate::backend;
 use clarion_launcher::session::Mode;
@@ -381,7 +381,9 @@ fn header_mouse_close_destroys_the_current_popup_after_event_dispatch(cx: &mut T
 }
 
 #[gpui::test]
-fn preferences_wm_close_clears_host_and_one_real_bar_click_opens_it_again(cx: &mut TestAppContext) {
+fn preferences_wm_close_clears_host_and_the_bar_mark_reopens_it_from_the_system_menu(
+    cx: &mut TestAppContext,
+) {
     let (_fixture, host, view, mut visual, window) = panel(cx, Panel::Preferences);
     assert!(
         !visual.simulate_close(),
@@ -403,6 +405,19 @@ fn preferences_wm_close_clears_host_and_one_real_bar_click_opens_it_again(cx: &m
     // The actual menu-mark control occupies x=10..42, across the menu-bar height.
     bar_visual.simulate_click(point(px(26.), px(12.)), Modifiers::default());
     bar_visual.run_until_parked();
+    host.read_with(cx, |host, _| assert_eq!(host.panel, Some(Panel::System)));
+    let menu_window = cx.update(|cx| testing::popup(&host, cx));
+    let mut menu = VisualTestContext::from_window(menu_window.into(), cx);
+    menu.run_until_parked();
+    assert!(
+        menu.debug_bounds("system-menu-about").is_some(),
+        "the mark's menu carries the About row"
+    );
+    let settings = menu
+        .debug_bounds("system-menu-settings")
+        .expect("the menu carries the settings row");
+    menu.simulate_click(settings.center(), Modifiers::default());
+    menu.run_until_parked();
     host.read_with(cx, |host, _| {
         assert_eq!(host.panel, Some(Panel::Preferences))
     });
@@ -410,6 +425,144 @@ fn preferences_wm_close_clears_host_and_one_real_bar_click_opens_it_again(cx: &m
         .windows()
         .iter()
         .any(|handle| handle.window_id() != bar.window_id())));
+}
+
+#[gpui::test]
+fn the_system_menu_carries_every_row_and_fits_its_popup(cx: &mut TestAppContext) {
+    let (_fixture, host, _view, mut visual, _window) = panel(cx, Panel::System);
+    for id in [
+        "system-menu-about",
+        "system-menu-settings",
+        "system-menu-recent",
+        "system-menu-sleep",
+        "system-menu-reboot",
+        "system-menu-shutdown",
+        "system-menu-lock",
+        "system-menu-logout",
+    ] {
+        assert!(
+            visual.debug_bounds(id).is_some(),
+            "the {id} row is painted"
+        );
+    }
+    let about = visual
+        .debug_bounds("system-menu-about")
+        .expect("the About row is painted");
+    let settings = visual
+        .debug_bounds("system-menu-settings")
+        .expect("the settings row is painted");
+    assert!(
+        about.top() < settings.top(),
+        "About leads the menu, like the reference"
+    );
+    let logout = visual
+        .debug_bounds("system-menu-logout")
+        .expect("the log-out row is painted");
+    let (bar, height) = host.read_with(cx, |host, _| {
+        (
+            host.prefs.bar_height as f32,
+            crate::app::panels::system_menu_height(),
+        )
+    });
+    assert!(
+        f32::from(logout.bottom()) <= bar + 8. + height + 1.,
+        "the last row stays inside the popup: {logout:?}"
+    );
+}
+
+#[gpui::test]
+fn the_system_menu_dispatches_session_actions_without_touching_the_system(
+    cx: &mut TestAppContext,
+) {
+    let (_fixture, host, _view, mut visual, _window) = panel(cx, Panel::System);
+    let commands = cx.update(|cx| testing::capture_backend(&host, cx));
+    let shutdown = visual
+        .debug_bounds("system-menu-shutdown")
+        .expect("the shutdown row is painted");
+    visual.simulate_click(shutdown.center(), Modifiers::default());
+    visual.run_until_parked();
+    assert!(
+        matches!(
+            commands.try_recv(),
+            Ok(backend::Command::System(SystemAction::Shutdown))
+        ),
+        "the row only queues the worker command"
+    );
+    host.read_with(cx, |host, _| assert!(host.panel.is_none()));
+}
+
+#[gpui::test]
+fn the_about_row_opens_the_machine_card(cx: &mut TestAppContext) {
+    let (_fixture, host, _view, mut visual, _window) = panel(cx, Panel::System);
+    host.update(cx, |host, cx| {
+        host.system.facts = crate::system_info::SystemFacts {
+            model: "Blade".into(),
+            hostname: "clarion-box".into(),
+            os_name: "Arch Linux".into(),
+            kernel: "6.17.6-arch1-1".into(),
+            cpu: "Test CPU".into(),
+            gpu: "GP106M [GeForce GTX 1060 Mobile]".into(),
+            serial: "PF12345678".into(),
+            memory_total: Some(16 * 1024 * 1024 * 1024),
+            disk_total: Some(512 * 1024 * 1024 * 1024),
+            disk_free: Some(128 * 1024 * 1024 * 1024),
+        };
+        host.changed(cx);
+    });
+    visual.run_until_parked();
+    let about = visual
+        .debug_bounds("system-menu-about")
+        .expect("the About row is painted");
+    visual.simulate_click(about.center(), Modifiers::default());
+    visual.run_until_parked();
+    host.read_with(cx, |host, _| assert_eq!(host.panel, Some(Panel::About)));
+    let card = cx.update(|cx| testing::popup(&host, cx));
+    let mut about = VisualTestContext::from_window(card.into(), cx);
+    about.run_until_parked();
+    assert!(about.debug_bounds("about-card").is_some());
+    assert!(about.debug_bounds("about-title").is_some());
+    assert!(about.debug_bounds("about-close").is_some());
+    assert!(about.debug_bounds("about-more").is_some());
+    for row in [
+        "about-row-cpu",
+        "about-row-gpu",
+        "about-row-memory",
+        "about-row-disk",
+        "about-row-serial",
+        "about-row-os",
+        "about-row-kernel",
+    ] {
+        assert!(
+            about.debug_bounds(row).is_some(),
+            "the {row} fact is painted"
+        );
+    }
+}
+
+#[gpui::test]
+fn a_click_outside_the_system_menu_dismisses_it(cx: &mut TestAppContext) {
+    let (_fixture, host, view, mut visual, _window) = panel(cx, Panel::System);
+    let (w, h) = visual.update(|window, _| {
+        let size = window.viewport_size();
+        (f32::from(size.width), f32::from(size.height))
+    });
+    let popup = view
+        .read_with(&visual, |view, _| {
+            crate::app::panels::placement(view.state.as_ref(), &Panel::System, w, h).popup
+        })
+        .expect("the system menu reports its visible popup");
+    let outside = if popup.origin.y > px(60.) || popup.origin.x > px(60.) {
+        point(px(4.), px(4.))
+    } else {
+        point(
+            popup.origin.x + popup.size.width + px(40.),
+            popup.origin.y,
+        )
+    };
+    assert!(!popup.contains(&outside));
+    visual.simulate_mouse_down(outside, MouseButton::Left, Modifiers::default());
+    visual.run_until_parked();
+    host.read_with(cx, |host, _| assert!(host.panel.is_none()));
 }
 
 #[gpui::test]

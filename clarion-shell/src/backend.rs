@@ -82,6 +82,8 @@ pub struct SystemSnapshot {
     /// The local calendar day, so the notification center's month grid does
     /// not have to parse the localized `date` label back into numbers.
     pub today: Option<chrono::NaiveDate>,
+    /// Machine facts for the About card, collected once at worker start.
+    pub facts: crate::system_info::SystemFacts,
 }
 
 /// The kernel's `POWER_SUPPLY_STATUS`, reduced to the values the UI uses.
@@ -1173,7 +1175,29 @@ fn system_worker(
     power_epoch: Arc<AtomicU64>,
     charge_epoch: Arc<AtomicU64>,
 ) {
-    let mut hardware = SystemSnapshot::default();
+    let mut facts = crate::system_info::SystemFacts::collect(&options.environment);
+    // NVIDIA names the card in procfs, so hybrid laptops avoid launching a
+    // tool at all. Other drivers get their marketing name from `lspci -mm`;
+    // the sysfs driver + PCI id is the last resort.
+    if facts.gpu.is_empty() {
+        if let Ok(text) = run_tool(
+            "lspci",
+            &["-mm"],
+            &options.environment,
+            Duration::from_secs(2),
+        ) {
+            if let Some(gpu) = crate::system_info::parse_lspci_gpu(&text) {
+                facts.gpu = gpu;
+            }
+        }
+    }
+    if facts.gpu.is_empty() {
+        facts.gpu = crate::system_info::sysfs_gpu();
+    }
+    let mut hardware = SystemSnapshot {
+        facts,
+        ..SystemSnapshot::default()
+    };
     let mut hardware_due = Instant::now();
     while alive.load(Ordering::Relaxed) {
         if !options.preview && Instant::now() >= hardware_due {

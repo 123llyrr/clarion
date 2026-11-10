@@ -57,6 +57,10 @@ pub enum Panel {
         ids: Vec<String>,
         icon_size: u16,
     },
+    /// The menu dropped from the bar's leading Clarion mark.
+    System,
+    /// The compact "About This Mac" card opened from the system menu.
+    About,
 }
 #[derive(Clone)]
 pub enum Action {
@@ -240,6 +244,8 @@ pub struct ViewState {
     pub launch_history: Arc<LaunchHistory>,
     /// The user's home directory, used to shorten palette file paths to `~`.
     pub home: PathBuf,
+    /// The session user's name, shown by the system menu's log-out row.
+    pub user_name: String,
     /// Built-in file search results, newest generation only.
     pub file_hits: Arc<Vec<FileHit>>,
     pub file_query: String,
@@ -614,6 +620,13 @@ impl Host {
                 .get("HOME")
                 .map(PathBuf::from)
                 .unwrap_or_default(),
+            user_name: self
+                .environment
+                .get("USER")
+                .or_else(|| self.environment.get("LOGNAME"))
+                .filter(|name| !name.is_empty())
+                .cloned()
+                .unwrap_or_else(|| "当前用户".into()),
             file_hits: self.file_hits.clone(),
             file_query: self.file_query.clone(),
             file_searching: self.file_searching,

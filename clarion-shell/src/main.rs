@@ -15,6 +15,7 @@ mod polkit;
 mod power;
 mod preferences;
 mod services;
+mod system_info;
 mod view;
 mod wallpapers;
 
