@@ -3,7 +3,6 @@ use std::time::{Duration, Instant};
 use smithay::reexports::wayland_protocols::wp::commit_timing::v1::client::wp_commit_timer_v1::{
     self, WpCommitTimerV1,
 };
-use smithay::reexports::wayland_protocols::wp::commit_timing::v1::client::wp_commit_timing_manager_v1;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface as ServerSurface;
 use smithay::reexports::wayland_server::Resource;
 use smithay::wayland::compositor::{with_states, SurfaceAttributes};
@@ -259,22 +258,29 @@ fn invalid_nanoseconds_report_the_mandated_timer_error() {
 }
 
 #[test]
-fn duplicate_timer_reports_error_on_the_manager_object() {
-    let (mut fixture, id, surface, _server_surface, _timer) = setup();
+fn duplicate_timer_is_replaced_instead_of_disconnecting_the_client() {
+    let (mut fixture, id, surface, server_surface, _timer) = setup();
     let client = fixture.client(id);
-    client
+    let replacement = client
         .state
         .commit_timing_manager
         .as_ref()
         .unwrap()
         .get_timer(&surface, &client.qh, ());
-
-    let error = receive_protocol_error(&mut fixture, id);
-    assert_eq!(
-        error.code,
-        wp_commit_timing_manager_v1::Error::CommitTimerExists as u32
+    fixture.double_roundtrip(id);
+    assert!(
+        fixture.client(id).connection.protocol_error().is_none(),
+        "a driver that keeps its first timer alive must not lose the connection"
     );
-    assert_eq!(error.object_interface, "wp_commit_timing_manager_v1");
+
+    set_timestamp(&replacement, get_monotonic_time() + Duration::from_millis(20));
+    surface.set_buffer_scale(2);
+    surface.commit();
+    fixture.double_roundtrip(id);
+    dispatch_until(&mut fixture, Duration::from_secs(1), |_| {
+        scale(&server_surface) == 2
+    });
+    assert_eq!(scale(&server_surface), 2);
 }
 
 #[test]
