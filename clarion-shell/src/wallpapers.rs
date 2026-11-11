@@ -30,6 +30,72 @@ pub struct WallpaperEntry {
     pub thumbnail: Option<Vec<u8>>,
 }
 
+/// The colour of the strip that sits behind the menu bar, plus its relative
+/// luminance so the bar can borrow the wallpaper and pick readable text.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BarBand {
+    pub rgb: [u8; 3],
+    /// Relative luminance, 0 for black and 1 for white.
+    pub luminance: f32,
+}
+
+/// Share of the image height a menu bar covers on a typical output. The bar
+/// only needs the strip's tint, not an exact crop.
+const BAR_BAND_SHARE: f32 = 0.06;
+const BAR_BAND_WIDTH: u32 = 96;
+
+/// Average the top strip of the wallpaper. The decode runs on a worker thread;
+/// an unreadable image simply leaves the bar untinted.
+pub fn bar_band(path: &Path) -> Option<BarBand> {
+    let image = ImageReader::open(path)
+        .ok()?
+        .with_guessed_format()
+        .ok()?
+        .decode()
+        .ok()?;
+    let sample = if image.width() > BAR_BAND_WIDTH {
+        image.resize(
+            BAR_BAND_WIDTH,
+            u32::MAX,
+            image::imageops::FilterType::Triangle,
+        )
+    } else {
+        image
+    }
+    .to_rgb8();
+    let rows = ((sample.height() as f32 * BAR_BAND_SHARE).round() as u32)
+        .max(1)
+        .min(sample.height());
+    let mut sums = [0u64; 3];
+    for y in 0..rows {
+        for x in 0..sample.width() {
+            let pixel = sample.get_pixel(x, y);
+            for (sum, channel) in sums.iter_mut().zip(pixel.0) {
+                *sum += u64::from(channel);
+            }
+        }
+    }
+    let pixels = u64::from(rows) * u64::from(sample.width());
+    let rgb = sums.map(|sum| (sum / pixels) as u8);
+    Some(BarBand {
+        rgb,
+        luminance: relative_luminance(rgb),
+    })
+}
+
+/// WCAG relative luminance of an sRGB colour.
+fn relative_luminance([red, green, blue]: [u8; 3]) -> f32 {
+    let channel = |value: u8| {
+        let value = f32::from(value) / 255.;
+        if value <= 0.040_45 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(red) + 0.7152 * channel(green) + 0.0722 * channel(blue)
+}
+
 /// Folders scanned by the gallery, in priority order. The current wallpaper's
 /// own directory is prepended so a photo chosen from anywhere stays visible.
 pub fn roots(environment: &std::collections::HashMap<String, String>) -> Vec<PathBuf> {
@@ -205,6 +271,35 @@ mod tests {
         .unwrap();
         let entries = scan(&environment(root.path()));
         assert!(entries.iter().any(|entry| entry.name == "current.png"));
+    }
+
+    #[test]
+    fn the_bar_band_reads_only_the_top_strip() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("band.png");
+        let mut image = RgbImage::from_pixel(120, 200, Rgb([20, 40, 200]));
+        for y in 0..12 {
+            for x in 0..120 {
+                image.put_pixel(x, y, Rgb([220, 40, 40]));
+            }
+        }
+        image.save(&path).unwrap();
+        let band = bar_band(&path).expect("a decodable wallpaper yields a band");
+        assert!(
+            band.rgb[0] > 180 && band.rgb[1] < 90 && band.rgb[2] < 90,
+            "the sampled strip must not include the rest of the image: {:?}",
+            band.rgb
+        );
+        assert!(
+            (0.05..0.4).contains(&band.luminance),
+            "a saturated red strip is neither black nor white: {}",
+            band.luminance
+        );
+    }
+
+    #[test]
+    fn an_unreadable_band_is_skipped_instead_of_failing() {
+        assert!(bar_band(Path::new("/nonexistent/wallpaper.png")).is_none());
     }
 
     #[test]

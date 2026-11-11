@@ -117,6 +117,9 @@ pub struct Preferences {
     pub recent_app_ids: Vec<String>,
     pub bar_height: f64,
     pub bar_auto_hide: bool,
+    /// Draw the wallpaper-tinted scrim behind the menu bar. Off leaves the
+    /// bar clear over the wallpaper with contrast-adapted text.
+    pub bar_background: bool,
     pub clock_show_date: bool,
     pub clock_show_seconds: bool,
     pub dock_size: f64,
@@ -160,6 +163,7 @@ impl Default for Preferences {
             recent_app_ids: Vec::new(),
             bar_height: 24.,
             bar_auto_hide: false,
+            bar_background: true,
             clock_show_date: true,
             clock_show_seconds: false,
             dock_size: 48.,
@@ -401,6 +405,7 @@ impl Preferences {
             };
         }
         boolean!(bar_auto_hide, "menu_bar_auto_hide");
+        boolean!(bar_background, "menu_bar_background");
         boolean!(clock_show_date, "clock_show_date");
         boolean!(clock_show_seconds, "clock_show_seconds");
         boolean!(dock_auto_hide, "dock_auto_hide");
@@ -471,6 +476,7 @@ impl Preferences {
             recent_app_ids,
             bar_height,
             bar_auto_hide,
+            bar_background,
             clock_show_date,
             clock_show_seconds,
             dock_size,
@@ -529,6 +535,20 @@ mod tests {
             root.to_string_lossy().into_owned(),
         )]
         .into()
+    }
+    #[test]
+    fn the_menu_bar_background_defaults_to_shown_and_roundtrips() {
+        assert!(
+            Preferences::default().bar_background,
+            "an existing desktop keeps the tinted bar it had before the switch"
+        );
+        assert!(
+            Preferences::from_json(&serde_json::json!({})).bar_background,
+            "older preference files show the background"
+        );
+        assert!(
+            !Preferences::from_json(&serde_json::json!({"bar_background": false})).bar_background
+        );
     }
     #[test]
     fn legacy_fields_migrate_but_cannot_select_retired_implementations() {

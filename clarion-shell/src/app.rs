@@ -125,6 +125,8 @@ pub enum Action {
     SurfaceOpacity(f64),
     FrostStrength(f64),
     BarHeight(f64),
+    /// Draw the wallpaper-tinted scrim behind the menu bar.
+    BarBackground(bool),
     DockPosition(DockPosition),
     AutoHide(bool),
     Magnification(bool),
@@ -255,6 +257,9 @@ pub struct ViewState {
     pub wallpapers: Arc<Vec<crate::wallpapers::WallpaperEntry>>,
     pub wallpaper_scanning: bool,
     pub current_wallpaper: Option<PathBuf>,
+    /// The colour of the wallpaper strip behind the bar, sampled so the scrim
+    /// borrows the desktop instead of fighting it.
+    pub bar_band: Option<crate::wallpapers::BarBand>,
     pub notifications: Vec<services::Notification>,
     pub tray: Vec<services::TrayItem>,
     pub history: Vec<services::HistoryEntry>,
@@ -335,6 +340,11 @@ pub struct Host {
     pub wallpapers: Arc<Vec<crate::wallpapers::WallpaperEntry>>,
     pub wallpaper_scanning: bool,
     pub current_wallpaper: Option<PathBuf>,
+    /// The colour of the wallpaper strip behind the bar, sampled so the scrim
+    /// borrows the desktop instead of fighting it.
+    pub bar_band: Option<crate::wallpapers::BarBand>,
+    /// Newest bar-band sampling request; older decodes are discarded.
+    bar_band_generation: u64,
     pub notifications: Vec<services::Notification>,
     pub tray: Vec<services::TrayItem>,
     pub history: Vec<services::HistoryEntry>,
@@ -442,6 +452,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             crate::input::TextInput::bind_keys(cx);
             DesktopView::bind_keys(cx);
             crate::view::bind_keys(cx);
+            let startup_wallpaper = crate::wallpapers::current_wallpaper(&environment);
             let launch_history = Arc::new(LaunchHistory::load(&environment));
             let host = cx.new(|_| Host {
                 prefs,
@@ -460,6 +471,8 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 wallpapers: Arc::default(),
                 wallpaper_scanning: false,
                 current_wallpaper: None,
+                bar_band: None,
+                bar_band_generation: 0,
                 notifications: vec![],
                 tray: vec![],
                 history: vec![],
@@ -513,6 +526,10 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 dock_hover: false,
                 dock_edge_hover: false,
                 idle_since: Instant::now(),
+            });
+            host.update(cx, |host, cx| {
+                host.current_wallpaper = startup_wallpaper.clone();
+                host.refresh_bar_band(startup_wallpaper, cx);
             });
             let retained = host.clone();
             cx.spawn(async move |cx| {
@@ -634,6 +651,7 @@ impl Host {
             wallpapers: self.wallpapers.clone(),
             wallpaper_scanning: self.wallpaper_scanning,
             current_wallpaper: self.current_wallpaper.clone(),
+            bar_band: self.bar_band,
             notifications: self.notifications.clone(),
             tray: self.tray.clone(),
             history: self.history.clone(),
@@ -1125,6 +1143,33 @@ impl Host {
         .detach();
     }
 
+    /// Sample the strip behind the menu bar on a worker thread. A missing or
+    /// unreadable wallpaper leaves the bar on its plain theme tint.
+    fn refresh_bar_band(&mut self, path: Option<PathBuf>, cx: &mut Context<Self>) {
+        self.bar_band_generation = self.bar_band_generation.wrapping_add(1);
+        let generation = self.bar_band_generation;
+        let Some(path) = path else {
+            if self.bar_band.take().is_some() {
+                self.changed(cx);
+            }
+            return;
+        };
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |host, cx| {
+            let band = executor
+                .spawn(async move { crate::wallpapers::bar_band(&path) })
+                .await;
+            let _ = host.update(cx, |host, cx| {
+                // A slower decode must not overwrite a newer wallpaper.
+                if host.bar_band_generation == generation && host.bar_band != band {
+                    host.bar_band = band;
+                    host.changed(cx);
+                }
+            });
+        })
+        .detach();
+    }
+
     /// Scan the picture folders once per gallery visit. The existing scan is
     /// kept on screen while a refresh runs, so entering the mode never blinks.
     fn scan_wallpapers(&mut self, cx: &mut Context<Self>) {
@@ -1143,8 +1188,12 @@ impl Host {
             let _ = host.update(cx, |host, cx| {
                 host.wallpapers = Arc::new(entries);
                 host.wallpaper_scanning = false;
-                if current.is_some() {
-                    host.current_wallpaper = current;
+                if let Some(current) = current {
+                    let resample = host.current_wallpaper.as_ref() != Some(&current);
+                    host.current_wallpaper = Some(current.clone());
+                    if resample {
+                        host.refresh_bar_band(Some(current), cx);
+                    }
                 }
                 host.changed(cx);
             });
@@ -1364,6 +1413,7 @@ impl Host {
             Action::ScanWallpapers => self.scan_wallpapers(cx),
             Action::ApplyWallpaper(path) => {
                 self.current_wallpaper = Some(path.clone());
+                self.refresh_bar_band(Some(path.clone()), cx);
                 self.desktop_action(DesktopAction::Wallpaper(Some(path)), cx);
                 self.close(cx);
             }
@@ -1493,6 +1543,13 @@ impl Host {
             Action::BarHeight(value) => {
                 self.prefs.bar_height = value.clamp(22., 48.);
                 self.save(cx);
+            }
+            Action::BarBackground(value) => {
+                if self.prefs.bar_background != value {
+                    self.prefs.bar_background = value;
+                    self.save(cx);
+                    self.changed(cx);
+                }
             }
             Action::DockPosition(value) => {
                 self.prefs.dock_position = value;
@@ -3043,6 +3100,7 @@ impl AssetSource for ShellAssets {
             "scan.svg" => include_bytes!("../assets/icons/scan.svg"),
             "sliders.svg" => include_bytes!("../assets/icons/sliders.svg"),
             "bell.svg" => include_bytes!("../assets/icons/bell.svg"),
+            "bell-off.svg" => include_bytes!("../assets/icons/bell-off.svg"),
             "circle.svg" => include_bytes!("../assets/icons/circle.svg"),
             "control-center.svg" => include_bytes!("../assets/icons/control-center.svg"),
             "moon.svg" => include_bytes!("../assets/icons/moon.svg"),
@@ -3538,5 +3596,45 @@ mod preferences_placement_tests {
                 "{floating} {size:?} {pos:?} still needs placing"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod surface_backdrop_tests {
+    use ::core::prelude::v1::test;
+
+    use super::*;
+
+    fn options(namespace: &'static str) -> WindowOptions {
+        window_options(
+            namespace,
+            None,
+            Bounds::new(point(px(0.), px(0.)), size(px(1280.), px(32.))),
+            false,
+            LayerShellAnchor {
+                top: true,
+                left: true,
+                right: true,
+                ..Default::default()
+            },
+            32,
+            LayerShellKeyboardInteractivity::None,
+            LayerShellMargins::default(),
+            LayerShellLayer::Top,
+        )
+    }
+
+    #[test]
+    fn the_bar_keeps_the_compositor_frost() {
+        assert_eq!(
+            options("clarion-shell").window_background,
+            WindowBackgroundAppearance::Blurred,
+            "the bar is created frosted; only the clear preference drops it at render time"
+        );
+        assert_eq!(
+            options("clarion-panel").window_background,
+            WindowBackgroundAppearance::Blurred,
+            "popups keep their compositor frost"
+        );
     }
 }

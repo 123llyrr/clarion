@@ -10,6 +10,12 @@ use crate::power::PowerProfile;
 const CHARGE_LIMIT_MIN: u8 = 50;
 const CHARGE_LIMIT_MAX: u8 = 100;
 
+/// The charge-limit track fills white, so its prefix glyph stays dark in both
+/// appearances instead of following the theme's light/dark battery artwork.
+fn charge_limit_icon_color() -> Hsla {
+    rgb(0x363636).into()
+}
+
 /// One turn of the confirmation ring.
 const POWER_SPIN_PERIOD: f32 = 0.9;
 /// How long the green completion burst and its check badge stay on screen.
@@ -288,16 +294,6 @@ impl ShellView {
         let percent = format!("{}%", (limit * 100.).round());
         let value_debug = format!("battery-charge-limit-value-{percent}");
         let percent_color = if supported { p.fg } else { p.muted };
-        let state = crate::battery::state(
-            host.system.battery,
-            host.system.battery_status,
-            host.system.ac_online,
-        );
-        let tone = crate::battery::tone(state);
-        // The slider is a ceiling, not the current charge: a generic battery
-        // mark reads better than the state-tinted level icon beside a
-        // percentage that describes the limit.
-        let icon = self.battery_icon("battery-symbolic", limit, tone, 15., p);
         let card = control_card(p)
             .debug_selector(|| "battery-charge-limit".into())
             .h(px(86.))
@@ -336,6 +332,15 @@ impl ShellView {
                     ),
             );
         if !supported {
+            // The unsupported pill does not sit on the white track, so it keeps
+            // the theme artwork's own light/dark colours.
+            let state = crate::battery::state(
+                host.system.battery,
+                host.system.battery_status,
+                host.system.ac_online,
+            );
+            let tone = crate::battery::tone(state);
+            let icon = self.battery_icon("battery-symbolic", limit, tone, 15., p);
             return card
                 .child(
                     div()
@@ -354,6 +359,10 @@ impl ShellView {
                 )
                 .into_any_element();
         }
+        // The slider is a ceiling, not the current charge: a generic battery
+        // mark reads better than the state-tinted level icon beside a
+        // percentage that describes the limit. The white track is why the
+        // glyph below is fixed dark instead of following the theme.
         // The gesture is 0–1 across the track; map it onto the percentage
         // range the firmware accepts.
         let normalized = ((limit * 100. - f64::from(CHARGE_LIMIT_MIN))
@@ -371,7 +380,7 @@ impl ShellView {
             value: normalized,
             dark: host.dark(),
             p,
-            icon,
+            icon: self.battery_glyph(limit, charge_limit_icon_color(), 15.),
         })
         .into_any_element()
     }
@@ -559,5 +568,20 @@ impl ShellView {
                 if selected { p.fg } else { p.muted },
             ))
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn the_charge_limit_prefix_stays_dark_on_the_white_track() {
+        let color = charge_limit_icon_color();
+        assert!(
+            color.l < 0.35,
+            "the track is always white, so the prefix must stay dark: {color:?}"
+        );
+        assert_eq!(color.a, 1.0);
     }
 }

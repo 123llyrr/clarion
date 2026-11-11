@@ -141,7 +141,7 @@ impl ShellView {
                         "controls-dnd",
                         "勿扰模式",
                         if host.dnd { "已开启" } else { "已关闭" },
-                        "moon",
+                        if host.dnd { "bell-off" } else { "bell" },
                         host.dnd,
                         Action::DoNotDisturb(!host.dnd),
                         dark,

@@ -775,6 +775,19 @@ impl ShellView {
             .child(form_row("菜单栏高度：", bar_slider).min_h(px(32.)))
             .child(
                 form_row(
+                    "菜单栏背景：",
+                    self.preference_check(
+                        "prefs-bar-background",
+                        "在壁纸上显示一层底色",
+                        host.prefs.bar_background,
+                        Action::BarBackground(!host.prefs.bar_background),
+                        p,
+                    ),
+                )
+                .min_h(px(30.)),
+            )
+            .child(
+                form_row(
                     "辅助功能：",
                     div()
                         .flex()
@@ -975,6 +988,7 @@ mod tests {
             "prefs-reduce-motion",
             "prefs-position-right",
             "prefs-auto-hide",
+            "prefs-bar-background",
         ] {
             let bounds = visual
                 .debug_bounds(id)
@@ -1003,6 +1017,7 @@ mod tests {
                     crate::preferences::DockPosition::Right
                 ),
                 "prefs-auto-hide" => assert!(host.prefs.dock_auto_hide),
+                "prefs-bar-background" => assert!(!host.prefs.bar_background),
                 _ => unreachable!(),
             });
         }

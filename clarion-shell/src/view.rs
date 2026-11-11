@@ -234,6 +234,9 @@ pub struct ShellView {
     notification_regions: std::rc::Rc<std::cell::RefCell<Vec<Bounds<Pixels>>>>,
     focus: FocusHandle,
     activated: bool,
+    /// The compositor backdrop this surface last asked for, so a repaint does
+    /// not re-commit the bar's background effect.
+    bar_appearance: Option<WindowBackgroundAppearance>,
     image_cache: std::collections::HashMap<String, Arc<Image>>,
     tray_image_hashes: std::collections::HashMap<String, [u8; 32]>,
     /// Resolved freedesktop icon names, cached per view so the bar and the
@@ -499,6 +502,76 @@ fn update_slider(
     send.then_some(value)
 }
 
+/// The bar's scrim: a decisive wallpaper-tinted surface. A faint wash would
+/// leave the compositor frost's hard edge visible against the desktop, so the
+/// tint has to read as a panel the user can recognise.
+fn bar_tint(dark: bool, band: Option<crate::wallpapers::BarBand>, frost: f32) -> Hsla {
+    let frost = frost.clamp(0., 1.);
+    let base: Hsla = if dark {
+        rgb(0x171922).into()
+    } else {
+        rgb(0xffffff).into()
+    };
+    let tint = match band {
+        // The wallpaper colours the panel instead of a fixed neutral, so the
+        // frosted edge never meets a contrasting band of the desktop.
+        Some(band) => {
+            let sample: Hsla = rgb(u32::from_be_bytes([
+                0,
+                band.rgb[0],
+                band.rgb[1],
+                band.rgb[2],
+            ]))
+            .into();
+            base.blend(sample.opacity(if dark { 0.32 } else { 0.28 }))
+        }
+        None => base,
+    };
+    // Enough body to hide the frost boundary; the frost slider only nudges how
+    // much of the wallpaper survives underneath.
+    tint.opacity(if dark {
+        0.64 + 0.10 * frost
+    } else {
+        0.60 + 0.10 * frost
+    })
+}
+
+/// The bar's text colour. With the scrim up the tint decides; without it the
+/// wallpaper itself sits behind the glyphs, so the text flips against the band.
+fn bar_foreground(dark: bool, background: bool, band: Option<crate::wallpapers::BarBand>) -> Hsla {
+    let dark_backdrop = if background {
+        dark
+    } else {
+        band.is_some_and(|band| band.luminance < 0.45)
+    };
+    if dark_backdrop {
+        rgb(0xf4f5fa).into()
+    } else {
+        rgb(0x23242a).into()
+    }
+}
+
+/// The hairline that declares the scrim's lower edge. Without it the frosted
+/// panel ends in a soft but unexplained boundary; a 1px line makes the change
+/// read as a surface edge.
+fn bar_hairline(dark: bool) -> Hsla {
+    if dark {
+        rgba(0xffffff26).into()
+    } else {
+        rgba(0x0000001a).into()
+    }
+}
+
+/// The bar's window backdrop. The clear mode paints no scrim, so asking the
+/// compositor for frost would freeze a rectangle of wallpaper behind the bar.
+fn bar_appearance(background: bool) -> WindowBackgroundAppearance {
+    if background {
+        WindowBackgroundAppearance::Blurred
+    } else {
+        WindowBackgroundAppearance::Transparent
+    }
+}
+
 impl ShellView {
     /// The output this surface belongs to. Tests read it to prove which
     /// monitor a dispatched click opened its popup on.
@@ -629,6 +702,7 @@ impl ShellView {
             notification_regions: Default::default(),
             focus: cx.focus_handle(),
             activated: false,
+            bar_appearance: None,
             image_cache: Default::default(),
             tray_image_hashes: Default::default(),
             theme_icons: Default::default(),
@@ -1213,6 +1287,23 @@ impl ShellView {
             None => battery_mark(percent, battery_color(tone, p), p.fg, size),
         }
     }
+    /// A monochrome version of the theme's battery mark. `battery_icon` keeps
+    /// the artwork's own light/dark colours, which vanish when the mark sits
+    /// on the charge-limit slider's always-white fill.
+    fn battery_glyph(&self, percent: f64, color: Hsla, size: f32) -> AnyElement {
+        let path = {
+            let mut cache = self.theme_icons.borrow_mut();
+            theme_icon("battery-symbolic", &mut cache)
+        };
+        match path {
+            Some(path) => svg()
+                .path(path.to_string_lossy().into_owned())
+                .size(px(size))
+                .text_color(color)
+                .into_any_element(),
+            None => battery_mark(percent, color, color, size),
+        }
+    }
     /// The palette header's leading mark. `path` is the mark the body on screen
     /// calls for — the store mark for applications, the selected command's own
     /// icon for the command bodies. One spring swaps them: the outgoing mark
@@ -1346,17 +1437,27 @@ impl ShellView {
             && host.panel_output.as_deref() == Some(self.output.as_str());
         let h = self.host.clone();
         let bar_output = self.output.clone();
+        // With the scrim up the tint decides the text colour; without it the
+        // wallpaper itself sits behind the menu, so the text flips against it.
+        let background = host.prefs.bar_background;
+        let fg = bar_foreground(host.dark(), background, host.bar_band);
+        let p = Palette {
+            fg,
+            muted: fg.opacity(0.78),
+            ..p
+        };
         let mut row = div()
             .id("macos-menu-bar")
             .size_full()
+            .relative()
             .flex()
             .items_center()
             .px(px(10.))
             .gap(px(0.))
-            .bg(if host.dark() {
-                rgba(0x14141a45)
+            .bg(if background {
+                bar_tint(host.dark(), host.bar_band, p.frost)
             } else {
-                rgba(0xffffff38)
+                rgba(0x00000000).into()
             })
             .text_color(p.fg)
             .text_size(px(text))
@@ -1518,7 +1619,7 @@ impl ShellView {
         if host.dnd {
             row = row.child(self.status_button(
                 "dnd-active",
-                "moon",
+                "bell-off",
                 Action::DoNotDisturb(false),
                 p,
                 tile,
@@ -1609,6 +1710,19 @@ impl ShellView {
             tile,
             (glyph - 2.).max(12.),
         ));
+        if background {
+            // Declare the scrim's lower edge so the frosted panel reads as a
+            // surface instead of a leak of the wallpaper.
+            row = row.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .h(px(1.))
+                    .bg(bar_hairline(host.dark())),
+            );
+        }
         let clock = if host.prefs.clock_show_date && width > 880. {
             format!("{}  {}", host.system.date, host.system.clock)
         } else {
@@ -2928,7 +3042,17 @@ impl Render for ShellView {
         let width = f32::from(window.viewport_size().width);
         let height = f32::from(window.viewport_size().height);
         let content = match self.kind {
-            Surface::Bar => self.bar(host, p, width, cx),
+            Surface::Bar => {
+                // Only the scrimmed bar borrows the compositor frost; a clear
+                // bar must not freeze a band of the wallpaper. Repaints skip
+                // the platform call when the backdrop has not changed.
+                let appearance = bar_appearance(host.prefs.bar_background);
+                if self.bar_appearance != Some(appearance) {
+                    window.set_background_appearance(appearance);
+                    self.bar_appearance = Some(appearance);
+                }
+                self.bar(host, p, width, cx)
+            }
             Surface::Dock => self.macos_dock(host, p, window, cx),
             Surface::Panel => self.panel(host, p, window, cx),
             Surface::LauncherMenu => self.launcher_menu_surface(host, p, width, height, cx),
@@ -3809,6 +3933,8 @@ fn symbolic_name(asset: &str) -> Option<&'static str> {
         "chevron-down.svg" => "pan-down-symbolic",
         "chevron-right.svg" => "pan-end-symbolic",
         "bell.svg" => "bell-symbolic",
+        "bell" => "notifications-symbolic",
+        "bell-off" => "notifications-disabled-symbolic",
         "sun.svg" => "weather-clear-symbolic",
         "moon.svg" => "weather-clear-night-symbolic",
         "speaker.svg" => "audio-volume-high-symbolic",
@@ -4121,6 +4247,99 @@ mod tests {
                 .iter()
                 .all(|r| f32::from(r.size.width) >= 0. && f32::from(r.size.height) >= 0.));
         }
+    }
+
+    #[::core::prelude::v1::test]
+    fn donotdisturb_borrows_the_desktop_themes_bell_symbols() {
+        assert_eq!(symbolic_name("bell"), Some("notifications-symbolic"));
+        assert_eq!(
+            symbolic_name("bell-off"),
+            Some("notifications-disabled-symbolic")
+        );
+        assert!(
+            icon_path("bell-off").is_file(),
+            "themes without a disabled bell need the bundled fallback"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn nested_cards_separate_from_the_popup_glass_in_both_appearances() {
+        let accent = rgb(0x0a84ff).into();
+        for dark in [true, false] {
+            let p = Palette::styled(dark, accent, 0.68, 0.68, 0.82);
+            // The card sits on the panel, so its own fill is only half the
+            // story: what matters is how much extra wallpaper it covers.
+            let panel = p.panel.a;
+            let card = 1. - (1. - panel) * (1. - p.card.a);
+            assert!(
+                card - panel > 0.03,
+                "the nested card must add enough fill in {}: {card} vs {panel}",
+                if dark { "dark" } else { "light" }
+            );
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn the_bar_borrows_the_wallpaper_colour_as_a_decisive_surface() {
+        let band = crate::wallpapers::BarBand {
+            rgb: [0xd9, 0x3a, 0x2b],
+            luminance: 0.24,
+        };
+        for dark in [true, false] {
+            let tint = bar_tint(dark, Some(band), 0.8);
+            assert!(
+                tint.a >= 0.6,
+                "the scrim must read as a surface instead of a wash: {tint:?}"
+            );
+            let neutral = bar_tint(dark, None, 0.8);
+            assert!(
+                (tint.s - neutral.s).abs() > 0.05,
+                "the wallpaper must colour the {} bar: {tint:?} vs {neutral:?}",
+                if dark { "dark" } else { "light" }
+            );
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn the_bar_foreground_flips_against_the_backdrop() {
+        let dark_band = crate::wallpapers::BarBand {
+            rgb: [0x10, 0x12, 0x18],
+            luminance: 0.01,
+        };
+        let light_band = crate::wallpapers::BarBand {
+            rgb: [0xfa, 0xfa, 0xf2],
+            luminance: 0.95,
+        };
+        assert!(
+            bar_foreground(true, false, Some(light_band)).l < 0.4,
+            "a clear bar over a bright wallpaper needs dark text"
+        );
+        assert!(
+            bar_foreground(false, false, Some(dark_band)).l > 0.7,
+            "a clear bar over a dark wallpaper needs light text"
+        );
+        assert!(
+            bar_foreground(true, true, Some(light_band)).l > 0.7,
+            "with the scrim up the tint decides, not the wallpaper"
+        );
+        assert!(
+            bar_foreground(false, true, Some(dark_band)).l < 0.4,
+            "with the scrim up the tint decides, not the wallpaper"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn clearing_the_bar_background_drops_the_compositor_frost() {
+        assert_eq!(
+            bar_appearance(true),
+            WindowBackgroundAppearance::Blurred,
+            "the scrimmed bar borrows the compositor frost"
+        );
+        assert_eq!(
+            bar_appearance(false),
+            WindowBackgroundAppearance::Transparent,
+            "a clear bar must not freeze a rectangle of wallpaper"
+        );
     }
 
     #[::core::prelude::v1::test]

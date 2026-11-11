@@ -32,6 +32,8 @@ pub(crate) fn test_host(
         wallpapers: Arc::default(),
         wallpaper_scanning: false,
         current_wallpaper: None,
+        bar_band: None,
+        bar_band_generation: 0,
         notifications: Vec::new(),
         tray: Vec::new(),
         history: Vec::new(),
