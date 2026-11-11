@@ -41,12 +41,10 @@ fn rounded_card(p: Palette, radius: f32) -> Div {
     div()
         .rounded(px(radius))
         .border_1()
-        .border_color(p.line.opacity(0.7))
-        .bg(linear_gradient(
-            180.,
-            linear_color_stop(p.frost_wash, 0.),
-            linear_color_stop(p.card, 1.),
-        ))
+        .border_color(p.card_line)
+        // One uniform fill: a vertical wash made nested cards look like they
+        // had a gradient rather than a flat glass tile.
+        .bg(p.card)
         .shadow(vec![BoxShadow {
             color: p.shadow.opacity(0.5),
             offset: point(px(0.), px(1.)),

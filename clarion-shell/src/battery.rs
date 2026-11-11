@@ -121,7 +121,13 @@ fn level(percent: f64) -> u32 {
 }
 
 pub fn percent_text(percent: f64) -> String {
-    format!("{}%", (percent.clamp(0., 1.) * 100.).round() as u32)
+    format!("{}%", percent_number(percent))
+}
+
+/// The charge as a bare number, for the bar's battery block where the glyph
+/// already carries the unit.
+pub fn percent_number(percent: f64) -> String {
+    format!("{}", (percent.clamp(0., 1.) * 100.).round() as u32)
 }
 
 #[cfg(test)]
@@ -201,6 +207,8 @@ mod tests {
         assert_eq!(percent_text(0.537), "54%");
         assert_eq!(percent_text(-1.), "0%");
         assert_eq!(percent_text(2.), "100%");
+        assert_eq!(percent_number(0.537), "54");
+        assert_eq!(percent_number(2.), "100");
     }
 
     #[test]

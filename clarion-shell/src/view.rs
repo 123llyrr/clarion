@@ -277,6 +277,12 @@ struct Palette {
     /// The Dock tray is a touch deeper so icons stay the brightest element.
     dock: Hsla,
     card: Hsla,
+    /// The edge of a nested card. It sits a step above `line` so a group
+    /// reads as its own surface against the popup behind it.
+    card_line: Hsla,
+    /// The visible outer edge of a popup: a 1px rim for small menus and cards,
+    /// a step softer than `card_line` but stronger than `line`.
+    rim: Hsla,
     fg: Hsla,
     muted: Hsla,
     line: Hsla,
@@ -291,6 +297,10 @@ struct Palette {
     shadow: Hsla,
     frost: f32,
 }
+/// The light popup fill reads heavier than the same alpha in dark mode, so the
+/// panel keeps a little more wallpaper visible.
+const LIGHT_PANEL_ALPHA_SCALE: f32 = 0.82;
+
 impl Palette {
     fn new(host: &ViewState) -> Self {
         let accent: Hsla = rgb(
@@ -330,7 +340,12 @@ impl Palette {
                     .opacity(dock_alpha)
                     .blend(accent_wash.opacity(0.6))
                     .blend(frost_wash),
-                card: tint(0xffffff, 0.055 + 0.03 * frost),
+                // A light glass a touch below the row-hover tint: slightly
+                // dimmer than hover, without the washed-out white of the
+                // earlier overlay.
+                card: tint(0xc9d3ee, 0.10 + 0.03 * frost),
+                card_line: tint(0xdfe9ff, 0.20 + 0.10 * frost),
+                rim: tint(0xe8f0ff, 0.17 + 0.10 * frost),
                 fg: rgb(0xf4f5fa).into(),
                 muted: rgb(0xb0b4c4).into(),
                 line: tint(0xd9e3ff, 0.12 + 0.08 * frost),
@@ -349,14 +364,21 @@ impl Palette {
             let frost_wash = tint(0xffffff, 0.03 + 0.06 * frost);
             Self {
                 panel: panel
-                    .opacity(surface_alpha)
+                    // The light panel keeps the wallpaper more visible; the
+                    // nested cards are the denser layer above it.
+                    .opacity(surface_alpha * LIGHT_PANEL_ALPHA_SCALE)
                     .blend(accent_wash)
                     .blend(frost_wash),
                 dock: dock
                     .opacity(dock_alpha)
                     .blend(accent_wash.opacity(0.5))
                     .blend(frost_wash),
-                card: tint(0x344966, 0.04 + 0.025 * frost),
+                // The panel stays the light glass layer; nested cards are a
+                // denser overlay so their labels keep contrast over the
+                // wallpaper, like the reference control center.
+                card: tint(0xffffff, 0.34 + 0.06 * frost),
+                card_line: tint(0x1d3557, 0.17 + 0.09 * frost),
+                rim: tint(0x1d3557, 0.15 + 0.08 * frost),
                 fg: rgb(0x23242a).into(),
                 muted: rgb(0x6d707b).into(),
                 line: tint(0x355578, 0.10 + 0.08 * frost),
@@ -1289,10 +1311,15 @@ impl ShellView {
         // Status icons read as separate controls only when their hit area is
         // wider than the glyph. Keep the slot close to a square at the
         // reference height and give narrow bars a usable minimum.
-        let tile = (bar * 0.92).round().clamp(26., 50.);
-        let tray_glyph = (bar * 0.5).round().clamp(14., 26.);
-        let status_glyph = (bar * 0.44).round().clamp(12., 22.);
-        let text = (14. * scale).clamp(11., 20.);
+        // Icons separate through their own slots: the 10px gap the bar used
+        // to leave between controls moved into the slots, with only a 1px
+        // seam between them. The slot pitch is unchanged.
+        let tile = (bar * 0.92).round().clamp(26., 50.) + 9.;
+        // One glyph size for the mark, tray icons and status buttons. The
+        // slot stays wider than the glyph, so the controls read as separate
+        // targets through their own padding instead of a large gap.
+        let glyph = (bar * 0.55).round().clamp(14., 22.);
+        let text = (18. * scale).clamp(12., 22.);
         let focused = host.desktop.windows.iter().find(|w| w.is_focused);
         let appname = focused
             .and_then(|w| w.app_id.as_deref())
@@ -1397,16 +1424,16 @@ impl ShellView {
                 let bar_output = self.output.clone();
                 let icon = if let Some(image) = self.image_cache.get(&format!("tray:{}", item.id)) {
                     img(image.clone())
-                        .size(px(tray_glyph))
+                        .size(px(glyph))
                         .object_fit(ObjectFit::Contain)
                         .into_any_element()
-                } else if let Some(named) = self.bar_icon(&item.icon_name, tray_glyph, p) {
+                } else if let Some(named) = self.bar_icon(&item.icon_name, glyph, p) {
                     // A status item that only publishes a freedesktop icon
                     // name (nm-applet, bluetooth applets) resolves through
                     // the theme instead of falling to the placeholder.
                     named
                 } else {
-                    self.symbol("circle", (tray_glyph - 4.).max(10.), p)
+                    self.symbol("circle", (glyph - 4.).max(10.), p)
                 };
                 row = row.child(
                     div()
@@ -1416,7 +1443,7 @@ impl ShellView {
                             move || selector.clone()
                         })
                         .w(px(tile))
-                        .mr(px(6.))
+                        .mr(px(1.))
                         .h_full()
                         .flex()
                         .items_center()
@@ -1476,7 +1503,7 @@ impl ShellView {
             Action::Panel(Panel::Recent),
             p,
             tile,
-            status_glyph,
+            glyph,
         ));
         if width > 520. {
             row = row.child(self.status_button(
@@ -1485,7 +1512,7 @@ impl ShellView {
                 Action::Panel(Panel::Screenshot),
                 p,
                 tile,
-                status_glyph,
+                glyph,
             ));
         }
         if host.dnd {
@@ -1495,7 +1522,7 @@ impl ShellView {
                 Action::DoNotDisturb(false),
                 p,
                 tile,
-                status_glyph,
+                glyph,
             ));
         }
         if width > 800. {
@@ -1511,14 +1538,22 @@ impl ShellView {
                 // under the clicked icon like the other status buttons.
                 let h = self.host.clone();
                 let bar_output = self.output.clone();
-                let mut indicator = div()
+                // The battery owns the width of two ordinary icon slots: the
+                // charge reads first, then the mark. The bare number keeps the
+                // block compact and the glyph already carries the unit.
+                let battery_glyph = (glyph * 1.4).round().clamp(18., 30.);
+                let battery_text = (text + 2.).min(24.);
+                let battery_width = 2. * tile + 1.;
+                let indicator = div()
                     .id("menu-battery")
                     .debug_selector(|| "menu-battery".into())
+                    .w(px(battery_width))
+                    .mr(px(1.))
                     .h_full()
-                    .px(px(8. * scale))
                     .flex()
                     .items_center()
-                    .gap(px(5. * scale))
+                    .justify_center()
+                    .gap(px((glyph * 0.55).round()))
                     .rounded(px(4.))
                     .cursor_pointer()
                     .hover(move |s| s.bg(p.line))
@@ -1534,20 +1569,17 @@ impl ShellView {
                             )
                         });
                     })
-                    .child(self.battery_icon(
-                        &icon,
-                        battery,
-                        tone,
-                        (status_glyph * 1.5).round().clamp(16., 28.),
-                        p,
-                    ));
-                if host.prefs.show_battery_percentage {
-                    indicator = indicator.child(
+                    .child(
                         div()
-                            .text_size(px(text))
-                            .child(battery::percent_text(battery)),
-                    );
-                }
+                            .text_size(px(battery_text))
+                            // Pin the line box to the glyph's optical centre;
+                            // the bar's inherited 1.4x line height otherwise
+                            // lifts the number a little.
+                            .line_height(px((battery_text * 1.05).round()))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(battery::percent_number(battery)),
+                    )
+                    .child(self.battery_icon(&icon, battery, tone, battery_glyph, p));
                 row = row.child(indicator);
             }
         }
@@ -1557,7 +1589,7 @@ impl ShellView {
         let h = self.host.clone();
         let bar_output = self.output.clone();
         row = row.child(
-            self.status_button_base("spotlight", "search", p, tile, status_glyph)
+            self.status_button_base("spotlight", "search", p, tile, glyph)
                 .debug_selector(|| "menu-spotlight".into())
                 .on_click(move |_, _, cx| {
                     h.update(cx, |h, cx| {
@@ -1575,7 +1607,7 @@ impl ShellView {
             Panel::Controls,
             p,
             tile,
-            status_glyph,
+            (glyph - 2.).max(12.),
         ));
         let clock = if host.prefs.clock_show_date && width > 880. {
             format!("{}  {}", host.system.date, host.system.clock)
@@ -1664,7 +1696,7 @@ impl ShellView {
         div()
             .id(SharedString::from(id.to_owned()))
             .w(px(tile))
-            .mr(px(4.))
+            .mr(px(1.))
             .h_full()
             .flex()
             .items_center()
@@ -2522,14 +2554,14 @@ impl ShellView {
             .text_size(px(13.));
         if arrow.is_none() {
             // A modal popup draws its own outline so the body and the pointer
-            // share one fill and one border. The launcher sheet's rim is a
-            // step heavier but nearly transparent: the frosted wallpaper
-            // tints it instead of a hard line.
+            // share one fill and one border. The launcher sheet keeps its
+            // heavier, nearly transparent 2px rim; the smaller popups take a
+            // thinner 1px rim in the same spirit.
             body = body.bg(p.panel);
             body = if panel == Panel::Spotlight {
                 body.border_2().border_color(p.fg.opacity(0.09))
             } else {
-                body.border_1().border_color(p.line)
+                body.border_1().border_color(p.rim)
             };
         }
         if panel == Panel::Controls {
@@ -3490,7 +3522,7 @@ fn popup_shape(
             let mut stroke = PathBuilder::stroke(px(1.));
             append_popup_path(&mut stroke, arrow, origin, width, height);
             if let Ok(path) = stroke.build() {
-                window.paint_path(path, p.line);
+                window.paint_path(path, p.rim);
             }
         },
     )
@@ -4145,7 +4177,12 @@ mod tests {
         for dark in [true, false] {
             for opacity in [0.3, 0.68, 1.0] {
                 let palette = Palette::styled(dark, rgb(0x0a84ff).into(), opacity, opacity, 0.82);
-                assert!((palette.panel.a - opacity).abs() < 0.0001);
+                let panel = if dark {
+                    opacity
+                } else {
+                    opacity * LIGHT_PANEL_ALPHA_SCALE
+                };
+                assert!((palette.panel.a - panel).abs() < 0.0001);
                 assert!((palette.dock.a - opacity).abs() < 0.0001);
                 assert_eq!(palette.fg.a, 1.0);
                 assert_eq!(palette.muted.a, 1.0);

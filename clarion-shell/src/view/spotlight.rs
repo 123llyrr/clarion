@@ -2301,7 +2301,7 @@ impl ShellView {
             .rounded(px(11.))
             .bg(fill)
             .border_1()
-            .border_color(p.line)
+            .border_color(p.rim)
             .p(px(4.))
             .flex()
             .flex_col()

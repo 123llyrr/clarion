@@ -877,8 +877,8 @@ fn the_bar_icon_slots_leave_breathing_room(cx: &mut TestAppContext) {
         .debug_bounds("menu-battery")
         .expect("the laptop bar carries the battery indicator");
     assert!(
-        f32::from(battery.size.width) >= 40.,
-        "the battery indicator needs the same roomy slot: {battery:?}"
+        f32::from(battery.size.width) >= 34.,
+        "the battery glyph keeps its own side padding: {battery:?}"
     );
 }
 

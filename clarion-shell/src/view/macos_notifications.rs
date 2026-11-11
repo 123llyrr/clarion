@@ -410,7 +410,7 @@ impl ShellView {
             .rounded(px(CARD_RADIUS))
             .bg(notification_card_fill(p, surface.stacked))
             .border_1()
-            .border_color(p.line.opacity(0.7))
+            .border_color(if surface.toast { p.rim } else { p.card_line })
             .p(px(CARD_PADDING))
             .flex()
             .flex_col()
@@ -1002,7 +1002,7 @@ impl ShellView {
             .rounded(px(CONTAINER_RADIUS))
             .bg(p.panel)
             .border_1()
-            .border_color(p.line)
+            .border_color(p.rim)
             .overflow_hidden()
             .pt(px(14.))
             .px(px(14.))
@@ -1095,7 +1095,7 @@ impl ShellView {
                         if window.viewport_size() != size {
                             window.resize(size);
                         }
-                        let regions = card_frost_shape(
+                        let regions = super::rounded_region(
                             f32::from(size.width),
                             f32::from(size.height),
                             CARD_RADIUS,
@@ -1267,46 +1267,12 @@ fn calendar_weeks(month: CalendarMonth) -> Vec<Vec<Option<u32>>> {
     cells.chunks(7).map(|week| week.to_vec()).collect()
 }
 
-/// Frost the rounded column: the card shape with a bounded number of corner
-/// bands, translated to its painted position.
+/// Frost the rounded column: the same per-row corner approximation the Dock
+/// and control center use, translated to its painted position.
 fn container_regions(origin: Point<Pixels>, width: f32, height: f32) -> Vec<Bounds<Pixels>> {
-    let mut regions = card_frost_shape(width, height, CONTAINER_RADIUS);
+    let mut regions = super::rounded_region(width, height, CONTAINER_RADIUS);
     for region in &mut regions {
         region.origin += origin;
-    }
-    regions
-}
-
-/// The rounded card shape with a bounded number of corner bands. Wayland caps
-/// background-effect regions, so a handful of bands approximates the painted
-/// radius while staying far below that cap.
-fn card_frost_shape(width: f32, height: f32, radius: f32) -> Vec<Bounds<Pixels>> {
-    const STEPS: f32 = 5.;
-    if width <= 0. || height <= 0. {
-        return Vec::new();
-    }
-    let radius = radius.min(width / 2.).min(height / 2.).max(0.);
-    let mut regions = vec![Bounds::new(
-        point(px(0.), px(radius)),
-        size(px(width), px((height - 2. * radius).max(0.))),
-    )];
-    let step = radius / STEPS;
-    for index in 0..STEPS as u32 {
-        let top = index as f32 * step;
-        let bottom = (index as f32 + 1.) * step;
-        let middle = (top + bottom) / 2.;
-        let distance = radius - middle;
-        let inset = (radius - (radius * radius - distance * distance).max(0.).sqrt()).ceil();
-        let width = (width - 2. * inset).max(0.);
-        let band = (bottom - top).max(1.);
-        regions.push(Bounds::new(
-            point(px(inset), px(top)),
-            size(px(width), px(band)),
-        ));
-        regions.push(Bounds::new(
-            point(px(inset), px(height - bottom)),
-            size(px(width), px(band)),
-        ));
     }
     regions
 }

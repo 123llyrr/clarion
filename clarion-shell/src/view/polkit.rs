@@ -258,7 +258,7 @@ pub(super) fn auth_surface(
         .h(px(card_height))
         .rounded(px(AUTH_RADIUS))
         .border_1()
-        .border_color(p.line)
+        .border_color(p.rim)
         // The palette is already semi-transparent and carries the frost wash;
         // the compositor blurs exactly this rounded rectangle.
         .bg(p.panel)

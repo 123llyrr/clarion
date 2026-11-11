@@ -2225,7 +2225,10 @@ impl Host {
                     0,
                     LayerShellKeyboardInteractivity::None,
                     LayerShellMargins {
-                        top: self.prefs.bar_height as i32 + 14,
+                        // The bar's exclusive zone already starts the overlay
+                        // below the menu bar; adding the bar height here again
+                        // pushed the banner a whole bar-height down.
+                        top: 14,
                         right: 14,
                         ..Default::default()
                     },

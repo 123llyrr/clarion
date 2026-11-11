@@ -117,7 +117,6 @@ pub struct Preferences {
     pub recent_app_ids: Vec<String>,
     pub bar_height: f64,
     pub bar_auto_hide: bool,
-    pub show_battery_percentage: bool,
     pub clock_show_date: bool,
     pub clock_show_seconds: bool,
     pub dock_size: f64,
@@ -161,7 +160,6 @@ impl Default for Preferences {
             recent_app_ids: Vec::new(),
             bar_height: 24.,
             bar_auto_hide: false,
-            show_battery_percentage: false,
             clock_show_date: true,
             clock_show_seconds: false,
             dock_size: 48.,
@@ -403,7 +401,6 @@ impl Preferences {
             };
         }
         boolean!(bar_auto_hide, "menu_bar_auto_hide");
-        boolean!(show_battery_percentage, "show_battery_percentage");
         boolean!(clock_show_date, "clock_show_date");
         boolean!(clock_show_seconds, "clock_show_seconds");
         boolean!(dock_auto_hide, "dock_auto_hide");
@@ -474,7 +471,6 @@ impl Preferences {
             recent_app_ids,
             bar_height,
             bar_auto_hide,
-            show_battery_percentage,
             clock_show_date,
             clock_show_seconds,
             dock_size,
