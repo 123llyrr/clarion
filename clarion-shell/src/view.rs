@@ -1677,7 +1677,7 @@ impl ShellView {
                             // the bar's inherited 1.4x line height otherwise
                             // lifts the number a little.
                             .line_height(px((battery_text * 1.05).round()))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::NORMAL)
                             .child(battery::percent_number(battery)),
                     )
                     .child(self.battery_icon(&icon, battery, tone, battery_glyph, p));
