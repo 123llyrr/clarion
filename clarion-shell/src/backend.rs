@@ -105,11 +105,16 @@ pub struct NetworkSnapshot {
 
 /// What the Control Center's media card shows. `playerctl` is the bridge; the
 /// shell never speaks MPRIS itself, matching the other tool-backed rows.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct MediaSnapshot {
     pub title: String,
     pub artist: String,
     pub playing: bool,
+    /// Elapsed time and track length in seconds, when the player reports them.
+    pub position: Option<f64>,
+    pub length: Option<f64>,
+    /// Cover art re-encoded to a small PNG, ready for GPUI's image cache.
+    pub art_png: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1241,6 +1246,7 @@ fn system_worker(
         facts,
         ..SystemSnapshot::default()
     };
+    let mut media_art_cache: Option<(String, Option<Vec<u8>>)> = None;
     let mut hardware_due = Instant::now();
     while alive.load(Ordering::Relaxed) {
         if !options.preview && Instant::now() >= hardware_due {
@@ -1319,7 +1325,7 @@ fn system_worker(
             hardware.trash_full = data
                 .and_then(|data| fs::read_dir(data.join("Trash/files")).ok())
                 .is_some_and(|mut files| files.next().is_some());
-            hardware.media = media_snapshot(&options.environment).map(Box::new);
+            hardware.media = media_snapshot(&options.environment, &mut media_art_cache).map(Box::new);
             *hardware.network = network_snapshot(&options.environment);
             hardware_due = Instant::now() + Duration::from_secs(3);
         }
@@ -1336,13 +1342,16 @@ fn system_worker(
 
 /// Read the active MPRIS player through `playerctl`. No player exits non-zero,
 /// which reads as "nothing to show"; the card then keeps its idle state.
-fn media_snapshot(environment: &Environment) -> Option<MediaSnapshot> {
+fn media_snapshot(
+    environment: &Environment,
+    art_cache: &mut Option<(String, Option<Vec<u8>>)>,
+) -> Option<MediaSnapshot> {
     let output = run_tool(
         "playerctl",
         &[
             "metadata",
             "--format",
-            "{{status}}\u{1f}{{title}}\u{1f}{{artist}}",
+            "{{status}}\u{1f}{{title}}\u{1f}{{artist}}\u{1f}{{mpris:artUrl}}\u{1f}{{position}}\u{1f}{{mpris:length}}",
         ],
         environment,
         TOOL_TIMEOUT,
@@ -1353,45 +1362,157 @@ fn media_snapshot(environment: &Environment) -> Option<MediaSnapshot> {
     if status.is_empty() || status == "Stopped" {
         return None;
     }
+    let title = fields.next().unwrap_or_default().trim().to_owned();
+    let artist = fields.next().unwrap_or_default().trim().to_owned();
+    let art_url = fields.next().unwrap_or_default().trim();
+    let position = fields
+        .next()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(|micros| micros as f64 / 1_000_000.);
+    let length = fields
+        .next()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(|micros| micros as f64 / 1_000_000.);
+    let art_png = if art_url.is_empty() {
+        None
+    } else if let Some((cached_url, cached)) = art_cache.as_ref() {
+        if cached_url == art_url {
+            cached.clone()
+        } else {
+            let decoded = media_art(art_url, environment);
+            *art_cache = Some((art_url.to_owned(), decoded.clone()));
+            decoded
+        }
+    } else {
+        let decoded = media_art(art_url, environment);
+        *art_cache = Some((art_url.to_owned(), decoded.clone()));
+        decoded
+    };
     Some(MediaSnapshot {
-        title: fields.next().unwrap_or_default().trim().to_owned(),
-        artist: fields.next().unwrap_or_default().trim().to_owned(),
+        title,
+        artist,
         playing: status == "Playing",
+        position,
+        length,
+        art_png,
     })
+}
+
+/// Turn an MPRIS `mpris:artUrl` into a small PNG. Local files are read
+/// directly; http(s) covers are fetched with curl into a bounded temp file.
+fn media_art(url: &str, environment: &Environment) -> Option<Vec<u8>> {
+    let bytes = if url.starts_with("http://") || url.starts_with("https://") {
+        fetch_remote_art(url, environment)?
+    } else {
+        let path = if let Some(rest) = url.strip_prefix("file://") {
+            let rest = rest.strip_prefix("localhost").unwrap_or(rest);
+            PathBuf::from(percent_decode(rest))
+        } else if url.starts_with('/') {
+            PathBuf::from(url)
+        } else {
+            return None;
+        };
+        if fs::metadata(&path).ok()?.len() > 8 * 1024 * 1024 {
+            return None;
+        }
+        fs::read(&path).ok()?
+    };
+    let image = image::load_from_memory(&bytes).ok()?;
+    let thumbnail = image.thumbnail(256, 256);
+    let mut png = Vec::new();
+    thumbnail
+        .write_to(
+            &mut std::io::Cursor::new(&mut png),
+            image::ImageFormat::Png,
+        )
+        .ok()?;
+    Some(png)
+}
+
+fn fetch_remote_art(url: &str, environment: &Environment) -> Option<Vec<u8>> {
+    let path = std::env::temp_dir().join(format!(
+        "clarion-media-art-{}.img",
+        std::process::id()
+    ));
+    let status = ProcessCommand::new("curl")
+        .args([
+            "-sL",
+            "--max-time",
+            "3",
+            "--max-filesize",
+            "8388608",
+            "-o",
+        ])
+        .arg(&path)
+        .arg("--")
+        .arg(url)
+        .env_clear()
+        .envs(environment)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .ok()?;
+    if !status.success() {
+        let _ = fs::remove_file(&path);
+        return None;
+    }
+    let bytes = fs::read(&path).ok();
+    let _ = fs::remove_file(&path);
+    bytes
+}
+
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).ok();
+            if let Some(byte) = hex.and_then(|hex| u8::from_str_radix(hex, 16).ok()) {
+                out.push(byte);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Read the active network and Bluetooth state through the usual desktop
 /// tools; a missing service simply leaves the row quiet.
 fn network_snapshot(environment: &Environment) -> NetworkSnapshot {
     let mut snapshot = NetworkSnapshot::default();
+    // Read the active device connections rather than the Wi-Fi scan list: the
+    // scan reorders as access points appear, which made the pill flip between
+    // equally valid names. The connection name of the connected Wi-Fi is its
+    // current SSID; a wired link falls back to its profile name.
     if let Ok(text) = run_tool(
         "nmcli",
-        &["-t", "-f", "active,ssid", "dev", "wifi"],
+        &["-t", "-f", "TYPE,STATE,CONNECTION", "device"],
         environment,
         TOOL_TIMEOUT,
     ) {
-        snapshot.network = text.lines().find_map(|line| {
-            let ssid = line.strip_prefix("yes:")?.trim();
-            (!ssid.is_empty()).then(|| ssid.replace("\\:", ":"))
-        });
-        snapshot.wireless = snapshot.network.is_some();
-    }
-    if snapshot.network.is_none() {
-        if let Ok(text) = run_tool(
-            "nmcli",
-            &["-t", "-f", "TYPE,STATE,CONNECTION", "device"],
-            environment,
-            TOOL_TIMEOUT,
-        ) {
-            snapshot.network = text.lines().find_map(|line| {
-                let mut parts = line.splitn(3, ':');
-                let kind = parts.next()?;
-                let state = parts.next()?;
-                let name = parts.next()?;
-                (kind == "ethernet" && state == "connected" && !name.is_empty())
-                    .then(|| name.to_owned())
-            });
+        let mut wireless = None;
+        let mut wired = None;
+        for line in text.lines() {
+            let mut parts = line.splitn(3, ':');
+            let kind = parts.next().unwrap_or_default();
+            let state = parts.next().unwrap_or_default();
+            let name = parts.next().unwrap_or_default().trim();
+            if state != "connected" || name.is_empty() {
+                continue;
+            }
+            match kind {
+                "wifi" => wireless = Some(name.replace("\\:", ":")),
+                "ethernet" => wired = Some(name.to_owned()),
+                _ => {}
+            }
         }
+        snapshot.wireless = wireless.is_some();
+        snapshot.network = wireless.or(wired);
     }
     if let Ok(text) = run_tool(
         "bluetoothctl",
@@ -2234,6 +2355,22 @@ mod tests {
             preview_location(&directory.path().join("missing.png"), &environment).is_err(),
             "a preview never opens a path that is not there"
         );
+    }
+
+    #[test]
+    fn media_art_urls_decode_to_png_thumbnails() {
+        assert_eq!(percent_decode("a%20b%2Fc"), "a b/c");
+        let directory = tempfile::tempdir().unwrap();
+        let cover = directory.path().join("cover with space.png");
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([20, 80, 100, 255]))
+            .save(&cover)
+            .unwrap();
+        let url = format!("file://{}", cover.display().to_string().replace(' ', "%20"));
+        let environment = Environment::new();
+        let png = media_art(&url, &environment).expect("a local cover decodes");
+        assert!(png.starts_with(&[0x89, b'P', b'N', b'G']));
+        assert!(media_art("ftp://example.com/cover.png", &environment).is_none());
+        assert!(media_art("file:///missing/cover.png", &environment).is_none());
     }
 
     #[test]

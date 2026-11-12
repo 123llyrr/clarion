@@ -1063,6 +1063,20 @@ impl ShellView {
                 }
             }
         }
+        if let Some(bytes) = self
+            .state
+            .system
+            .media
+            .as_ref()
+            .and_then(|media| media.art_png.as_ref())
+        {
+            let hash: [u8; 32] = Sha256::digest(bytes).into();
+            let key = format!("media-art:{}", icon_key(&hash));
+            keep.insert(key.clone());
+            self.image_cache.entry(key).or_insert_with(|| {
+                Arc::new(Image::from_bytes(ImageFormat::Png, bytes.clone()))
+            });
+        }
         // Menu rows carry their owner's device icons as bytes; key them by
         // content so a renaming tree still hits the same decoded image.
         let mut menu_icons: Vec<Vec<u8>> = Vec::new();

@@ -20,6 +20,20 @@ impl RenderOnce for ControlText {
     }
 }
 
+fn clock_time(seconds: f64) -> String {
+    let seconds = seconds.max(0.).round() as u64;
+    if seconds >= 3600 {
+        format!(
+            "{}:{:02}:{:02}",
+            seconds / 3600,
+            (seconds % 3600) / 60,
+            seconds % 60
+        )
+    } else {
+        format!("{}:{:02}", seconds / 60, seconds % 60)
+    }
+}
+
 fn text(text: impl Into<String>, size: f32, weight: FontWeight, color: Hsla) -> ControlText {
     ControlText {
         text: text.into(),
@@ -31,10 +45,9 @@ fn text(text: impl Into<String>, size: f32, weight: FontWeight, color: Hsla) -> 
 
 /// The control center's inner cards step down from the popup radius so the
 /// nested surfaces share one silhouette.
-const CONTROL_CARD_RADIUS: f32 = 35.;
-/// The brightness and volume rows are slimmer than the top cards; their
-/// corners step down so they read as controls, not as another tile.
-const SLIDER_CARD_RADIUS: f32 = 20.;
+const CONTROL_CARD_RADIUS: f32 = 18.;
+/// The brightness and volume rows share the inner-card radius.
+const SLIDER_CARD_RADIUS: f32 = 18.;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PillKind {
@@ -171,22 +184,36 @@ impl ShellView {
             },
         );
 
-        // The left column stacks three capsules; the right column is a square
-        // media tile with the remaining quick toggles underneath. Both are the
-        // same height, so the two columns share one bottom edge.
-        let left = div()
-            .flex_1()
-            .min_w_0()
+        // The media banner spans the full row; the two connectivity capsules
+        // and the quick toggles follow underneath, then the action row sits
+        // above the brightness and sound sliders.
+        let connectivity = div()
+            .w_full()
             .flex()
-            .flex_col()
             .gap(px(10.))
-            .child(self.status_pill(host, PillKind::Network, dark, p))
-            .child(self.status_pill(host, PillKind::Bluetooth, dark, p))
-            .child(self.status_pill(host, PillKind::Dnd, dark, p));
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(self.status_pill(host, PillKind::Network, dark, p)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(self.status_pill(host, PillKind::Bluetooth, dark, p)),
+            );
         let quick = div()
             .w_full()
             .flex()
-            .justify_between()
+            .items_center()
+            .gap(px(10.))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(self.status_pill(host, PillKind::Dnd, dark, p)),
+            )
             .child(self.control_circle(
                 "controls-theme",
                 self.symbol(
@@ -208,18 +235,8 @@ impl ShellView {
                 Some(Action::ToggleTilingMode),
                 p,
             ));
-        let right = div()
-            .flex_1()
-            .min_w_0()
-            .flex()
-            .flex_col()
-            .gap(px(10.))
-            .child(self.media_card(host, p))
-            .child(quick);
-        let top = div().w_full().flex().gap(px(10.)).child(left).child(right);
 
-        // Four transport-style actions at the very bottom, spread across the
-        // popup width with the same rhythm as the capsule row above.
+        // Four transport-style actions, spread across the popup width.
         let actions = div()
             .w_full()
             .flex()
@@ -262,7 +279,10 @@ impl ShellView {
             .flex()
             .flex_col()
             .gap(px(12.))
-            .child(top)
+            .child(self.media_card(host, p))
+            .child(connectivity)
+            .child(quick)
+            .child(actions)
             .child(self.control_slider(
                 "brightness",
                 "显示器",
@@ -295,7 +315,6 @@ impl ShellView {
                 dark,
                 p,
             ))
-            .child(actions)
             .into_any_element()
     }
 
@@ -511,76 +530,137 @@ impl ShellView {
             .map(|media| media.artist.clone())
             .unwrap_or_default();
         let enabled = media.is_some();
-        let mut card = control_card(p)
-            .debug_selector(|| "controls-media".into())
-            .w_full()
-            .h(px(150.))
-            .p(px(12.))
+        let art = media.and_then(|media| media.art_png.as_ref()).and_then(|bytes| {
+            use sha2::{Digest, Sha256};
+            let hash: [u8; 32] = Sha256::digest(bytes).into();
+            self.image_cache
+                .get(&format!("media-art:{}", icon_key(&hash)))
+                .cloned()
+        });
+        let mut info = div()
             .flex()
             .flex_col()
+            .gap(px(1.))
             .child(
                 div()
-                    .size(px(54.))
-                    .flex_shrink_0()
-                    .rounded(px(12.))
-                    .bg(linear_gradient(
-                        135.,
-                        linear_color_stop(rgb(0x3b82f6), 0.),
-                        linear_color_stop(rgb(0x8b5cf6), 1.),
-                    ))
-                    .opacity(if playing { 1. } else { 0.55 }),
-            )
-            .child(
-                div()
-                    .mt(px(6.))
                     .min_w_0()
                     .overflow_hidden()
                     .child(text(title, 13., FontWeight::SEMIBOLD, p.fg)),
             );
         if !artist.is_empty() {
-            card = card.child(
+            info = info.child(
                 div()
                     .min_w_0()
                     .overflow_hidden()
                     .child(text(artist, 10., FontWeight::NORMAL, p.muted)),
             );
         }
-        card.child(div().flex_1())
-            .child(
+        let controls = div()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .child(self.media_button(
+                "controls-media-prev",
+                "media-skip-backward-symbolic",
+                "⏮",
+                backend::MediaControl::Previous,
+                enabled,
+                p,
+            ))
+            .child(self.media_button(
+                "controls-media-play",
+                if playing {
+                    "media-playback-pause-symbolic"
+                } else {
+                    "media-playback-start-symbolic"
+                },
+                if playing { "⏸" } else { "▶" },
+                backend::MediaControl::PlayPause,
+                enabled,
+                p,
+            ))
+            .child(self.media_button(
+                "controls-media-next",
+                "media-skip-forward-symbolic",
+                "⏭",
+                backend::MediaControl::Next,
+                enabled,
+                p,
+            ));
+        let progress = media
+            .filter(|media| media.length.is_some_and(|length| length > 0.))
+            .map(|media| {
+                let length = media.length.unwrap_or(0.);
+                let position = media.position.unwrap_or(0.).clamp(0., length);
+                let fraction = (position / length).clamp(0., 1.) as f32;
                 div()
+                    .w_full()
                     .flex()
                     .items_center()
-                    .justify_center()
-                    .gap(px(10.))
-                    .child(self.media_button(
-                        "controls-media-prev",
-                        "media-skip-backward-symbolic",
-                        "⏮",
-                        backend::MediaControl::Previous,
-                        enabled,
-                        p,
+                    .gap(px(6.))
+                    .child(text(clock_time(position), 9., FontWeight::NORMAL, p.muted))
+                    .child(
+                        div()
+                            .flex_1()
+                            .h(px(3.))
+                            .rounded_full()
+                            .bg(p.line.opacity(0.6))
+                            .child(
+                                div()
+                                    .h_full()
+                                    .w(relative(fraction))
+                                    .rounded_full()
+                                    .bg(p.accent),
+                            ),
+                    )
+                    .child(text(clock_time(length), 9., FontWeight::NORMAL, p.muted))
+                    .into_any_element()
+            });
+        control_card(p)
+            .debug_selector(|| "controls-media".into())
+            .w_full()
+            .h(px(112.))
+            .p(px(12.))
+            .flex()
+            .items_center()
+            .gap(px(12.))
+            .child(match art {
+                // The artwork fills the card's inner height; its 6px corner
+                // radius is the card's 18px radius minus the 12px inset, so
+                // both arcs share a centre.
+                Some(image) => img(image)
+                    .size(px(88.))
+                    .flex_shrink_0()
+                    .rounded(px(6.))
+                    .object_fit(ObjectFit::Cover)
+                    .into_any_element(),
+                None => div()
+                    .size(px(88.))
+                    .flex_shrink_0()
+                    .rounded(px(6.))
+                    .bg(linear_gradient(
+                        135.,
+                        linear_color_stop(rgb(0x3b82f6), 0.),
+                        linear_color_stop(rgb(0x8b5cf6), 1.),
                     ))
-                    .child(self.media_button(
-                        "controls-media-play",
-                        if playing {
-                            "media-playback-pause-symbolic"
-                        } else {
-                            "media-playback-start-symbolic"
-                        },
-                        if playing { "⏸" } else { "▶" },
-                        backend::MediaControl::PlayPause,
-                        enabled,
-                        p,
-                    ))
-                    .child(self.media_button(
-                        "controls-media-next",
-                        "media-skip-forward-symbolic",
-                        "⏭",
-                        backend::MediaControl::Next,
-                        enabled,
-                        p,
-                    )),
-            )
+                    .opacity(if playing { 1. } else { 0.55 })
+                    .into_any_element(),
+            })
+            .child({
+                let mut column = div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .child(info)
+                    .child(div().flex_1());
+                if let Some(progress) = progress {
+                    column = column.child(progress);
+                }
+                column.child(controls)
+            })
             .into_any_element()
     }
 
