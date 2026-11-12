@@ -244,10 +244,9 @@ impl ShellView {
                 p,
             ));
         }
-        let modes = control_card(p)
+        let modes = div()
             .debug_selector(|| "battery-modes".into())
             .w_full()
-            .p(px(14.))
             .flex()
             .flex_col()
             .gap(px(12.))
@@ -274,32 +273,43 @@ impl ShellView {
             window.request_animation_frame();
         }
 
+        // One card carries both the profile switch and the charge ceiling; the
+        // top padding keeps the "电源模式" line clear of the large corner arc.
+        let settings = control_card(p)
+            .debug_selector(|| "battery-settings".into())
+            .w_full()
+            .px(px(16.))
+            .pt(px(18.))
+            .pb(px(14.))
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .child(modes)
+            .child(div().h(px(1.)).bg(p.line.opacity(0.55)))
+            .child(self.battery_charge_limit_content(host, p));
+
         div()
             .w_full()
             .flex()
             .flex_col()
             .gap(px(10.))
             .child(summary)
-            .child(modes)
-            .child(self.battery_charge_limit_card(host, p))
+            .child(settings)
             .into_any_element()
     }
 
     /// The charge ceiling. Supported machines get the same slim slider as the
     /// Control Center's brightness and volume; unsupported ones keep the card
     /// at the default 100% and say so instead of hiding the row.
-    fn battery_charge_limit_card(&self, host: &ViewState, p: Palette) -> AnyElement {
+    fn battery_charge_limit_content(&self, host: &ViewState, p: Palette) -> AnyElement {
         let supported = host.battery_charge_limit.is_some();
         let limit = host.battery_charge_limit.unwrap_or(1.).clamp(0., 1.);
         let percent = format!("{}%", (limit * 100.).round());
         let value_debug = format!("battery-charge-limit-value-{percent}");
         let percent_color = if supported { p.fg } else { p.muted };
-        let card = control_card(p)
+        let section = div()
             .debug_selector(|| "battery-charge-limit".into())
-            .h(px(86.))
             .w_full()
-            .px(px(12.))
-            .py(px(11.))
             .flex()
             .flex_col()
             .gap(px(10.))
@@ -341,7 +351,7 @@ impl ShellView {
             );
             let tone = crate::battery::tone(state);
             let icon = self.battery_icon("battery-symbolic", limit, tone, 15., p);
-            return card
+            return section
                 .child(
                     div()
                         .h(px(26.))
@@ -368,7 +378,7 @@ impl ShellView {
         let normalized = ((limit * 100. - f64::from(CHARGE_LIMIT_MIN))
             / f64::from(CHARGE_LIMIT_MAX - CHARGE_LIMIT_MIN))
             .clamp(0., 1.);
-        card.child(ControlSlider {
+        section.child(ControlSlider {
             key: SharedString::from("battery-charge-limit-slider"),
             selector: "slider-battery-charge-limit".into(),
             host: self.host.clone(),

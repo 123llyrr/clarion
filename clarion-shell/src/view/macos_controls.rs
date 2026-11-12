@@ -31,7 +31,17 @@ fn text(text: impl Into<String>, size: f32, weight: FontWeight, color: Hsla) -> 
 
 /// The control center's inner cards step down from the popup radius so the
 /// nested surfaces share one silhouette.
-const CONTROL_CARD_RADIUS: f32 = 16.;
+const CONTROL_CARD_RADIUS: f32 = 35.;
+/// The brightness and volume rows are slimmer than the top cards; their
+/// corners step down so they read as controls, not as another tile.
+const SLIDER_CARD_RADIUS: f32 = 20.;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PillKind {
+    Network,
+    Bluetooth,
+    Dnd,
+}
 
 pub(super) fn card(p: Palette) -> Div {
     rounded_card(p, 11.)
@@ -91,120 +101,168 @@ impl ShellView {
             .and_then(|output| output.hdr_brightness)
             .map(|value| f64::from(value) / 100.)
             .or(host.system.brightness);
-        let mut footer = control_card(p).w_full().p(px(4.)).flex().flex_col();
-        for (index, (id, label, icon, action)) in [
-            (
-                "controls-desktop",
-                "桌面与 Dock",
-                "display",
-                Action::Panel(Panel::Preferences),
-            ),
-            (
-                "controls-settings",
-                "系统设置",
-                "settings",
-                Action::Settings,
-            ),
-            (
-                "controls-wallpaper",
-                "更换壁纸",
-                "wallpaper",
-                Action::PickWallpaper,
-            ),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            if index != 0 {
-                footer = footer.child(
-                    div()
-                        .ml(px(32.))
-                        .mr(px(8.))
-                        .h(px(1.))
-                        .bg(p.line.opacity(0.55)),
-                );
-            }
-            footer = footer.child(self.control_entry(id, label, icon, action, p));
-        }
+        let fullscreen = host.prefs.launcher_presentation
+            == crate::preferences::LauncherPresentation::Fullscreen;
+        let dwindle = matches!(host.tiling_mode, clarion_ipc::TilingMode::Dwindle);
+        let dock_autohide = host.prefs.dock_auto_hide;
 
-        let controls = div()
+        let launcher_glyph = self.glyph(
+            &self.themed_glyph_path(
+                if fullscreen {
+                    "move-symbolic"
+                } else {
+                    "window-new-symbolic"
+                },
+                if fullscreen {
+                    "display.svg"
+                } else {
+                    "generic-application.svg"
+                },
+            ),
+            26.,
+            Palette {
+                fg: if fullscreen {
+                    rgb(0xffffff).into()
+                } else {
+                    p.fg
+                },
+                ..p
+            },
+        );
+        let layout_glyph = self.glyph(
+            &self.themed_glyph_path(
+                if dwindle {
+                    "view-grid-symbolic"
+                } else {
+                    "multitasking-symbolic"
+                },
+                if dwindle { "grid.svg" } else { "display.svg" },
+            ),
+            26.,
+            Palette {
+                fg: if dwindle {
+                    rgb(0xffffff).into()
+                } else {
+                    p.fg
+                },
+                ..p
+            },
+        );
+        let settings_glyph = self.glyph(
+            &self.themed_glyph_path("preferences-system-symbolic", "settings.svg"),
+            26.,
+            p,
+        );
+        let shot_glyph = self.glyph(
+            &self.themed_glyph_path("screenshooter-symbolic", "scan.svg"),
+            26.,
+            p,
+        );
+        let dock_glyph = self.glyph(
+            &self.themed_glyph_path("display-symbolic", "display.svg"),
+            26.,
+            Palette {
+                fg: if dock_autohide {
+                    rgb(0xffffff).into()
+                } else {
+                    p.fg
+                },
+                ..p
+            },
+        );
+
+        // The left column stacks three capsules; the right column is a square
+        // media tile with the remaining quick toggles underneath. Both are the
+        // same height, so the two columns share one bottom edge.
+        let left = div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(self.status_pill(host, PillKind::Network, dark, p))
+            .child(self.status_pill(host, PillKind::Bluetooth, dark, p))
+            .child(self.status_pill(host, PillKind::Dnd, dark, p));
+        let quick = div()
+            .w_full()
+            .flex()
+            .justify_between()
+            .child(self.control_circle(
+                "controls-theme",
+                self.symbol(
+                    if dark { "moon" } else { "sun" },
+                    26.,
+                    Palette {
+                        fg: if dark { rgb(0xffffff).into() } else { p.fg },
+                        ..p
+                    },
+                ),
+                dark,
+                Some(Action::Theme(if dark { "light" } else { "dark" }.into())),
+                p,
+            ))
+            .child(self.control_circle(
+                "controls-layout",
+                layout_glyph,
+                dwindle,
+                Some(Action::ToggleTilingMode),
+                p,
+            ));
+        let right = div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(self.media_card(host, p))
+            .child(quick);
+        let top = div().w_full().flex().gap(px(10.)).child(left).child(right);
+
+        // Four transport-style actions at the very bottom, spread across the
+        // popup width with the same rhythm as the capsule row above.
+        let actions = div()
+            .w_full()
+            .flex()
+            .justify_between()
+            .child(self.control_circle(
+                "controls-settings",
+                settings_glyph,
+                false,
+                Some(Action::Settings),
+                p,
+            ))
+            .child(self.control_circle(
+                "controls-screenshot",
+                shot_glyph,
+                false,
+                Some(Action::Panel(Panel::Screenshot)),
+                p,
+            ))
+            .child(self.control_circle(
+                "controls-launcher",
+                launcher_glyph,
+                fullscreen,
+                Some(Action::LauncherPresentation(if fullscreen {
+                    crate::preferences::LauncherPresentation::Palette
+                } else {
+                    crate::preferences::LauncherPresentation::Fullscreen
+                })),
+                p,
+            ))
+            .child(self.control_circle(
+                "controls-dock",
+                dock_glyph,
+                dock_autohide,
+                Some(Action::AutoHide(!dock_autohide)),
+                p,
+            ));
+
+        div()
             .w_full()
             .flex()
             .flex_col()
             .gap(px(10.))
-            .child(
-                div()
-                    .w_full()
-                    .flex()
-                    .gap(px(8.))
-                    .child(self.control_tile(
-                        "controls-dnd",
-                        "勿扰模式",
-                        if host.dnd { "已开启" } else { "已关闭" },
-                        if host.dnd { "bell-off" } else { "bell" },
-                        host.dnd,
-                        Action::DoNotDisturb(!host.dnd),
-                        dark,
-                        p,
-                    ))
-                    .child(self.control_tile(
-                        "controls-screenshot",
-                        "屏幕截图",
-                        "选择截取区域",
-                        "scan",
-                        false,
-                        Action::Panel(Panel::Screenshot),
-                        dark,
-                        p,
-                    )),
-            )
-            .child(
-                div()
-                    .w_full()
-                    .flex()
-                    .gap(px(8.))
-                    .child(self.control_tile(
-                        "controls-theme",
-                        "外观",
-                        if dark { "深色" } else { "浅色" },
-                        if dark { "moon" } else { "sun" },
-                        false,
-                        Action::Theme(if dark { "light" } else { "dark" }.into()),
-                        dark,
-                        p,
-                    ))
-                    .child(self.control_tile(
-                        "controls-launcher",
-                        "启动器",
-                        if host.prefs.launcher_presentation
-                            == crate::preferences::LauncherPresentation::Fullscreen
-                        {
-                            "全屏"
-                        } else {
-                            "弹窗"
-                        },
-                        if host.prefs.launcher_presentation
-                            == crate::preferences::LauncherPresentation::Fullscreen
-                        {
-                            "launchpad"
-                        } else {
-                            "display"
-                        },
-                        false,
-                        Action::LauncherPresentation(
-                            if host.prefs.launcher_presentation
-                                == crate::preferences::LauncherPresentation::Fullscreen
-                            {
-                                crate::preferences::LauncherPresentation::Palette
-                            } else {
-                                crate::preferences::LauncherPresentation::Fullscreen
-                            },
-                        ),
-                        dark,
-                        p,
-                    )),
-            );
-        controls
+            .child(top)
             .child(self.control_slider(
                 "brightness",
                 "显示器",
@@ -237,139 +295,347 @@ impl ShellView {
                 dark,
                 p,
             ))
-            .child(footer)
+            .child(actions)
             .into_any_element()
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn control_tile(
+    /// One round control-center button. The optional action makes the reserved
+    /// slot inert; no circle carries a label, matching the macOS tiles.
+    fn control_circle(
         &self,
         id: &'static str,
-        label: &'static str,
-        status: &'static str,
-        icon: &'static str,
+        glyph: AnyElement,
         selected: bool,
-        action: Action,
+        action: Option<Action>,
+        p: Palette,
+    ) -> AnyElement {
+        let mut circle = div()
+            .id(id)
+            .debug_selector(move || id.into())
+            .size(px(70.))
+            .rounded_full()
+            .border_1()
+            .border_color(if selected { p.accent } else { p.line })
+            .bg(if selected { p.accent } else { p.card })
+            .flex()
+            .items_center()
+            .justify_center()
+            .focusable()
+            .key_context("ClarionControlButton")
+            .focus(move |style| style.border_color(p.accent))
+            .child(glyph);
+        if let Some(action) = action {
+            let host = self.host.clone();
+            let keyboard_host = self.host.clone();
+            let keyboard_action = action.clone();
+            circle = circle
+                .cursor_pointer()
+                .hover(move |style| {
+                    if selected {
+                        style
+                    } else {
+                        style.bg(p.line)
+                    }
+                })
+                .on_click(move |_, _, cx| host.update(cx, |host, cx| host.handle(action.clone(), cx)))
+                .on_action({
+                    let keyboard_host = keyboard_host.clone();
+                    let action = keyboard_action.clone();
+                    move |_: &Activate, _, cx| {
+                        keyboard_host.update(cx, |host, cx| host.handle(action.clone(), cx));
+                        cx.stop_propagation();
+                    }
+                })
+                .on_key_down({
+                    let keyboard_host = keyboard_host.clone();
+                    let action = keyboard_action.clone();
+                    move |event, _, cx| {
+                        if event.keystroke.key == "space"
+                            && event.keystroke.modifiers == Modifiers::default()
+                        {
+                            keyboard_host.update(cx, |host, cx| host.handle(action.clone(), cx));
+                            cx.stop_propagation();
+                        }
+                    }
+                });
+        }
+        circle.into_any_element()
+    }
+
+    /// The three top-left connectivity capsules. Their half-height radius and
+    /// the 56px glyph badge share a centre, so the badge keeps an even inset
+    /// from the capsule's rounded end.
+    fn status_pill(
+        &self,
+        host: &ViewState,
+        kind: PillKind,
         dark: bool,
         p: Palette,
     ) -> AnyElement {
-        let host = self.host.clone();
-        let keyboard_host = self.host.clone();
-        let keyboard_action = action.clone();
-        let icon_color = if selected { rgb(0xffffff).into() } else { p.fg };
-        control_card(p)
+        let network = &host.system.network;
+        let (id, title, subtitle, symbol, selected) = match kind {
+            PillKind::Network => (
+                "controls-network",
+                if network.wireless { "Wi-Fi" } else { "网络" },
+                network.network.clone().unwrap_or_else(|| "未连接".into()),
+                if network.wireless {
+                    "network-wireless-symbolic"
+                } else {
+                    "network-wired-symbolic"
+                },
+                false,
+            ),
+            PillKind::Bluetooth => (
+                "controls-bluetooth",
+                "蓝牙",
+                network
+                    .bluetooth
+                    .clone()
+                    .unwrap_or_else(|| "已关闭".into()),
+                if network.bluetooth.is_some() {
+                    "bluetooth-active-symbolic"
+                } else {
+                    "bluetooth-disabled-symbolic"
+                },
+                false,
+            ),
+            PillKind::Dnd => (
+                "controls-dnd",
+                "勿扰",
+                if host.dnd { "已开启" } else { "已关闭" }.into(),
+                if host.dnd { "bell-off" } else { "bell" },
+                host.dnd,
+            ),
+        };
+        let glyph_palette = Palette {
+            fg: if selected {
+                rgb(0xffffff).into()
+            } else {
+                p.accent
+            },
+            ..p
+        };
+        let glyph = match kind {
+            PillKind::Dnd => self.symbol(symbol, 22., glyph_palette),
+            _ => self
+                .named_icon(symbol, 22., glyph_palette)
+                .unwrap_or_else(|| self.symbol("circle", 20., glyph_palette)),
+        };
+        let action = matches!(kind, PillKind::Dnd).then(|| Action::DoNotDisturb(!host.dnd));
+        let mut pill = control_card(p)
+            .rounded_full()
             .id(id)
-            .flex_1()
-            .min_w_0()
-            .h(px(80.))
-            .px(px(11.))
+            .debug_selector(move || id.into())
+            .w_full()
+            .h(px(70.))
+            .p(px(13.))
             .flex()
             .items_center()
-            .gap(px(8.))
-            .focusable()
-            .key_context("ClarionControlButton")
-            .debug_selector(move || id.into())
-            .cursor_pointer()
-            .hover(move |style| style.bg(p.line))
-            .focus(move |style| style.border_color(p.accent))
+            .gap(px(10.))
             .child(
                 div()
-                    .size(px(30.))
+                    .size(px(44.))
                     .flex_shrink_0()
                     .rounded_full()
                     .bg(if selected {
-                        rgb(0x7761c5)
+                        p.accent
                     } else if dark {
-                        rgba(0xffffff20)
+                        rgba(0xffffff1f).into()
                     } else {
-                        rgba(0xffffffb3)
+                        rgba(0xffffffe6).into()
                     })
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(self.symbol(
-                        icon,
-                        17.,
-                        Palette {
-                            fg: icon_color,
-                            ..p
-                        },
-                    )),
+                    .child(glyph),
             )
             .child(
                 div()
                     .min_w_0()
+                    .flex_1()
                     .flex()
                     .flex_col()
-                    .gap(px(2.))
-                    .child(text(label, 13., FontWeight::MEDIUM, p.fg))
-                    .child(text(status, 11., FontWeight::NORMAL, p.muted)),
+                    .gap(px(1.))
+                    .overflow_hidden()
+                    .child(text(title, 12., FontWeight::SEMIBOLD, p.fg))
+                    .child(text(subtitle, 10., FontWeight::NORMAL, p.muted)),
+            );
+        if let Some(action) = action {
+            let host = self.host.clone();
+            let keyboard_host = self.host.clone();
+            let keyboard_action = action.clone();
+            pill = pill
+                .focusable()
+                .key_context("ClarionControlButton")
+                .focus(move |style| style.border_color(p.accent))
+                .cursor_pointer()
+                .hover(move |style| style.bg(p.line))
+                .on_click(move |_, _, cx| {
+                    host.update(cx, |host, cx| host.handle(action.clone(), cx))
+                })
+                .on_action({
+                    let keyboard_host = keyboard_host.clone();
+                    let action = keyboard_action.clone();
+                    move |_: &Activate, _, cx| {
+                        keyboard_host.update(cx, |host, cx| host.handle(action.clone(), cx));
+                        cx.stop_propagation();
+                    }
+                })
+                .on_key_down({
+                    let keyboard_host = keyboard_host.clone();
+                    let action = keyboard_action.clone();
+                    move |event, _, cx| {
+                        if event.keystroke.key == "space"
+                            && event.keystroke.modifiers == Modifiers::default()
+                        {
+                            keyboard_host.update(cx, |host, cx| host.handle(action.clone(), cx));
+                            cx.stop_propagation();
+                        }
+                    }
+                });
+        }
+        pill.into_any_element()
+    }
+
+    /// The square media tile: artwork, track text and the transport row, all
+    /// stacked in one column like the reference Now Playing widget.
+    fn media_card(&self, host: &ViewState, p: Palette) -> AnyElement {
+        let media = host.system.media.as_ref();
+        let playing = media.is_some_and(|media| media.playing);
+        let title = media
+            .map(|media| media.title.as_str())
+            .filter(|title| !title.is_empty())
+            .unwrap_or("未在播放")
+            .to_owned();
+        let artist = media
+            .map(|media| media.artist.clone())
+            .unwrap_or_default();
+        let enabled = media.is_some();
+        let mut card = control_card(p)
+            .debug_selector(|| "controls-media".into())
+            .w_full()
+            .h(px(150.))
+            .p(px(12.))
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .size(px(54.))
+                    .flex_shrink_0()
+                    .rounded(px(12.))
+                    .bg(linear_gradient(
+                        135.,
+                        linear_color_stop(rgb(0x3b82f6), 0.),
+                        linear_color_stop(rgb(0x8b5cf6), 1.),
+                    ))
+                    .opacity(if playing { 1. } else { 0.55 }),
             )
-            .on_click(move |_, _, cx| host.update(cx, |host, cx| host.handle(action.clone(), cx)))
-            .on_action({
-                let host = keyboard_host.clone();
-                let action = keyboard_action.clone();
-                move |_: &Activate, _, cx| {
-                    host.update(cx, |host, cx| host.handle(action.clone(), cx));
-                    cx.stop_propagation();
-                }
-            })
-            .on_key_down(move |event, _, cx| {
-                if event.keystroke.key == "space"
-                    && event.keystroke.modifiers == Modifiers::default()
-                {
-                    keyboard_host.update(cx, |host, cx| host.handle(keyboard_action.clone(), cx));
-                    cx.stop_propagation();
-                }
-            })
+            .child(
+                div()
+                    .mt(px(6.))
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(text(title, 13., FontWeight::SEMIBOLD, p.fg)),
+            );
+        if !artist.is_empty() {
+            card = card.child(
+                div()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(text(artist, 10., FontWeight::NORMAL, p.muted)),
+            );
+        }
+        card.child(div().flex_1())
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(10.))
+                    .child(self.media_button(
+                        "controls-media-prev",
+                        "media-skip-backward-symbolic",
+                        "⏮",
+                        backend::MediaControl::Previous,
+                        enabled,
+                        p,
+                    ))
+                    .child(self.media_button(
+                        "controls-media-play",
+                        if playing {
+                            "media-playback-pause-symbolic"
+                        } else {
+                            "media-playback-start-symbolic"
+                        },
+                        if playing { "⏸" } else { "▶" },
+                        backend::MediaControl::PlayPause,
+                        enabled,
+                        p,
+                    ))
+                    .child(self.media_button(
+                        "controls-media-next",
+                        "media-skip-forward-symbolic",
+                        "⏭",
+                        backend::MediaControl::Next,
+                        enabled,
+                        p,
+                    )),
+            )
             .into_any_element()
     }
 
-    fn control_entry(
+    fn media_button(
         &self,
         id: &'static str,
-        label: &'static str,
-        icon: &'static str,
-        action: Action,
+        symbol: &str,
+        fallback: &'static str,
+        control: backend::MediaControl,
+        enabled: bool,
         p: Palette,
     ) -> AnyElement {
         let host = self.host.clone();
-        let keyboard_host = self.host.clone();
-        let keyboard_action = action.clone();
-        div()
+        let color = if enabled { p.fg } else { p.muted };
+        let mut button = div()
             .id(id)
-            .h(px(31.))
-            .px(px(8.))
-            .rounded(px(10.))
+            .debug_selector(move || id.into())
+            .size(px(30.))
+            .rounded_full()
             .flex()
             .items_center()
-            .gap(px(9.))
-            .focusable()
-            .key_context("ClarionControlButton")
-            .debug_selector(move || id.into())
-            .cursor_pointer()
-            .hover(move |style| style.bg(p.line))
-            .focus(move |style| style.bg(p.line))
-            .child(self.symbol(icon, 16., p))
-            .child(text(label, 12., FontWeight::NORMAL, p.fg))
-            .on_click(move |_, _, cx| host.update(cx, |host, cx| host.handle(action.clone(), cx)))
-            .on_action({
-                let host = keyboard_host.clone();
-                let action = keyboard_action.clone();
-                move |_: &Activate, _, cx| {
-                    host.update(cx, |host, cx| host.handle(action.clone(), cx));
-                    cx.stop_propagation();
-                }
-            })
-            .on_key_down(move |event, _, cx| {
-                if event.keystroke.key == "space"
-                    && event.keystroke.modifiers == Modifiers::default()
-                {
-                    keyboard_host.update(cx, |host, cx| host.handle(keyboard_action.clone(), cx));
-                    cx.stop_propagation();
-                }
-            })
-            .into_any_element()
+            .justify_center()
+            .child(self.media_glyph(symbol, fallback, 18., Palette { fg: color, ..p }));
+        if enabled {
+            button = button
+                .cursor_pointer()
+                .hover(move |style| style.bg(p.line))
+                .on_click(move |_, _, cx| {
+                    host.update(cx, |host, cx| {
+                        host.handle(
+                            Action::Backend(backend::Command::Media(control)),
+                            cx,
+                        )
+                    })
+                });
+        }
+        button.into_any_element()
+    }
+
+    /// Prefer the theme's transport glyph; text glyphs keep the row readable on
+    /// icon sets that ship no media artwork.
+    fn media_glyph(&self, symbol: &str, fallback: &'static str, size: f32, p: Palette) -> AnyElement {
+        let path = {
+            let mut cache = self.theme_icons.borrow_mut();
+            theme_icon(symbol, &mut cache)
+        };
+        match path {
+            Some(path) => self.glyph(&path, size, p),
+            None => div()
+                .text_size(px(size))
+                .line_height(px(size + 2.))
+                .text_color(p.fg)
+                .child(fallback)
+                .into_any_element(),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -438,6 +704,7 @@ impl ShellView {
             );
         }
         let body = control_card(p)
+            .rounded(px(SLIDER_CARD_RADIUS))
             .h(px(86.))
             .w_full()
             .px(px(12.))
@@ -824,7 +1091,7 @@ mod tests {
         });
         let window = cx.update(|cx| testing::open_panel(&host, Panel::Controls, cx));
         let mut visual = VisualTestContext::from_window(*window, cx);
-        activate(&mut visual, 320., 510.);
+        activate(&mut visual, 360., 510.);
         assert!(
             visual.debug_bounds("controls-battery").is_none(),
             "the control center no longer carries a battery card"
@@ -840,7 +1107,7 @@ mod tests {
         let (_root, host) = private_host(cx);
         let window = cx.update(|cx| testing::open_panel(&host, Panel::Controls, cx));
         let mut visual = VisualTestContext::from_window(*window, cx);
-        activate(&mut visual, 320., 590.);
+        activate(&mut visual, 360., 590.);
         for id in ["controls-theme", "controls-launcher"] {
             assert!(
                 visual.debug_bounds(id).is_some(),
@@ -848,18 +1115,13 @@ mod tests {
             );
         }
 
-        // Both cards toggle in place, exactly like the Do Not Disturb tile.
-        let theme = visual
-            .debug_bounds("controls-theme")
-            .expect("appearance card");
-        visual.simulate_click(theme.center(), Modifiers::default());
-        visual.run_until_parked();
-        host.read_with(cx, |host, _| assert_eq!(host.prefs.theme, "light"));
-
+        // Drive the launcher first so the appearance re-layout cannot move the
+        // target between the bounds read and the press.
         let launcher = visual
             .debug_bounds("controls-launcher")
-            .expect("launcher card");
-        visual.simulate_click(launcher.center(), Modifiers::default());
+            .expect("launcher circle")
+            .center();
+        visual.simulate_click(launcher, Modifiers::default());
         visual.run_until_parked();
         host.read_with(cx, |host, _| {
             assert_eq!(
@@ -868,10 +1130,11 @@ mod tests {
             )
         });
 
-        visual.simulate_click(theme.center(), Modifiers::default());
-        visual.run_until_parked();
-        host.read_with(cx, |host, _| assert_eq!(host.prefs.theme, "dark"));
-        visual.simulate_click(launcher.center(), Modifiers::default());
+        let launcher = visual
+            .debug_bounds("controls-launcher")
+            .expect("launcher circle")
+            .center();
+        visual.simulate_click(launcher, Modifiers::default());
         visual.run_until_parked();
         host.read_with(cx, |host, _| {
             assert_eq!(
@@ -879,6 +1142,14 @@ mod tests {
                 crate::preferences::LauncherPresentation::Fullscreen
             )
         });
+
+        let theme = visual
+            .debug_bounds("controls-theme")
+            .expect("appearance circle")
+            .center();
+        visual.simulate_click(theme, Modifiers::default());
+        visual.run_until_parked();
+        host.read_with(cx, |host, _| assert_eq!(host.prefs.theme, "light"));
     }
 
     #[gpui::test]
@@ -886,7 +1157,7 @@ mod tests {
         let (_root, host) = private_host(cx);
         let window = cx.update(|cx| testing::open_panel(&host, Panel::Controls, cx));
         let mut visual = VisualTestContext::from_window(*window, cx);
-        activate(&mut visual, 320., 424.);
+        activate(&mut visual, 360., 424.);
         focus_without_click(&mut visual, "controls-dnd");
         host.read_with(cx, |host, _| assert!(!host.dnd));
         visual.simulate_keystrokes("enter");
@@ -903,30 +1174,66 @@ mod tests {
     }
 
     #[gpui::test]
-    fn controls_tile_and_entry_enter_open_the_actual_target_windows(cx: &mut TestAppContext) {
+    fn controls_enter_opens_the_screenshot_target(cx: &mut TestAppContext) {
         let (_root, host) = private_host(cx);
-        for (selector, target) in [
-            ("controls-screenshot", Panel::Screenshot),
-            ("controls-desktop", Panel::Preferences),
-        ] {
-            let window = cx.update(|cx| testing::open_panel(&host, Panel::Controls, cx));
-            let mut visual = VisualTestContext::from_window(*window, cx);
-            // The control center carries two tile rows and two sliders; the
-            // footer entries need the real height.
-            activate(&mut visual, 320., 510.);
-            focus_without_click(&mut visual, selector);
-            host.read_with(cx, |host, _| assert_eq!(host.panel, Some(Panel::Controls)));
-            visual.simulate_keystrokes("enter");
-            cx.run_until_parked();
-            host.read_with(cx, |host, _| assert_eq!(host.panel.as_ref(), Some(&target)));
-            assert!(
-                !cx.read(|cx| cx
-                    .windows()
-                    .iter()
-                    .any(|handle| handle.window_id() == window.window_id())),
-                "Enter must replace the real popup, not merely change a selection"
-            );
-        }
+        let window = cx.update(|cx| testing::open_panel(&host, Panel::Controls, cx));
+        let mut visual = VisualTestContext::from_window(*window, cx);
+        // The control center carries the top control row, the action row and
+        // two sliders.
+        activate(&mut visual, 360., 560.);
+        focus_without_click(&mut visual, "controls-screenshot");
+        host.read_with(cx, |host, _| assert_eq!(host.panel, Some(Panel::Controls)));
+        visual.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        host.read_with(cx, |host, _| {
+            assert_eq!(host.panel.as_ref(), Some(&Panel::Screenshot))
+        });
+        assert!(
+            !cx.read(|cx| cx
+                .windows()
+                .iter()
+                .any(|handle| handle.window_id() == window.window_id())),
+            "Enter must replace the real popup, not merely change a selection"
+        );
+    }
+
+    #[gpui::test]
+    fn controls_layout_button_toggles_the_workspace_and_the_pills_report_connectivity(
+        cx: &mut TestAppContext,
+    ) {
+        let (_root, host) = private_host(cx);
+        host.update(cx, |host, cx| {
+            host.system.network = Box::new(crate::backend::NetworkSnapshot {
+                network: Some("Home 5G".into()),
+                wireless: true,
+                bluetooth: Some("Keychron K8".into()),
+            });
+            host.changed(cx);
+        });
+        let window = cx.update(|cx| testing::open_panel(&host, Panel::Controls, cx));
+        let mut visual = VisualTestContext::from_window(*window, cx);
+        activate(&mut visual, 360., 560.);
+        assert!(visual.debug_bounds("controls-network").is_some());
+        assert!(visual.debug_bounds("controls-bluetooth").is_some());
+        assert!(visual.debug_bounds("controls-media").is_some());
+
+        let commands = cx.update(|cx| testing::capture_backend(&host, cx));
+        let layout = visual
+            .debug_bounds("controls-layout")
+            .expect("layout circle");
+        visual.simulate_click(layout.center(), Modifiers::default());
+        visual.run_until_parked();
+        host.read_with(cx, |host, _| {
+            assert_eq!(host.tiling_mode, clarion_ipc::TilingMode::Dwindle)
+        });
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(backend::Command::Action(
+                clarion_ipc::Action::SwitchTilingMode {
+                    mode: Some(clarion_ipc::TilingMode::Dwindle)
+                }
+            ))
+        ));
     }
 
     struct SliderHarness {

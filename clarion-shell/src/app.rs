@@ -175,6 +175,8 @@ pub enum Action {
     DockHover(bool),
     DockEdgeHover(bool),
     DoNotDisturb(bool),
+    /// Cycle the workspace tiling mode between scrolling and dwindle.
+    ToggleTilingMode,
     PickWallpaper,
     /// Switch the machine's ACPI/daemon power profile. The battery popup
     /// keeps its active mark in sync optimistically, then the worker confirms.
@@ -235,6 +237,8 @@ pub struct ViewState {
     pub prefs: Preferences,
     pub desktop: backend::DesktopSnapshot,
     pub system: backend::SystemSnapshot,
+    /// The tiling mode shown by the control center's layout button.
+    pub tiling_mode: clarion_ipc::TilingMode,
     /// The power profile the worker is still confirming, if any. The battery
     /// popup paints its spinner from this until the read-back settles it.
     pub power_profile_pending: Option<PowerProfile>,
@@ -320,6 +324,9 @@ pub struct Host {
     pub prefs: Preferences,
     pub desktop: backend::DesktopSnapshot,
     pub system: backend::SystemSnapshot,
+    /// The tiling mode the control center button last asked for. The compositor
+    /// has no readable state for it, so the shell keeps the optimistic toggle.
+    pub tiling_mode: clarion_ipc::TilingMode,
     /// The profile the user just picked, kept until the worker reads the
     /// platform back. Stale heartbeat snapshots cannot undo it meanwhile.
     power_profile_pending: Option<PowerProfile>,
@@ -458,6 +465,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 prefs,
                 desktop: Default::default(),
                 system: Default::default(),
+                tiling_mode: clarion_ipc::TilingMode::Scrolling,
                 power_profile_pending: None,
                 power_profile_epoch: 0,
                 battery_charge_limit: None,
@@ -628,6 +636,7 @@ impl Host {
             prefs: self.prefs.clone(),
             desktop: self.desktop.clone(),
             system: self.system.clone(),
+            tiling_mode: self.tiling_mode,
             power_profile_pending: self.power_profile_pending,
             battery_charge_limit: self.battery_charge_limit,
             catalog: self.catalog.clone(),
@@ -1233,6 +1242,20 @@ impl Host {
             Action::DoNotDisturb(value) => {
                 self.dnd = value;
                 self.service.send(services::Command::Dnd(value));
+            }
+            Action::ToggleTilingMode => {
+                let next = match self.tiling_mode {
+                    clarion_ipc::TilingMode::Scrolling => clarion_ipc::TilingMode::Dwindle,
+                    clarion_ipc::TilingMode::Dwindle => clarion_ipc::TilingMode::Scrolling,
+                };
+                self.tiling_mode = next;
+                // The compositor owns the workspace mode. Send the explicit
+                // target rather than its own toggle so the button stays in
+                // step with the state it paints.
+                let _ = self.backend.send(backend::Command::Action(
+                    CoreAction::SwitchTilingMode { mode: Some(next) },
+                ));
+                self.changed(cx);
             }
             Action::PickWallpaper => self.desktop_action(DesktopAction::Wallpaper(None), cx),
             Action::Close => self.close(cx),

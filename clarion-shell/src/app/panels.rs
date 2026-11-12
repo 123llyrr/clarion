@@ -50,7 +50,7 @@ pub(crate) const DOCK_MENU_WIDTH: f32 = 250.;
 pub(crate) const SPOTLIGHT_RADIUS: f32 = 31.;
 /// The control center's painted corner radius. Its inner cards step down from
 /// this value so the nested surfaces read as one family.
-pub(crate) const CONTROLS_RADIUS: f32 = 24.;
+pub(crate) const CONTROLS_RADIUS: f32 = 47.;
 /// The launcher sheet's resting size. The width gives the grid six equal
 /// slots at the original 128-point tile size; the height carries the extra
 /// status bar under the results without shrinking the scrollable body.
@@ -735,7 +735,7 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
             // on the button that opened it; the clamp pulls the rectangle
             // back inside the output when the click sits near an edge.
             let ceiling = available.min(h * BAR_POPUP_MAX_HEIGHT_SHARE);
-            let (width, height): (f32, f32) = (360f32.min(w - 24.), 510f32.min(ceiling));
+            let (width, height): (f32, f32) = (334f32.min(w - 24.), 528f32.min(ceiling));
             let x = state.anchored.map_or(w - width - 12., |x| {
                 (x - width / 2.).clamp(8., (w - width - 8.).max(8.))
             });
@@ -749,7 +749,7 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
             // padding and border (26) + two points of rounding slack: the
             // sheet never needs to scroll.
             let ceiling = available.min(h * BAR_POPUP_MAX_HEIGHT_SHARE);
-            let (width, height): (f32, f32) = (344f32.min(w - 24.), 348f32.min(ceiling));
+            let (width, height): (f32, f32) = (344f32.min(w - 24.), 336f32.min(ceiling));
             let x = state.anchored.map_or(w - width - 12., |x| {
                 (x - width / 2.).clamp(8., (w - width - 8.).max(8.))
             });
@@ -995,7 +995,7 @@ mod tests {
         let popup = controls
             .popup
             .expect("the control center reports its popup");
-        assert_eq!(f32::from(popup.origin.x), 1440. - 360. - 12.);
+        assert_eq!(f32::from(popup.origin.x), 1440. - 334. - 12.);
         assert_eq!(
             f32::from(popup.origin.y),
             state.prefs.bar_height as f32 + 8.

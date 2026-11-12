@@ -19,6 +19,7 @@ pub(crate) fn test_host(
         prefs: Preferences::default(),
         desktop: Default::default(),
         system: Default::default(),
+        tiling_mode: clarion_ipc::TilingMode::Scrolling,
         power_profile_pending: None,
         power_profile_epoch: 0,
         battery_charge_limit: None,

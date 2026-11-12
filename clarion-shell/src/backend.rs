@@ -84,6 +84,39 @@ pub struct SystemSnapshot {
     pub today: Option<chrono::NaiveDate>,
     /// Machine facts for the About card, collected once at worker start.
     pub facts: crate::system_info::SystemFacts,
+    /// The active MPRIS player's metadata, when one is running.
+    pub media: Option<Box<MediaSnapshot>>,
+    /// The active network/Bluetooth connection, refreshed with the hardware
+    /// poll.
+    pub network: Box<NetworkSnapshot>,
+}
+
+/// The two connectivity rows at the top of the Control Center.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NetworkSnapshot {
+    /// SSID of the active Wi-Fi, or the connection name of an active wired
+    /// link. `None` means nothing is connected.
+    pub network: Option<String>,
+    pub wireless: bool,
+    /// The connected Bluetooth device's name, "已开启" when the adapter is on
+    /// without a device, or `None` when Bluetooth is off/unavailable.
+    pub bluetooth: Option<String>,
+}
+
+/// What the Control Center's media card shows. `playerctl` is the bridge; the
+/// shell never speaks MPRIS itself, matching the other tool-backed rows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MediaSnapshot {
+    pub title: String,
+    pub artist: String,
+    pub playing: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediaControl {
+    PlayPause,
+    Next,
+    Previous,
 }
 
 /// The kernel's `POWER_SUPPLY_STATUS`, reduced to the values the UI uses.
@@ -169,6 +202,8 @@ pub enum Command {
     OpenSettings,
     SetVolume(f64),
     SetMuted(bool),
+    /// Drive the active MPRIS player through `playerctl`.
+    Media(MediaControl),
     SetOutputBrightness {
         output: String,
         value: f64,
@@ -766,6 +801,14 @@ fn perform(
                 TOOL_TIMEOUT,
             )?;
         }
+        Command::Media(control) => {
+            let command = match control {
+                MediaControl::PlayPause => "play-pause",
+                MediaControl::Next => "next",
+                MediaControl::Previous => "previous",
+            };
+            run_tool("playerctl", &[command], &options.environment, TOOL_TIMEOUT)?;
+        }
         Command::SetOutputBrightness { output, value } => {
             anyhow::ensure!(
                 value.is_finite() && (0. ..=1.).contains(&value) && output.len() <= 1024,
@@ -1276,6 +1319,8 @@ fn system_worker(
             hardware.trash_full = data
                 .and_then(|data| fs::read_dir(data.join("Trash/files")).ok())
                 .is_some_and(|mut files| files.next().is_some());
+            hardware.media = media_snapshot(&options.environment).map(Box::new);
+            *hardware.network = network_snapshot(&options.environment);
             hardware_due = Instant::now() + Duration::from_secs(3);
         }
         let now = chrono::Local::now();
@@ -1289,8 +1334,91 @@ fn system_worker(
     }
 }
 
-fn parse_volume(value: &str) -> Option<f64> {
-    value
+/// Read the active MPRIS player through `playerctl`. No player exits non-zero,
+/// which reads as "nothing to show"; the card then keeps its idle state.
+fn media_snapshot(environment: &Environment) -> Option<MediaSnapshot> {
+    let output = run_tool(
+        "playerctl",
+        &[
+            "metadata",
+            "--format",
+            "{{status}}\u{1f}{{title}}\u{1f}{{artist}}",
+        ],
+        environment,
+        TOOL_TIMEOUT,
+    )
+    .ok()?;
+    let mut fields = output.trim_end().split('\u{1f}');
+    let status = fields.next()?.trim();
+    if status.is_empty() || status == "Stopped" {
+        return None;
+    }
+    Some(MediaSnapshot {
+        title: fields.next().unwrap_or_default().trim().to_owned(),
+        artist: fields.next().unwrap_or_default().trim().to_owned(),
+        playing: status == "Playing",
+    })
+}
+
+/// Read the active network and Bluetooth state through the usual desktop
+/// tools; a missing service simply leaves the row quiet.
+fn network_snapshot(environment: &Environment) -> NetworkSnapshot {
+    let mut snapshot = NetworkSnapshot::default();
+    if let Ok(text) = run_tool(
+        "nmcli",
+        &["-t", "-f", "active,ssid", "dev", "wifi"],
+        environment,
+        TOOL_TIMEOUT,
+    ) {
+        snapshot.network = text.lines().find_map(|line| {
+            let ssid = line.strip_prefix("yes:")?.trim();
+            (!ssid.is_empty()).then(|| ssid.replace("\\:", ":"))
+        });
+        snapshot.wireless = snapshot.network.is_some();
+    }
+    if snapshot.network.is_none() {
+        if let Ok(text) = run_tool(
+            "nmcli",
+            &["-t", "-f", "TYPE,STATE,CONNECTION", "device"],
+            environment,
+            TOOL_TIMEOUT,
+        ) {
+            snapshot.network = text.lines().find_map(|line| {
+                let mut parts = line.splitn(3, ':');
+                let kind = parts.next()?;
+                let state = parts.next()?;
+                let name = parts.next()?;
+                (kind == "ethernet" && state == "connected" && !name.is_empty())
+                    .then(|| name.to_owned())
+            });
+        }
+    }
+    if let Ok(text) = run_tool(
+        "bluetoothctl",
+        &["devices", "Connected"],
+        environment,
+        TOOL_TIMEOUT,
+    ) {
+        snapshot.bluetooth = text.lines().find_map(|line| {
+            let mut parts = line.splitn(3, ' ');
+            parts.next()?; // "Device"
+            parts.next()?; // MAC address
+            let name = parts.next()?.trim();
+            (!name.is_empty()).then(|| name.to_owned())
+        });
+        if snapshot.bluetooth.is_none() {
+            if let Ok(text) = run_tool("bluetoothctl", &["show"], environment, TOOL_TIMEOUT) {
+                snapshot.bluetooth = text.lines().find_map(|line| {
+                    let powered = line.strip_prefix("Powered:")?.trim();
+                    (powered == "yes").then(|| "已开启".to_owned())
+                });
+            }
+        }
+    }
+    snapshot
+}
+
+fn parse_volume(value: &str) -> Option<f64> {    value
         .strip_prefix("Volume:")?
         .split_whitespace()
         .next()?
