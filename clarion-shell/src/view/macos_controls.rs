@@ -228,7 +228,7 @@ impl ShellView {
                 "controls-settings",
                 settings_glyph,
                 false,
-                Some(Action::Settings),
+                Some(Action::Panel(Panel::Preferences)),
                 p,
             ))
             .child(self.control_circle(
@@ -261,7 +261,7 @@ impl ShellView {
             .w_full()
             .flex()
             .flex_col()
-            .gap(px(10.))
+            .gap(px(12.))
             .child(top)
             .child(self.control_slider(
                 "brightness",

@@ -292,7 +292,7 @@ impl ShellView {
             .w_full()
             .flex()
             .flex_col()
-            .gap(px(10.))
+            .gap(px(12.))
             .child(summary)
             .child(settings)
             .into_any_element()

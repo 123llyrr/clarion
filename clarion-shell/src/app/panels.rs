@@ -735,7 +735,7 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
             // on the button that opened it; the clamp pulls the rectangle
             // back inside the output when the click sits near an edge.
             let ceiling = available.min(h * BAR_POPUP_MAX_HEIGHT_SHARE);
-            let (width, height): (f32, f32) = (334f32.min(w - 24.), 528f32.min(ceiling));
+            let (width, height): (f32, f32) = (334f32.min(w - 24.), 534f32.min(ceiling));
             let x = state.anchored.map_or(w - width - 12., |x| {
                 (x - width / 2.).clamp(8., (w - width - 8.).max(8.))
             });
