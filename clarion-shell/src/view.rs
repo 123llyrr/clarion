@@ -2737,10 +2737,16 @@ impl ShellView {
                 .child(tools)
                 .into_any_element();
         }
+        // The control center lays its rows out in explicit pixels; the popup's
+        // visible rectangle is the only place that knows the width.
+        let controls_width = placement
+            .as_ref()
+            .and_then(|placement| placement.popup)
+            .map_or(334., |popup| f32::from(popup.size.width));
         let content = match &panel {
             Panel::Recent => self.recent(host, p, cx),
             Panel::Spotlight => self.spotlight_results(host, p, cx),
-            Panel::Controls => self.macos_controls(host, p),
+            Panel::Controls => self.macos_controls(host, p, controls_width),
             Panel::Battery => self.macos_battery(host, p, window),
             Panel::Tray(_) => self.tray_menu(host, p),
             Panel::System => self.system_menu(host, p),

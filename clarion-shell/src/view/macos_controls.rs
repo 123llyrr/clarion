@@ -103,8 +103,19 @@ fn gesture_bounds(bounds: Bounds<Pixels>) -> Bounds<Pixels> {
 }
 
 impl ShellView {
-    pub(super) fn macos_controls(&self, host: &ViewState, p: Palette) -> AnyElement {
+    pub(super) fn macos_controls(
+        &self,
+        host: &ViewState,
+        p: Palette,
+        popup_width: f32,
+    ) -> AnyElement {
         let dark = host.dark();
+        // The popup's own padding (12) and rim (1) come off the row width. The
+        // rows carry explicit pixels instead of percentages: a percentage
+        // inside the popup's scroll wrapper can resolve against an indefinite
+        // width on the first layout, which collapsed the sliders to their
+        // content for a moment before the next repaint.
+        let row_width = (popup_width - 26.).max(120.);
         let output = self.output.clone();
         let brightness = host
             .desktop
@@ -188,7 +199,7 @@ impl ShellView {
         // and the quick toggles follow underneath, then the action row sits
         // above the brightness and sound sliders.
         let connectivity = div()
-            .w_full()
+            .w(px(row_width))
             .flex()
             .gap(px(10.))
             .child(
@@ -204,7 +215,7 @@ impl ShellView {
                     .child(self.status_pill(host, PillKind::Bluetooth, dark, p)),
             );
         let quick = div()
-            .w_full()
+            .w(px(row_width))
             .flex()
             .items_center()
             .gap(px(10.))
@@ -238,7 +249,7 @@ impl ShellView {
 
         // Four transport-style actions, spread across the popup width.
         let actions = div()
-            .w_full()
+            .w(px(row_width))
             .flex()
             .justify_between()
             .child(self.control_circle(
@@ -275,11 +286,11 @@ impl ShellView {
             ));
 
         div()
-            .w_full()
+            .w(px(row_width))
             .flex()
             .flex_col()
             .gap(px(12.))
-            .child(self.media_card(host, p))
+            .child(self.media_card(host, p, row_width))
             .child(connectivity)
             .child(quick)
             .child(actions)
@@ -518,7 +529,7 @@ impl ShellView {
 
     /// The square media tile: artwork, track text and the transport row, all
     /// stacked in one column like the reference Now Playing widget.
-    fn media_card(&self, host: &ViewState, p: Palette) -> AnyElement {
+    fn media_card(&self, host: &ViewState, p: Palette, row_width: f32) -> AnyElement {
         let media = host.system.media.as_ref();
         let playing = media.is_some_and(|media| media.playing);
         let title = media
@@ -556,8 +567,10 @@ impl ShellView {
             );
         }
         let controls = div()
+            .w_full()
             .flex()
             .items_center()
+            .justify_center()
             .gap(px(8.))
             .child(self.media_button(
                 "controls-media-prev",
@@ -618,21 +631,40 @@ impl ShellView {
             });
         control_card(p)
             .debug_selector(|| "controls-media".into())
-            .w_full()
+            .w(px(row_width))
             .h(px(112.))
             .p(px(12.))
             .flex()
             .items_center()
             .gap(px(12.))
             .child(match art {
-                // The artwork fills the card's inner height; its 6px corner
-                // radius is the card's 18px radius minus the 12px inset, so
-                // both arcs share a centre.
-                Some(image) => img(image)
+                // The tile keeps the card's inner height; its 6px corner radius
+                // is the card's 18px radius minus the 12px inset, so both arcs
+                // share a centre. The artwork is *contained*, not cropped: a
+                // cover with an odd ratio keeps its whole frame and the square
+                // only pads it. The matte and the clip box carry the same
+                // radius, and the image itself is rounded too, so a tall cover
+                // (limited by height, narrower than the tile) still ends in
+                // arcs rather than square corners.
+                Some(image) => div()
                     .size(px(88.))
                     .flex_shrink_0()
                     .rounded(px(6.))
-                    .object_fit(ObjectFit::Cover)
+                    .overflow_hidden()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(if host.dark() {
+                        rgba(0xffffff12)
+                    } else {
+                        rgba(0x0000000d)
+                    })
+                    .child(
+                        img(image)
+                            .size_full()
+                            .rounded(px(6.))
+                            .object_fit(ObjectFit::Contain),
+                    )
                     .into_any_element(),
                 None => div()
                     .size(px(88.))
@@ -1157,6 +1189,70 @@ mod tests {
             Modifiers::default(),
         );
         visual.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn the_control_center_rows_share_one_width_and_centre_their_transport(
+        cx: &mut TestAppContext,
+    ) {
+        let (_root, host) = private_host(cx);
+        host.update(cx, |host, cx| {
+            host.system.brightness = Some(0.4);
+            host.system.volume = Some(0.62);
+            host.changed(cx);
+        });
+        let window = cx.update(|cx| testing::open_panel(&host, Panel::Controls, cx));
+        let mut visual = VisualTestContext::from_window(*window, cx);
+        activate(&mut visual, 1920., 1080.);
+        let media = visual
+            .debug_bounds("controls-media")
+            .expect("the media card is painted");
+        // 334 popup - 12 padding a side - the 1px rim a side.
+        assert_eq!(f32::from(media.size.width), 308.);
+        for id in [
+            "controls-network",
+            "controls-dnd",
+            "controls-theme",
+            "controls-settings",
+        ] {
+            let bounds = visual.debug_bounds(id).expect("row child is painted");
+            assert!(
+                f32::from(bounds.origin.x) >= f32::from(media.origin.x),
+                "{id} starts inside the card column"
+            );
+        }
+        let brightness = visual
+            .debug_bounds("slider-brightness")
+            .expect("the brightness slider is painted");
+        assert_eq!(
+            f32::from(brightness.size.width),
+            308. - 12. * 2. - 2.,
+            "the slider card keeps the full row width instead of collapsing to its content"
+        );
+        let play = visual
+            .debug_bounds("controls-media-play")
+            .expect("the play button is painted");
+        let prev = visual
+            .debug_bounds("controls-media-prev")
+            .expect("the previous button is painted");
+        let next = visual
+            .debug_bounds("controls-media-next")
+            .expect("the next button is painted");
+        // The transport is centred in the column beside the artwork: the play
+        // button sits midway between its neighbours and the group keeps equal
+        // margins inside the card.
+        assert_eq!(f32::from(prev.origin.y), f32::from(next.origin.y));
+        let span_center = (f32::from(prev.origin.x) + f32::from(next.origin.x) + 30.) / 2.;
+        assert!(
+            (f32::from(play.origin.x) + 15. - span_center).abs() <= 1.,
+            "the play button sits in the middle of the transport"
+        );
+        let left_gap = f32::from(prev.origin.x) - (f32::from(media.origin.x) + 13. + 88. + 12.);
+        let right_gap = (f32::from(media.origin.x) + 308. - 13.) - (f32::from(next.origin.x) + 30.);
+        assert!(
+            (left_gap - right_gap).abs() <= 1.,
+            "the transport is centred under the timeline ({left_gap} vs {right_gap})"
+        );
     }
 
     #[gpui::test]
