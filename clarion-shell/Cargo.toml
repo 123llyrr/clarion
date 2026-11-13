@@ -26,7 +26,7 @@ walkdir = "2.5"
 mime_guess = "2.0.5"
 # Rasterize the icon theme's file-type artwork (themes ship full-colour SVGs
 # the single-palette element renderer cannot honour).
-resvg = { version = "0.45.0", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
+resvg = { version = "0.45.0", default-features = false, features = ["text", "system-fonts", "memmap-fonts", "raster-images"] }
 sha2 = "0.10"
 chrono = "0.4"
 unicode-segmentation = "1"
