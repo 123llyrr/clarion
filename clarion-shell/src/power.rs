@@ -46,7 +46,7 @@ impl PowerProfile {
         }
     }
 
-    /// Bundled mark. These stay out of `view::symbolic_name` on purpose: the
+    /// Bundled mark. These stay out of `icons::symbolic` on purpose: the
     /// desktop themes' `power-profile-*-symbolic` icons are tuned for 16 px
     /// status trays and collapse into detail at the popup's 26 px, with the
     /// performance needle in particular reading as a smudge.

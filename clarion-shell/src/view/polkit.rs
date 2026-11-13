@@ -125,8 +125,7 @@ pub(super) fn auth_surface(
             let path = std::path::PathBuf::from(name);
             path.is_file().then_some(path)
         } else {
-            let mut cache = view.theme_icons.borrow_mut();
-            theme_icon(name, &mut cache)
+            crate::icons::resolve(name)
         }
     }) {
         Some(Some(path)) => img(path)

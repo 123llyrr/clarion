@@ -420,7 +420,7 @@ impl ShellView {
                         .top(px(-4.))
                         .size(px(66.))
                         .child(self.glyph_rotated(
-                            &icon_path("power-spinner"),
+                            &crate::icons::asset_svg("power-spinner"),
                             66.,
                             fx.spin,
                             Palette { fg: p.accent, ..p },
@@ -472,7 +472,7 @@ impl ShellView {
                         .items_center()
                         .justify_center()
                         .child(self.glyph(
-                            &icon_path("power-check"),
+                            &crate::icons::asset_svg("power-check"),
                             11.,
                             Palette {
                                 fg: rgb(0xffffff).into(),

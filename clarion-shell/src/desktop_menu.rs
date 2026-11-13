@@ -6,8 +6,6 @@
 //! icons. Opening the menu as a full-screen transparent overlay (the same shape
 //! the launcher's application menu uses) lets the compositor blur the real
 //! desktop underneath the card while outside clicks still land on its backdrop.
-use std::cell::RefCell;
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use gpui::prelude::*;
@@ -130,9 +128,6 @@ pub(crate) struct DesktopMenuView {
     has_image: bool,
     selected: Option<PathBuf>,
     focus: FocusHandle,
-    /// Theme icons resolved once per appearance change: probing every icon
-    /// theme on each repaint would stall the frame for a static glyph.
-    icons: RefCell<HashMap<&'static str, PathBuf>>,
     /// The surface region currently frost-requested from the compositor.
     pub(crate) glass: Option<Bounds<Pixels>>,
 }
@@ -162,7 +157,6 @@ impl DesktopMenuView {
             has_image,
             selected,
             focus: cx.focus_handle(),
-            icons: RefCell::new(HashMap::new()),
             glass: None,
         }
     }
@@ -174,7 +168,6 @@ impl DesktopMenuView {
     pub(crate) fn set_appearance(&mut self, appearance: SurfaceAppearance, cx: &mut Context<Self>) {
         if self.appearance != appearance {
             self.appearance = appearance;
-            self.icons.borrow_mut().clear();
             cx.notify();
         }
     }
@@ -208,16 +201,7 @@ impl DesktopMenuView {
     /// A menu prefix glyph: the desktop theme's symbolic mark when it exists,
     /// otherwise the bundled monochrome fallback.
     fn icon(&self, themed: &'static str, fallback: &'static str) -> AnyElement {
-        let cached = { self.icons.borrow().get(themed).cloned() };
-        let path = match cached {
-            Some(path) => path,
-            None => {
-                let path = crate::view::resolve_theme_icon(themed)
-                    .unwrap_or_else(|| crate::view::image_path(fallback));
-                self.icons.borrow_mut().insert(themed, path.clone());
-                path
-            }
-        };
+        let path = crate::icons::resolve(themed).unwrap_or_else(|| crate::icons::asset(fallback));
         if path.is_file() {
             svg()
                 .path(path.to_string_lossy().into_owned())

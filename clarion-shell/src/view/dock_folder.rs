@@ -1393,7 +1393,7 @@ impl ShellView {
             let path = self.themed_glyph_path("go-previous-symbolic", "chevron-left.svg");
             self.glyph_rotated(&path, reveal_glyph, reveal_radians, p)
         } else {
-            self.glyph_rotated(&icon_path("external-link"), reveal_glyph, reveal_radians, p)
+            self.glyph_rotated(&crate::icons::asset_svg("external-link"), reveal_glyph, reveal_radians, p)
         };
         overlay = overlay.child(
             div()

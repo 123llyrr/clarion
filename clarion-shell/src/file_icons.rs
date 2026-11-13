@@ -12,10 +12,10 @@
 //! * the bundled artwork when no theme answers.
 //!
 //! Themes ship their MIME icons as full-colour SVGs; GPUI's `svg` element
-//! flattens those to one colour, so they are rasterized here with the same
-//! resvg build GPUI uses, cached, and drawn as images. Everything stays PNG
-//! bytes until it is painted, so the fan's tilted cards rotate the preview as
-//! easily as a type mark.
+//! flattens those to one colour, so `crate::icons` rasterizes them with the
+//! same resvg build GPUI uses and this module draws the resulting PNG bytes.
+//! Everything stays bytes until it is painted, so the fan's tilted cards
+//! rotate the preview as easily as a type mark.
 //!
 //! Finder-style tags (`user.xdg.tags`) ride on top of the artwork as a small
 //! row of coloured dots, the way the reference desktop marks them.
@@ -24,24 +24,18 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use gpui::prelude::*;
 use gpui::*;
 
 use crate::desktop_icons::{self, DesktopIconKind};
+use crate::icons::{self, is_svg, RASTER};
 
-/// The pixel size artwork is rasterized at. Comfortably above the largest
-/// place the shell draws a file icon (the desktop grid) so the GPU only ever
-/// scales down.
-const RASTER: f32 = 256.;
 /// Tags drawn on one icon; Finder shows a short row, not an endless strip.
 const MAX_TAG_DOTS: usize = 3;
-/// Artwork held in memory before the caches are dropped wholesale.
+/// Rotated cards held in memory before the cache is dropped wholesale.
 const CACHE_LIMIT: usize = 512;
-/// How long a miss is trusted. Files apps fill the thumbnail cache while the
-/// shell is running, so a miss must not stick for the whole session.
-const RETRY_AFTER: Duration = Duration::from_secs(30);
 /// Preview cards keep a 4:3 ratio, whatever the source frame was.
 const PREVIEW_ASPECT: f32 = 4. / 3.;
 /// How much larger than the icon box a preview card is drawn. The card is 4:3,
@@ -303,7 +297,7 @@ fn artwork(path: Option<&Path>, kind: FileKind) -> (String, Arc<Vec<u8>>, bool) 
         // mark would hide the artwork the file exists for.
         if kind == FileKind::Image && is_svg(path) {
             let key = format!("file:{}", path.display());
-            if let Some(bytes) = cached_bytes(&key, || read_svg(path).map(preview_png)) {
+            if let Some(bytes) = icons::cached(&key, || read_svg(path).map(preview_png)) {
                 return (key, bytes, true);
             }
         }
@@ -315,7 +309,7 @@ fn artwork(path: Option<&Path>, kind: FileKind) -> (String, Arc<Vec<u8>>, bool) 
             // PDF keeps its page shape so the sheet stays readable.
             let cover = matches!(kind, FileKind::Image | FileKind::Video);
             let key = format!("thumb:{}", path.display());
-            if let Some(bytes) = cached_bytes(&key, || {
+            if let Some(bytes) = icons::cached(&key, || {
                 thumbnail_png(path).map(|png| {
                     if cover {
                         preview_png(png)
@@ -328,23 +322,30 @@ fn artwork(path: Option<&Path>, kind: FileKind) -> (String, Arc<Vec<u8>>, bool) 
             }
         }
     }
-    let name = icon_name(kind);
-    let theme = crate::view::current_icon_theme();
-    let key = format!("theme:{theme}:{name}");
-    let bytes = cached_bytes(&key, || resolve(name).and_then(|path| rasterize(&path)))
-        .unwrap_or_else(|| embedded_bytes(fallback(kind)));
-    (key, bytes, false)
-}
-
-fn is_svg(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"))
+    // Special folders keep their place emblem: Downloads, Pictures and the
+    // rest resolve through the theme's `folder-*` artwork instead of the plain
+    // folder mark. Ordinary folders fall back to `folder`.
+    let name = match (path, kind) {
+        (Some(path), FileKind::Folder) => icons::place(path).unwrap_or("folder"),
+        _ => icon_name(kind),
+    };
+    // A theme that ships no place icon for the folder still has the plain one,
+    // so the tile never falls all the way to the bundled PNG.
+    let art = icons::artwork(name)
+        .or_else(|| (name != "folder").then(|| icons::artwork("folder")).flatten());
+    match art {
+        Some(art) => (art.key, art.png, false),
+        None => (
+            format!("bundled:{name}"),
+            embedded_bytes(fallback(kind)),
+            false,
+        ),
+    }
 }
 
 /// A vector file rasterized at icon size, so the preview is the file itself.
 fn read_svg(path: &Path) -> Option<Vec<u8>> {
-    render_svg(&std::fs::read(path).ok()?)
+    icons::render_svg(&std::fs::read(path).ok()?)
 }
 
 /// The freedesktop thumbnail for a path, verified against the file's mtime the
@@ -602,44 +603,10 @@ fn md5(input: &[u8]) -> [u8; 16] {
     digest
 }
 
-/// The artwork key to the PNG bytes we draw for it, or a timed miss.
-type ArtworkCache = Mutex<HashMap<String, (Option<Arc<Vec<u8>>>, Instant)>>;
-/// The icon name to the theme file it resolves to.
-type PathCache = Mutex<HashMap<String, Option<PathBuf>>>;
 /// Rasterized artwork by key and rotation (whole degrees).
 type RotationCache = Mutex<HashMap<(String, i16), Rotated>>;
 /// Bundled PNG bytes, decoded once per coarse kind.
 type EmbeddedCache = Mutex<HashMap<DesktopIconKind, Arc<Vec<u8>>>>;
-
-fn cached_bytes(key: &str, load: impl FnOnce() -> Option<Vec<u8>>) -> Option<Arc<Vec<u8>>> {
-    static CACHE: OnceLock<ArtworkCache> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some((bytes, at)) = cache.lock().unwrap().get(key) {
-        if bytes.is_some() || at.elapsed() < RETRY_AFTER {
-            return bytes.clone();
-        }
-    }
-    let bytes = load().map(Arc::new);
-    let mut cache = cache.lock().unwrap();
-    if cache.len() >= CACHE_LIMIT {
-        cache.clear();
-    }
-    cache.insert(key.to_owned(), (bytes.clone(), Instant::now()));
-    bytes
-}
-
-fn resolve(name: &str) -> Option<PathBuf> {
-    static PATHS: OnceLock<PathCache> = OnceLock::new();
-    let theme = crate::view::current_icon_theme();
-    let key = format!("{theme}:{name}");
-    let cache = PATHS.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(cached) = cache.lock().unwrap().get(&key) {
-        return cached.clone();
-    }
-    let resolved = crate::view::resolve_theme_icon(name);
-    cache.lock().unwrap().insert(key, resolved.clone());
-    resolved
-}
 
 fn embedded_bytes(kind: DesktopIconKind) -> Arc<Vec<u8>> {
     static CACHE: OnceLock<EmbeddedCache> = OnceLock::new();
@@ -650,33 +617,6 @@ fn embedded_bytes(kind: DesktopIconKind) -> Arc<Vec<u8>> {
     let bytes = Arc::new(desktop_icons::bytes(kind).to_vec());
     cache.lock().unwrap().insert(kind, bytes.clone());
     bytes
-}
-
-/// Full-colour icon theme SVG → PNG, using the renderer GPUI already links.
-fn rasterize(path: &Path) -> Option<Vec<u8>> {
-    let bytes = std::fs::read(path).ok()?;
-    if is_svg(path) {
-        render_svg(&bytes)
-    } else {
-        Some(bytes)
-    }
-}
-
-fn render_svg(bytes: &[u8]) -> Option<Vec<u8>> {
-    let tree = resvg::usvg::Tree::from_data(bytes, &resvg::usvg::Options::default()).ok()?;
-    let source = tree.size();
-    let longest = source.width().max(source.height());
-    if longest <= 0. {
-        return None;
-    }
-    let scale = RASTER / longest;
-    let mut pixmap = resvg::tiny_skia::Pixmap::new(RASTER as u32, RASTER as u32)?;
-    let transform = resvg::tiny_skia::Transform::from_scale(scale, scale).post_translate(
-        (RASTER - source.width() * scale) / 2.,
-        (RASTER - source.height() * scale) / 2.,
-    );
-    resvg::render(&tree, transform, &mut pixmap.as_mut());
-    pixmap.encode_png().ok()
 }
 
 /// One piece of artwork ready to paint: the encoded canvas, the card size it
@@ -838,13 +778,6 @@ mod tests {
         assert_eq!(tag_color("Red"), tag_color("红"));
         assert_eq!(tag_color("自定义"), tag_color("自定义"));
         assert_ne!(tag_color("自定义"), tag_color("另一个"));
-    }
-
-    #[test]
-    fn the_theme_svg_rasterizes_to_png() {
-        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><rect width="24" height="24" fill="#ff0000"/></svg>"##;
-        let png = render_svg(svg).expect("resvg renders a plain svg");
-        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
     }
 
     #[test]

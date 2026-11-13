@@ -115,7 +115,7 @@ impl ShellView {
             return Some(icon);
         }
         let asset = asset?;
-        let path = icon_path(asset);
+        let path = crate::icons::asset_svg(asset);
         path.is_file().then(|| {
             svg()
                 .path(path.to_string_lossy().into_owned())

@@ -443,7 +443,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
     let preview = options.preview || options.demo;
     let environment: HashMap<String, String> = std::env::vars().collect();
     let prefs = Preferences::load(&environment, preview)?;
-    crate::view::set_icon_theme(prefs.surface_appearance().dark);
+    crate::icons::set_dark(prefs.surface_appearance().dark);
     let (backend, events) = backend::Backend::start(backend::Options {
         environment: environment.clone(),
         preview,
@@ -982,7 +982,7 @@ impl Host {
         // The icon theme follows the shell appearance: dark uses the theme's
         // `-dark` variant. Icon resolution only ever asks for "the current
         // theme", so this is the single place that picks the variant.
-        crate::view::set_icon_theme(self.prefs.surface_appearance().dark);
+        crate::icons::set_dark(self.prefs.surface_appearance().dark);
         self.revision = self.revision.wrapping_add(1);
         cx.notify();
         let state = Arc::new(self.snapshot());

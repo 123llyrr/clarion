@@ -3576,29 +3576,27 @@ impl ShellView {
     /// bundled file itself. Actions resolve through the same table as the
     /// surfaces they open, so a row and its destination share one mark.
     fn command_glyph_path(&self, command: &Command) -> PathBuf {
-        let mut cache = self.theme_icons.borrow_mut();
         if let Some(symbol) = command_symbol(command.id) {
-            if let Some(path) = theme_icon(symbol, &mut cache) {
+            if let Some(path) = crate::icons::resolve(symbol) {
                 return path;
             }
         }
         match command_icon(command) {
-            Some(asset) => symbolic_name(asset)
-                .and_then(|alias| theme_icon(alias, &mut cache))
-                .unwrap_or_else(|| icon_path(asset)),
+            Some(asset) => crate::icons::symbolic(asset)
+                .and_then(crate::icons::resolve)
+                .unwrap_or_else(|| crate::icons::asset_svg(asset)),
             // Actions without a close visual match share the catalog mark.
-            None => theme_icon("dialog-rows-and-columns-symbolic", &mut cache)
-                .unwrap_or_else(|| icon_path("activity-monitor.svg")),
+            None => crate::icons::resolve("dialog-rows-and-columns-symbolic")
+                .unwrap_or_else(|| crate::icons::asset_svg("activity-monitor")),
         }
     }
 
     /// The row mark for one web search, falling back to the browser glyph when
     /// the theme lacks the engine's own icon.
     fn web_glyph(&self, entry: &web::WebSearch) -> PathBuf {
-        let mut cache = self.theme_icons.borrow_mut();
-        theme_icon(web_symbol(entry), &mut cache)
-            .or_else(|| theme_icon("web-browser-symbolic", &mut cache))
-            .unwrap_or_else(|| icon_path("safari.svg"))
+        crate::icons::resolve(web_symbol(entry))
+            .or_else(|| crate::icons::resolve("web-browser-symbolic"))
+            .unwrap_or_else(|| crate::icons::asset_svg("safari"))
     }
 
     fn spotlight_commands(&self, p: Palette, cx: &Context<Self>) -> AnyElement {

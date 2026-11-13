@@ -67,7 +67,7 @@ impl ShellView {
                 if path.is_file() {
                     return Some(path);
                 }
-            } else if let Some(path) = theme_icon(name, &mut self.theme_icons.borrow_mut()) {
+            } else if let Some(path) = crate::icons::resolve(name) {
                 return Some(path);
             }
         }
@@ -605,7 +605,7 @@ impl ShellView {
         } else {
             "chevron-right.svg"
         };
-        let path = icon_path(asset);
+        let path = crate::icons::asset_svg(asset);
         let glyph = if path.is_file() {
             svg()
                 .path(path.to_string_lossy().into_owned())

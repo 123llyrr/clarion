@@ -735,10 +735,7 @@ impl ShellView {
     /// Prefer the theme's transport glyph; text glyphs keep the row readable on
     /// icon sets that ship no media artwork.
     fn media_glyph(&self, symbol: &str, fallback: &'static str, size: f32, p: Palette) -> AnyElement {
-        let path = {
-            let mut cache = self.theme_icons.borrow_mut();
-            theme_icon(symbol, &mut cache)
-        };
+        let path = crate::icons::resolve(symbol);
         match path {
             Some(path) => self.glyph(&path, size, p),
             None => div()

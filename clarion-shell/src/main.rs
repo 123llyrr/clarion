@@ -9,6 +9,7 @@ mod desktop_menu;
 mod dock_folder;
 mod dock_motion;
 mod file_icons;
+mod icons;
 mod input;
 mod mime;
 mod polkit;

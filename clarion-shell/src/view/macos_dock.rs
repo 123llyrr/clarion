@@ -153,8 +153,9 @@ fn folder_tile_icon(
     }
     if folder.display == crate::preferences::FolderDisplay::Folder || entries.is_empty() {
         // The pinned folder itself always reads as a folder, with its own
-        // tags on the corner.
-        return crate::file_icons::icon(None, true, &tags, size, 0.);
+        // tags on the corner — and the theme's place emblem when it is one of
+        // the well-known directories (Downloads, Pictures, the home folder).
+        return crate::file_icons::icon(Some(&folder.path), true, &tags, size, 0.);
     }
     let picked = folder_preview_entries(entries);
     let mut stack = div().relative().w(px(size)).h(px(size));
@@ -1905,17 +1906,6 @@ impl ShellView {
                 let accepting = app.is_some_and(|app| {
                     self.dock_motion.drag_accept.as_deref() == Some(app.id.as_str())
                 });
-                let icon = if launcher {
-                    utility_icon("launchpad.png")
-                } else if let Some(app) = app {
-                    app.icon.clone()
-                } else {
-                    utility_icon(if host.system.trash_full {
-                        "trash-full.png"
-                    } else {
-                        "trash-empty.png"
-                    })
-                };
                 // A file the app can open lifts its icon slightly and tints the
                 // artwork so the drop target stands out without hiding it.
                 let icon_size = if accepting {
@@ -1924,7 +1914,39 @@ impl ShellView {
                     slot.size
                 };
                 let icon_inset = (slot.size - icon_size) / 2.;
-                let icon_element = self.icon(icon, icon_size, p);
+                let icon_element = if app.is_none() && !launcher {
+                    // The trash reads through the desktop icon theme, so it
+                    // matches the file manager's place icon; the bundled PNG
+                    // only answers for themes without one.
+                    crate::icons::trash(host.system.trash_full)
+                        .map(|image| {
+                            img(image)
+                                .size(px(icon_size))
+                                .object_fit(ObjectFit::Contain)
+                                .into_any_element()
+                        })
+                        .unwrap_or_else(|| {
+                            self.icon(
+                                utility_icon(if host.system.trash_full {
+                                    "trash-full.png"
+                                } else {
+                                    "trash-empty.png"
+                                }),
+                                icon_size,
+                                p,
+                            )
+                        })
+                } else {
+                    self.icon(
+                        if launcher {
+                            utility_icon("launchpad.png")
+                        } else {
+                            app.and_then(|app| app.icon.clone())
+                        },
+                        icon_size,
+                        p,
+                    )
+                };
                 tile = if accepting {
                     tile.child(
                         div()

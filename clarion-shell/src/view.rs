@@ -239,9 +239,6 @@ pub struct ShellView {
     bar_appearance: Option<WindowBackgroundAppearance>,
     image_cache: std::collections::HashMap<String, Arc<Image>>,
     tray_image_hashes: std::collections::HashMap<String, [u8; 32]>,
-    /// Resolved freedesktop icon names, cached per view so the bar and the
-    /// tray menus never walk the theme directories twice for one name.
-    theme_icons: std::cell::RefCell<HashMap<(String, String), Option<PathBuf>>>,
     /// The open/close fade of one submenu card, keyed by its menu item id.
     /// The card itself renders at the sampled opacity; the host releases the
     /// collapsed id once its fade has run out.
@@ -705,7 +702,6 @@ impl ShellView {
             bar_appearance: None,
             image_cache: Default::default(),
             tray_image_hashes: Default::default(),
-            theme_icons: Default::default(),
             submenu_motion: Default::default(),
             popup_height_motion: None,
             launcher_menu: None,
@@ -1177,7 +1173,7 @@ impl ShellView {
     /// toggled column reads the same on enabled and disabled rows.
     fn check_circle(&self, on: bool, p: Palette) -> AnyElement {
         let color = if on { p.accent } else { p.muted };
-        let path = icon_path(if on {
+        let path = crate::icons::asset_svg(if on {
             "menu-check.svg"
         } else {
             "menu-ring.svg"
@@ -1228,24 +1224,18 @@ impl ShellView {
         // UI glyphs prefer the desktop theme's symbolic icon so the shell's
         // controls match the installed icon set; the bundled file remains the
         // fallback for themes that do not carry the name.
-        let path = symbolic_name(name)
-            .and_then(|symbol| {
-                let mut cache = self.theme_icons.borrow_mut();
-                theme_icon(symbol, &mut cache)
-            })
-            .unwrap_or_else(|| icon_path(name));
+        let path = crate::icons::symbolic(name)
+            .and_then(crate::icons::resolve)
+            .unwrap_or_else(|| crate::icons::asset_svg(name));
         self.glyph(&path, size, p)
     }
     /// Resolve a glyph by its desktop-theme symbolic name. Themes that lack the
     /// name fall back to the bundled asset's own alias, then to the bundled
     /// file, so a missing mark degrades instead of blanking out.
     fn themed_glyph_path(&self, symbol: &str, fallback_asset: &str) -> PathBuf {
-        let mut cache = self.theme_icons.borrow_mut();
-        theme_icon(symbol, &mut cache)
-            .or_else(|| {
-                symbolic_name(fallback_asset).and_then(|alias| theme_icon(alias, &mut cache))
-            })
-            .unwrap_or_else(|| icon_path(fallback_asset))
+        crate::icons::resolve(symbol)
+            .or_else(|| crate::icons::symbolic(fallback_asset).and_then(crate::icons::resolve))
+            .unwrap_or_else(|| crate::icons::asset_svg(fallback_asset))
     }
     fn glyph(&self, path: &Path, size: f32, p: Palette) -> AnyElement {
         self.glyph_rotated(path, size, 0., p)
@@ -1272,7 +1262,7 @@ impl ShellView {
     /// The current theme's battery artwork. `img` keeps the SVG's own colours
     /// (green charge, amber/red low levels) instead of the monochrome tint the
     /// `svg` element would apply; the active theme already carries the light
-    /// or dark outline chosen by `set_icon_theme`.
+    /// or dark outline chosen by `icons::set_dark`.
     fn battery_icon(
         &self,
         name: &str,
@@ -1282,14 +1272,13 @@ impl ShellView {
         p: Palette,
     ) -> AnyElement {
         let path = {
-            let mut cache = self.theme_icons.borrow_mut();
-            let mut path = theme_icon(name, &mut cache);
+            let mut path = crate::icons::resolve(name);
             if path.is_none() && name.ends_with("-100-charging-symbolic") {
                 // Sets that stop the charging family at 90 still have the
                 // charged mark at 100; a full battery must look full.
-                path = theme_icon("battery-level-100-charged-symbolic", &mut cache);
+                path = crate::icons::resolve("battery-level-100-charged-symbolic");
             }
-            path.or_else(|| theme_icon("battery-symbolic", &mut cache))
+            path.or_else(|| crate::icons::resolve("battery-symbolic"))
         };
         match path {
             Some(path) => img(path)
@@ -1305,10 +1294,7 @@ impl ShellView {
     /// the artwork's own light/dark colours, which vanish when the mark sits
     /// on the charge-limit slider's always-white fill.
     fn battery_glyph(&self, percent: f64, color: Hsla, size: f32) -> AnyElement {
-        let path = {
-            let mut cache = self.theme_icons.borrow_mut();
-            theme_icon("battery-symbolic", &mut cache)
-        };
+        let path = crate::icons::resolve("battery-symbolic");
         match path {
             Some(path) => svg()
                 .path(path.to_string_lossy().into_owned())
@@ -1440,7 +1426,7 @@ impl ShellView {
                     .unwrap_or_else(|| id.to_owned())
             })
             .unwrap_or_else(|| "Home".into());
-        let mark = image_path(if host.dark() {
+        let mark = crate::icons::asset(if host.dark() {
             "clarion-mark-white.png"
         } else {
             "clarion-mark-black.png"
@@ -2190,14 +2176,12 @@ impl ShellView {
         if name.is_empty() {
             return None;
         }
-        let mut cache = self.theme_icons.borrow_mut();
         let path = if name.ends_with("symbolic") {
-            theme_icon(name, &mut cache)
+            crate::icons::resolve(name)
         } else {
-            theme_icon(&format!("{name}-symbolic"), &mut cache)
-                .or_else(|| theme_icon(name, &mut cache))
+            crate::icons::resolve(&format!("{name}-symbolic"))
+                .or_else(|| crate::icons::resolve(name))
         }?;
-        drop(cache);
         if path.extension().is_some_and(|ext| ext == "svg") {
             return Some(
                 svg()
@@ -2220,7 +2204,7 @@ impl ShellView {
         if name.is_empty() {
             return None;
         }
-        let path = theme_icon(name, &mut self.theme_icons.borrow_mut())?;
+        let path = crate::icons::resolve(name)?;
         if path.extension().is_some_and(|ext| ext == "svg") {
             return Some(
                 svg()
@@ -2240,7 +2224,7 @@ impl ShellView {
     /// The folding arrow of a submenu row: right while collapsed, down while
     /// expanded, in the muted palette like macOS submenu markers.
     fn chevron(&self, expanded: bool, p: Palette) -> AnyElement {
-        let path = icon_path(if expanded {
+        let path = crate::icons::asset_svg(if expanded {
             "chevron-down.svg"
         } else {
             "chevron-right.svg"
@@ -3941,39 +3925,6 @@ pub fn popup_region(
 /// constant to match the installed icon set.
 const SPOTLIGHT_COMMAND_GLYPH: &str = "explore-symbolic";
 
-/// The symbolic icon the desktop theme provides for a bundled glyph, or
-/// `None` when the glyph has no common theme counterpart and always draws
-/// from the bundled assets.
-fn symbolic_name(asset: &str) -> Option<&'static str> {
-    Some(match asset {
-        "x.svg" => "window-close-symbolic",
-        "wine.svg" => "wine-symbolic",
-        "launchpad.svg" => "software-store-symbolic",
-        "grid.svg" => "view-app-grid-symbolic",
-        "chevron-down.svg" => "pan-down-symbolic",
-        "chevron-right.svg" => "pan-end-symbolic",
-        "bell.svg" => "bell-symbolic",
-        "bell" => "notifications-symbolic",
-        "bell-off" => "notifications-disabled-symbolic",
-        "sun.svg" => "weather-clear-symbolic",
-        "moon.svg" => "weather-clear-night-symbolic",
-        "speaker.svg" => "audio-volume-high-symbolic",
-        "speaker-muted.svg" => "audio-volume-muted-symbolic",
-        "sliders.svg" => "sliders-symbolic",
-        "settings.svg" => "settings-symbolic",
-        "clipboard.svg" => "edit-paste-symbolic",
-        "search.svg" => "system-search-symbolic",
-        "display.svg" => "display-symbolic",
-        "home.svg" => "user-home-symbolic",
-        "downloads.svg" => "folder-download-symbolic",
-        _ => return None,
-    })
-}
-
-fn icon_path(name: &str) -> PathBuf {
-    image_path(&format!("{name}.svg"))
-}
-
 /// Hex key for a content-hash so decoded menu icons cache by their bytes.
 fn icon_key(hash: &[u8]) -> String {
     hash.iter().map(|byte| format!("{byte:02x}")).collect()
@@ -3989,257 +3940,6 @@ fn collect_menu_icons(items: &[services::MenuItem], out: &mut Vec<Vec<u8>>) {
     }
 }
 
-/// Resolve a freedesktop icon name to a real file on the theme paths. Device,
-/// signal and battery icons ship in the system themes; the shell only needs a
-/// small, ordered probe over the common sizes and categories.
-fn theme_icon(
-    name: &str,
-    cache: &mut HashMap<(String, String), Option<PathBuf>>,
-) -> Option<PathBuf> {
-    let key = (current_icon_theme(), name.to_owned());
-    if let Some(cached) = cache.get(&key) {
-        return cached.clone();
-    }
-    let resolved = resolve_theme_icon(name);
-    cache.insert(key, resolved.clone());
-    resolved
-}
-
-/// The icon theme the desktop currently selected: the GTK settings (both
-/// majors) first, then KDE's kdeglobals, then the spec fallback theme.
-fn configured_icon_theme() -> String {
-    if let Ok(home) = std::env::var("HOME") {
-        let config = PathBuf::from(&home).join(".config");
-        for file in ["gtk-4.0/settings.ini", "gtk-3.0/settings.ini"] {
-            if let Ok(text) = std::fs::read_to_string(config.join(file)) {
-                if let Some(theme) = ini_value(&text, "gtk-icon-theme-name") {
-                    return theme;
-                }
-            }
-        }
-        if let Ok(text) = std::fs::read_to_string(config.join("kdeglobals")) {
-            if let Some(theme) = ini_value(&text, "Theme") {
-                return theme;
-            }
-        }
-    }
-    "hicolor".to_owned()
-}
-
-/// The icon theme every resolution uses right now. The shell switches the
-/// light/dark *variant* here once, when its appearance changes, so the icon
-/// resolvers never have to reason about the appearance themselves.
-static ACTIVE_ICON_THEME: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
-
-pub(crate) fn current_icon_theme() -> String {
-    ACTIVE_ICON_THEME
-        .read()
-        .ok()
-        .and_then(|theme| theme.clone())
-        .unwrap_or_else(configured_icon_theme)
-}
-
-/// Point icon resolution at the light or dark variant of the desktop's icon
-/// theme. Called when the shell appearance changes and once at startup.
-pub(crate) fn set_icon_theme(dark: bool) {
-    let base = configured_icon_theme();
-    let theme = icon_theme_variant(&base, dark, icon_theme_installed);
-    if let Ok(mut active) = ACTIVE_ICON_THEME.write() {
-        if active.as_deref() != Some(theme.as_str()) {
-            *active = Some(theme);
-        }
-    }
-}
-
-/// The light/dark counterpart of a theme name. Light themes get a `-dark`
-/// suffix; a dark theme chosen in the desktop settings strips it again.
-/// The `exists` probe keeps a missing variant from blanking the icons.
-fn icon_theme_variant(base: &str, dark: bool, exists: impl Fn(&str) -> bool) -> String {
-    if dark {
-        for suffix in ["-dark", "-Dark"] {
-            if !base.ends_with(suffix) {
-                let candidate = format!("{base}{suffix}");
-                if exists(&candidate) {
-                    return candidate;
-                }
-            }
-        }
-        base.to_owned()
-    } else {
-        for suffix in ["-dark", "-Dark"] {
-            if let Some(light) = base.strip_suffix(suffix) {
-                if exists(light) {
-                    return light.to_owned();
-                }
-            }
-        }
-        base.to_owned()
-    }
-}
-
-fn icon_theme_installed(name: &str) -> bool {
-    if name.is_empty() {
-        return false;
-    }
-    let home = std::env::var("HOME").ok().map(PathBuf::from);
-    let mut roots = vec![PathBuf::from("/usr/share/icons")];
-    if let Some(home) = home {
-        roots.push(home.join(".icons"));
-        roots.push(home.join(".local/share/icons"));
-    }
-    roots
-        .into_iter()
-        .any(|root| root.join(name).join("index.theme").is_file())
-}
-
-/// One `key = value` pair out of an ini-style settings file.
-fn ini_value(text: &str, key: &str) -> Option<String> {
-    for line in text.lines() {
-        if let Some((name, value)) = line.split_once('=') {
-            if name.trim() == key {
-                let value = value.trim().trim_matches('"');
-                if !value.is_empty() {
-                    return Some(value.to_owned());
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Probe one theme directory for the icon. Themes use two layouts —
-/// `size/category` (hicolor) and `category/size` (MacTahoe) — so try both.
-fn probe_theme(dir: &std::path::Path, name: &str) -> Option<PathBuf> {
-    const SIZES: &[&str] = &[
-        "scalable", "symbolic", "256", "256x256", "128", "128x128", "96", "96x96", "64", "64x64",
-        "48", "48x48", "32", "32x32", "24", "24x24", "22", "22x22", "16", "16x16",
-    ];
-    const CATEGORIES: &[&str] = &[
-        "devices",
-        "status",
-        "actions",
-        "apps",
-        "panel",
-        "places",
-        // File-type marks live in `mimes`; without it every document fell back
-        // to the bundled artwork instead of the theme the desktop selected.
-        "mimes",
-        "categories",
-        "",
-    ];
-    for size in SIZES {
-        for category in CATEGORIES {
-            // Full-colour art ships as gradients the single-palette svg
-            // rasterizer cannot honour (it paints them one flat colour), so
-            // bitmaps win for non-symbolic names; symbolic glyphs only exist
-            // as vectors and recolor by design.
-            let extensions: &[&str] = if name.ends_with("symbolic") {
-                &["svg", "png"]
-            } else {
-                &["png", "svg"]
-            };
-            for extension in extensions {
-                let path = dir
-                    .join(size)
-                    .join(category)
-                    .join(format!("{name}.{extension}"));
-                if path.is_file() {
-                    return Some(path);
-                }
-                let path = dir
-                    .join(category)
-                    .join(size)
-                    .join(format!("{name}.{extension}"));
-                if path.is_file() {
-                    return Some(path);
-                }
-            }
-        }
-    }
-    None
-}
-
-pub(crate) fn resolve_theme_icon(name: &str) -> Option<PathBuf> {
-    if name.is_empty() || name.contains("..") {
-        return None;
-    }
-    let absolute = PathBuf::from(name);
-    if absolute.is_absolute() {
-        return absolute.is_file().then_some(absolute);
-    }
-    let home = std::env::var("HOME").ok().map(PathBuf::from);
-    // The desktop's chosen theme wins; hicolor is the spec fallback; every
-    // other installed theme follows in deterministic order because vendors
-    // ship device glyphs in their own theme (breeze, blueman, ...).
-    let current = current_icon_theme();
-    let roots = |theme: &str, out: &mut Vec<PathBuf>| {
-        if let Some(home) = &home {
-            out.push(home.join(".icons").join(theme));
-            out.push(home.join(".local/share/icons").join(theme));
-        }
-        out.push(PathBuf::from("/usr/share/icons").join(theme));
-    };
-    let mut themes: Vec<PathBuf> = Vec::new();
-    roots(&current, &mut themes);
-    if current != "hicolor" {
-        roots("hicolor", &mut themes);
-    }
-    let mut others: Vec<PathBuf> = Vec::new();
-    for root in [PathBuf::from("/usr/share/icons")].into_iter().chain(
-        home.iter()
-            .flat_map(|home| [home.join(".icons"), home.join(".local/share/icons")]),
-    ) {
-        if let Ok(entries) = std::fs::read_dir(&root) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let theme = path.file_name().map(|n| n.to_string_lossy().into_owned());
-                if path.is_dir()
-                    && theme
-                        .as_deref()
-                        .is_none_or(|theme| theme != current && theme != "hicolor")
-                {
-                    others.push(path);
-                }
-            }
-        }
-    }
-    others.sort();
-    themes.extend(others);
-    themes.push(PathBuf::from("/usr/share/pixmaps"));
-    for theme in &themes {
-        if theme.ends_with("pixmaps") {
-            for extension in ["svg", "png"] {
-                let path = theme.join(format!("{name}.{extension}"));
-                if path.is_file() {
-                    return Some(path);
-                }
-            }
-            continue;
-        }
-        if let Some(path) = probe_theme(theme, name) {
-            return Some(path);
-        }
-    }
-    None
-}
-pub(crate) fn image_path(filename: &str) -> PathBuf {
-    let prefix = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().and_then(|p| p.parent()).map(|p| p.to_path_buf()));
-    let executable = prefix.as_ref().map(|p| p.join("assets/icons"));
-    let system = prefix.map(|p| p.join("share/clarion-shell/icons"));
-    for root in executable.into_iter().chain(system).chain([
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/icons"),
-        PathBuf::from("/usr/share/clarion-shell/icons"),
-        PathBuf::from("/usr/local/share/clarion-shell/icons"),
-    ]) {
-        let path = root.join(filename);
-        if path.is_file() {
-            return path;
-        }
-    }
-    PathBuf::from(filename)
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4267,19 +3967,6 @@ mod tests {
                 .iter()
                 .all(|r| f32::from(r.size.width) >= 0. && f32::from(r.size.height) >= 0.));
         }
-    }
-
-    #[::core::prelude::v1::test]
-    fn donotdisturb_borrows_the_desktop_themes_bell_symbols() {
-        assert_eq!(symbolic_name("bell"), Some("notifications-symbolic"));
-        assert_eq!(
-            symbolic_name("bell-off"),
-            Some("notifications-disabled-symbolic")
-        );
-        assert!(
-            icon_path("bell-off").is_file(),
-            "themes without a disabled bell need the bundled fallback"
-        );
     }
 
     #[::core::prelude::v1::test]
@@ -4360,55 +4047,6 @@ mod tests {
             WindowBackgroundAppearance::Transparent,
             "a clear bar must not freeze a rectangle of wallpaper"
         );
-    }
-
-    #[::core::prelude::v1::test]
-    fn power_profiles_keep_the_bundled_marks() {
-        // The theme's 16 px status marks turn to mush in the 26 px popup, so
-        // these three must always resolve to their bundled files.
-        for asset in ["power-saver.svg", "balanced.svg", "performance.svg"] {
-            assert_eq!(
-                symbolic_name(asset),
-                None,
-                "{asset} must not borrow the theme's status-tray mark"
-            );
-        }
-    }
-
-    #[::core::prelude::v1::test]
-    fn icon_theme_variant_follows_the_shell_appearance() {
-        let installed = |name: &str| {
-            matches!(
-                name,
-                "MacTahoe" | "MacTahoe-dark" | "Papirus" | "Papirus-Dark"
-            )
-        };
-        assert_eq!(
-            icon_theme_variant("MacTahoe", true, installed),
-            "MacTahoe-dark"
-        );
-        assert_eq!(icon_theme_variant("MacTahoe", false, installed), "MacTahoe");
-        // A desktop that already selected the dark variant comes back to the
-        // light one when the shell switches appearance.
-        assert_eq!(
-            icon_theme_variant("MacTahoe-dark", false, installed),
-            "MacTahoe"
-        );
-        assert_eq!(
-            icon_theme_variant("MacTahoe-dark", true, installed),
-            "MacTahoe-dark"
-        );
-        // Both common spellings of the dark suffix are understood.
-        assert_eq!(
-            icon_theme_variant("Papirus", true, installed),
-            "Papirus-Dark"
-        );
-        assert_eq!(
-            icon_theme_variant("Papirus-Dark", false, installed),
-            "Papirus"
-        );
-        // A theme without a dark variant is used exactly as installed.
-        assert_eq!(icon_theme_variant("Adwaita", true, |_| false), "Adwaita");
     }
 
     #[::core::prelude::v1::test]
