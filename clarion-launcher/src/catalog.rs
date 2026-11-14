@@ -1023,11 +1023,7 @@ mod tests {
         let catalog = fixture.load();
         let viewer = catalog.get("viewer.desktop").unwrap();
         assert_eq!(viewer.mime_types, ["text/plain", "image/png"]);
-        assert!(catalog
-            .get("plain.desktop")
-            .unwrap()
-            .mime_types
-            .is_empty());
+        assert!(catalog.get("plain.desktop").unwrap().mime_types.is_empty());
     }
 
     #[test]

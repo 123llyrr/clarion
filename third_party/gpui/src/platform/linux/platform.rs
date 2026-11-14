@@ -721,7 +721,11 @@ impl CursorStyle {
             CursorStyle::IBeamCursorForVerticalLayout => &["vertical-text"],
             CursorStyle::OperationNotAllowed => &["not-allowed", "crossed_circle"],
             CursorStyle::DragLink => &["alias"],
-            CursorStyle::DragCopy => &["copy"],
+            CursorStyle::DragCopy => &["dnd-copy", "copy"],
+            // GTK's `dnd-move` is the plain pointer used for a file move;
+            // themes without it fall back to the classic move cursors.
+            CursorStyle::DragMove => &["dnd-move", "move", "fleur"],
+            CursorStyle::DragNoDrop => &["dnd-none", "no-drop", "not-allowed"],
             CursorStyle::ContextualMenu => &["context-menu"],
             CursorStyle::None => {
                 #[cfg(debug_assertions)]

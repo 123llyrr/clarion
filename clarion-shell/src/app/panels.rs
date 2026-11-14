@@ -44,12 +44,34 @@ pub(crate) const DOCK_MENU_PAD: f32 = 10.;
 /// The menu body's one-point border on each side.
 pub(crate) const DOCK_MENU_BORDER: f32 = 2.;
 pub(crate) const DOCK_MENU_WIDTH: f32 = 250.;
+/// The launcher sheet's painted corner radius. The compositor's frost region
+/// must use the same value, or the blur pokes out past the rounded corners as
+/// square patches.
+pub(crate) const SPOTLIGHT_RADIUS: f32 = 31.;
+/// The control center's painted corner radius. Its inner cards step down from
+/// this value so the nested surfaces read as one family.
+pub(crate) const CONTROLS_RADIUS: f32 = 30.;
+/// The launcher sheet's resting size. The width gives the grid six equal
+/// slots at the original 128-point tile size; the height carries the extra
+/// status bar under the results without shrinking the scrollable body.
+pub(crate) const SPOTLIGHT_WIDTH: f32 = 886.;
+pub(crate) const SPOTLIGHT_HEIGHT: f32 = 668.;
+/// Keep the sheet's proportions when a small output clamps its width.
+const SPOTLIGHT_ASPECT: f32 = SPOTLIGHT_HEIGHT / SPOTLIGHT_WIDTH;
 pub(crate) const FOLDER_LIST_WIDTH: f32 = 300.;
-pub(crate) const FOLDER_GRID_WIDTH: f32 = 380.;
+/// The grid keeps three columns; wider cells leave room for a two-line name
+/// and let a picture fill the cell's width or the height above the name.
+pub(crate) const FOLDER_GRID_COLUMNS: usize = 3;
+pub(crate) const FOLDER_GRID_CELL_WIDTH: f32 = 116.;
+pub(crate) const FOLDER_GRID_CELL_HEIGHT: f32 = 120.;
+pub(crate) const FOLDER_GRID_IMAGE_WIDTH: f32 = 108.;
+pub(crate) const FOLDER_GRID_IMAGE_HEIGHT: f32 = 82.;
+pub(crate) const FOLDER_GRID_GAP: f32 = 12.;
+pub(crate) const FOLDER_GRID_WIDTH: f32 = 2. * DOCK_MENU_PAD
+    + FOLDER_GRID_COLUMNS as f32 * FOLDER_GRID_CELL_WIDTH
+    + (FOLDER_GRID_COLUMNS - 1) as f32 * FOLDER_GRID_GAP;
 pub(crate) const FOLDER_MENU_WIDTH: f32 = 240.;
 const FOLDER_LIST_ROW: f32 = 34.;
-const FOLDER_GRID_ROW: f32 = 84.;
-const FOLDER_GRID_COLUMNS: usize = 4;
 const FOLDER_HEADER: f32 = 34.;
 const FOLDER_FOOTER: f32 = 34.;
 /// Compact metrics shared with the folder menu view. The menu packs four
@@ -73,10 +95,10 @@ pub(crate) fn dock_menu_content_height(state: &ViewState, id: &str) -> f32 {
     let apps = state.dock_apps();
     let rows = match apps.iter().find(|app| app.id == id) {
         Some(app) => {
-            // Each window contributes a focus row and a minimize/close row,
-            // then the pin row follows. A closed pinned app shows only the pin
-            // row, so zero windows is one row rather than two.
-            app.windows.len().min(8) as f32 * 2. + 1.
+            // The launch entry leads, then each window contributes a focus
+            // row and a minimize/close row, then the pin row follows. A
+            // closed pinned app shows the launch and pin rows only.
+            app.windows.len().min(8) as f32 * 2. + 2.
         }
         None => {
             // A closed, unpinned application offers launch and pin.
@@ -137,9 +159,10 @@ pub(crate) fn dock_surface_origin(
     h: f32,
 ) -> (f32, f32) {
     match state.prefs.dock_position {
-        DockPosition::Bottom => {
-            ((w - metrics.surface_width) / 2., h - 8. - metrics.surface_height)
-        }
+        DockPosition::Bottom => (
+            (w - metrics.surface_width) / 2.,
+            h - 8. - metrics.surface_height,
+        ),
         DockPosition::Left | DockPosition::Right => {
             let bar = state.prefs.bar_height as f32;
             let y = bar + (h - bar - metrics.surface_height) / 2.;
@@ -177,10 +200,7 @@ pub(crate) fn dock_tile_center(
     match state.prefs.dock_position {
         DockPosition::Bottom => (surface_x + main, surface_y + metrics.cross_padding + cross),
         DockPosition::Left => (surface_x + cross, surface_y + main),
-        DockPosition::Right => (
-            surface_x + metrics.surface_width - cross,
-            surface_y + main,
-        ),
+        DockPosition::Right => (surface_x + metrics.surface_width - cross, surface_y + main),
     }
 }
 
@@ -214,7 +234,7 @@ fn folder_popup_size(
     h: f32,
 ) -> (f32, f32) {
     let count = folder_entry_count(state, root);
-    let (width, rows, row_height) = match layout {
+    let (width, rows, row_height, row_gap) = match layout {
         FolderLayout::Grid => (
             FOLDER_GRID_WIDTH,
             if count == 0 {
@@ -222,16 +242,18 @@ fn folder_popup_size(
             } else {
                 count.div_ceil(FOLDER_GRID_COLUMNS)
             },
-            FOLDER_GRID_ROW,
+            FOLDER_GRID_CELL_HEIGHT,
+            FOLDER_GRID_GAP,
         ),
         _ => (
             FOLDER_LIST_WIDTH,
             if count == 0 { 3 } else { count },
             FOLDER_LIST_ROW,
+            4.,
         ),
     };
     let width = width.min(w - 24.);
-    let content = rows as f32 * row_height + (rows.saturating_sub(1)) as f32 * 4.;
+    let content = rows as f32 * row_height + (rows.saturating_sub(1)) as f32 * row_gap;
     let height = 2. * DOCK_MENU_PAD
         + FOLDER_HEADER
         + 8.
@@ -243,9 +265,7 @@ fn folder_popup_size(
     let available = (h - (state.prefs.bar_height as f32 + 8.) - 12.).max(100.);
     (
         width,
-        height
-            .min(h * FOLDER_POPUP_MAX_SCREEN_SHARE)
-            .min(available),
+        height.min(h * FOLDER_POPUP_MAX_SCREEN_SHARE).min(available),
     )
 }
 
@@ -290,37 +310,10 @@ pub(crate) fn folder_tile_center(
     Some(dock_tile_center(state, &metrics, slot, w, h))
 }
 
-fn fan_fits(state: &ViewState, root: &std::path::Path, count: usize, w: f32, h: f32) -> bool {
-    if count == 0 || count > 8 {
-        return false;
-    }
-    let Some((x, y)) = folder_tile_center(state, root, w, h) else {
-        return false;
-    };
-    let icon = state.prefs.dock_size as f32;
-    let spacing = icon * 0.94;
-    let margin = 16.;
-    let available = match state.prefs.dock_position {
-        DockPosition::Bottom => y - margin,
-        DockPosition::Left | DockPosition::Right => h - 32.,
-    };
-    let capacity = ((available / spacing).floor() as usize).clamp(1, 10);
-    let label_room = 112.;
-    count <= capacity
-        && match state.prefs.dock_position {
-            DockPosition::Bottom => x >= label_room || w - x >= label_room,
-            DockPosition::Left => w - x >= 220.,
-            DockPosition::Right => x >= 220.,
-        }
-}
-
 pub(crate) fn resolved_folder_layout(
     state: &ViewState,
     root: &std::path::Path,
-    w: f32,
-    h: f32,
 ) -> FolderLayout {
-    let count = folder_entry_count(state, root);
     let configured = state
         .dock_folders
         .iter()
@@ -328,16 +321,11 @@ pub(crate) fn resolved_folder_layout(
         .map(|folder| folder.layout)
         .unwrap_or(FolderLayout::Auto);
     match configured {
-        FolderLayout::Auto => match state.prefs.dock_position {
-            DockPosition::Bottom
-                if count > 0 && count <= 8 && fan_fits(state, root, count, w, h) =>
-            {
-                FolderLayout::Fan
-            }
-            DockPosition::Bottom => FolderLayout::Grid,
-            _ if count > 0 && count <= 12 => FolderLayout::List,
-            _ => FolderLayout::Grid,
-        },
+        // Pinned folders open as a grid: a stable four-column body that keeps
+        // names readable and grows in rows, and one entrance animation for
+        // every folder. The fan stays available as an explicit choice (and so
+        // does the list) for users who prefer it.
+        FolderLayout::Auto => FolderLayout::Grid,
         layout => layout,
     }
 }
@@ -403,6 +391,49 @@ fn dock_popup_geometry(
 
 /// A bar popup window covers the whole output so clicks anywhere outside its
 /// visible rectangle dismiss the panel; the popup's rect is reported inside.
+/// Place an application menu opened from a launcher tile beside that tile.
+/// The card drops below the click, flips above it when the bottom edge would
+/// clip, and keeps an eight-point inset from the output edges.
+fn launcher_menu_anchor(
+    anchor: (i32, i32),
+    width: f32,
+    height: f32,
+    w: f32,
+    h: f32,
+    top: f32,
+) -> (f32, f32) {
+    const GAP: f32 = 10.;
+    let ax = anchor.0 as f32;
+    let ay = anchor.1 as f32;
+    let x = (ax - 12.).clamp(8., (w - width - 8.).max(8.));
+    let below = ay + GAP;
+    let y = if below + height <= h - 8. {
+        below
+    } else {
+        (ay - GAP - height).max(top)
+    };
+    (x, y)
+}
+
+/// The card an application menu opened from a launcher tile occupies. The card
+/// is its own fullscreen surface over the launcher (so the compositor can frost
+/// it against the content underneath), and both launcher presentations cover
+/// the whole output, so this rectangle is already in window coordinates.
+pub(crate) fn launcher_menu_rect(
+    state: &ViewState,
+    id: &str,
+    anchor: (i32, i32),
+    w: f32,
+    h: f32,
+) -> Bounds<Pixels> {
+    let top = state.prefs.bar_height as f32 + 8.;
+    let available = (h - top - 16.).max(100.);
+    let width = DOCK_MENU_WIDTH.min((w - 24.).max(120.));
+    let height = (dock_menu_content_height(state, id) + DOCK_MENU_BORDER).min(available);
+    let (x, y) = launcher_menu_anchor(anchor, width, height, w, h, top);
+    Bounds::new(point(px(x), px(y)), size(px(width), px(height)))
+}
+
 fn modal_popup(w: f32, h: f32, x: f32, y: f32, width: f32, height: f32) -> Placement {
     Placement {
         bounds: Bounds::new(point(px(0.), px(0.)), size(px(w), px(h))),
@@ -410,7 +441,10 @@ fn modal_popup(w: f32, h: f32, x: f32, y: f32, width: f32, height: f32) -> Place
         margins: LayerShellMargins::default(),
         normal: false,
         arrow: None,
-        popup: Some(Bounds::new(point(px(x), px(y)), size(px(width), px(height)))),
+        popup: Some(Bounds::new(
+            point(px(x), px(y)),
+            size(px(width), px(height)),
+        )),
     }
 }
 
@@ -424,6 +458,16 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
         Panel::Apps => {
             anchor = LayerShellAnchor::ALL;
             (w, h, 0., 0.)
+        }
+        Panel::Spotlight => {
+            // The palette floats over the centre of the output. The window
+            // itself covers everything (so a click outside dismisses it) and
+            // reports the visible rectangle inside. The sheet is a little
+            // shorter than it is wide, like the reference sheet; short outputs
+            // clamp the height.
+            let width = SPOTLIGHT_WIDTH.min(w - 32.).max(280.);
+            let height = (width * SPOTLIGHT_ASPECT).min(h - 48.).max(220.);
+            return modal_popup(w, h, (w - width) / 2., (h - height) / 2., width, height);
         }
         Panel::Preferences => {
             let width = 640f32.min(w - 32.).max(280.);
@@ -470,7 +514,8 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
                 DockPosition::Bottom => {
                     // The triangle points down at the tile from the popup bottom.
                     let x = (tile_x - width / 2.).clamp(8., (w - width - 8.).max(8.));
-                    let offset = (tile_x - x).clamp(DOCK_ARROW, (width - DOCK_ARROW).max(DOCK_ARROW));
+                    let offset =
+                        (tile_x - x).clamp(DOCK_ARROW, (width - DOCK_ARROW).max(DOCK_ARROW));
                     (
                         width,
                         height,
@@ -488,9 +533,9 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
                     // height.
                     let width = width + DOCK_ARROW;
                     let height = height - DOCK_ARROW;
-                    let y = (tile_y - height / 2.)
-                        .clamp(top, (h - height - 8.).max(top));
-                    let offset = (tile_y - y).clamp(DOCK_ARROW, (height - DOCK_ARROW).max(DOCK_ARROW));
+                    let y = (tile_y - height / 2.).clamp(top, (h - height - 8.).max(top));
+                    let offset =
+                        (tile_y - y).clamp(DOCK_ARROW, (height - DOCK_ARROW).max(DOCK_ARROW));
                     let (x, arrow) = if state.prefs.dock_position == DockPosition::Left {
                         (
                             edge - DOCK_ARROW,
@@ -519,11 +564,14 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
                 margins: LayerShellMargins::default(),
                 normal: false,
                 arrow,
-                popup: Some(Bounds::new(point(px(x), px(y)), size(px(width), px(height)))),
+                popup: Some(Bounds::new(
+                    point(px(x), px(y)),
+                    size(px(width), px(height)),
+                )),
             };
         }
         Panel::DockFolder { root } => {
-            let layout = resolved_folder_layout(state, root, w, h);
+            let layout = resolved_folder_layout(state, root);
             if layout == FolderLayout::Fan {
                 return Placement {
                     bounds: Bounds::new(point(px(0.), px(0.)), size(px(w), px(h))),
@@ -537,25 +585,27 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
             let apps = state.dock_apps();
             let metrics = dock_metrics(state, &apps, w, h);
             let (width, height) = folder_popup_size(state, root, layout, w, h);
-            let (tile_x, tile_y) = folder_tile_center(state, root, w, h)
-                .unwrap_or((w / 2., h / 2.));
-            let (width, height, x, y, arrow) = dock_popup_geometry(
-                state, &metrics, tile_x, tile_y, width, height, w, h, top,
-            );
+            let (tile_x, tile_y) =
+                folder_tile_center(state, root, w, h).unwrap_or((w / 2., h / 2.));
+            let (width, height, x, y, arrow) =
+                dock_popup_geometry(state, &metrics, tile_x, tile_y, width, height, w, h, top);
             return Placement {
                 bounds: Bounds::new(point(px(0.), px(0.)), size(px(w), px(h))),
                 anchor: LayerShellAnchor::ALL,
                 margins: LayerShellMargins::default(),
                 normal: false,
                 arrow: Some(arrow),
-                popup: Some(Bounds::new(point(px(x), px(y)), size(px(width), px(height)))),
+                popup: Some(Bounds::new(
+                    point(px(x), px(y)),
+                    size(px(width), px(height)),
+                )),
             };
         }
         Panel::DockFolderMenu { path } => {
             let apps = state.dock_apps();
             let metrics = dock_metrics(state, &apps, w, h);
-            let (tile_x, tile_y) = folder_tile_center(state, path, w, h)
-                .unwrap_or((w / 2., h / 2.));
+            let (tile_x, tile_y) =
+                folder_tile_center(state, path, w, h).unwrap_or((w / 2., h / 2.));
             let menu_height = folder_menu_window_height()
                 .min(h * FOLDER_POPUP_MAX_SCREEN_SHARE)
                 .min(available);
@@ -576,7 +626,10 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
                 margins: LayerShellMargins::default(),
                 normal: false,
                 arrow: Some(arrow),
-                popup: Some(Bounds::new(point(px(x), px(y)), size(px(width), px(height)))),
+                popup: Some(Bounds::new(
+                    point(px(x), px(y)),
+                    size(px(width), px(height)),
+                )),
             };
         }
         Panel::DockOverflow { ids, icon_size } => {
@@ -618,8 +671,7 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
                 }
                 DockPosition::Left | DockPosition::Right => {
                     let width = width + DOCK_ARROW;
-                    let y = (tile_y - height / 2.)
-                        .clamp(top, (h - height - 8.).max(top));
+                    let y = (tile_y - height / 2.).clamp(top, (h - height - 8.).max(top));
                     let offset =
                         (tile_y - y).clamp(DOCK_ARROW, (height - DOCK_ARROW).max(DOCK_ARROW));
                     let (x, arrow) = if state.prefs.dock_position == DockPosition::Left {
@@ -648,7 +700,10 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
                 margins: LayerShellMargins::default(),
                 normal: false,
                 arrow,
-                popup: Some(Bounds::new(point(px(x), px(y)), size(px(width), px(height)))),
+                popup: Some(Bounds::new(
+                    point(px(x), px(y)),
+                    size(px(width), px(height)),
+                )),
             };
         }
         Panel::Controls => {
@@ -658,7 +713,23 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
             // on the button that opened it; the clamp pulls the rectangle
             // back inside the output when the click sits near an edge.
             let ceiling = available.min(h * BAR_POPUP_MAX_HEIGHT_SHARE);
-            let (width, height) = (320f32.min(w - 24.), 424f32.min(ceiling));
+            // 600 keeps every row visible with the roomier 16-point gaps; the
+            // body still scrolls when a short output clamps the sheet.
+            let (width, height): (f32, f32) = (334f32.min(w - 24.), 600f32.min(ceiling));
+            let x = state.anchored.map_or(w - width - 12., |x| {
+                (x - width / 2.).clamp(8., (w - width - 8.).max(8.))
+            });
+            return modal_popup(w, h, x, top, width, height);
+        }
+        Panel::Battery => {
+            // The battery popup is its own compact modal, dropped from the
+            // menu-bar indicator that opened it rather than the control center.
+            // Its height is the summary (74) + the profile card (140) + the
+            // charge-limit card (86) + two body gaps (10 each) + the body
+            // padding and border (26) + two points of rounding slack: the
+            // sheet never needs to scroll.
+            let ceiling = available.min(h * BAR_POPUP_MAX_HEIGHT_SHARE);
+            let (width, height): (f32, f32) = (344f32.min(w - 24.), 336f32.min(ceiling));
             let x = state.anchored.map_or(w - width - 12., |x| {
                 (x - width / 2.).clamp(8., (w - width - 8.).max(8.))
             });
@@ -684,12 +755,44 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
             });
             return modal_popup(w, h, x, top, width, height);
         }
+        Panel::System => {
+            // The leading mark's menu sits in the corner, left aligned with
+            // the bar's own padding instead of centring under the click.
+            let ceiling = available.min(h * BAR_POPUP_MAX_HEIGHT_SHARE);
+            let height = system_menu_height().min(ceiling);
+            let width = 260f32.min(w - 24.);
+            return modal_popup(w, h, 8., top, width, height);
+        }
+        Panel::About => {
+            // A tall, narrow card like the reference About window; the height
+            // follows its width until a short output clamps it.
+            let width = 360f32.min(w - 24.);
+            let height = (width * 1.7).min(available);
+            return modal_popup(w, h, (w - width) / 2., (h - height) / 2., width, height);
+        }
+        Panel::OpenWith { apps, .. } => {
+            let width = 420f32.min(w - 24.);
+            let height = (96. + apps.len() as f32 * 42.)
+                .min(available)
+                .min(h * 0.8);
+            return modal_popup(w, h, (w - width) / 2., (h - height) / 2., width, height);
+        }
+        Panel::Info { rows, .. } => {
+            // A centered info card, sized by its rows and scrollable when a
+            // long metadata list would run past the output.
+            // Artwork (140) + close control + title + margins, then one row
+            // per fact; the card is tall enough that the body never scrolls.
+            let width = 440f32.min(w - 24.);
+            let height = (252. + rows.len() as f32 * 21.).min(available);
+            return modal_popup(w, h, (w - width) / 2., (h - height) / 2., width, height);
+        }
         Panel::Notifications => {
-            anchor.top = true;
-            anchor.right = true;
-            margins.top = top.round() as i32;
-            margins.right = 12;
-            (368., available.min(1800.), w - 368. - 12., top)
+            // A full-output catcher lets a click anywhere outside the column
+            // dismiss the center; only the column itself is visible. The
+            // column covers most of the output but keeps a visible margin at
+            // the bottom instead of running edge to edge.
+            let height = (h * 0.90).min(available).min(1800.);
+            return modal_popup(w, h, w - 368. - 12., top, 368., height);
         }
     };
     Placement {
@@ -720,6 +823,22 @@ const NESTED_GAP: f32 = 3.;
 const NESTED_CONTAINER: f32 = 8.;
 /// The 6pt rhythm between the popup's top-level entries.
 const TOP_GAP: f32 = 6.;
+
+/// The system menu's fixed content: seven action rows split by two rules.
+/// Keep these counts in step with `view::system_menu`'s table; the UI test
+/// asserts the painted rows fit the popup.
+const SYSTEM_MENU_ACTIONS: f32 = 7.;
+const SYSTEM_MENU_SEPARATORS: f32 = 2.;
+
+/// The exact height of the bar mark's menu, using the same row, separator,
+/// gap and padding rhythm as the tray menu.
+pub(crate) fn system_menu_height() -> f32 {
+    (SYSTEM_MENU_ACTIONS * TRAY_MENU_ROW
+        + SYSTEM_MENU_SEPARATORS * TRAY_MENU_SEPARATOR
+        + (SYSTEM_MENU_ACTIONS + SYSTEM_MENU_SEPARATORS - 1.) * TOP_GAP
+        + TRAY_MENU_PAD)
+        .max(20.)
+}
 
 /// The exact height the view paints for the tray menu rows. Every `visible`
 /// entry renders (nested child lists ride their own rounded panels and stay
@@ -769,7 +888,16 @@ fn entry_height(item: &services::MenuItem, depth: usize, expanded: &[i32]) -> f3
 /// The fullscreen dashboards never fade; a Dock folder has its own exit
 /// choreography when its fan retracts.
 pub(crate) fn popup_exit_panel(panel: &Panel) -> bool {
-    matches!(panel, Panel::Tray(_) | Panel::Controls | Panel::Recent)
+    matches!(
+        panel,
+        Panel::Tray(_)
+            | Panel::Controls
+            | Panel::Battery
+            | Panel::Recent
+            | Panel::Spotlight
+            | Panel::Apps
+            | Panel::Notifications
+    )
 }
 
 #[cfg(test)]
@@ -778,6 +906,69 @@ mod tests {
 
     use super::*;
     use crate::app::testing;
+
+    #[gpui::test]
+    fn the_launcher_palette_is_a_centred_modal_with_a_visible_rectangle(cx: &mut TestAppContext) {
+        let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
+        let state = host.read_with(cx, |host, _| host.snapshot());
+        let palette = placement(&state, &Panel::Spotlight, 1440., 900.);
+        // The window still covers the output so the backdrop can dismiss it.
+        assert_eq!(
+            palette.bounds,
+            Bounds::new(point(px(0.), px(0.)), size(px(1440.), px(900.)))
+        );
+        assert!(!palette.normal);
+        assert!(palette.arrow.is_none());
+        let popup = palette.popup.expect("the palette reports its popup");
+        let width = super::SPOTLIGHT_WIDTH;
+        let height = super::SPOTLIGHT_HEIGHT;
+        assert_eq!(popup.size, size(px(width), px(height)));
+        assert_eq!(
+            popup.origin,
+            point(px((1440. - width) / 2.), px((900. - height) / 2.))
+        );
+        // Small outputs shrink the palette instead of clipping it.
+        let compact = placement(&state, &Panel::Spotlight, 640., 320.);
+        let popup = compact.popup.expect("the palette reports its popup");
+        assert_eq!(popup.size, size(px(608.), px(272.)));
+    }
+
+    #[gpui::test]
+    fn the_launcher_palette_grows_to_offset_the_larger_inner_padding(cx: &mut TestAppContext) {
+        let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
+        let state = host.read_with(cx, |host, _| host.snapshot());
+        let palette = placement(&state, &Panel::Spotlight, 1440., 900.);
+        let popup = palette.popup.expect("the palette reports its popup");
+        assert_eq!(popup.size, size(px(886.), px(668.)));
+    }
+
+    #[gpui::test]
+    fn the_system_menu_drops_under_the_mark_and_about_is_centred(cx: &mut TestAppContext) {
+        let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
+        let state = host.read_with(cx, |host, _| host.snapshot());
+        let menu = placement(&state, &Panel::System, 1440., 900.);
+        assert_eq!(
+            menu.bounds,
+            Bounds::new(point(px(0.), px(0.)), size(px(1440.), px(900.)))
+        );
+        assert!(!menu.normal);
+        let popup = menu.popup.expect("the system menu reports its popup");
+        assert_eq!(
+            popup.origin,
+            point(px(8.), px(state.prefs.bar_height as f32 + 8.))
+        );
+        assert_eq!(
+            popup.size,
+            size(px(260.), px(super::system_menu_height()))
+        );
+        let about = placement(&state, &Panel::About, 1440., 900.);
+        let popup = about.popup.expect("the About card reports its popup");
+        assert_eq!(
+            popup.origin,
+            point(px((1440. - 360.) / 2.), px((900. - 612.) / 2.))
+        );
+        assert_eq!(popup.size, size(px(360.), px(612.)));
+    }
 
     #[gpui::test]
     fn desktop_components_have_distinct_positions_and_roles(cx: &mut TestAppContext) {
@@ -797,9 +988,14 @@ mod tests {
             controls.bounds,
             Bounds::new(point(px(0.), px(0.)), size(px(1440.), px(900.)))
         );
-        let popup = controls.popup.expect("the control center reports its popup");
-        assert_eq!(f32::from(popup.origin.x), 1440. - 320. - 12.);
-        assert_eq!(f32::from(popup.origin.y), state.prefs.bar_height as f32 + 8.);
+        let popup = controls
+            .popup
+            .expect("the control center reports its popup");
+        assert_eq!(f32::from(popup.origin.x), 1440. - 334. - 12.);
+        assert_eq!(
+            f32::from(popup.origin.y),
+            state.prefs.bar_height as f32 + 8.
+        );
         assert!(controls.anchor.top && controls.anchor.right);
         let capture = placement(&state, &Panel::Screenshot, 1440., 900.);
         assert!(capture.anchor.bottom);
@@ -809,10 +1005,19 @@ mod tests {
         assert_eq!(prefs.bounds.size, size(px(640.), px(520.)));
         for output_height in [2160., 4320.] {
             let notifications = placement(&state, &Panel::Notifications, 3840., output_height);
-            assert!(notifications.bounds.size.height <= px(1800.));
+            let popup = notifications
+                .popup
+                .expect("the notification center reports its column");
+            assert!(popup.size.height <= px(1800.));
         }
+        // The notification column keeps a bottom margin: 90% of the output,
+        // clamped to the room below the menu bar.
+        let notifications = placement(&state, &Panel::Notifications, 1920., 1080.);
+        let popup = notifications.popup.expect("the column rectangle");
+        assert_eq!(popup.size.height, px(1080. * 0.90));
         for panel in [
             Panel::Controls,
+            Panel::Battery,
             Panel::Notifications,
             Panel::Recent,
             Panel::Screenshot,
@@ -865,7 +1070,9 @@ mod tests {
         });
         let state = host.read_with(cx, |host, _| host.snapshot());
         let content = dock_menu_content_height(&state, id);
-        let expect_rows = 3. * 2. + 1.;
+        // The launch entry leads, then three focus rows, three action rows
+        // and the pin row.
+        let expect_rows = 3. * 2. + 2.;
         assert_eq!(
             content,
             2. * DOCK_MENU_PAD + expect_rows * DOCK_MENU_ROW + (expect_rows - 1.) * DOCK_MENU_GAP
@@ -962,7 +1169,9 @@ mod tests {
                     1440.,
                     height,
                 );
-                let popup = placement.popup.expect("the folder menu reports its visible rect");
+                let popup = placement
+                    .popup
+                    .expect("the folder menu reports its visible rect");
                 let popup_height = f32::from(popup.size.height);
                 assert!(
                     popup_height <= height * FOLDER_POPUP_MAX_SCREEN_SHARE + 0.01,
@@ -974,9 +1183,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn the_folder_popup_never_covers_more_than_most_of_the_screen(
-        cx: &mut TestAppContext,
-    ) {
+    fn the_folder_popup_never_covers_more_than_most_of_the_screen(cx: &mut TestAppContext) {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap();
         let child = root.join("crowded");
@@ -1049,14 +1256,58 @@ mod tests {
             });
         });
         let state = host.read_with(cx, |host, _| host.snapshot());
-        // A closed pinned app shows only the unpin row, so there is no empty
-        // band below a single item.
+        // A closed pinned app offers launch and unpin, so the compact menu
+        // still has two rows and no empty band below them.
+        let rows = 2.;
         assert_eq!(
             dock_menu_content_height(&state, id),
-            2. * DOCK_MENU_PAD + DOCK_MENU_ROW
+            2. * DOCK_MENU_PAD + rows * DOCK_MENU_ROW + (rows - 1.) * DOCK_MENU_GAP
         );
         let placement = placement(&state, &Panel::Dock(id.into()), 1440., 900.);
         assert!(placement.arrow.is_some());
+    }
+
+    #[gpui::test]
+    fn launcher_application_menus_open_beside_the_clicked_tile(cx: &mut TestAppContext) {
+        let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
+        let state = host.read_with(cx, |host, _| host.snapshot());
+        let id = "alpha.desktop";
+        let width = DOCK_MENU_WIDTH.min(1440. - 24.);
+        let height = dock_menu_content_height(&state, id) + DOCK_MENU_BORDER;
+        let menu = |anchor| launcher_menu_rect(&state, id, anchor, 1440., 900.);
+        let card = menu((420, 260));
+        let (x, y) = (f32::from(card.origin.x), f32::from(card.origin.y));
+        assert!((f32::from(card.size.width) - width).abs() < 0.01);
+        assert!(
+            (f32::from(card.size.height) - height).abs() < 0.01,
+            "the card is the content plus its border, with no arrow band"
+        );
+        assert!(
+            (y - 270.).abs() < 0.01,
+            "the card drops below the click: {y}"
+        );
+        assert!(
+            x <= 420. && x + width > 420.,
+            "the click stays over the card: x={x}"
+        );
+        // Near the bottom edge the card flips above the pointer rather than
+        // clipping, and it never climbs into the bar.
+        let flipped = menu((420, 860));
+        let fy = f32::from(flipped.origin.y);
+        let bar = state.prefs.bar_height as f32;
+        assert!(
+            fy + height <= 860. && fy >= bar,
+            "the card flips above the click: y={fy}"
+        );
+        // The old failure put the menu at the Dock tile on the bottom edge;
+        // the anchored card must stay near the row it came from.
+        for anchor in [(420, 260), (420, 860)] {
+            let y = f32::from(menu(anchor).origin.y);
+            assert!(
+                (y - anchor.1 as f32).abs() < height + 16.,
+                "the menu stays beside the clicked tile"
+            );
+        }
     }
 
     #[gpui::test]
@@ -1213,7 +1464,9 @@ mod tests {
             let arrow = placement.arrow.expect("the drawer points at its tile");
             assert_eq!(f32::from(placement.bounds.size.width), 1440.);
             assert_eq!(f32::from(placement.bounds.size.height), 900.);
-            let popup = placement.popup.expect("the drawer reports its visible rect");
+            let popup = placement
+                .popup
+                .expect("the drawer reports its visible rect");
             let want = match position {
                 DockPosition::Bottom => ArrowEdge::Bottom,
                 DockPosition::Left => ArrowEdge::Left,

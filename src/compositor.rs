@@ -43,7 +43,7 @@ use smithay::desktop::{
     find_popup_root_surface, layer_map_for_output, LayerSurface, PopupGrab, PopupManager,
     PopupUngrabStrategy, Space, Window, WindowSurfaceType,
 };
-use smithay::input::keyboard::{Layout as KeyboardLayout, XkbConfig};
+use smithay::input::keyboard::{KeyboardSource, Layout as KeyboardLayout, XkbConfig};
 use smithay::input::pointer::{
     CursorIcon, CursorImageStatus, CursorImageSurfaceData, Focus,
     GrabStartData as PointerGrabStartData, MotionEvent,
@@ -353,6 +353,19 @@ pub struct Clarion {
     pub bind_cooldown_timers: HashMap<Key, RegistrationToken>,
     pub bind_repeat_timer: Option<crate::input::BindRepeat>,
     pub keyboard_focus: KeyboardFocus,
+    /// Keyboard sources of virtual keyboards owned by an input method.
+    ///
+    /// IMEs forward the keys they do not consume through their own virtual
+    /// keyboard. Those events must bypass the IME grab (otherwise they loop
+    /// back into it), and their synthetic releases must stay out of the seat's
+    /// XKB state, or they would release physically held modifiers behind the
+    /// user's back.
+    ///
+    /// Sources are tracked instead of clients because the virtual keyboard is
+    /// already dead when Smithay releases its still-pressed keys: at that point
+    /// `VirtualKeyboardDevice::client` returns `None`, while the source is
+    /// still unique to the device.
+    pub(crate) ime_virtual_keyboards: HashSet<KeyboardSource>,
     pub layer_shell_on_demand_focus: Option<LayerSurface>,
     pub idle_inhibiting_surfaces: HashSet<WlSurface>,
     pub is_fdo_idle_inhibited: Arc<AtomicBool>,
@@ -983,7 +996,7 @@ impl State {
             &MotionEvent {
                 location,
                 serial: SERIAL_COUNTER.next_serial(),
-                time: get_monotonic_time().as_millis() as u32,
+                time: crate::utils::input_time(),
             },
         );
         pointer.frame(self);
@@ -1220,7 +1233,7 @@ impl State {
             &MotionEvent {
                 location,
                 serial: SERIAL_COUNTER.next_serial(),
-                time: get_monotonic_time().as_millis() as u32,
+                time: crate::utils::input_time(),
             },
         );
 
@@ -1479,7 +1492,7 @@ impl State {
                     self.clarion.seat.get_pointer().unwrap().unset_grab(
                         self,
                         SERIAL_COUNTER.next_serial(),
-                        get_monotonic_time().as_millis() as u32,
+                        crate::utils::input_time(),
                     );
                     self.clarion.popup_grab = None;
                 }
@@ -2382,7 +2395,7 @@ impl State {
         }
 
         // Now that we captured the screenshots, clear grabs like drag-and-drop, etc.
-        let time = get_monotonic_time().as_millis() as u32;
+        let time = crate::utils::input_time();
         self.clarion.seat.get_pointer().unwrap().unset_grab(
             self,
             SERIAL_COUNTER.next_serial(),
@@ -2392,11 +2405,15 @@ impl State {
             touch.unset_grab(self);
         }
 
-        // Can't unset_grab() from with_tools(), will deadlock on tablet seat mutex...
-        let mut tools = Vec::new();
-        self.clarion.seat.tablet_seat().with_tools(|map| {
-            tools = Vec::from_iter(map.values().cloned());
-        });
+        // Collect the tools first: unset_grab() must not run while the tablet
+        // seat is borrowed.
+        let tools: Vec<_> = self
+            .clarion
+            .seat
+            .tablet_seat()
+            .get_tools()
+            .into_values()
+            .collect();
         for tool in tools {
             tool.unset_grab(self, SERIAL_COUNTER.next_serial(), time);
         }
@@ -2759,10 +2776,16 @@ impl State {
 
     #[cfg(feature = "dbus")]
     pub fn on_login1_msg(&mut self, msg: Login1ToClarion) {
-        let Login1ToClarion::LidClosedChanged(is_closed) = msg;
-
-        trace!("login1 lid {}", if is_closed { "closed" } else { "opened" });
-        self.set_lid_closed(is_closed);
+        match msg {
+            Login1ToClarion::LidClosedChanged(is_closed) => {
+                trace!("login1 lid {}", if is_closed { "closed" } else { "opened" });
+                self.set_lid_closed(is_closed);
+            }
+            Login1ToClarion::LockRequested => {
+                trace!("login1 requested a session lock");
+                self.clarion.request_lock();
+            }
+        }
     }
 
     #[cfg(feature = "dbus")]
@@ -2862,9 +2885,16 @@ impl Clarion {
         }
 
         let compositor_state = CompositorState::new_v6::<State>(&display_handle);
+        // Minimize is implemented by XdgShellHandler::minimize_request. GTK
+        // hides or disables its titlebar button unless the min capability is
+        // advertised. WindowMenu stays out until show_window_menu is handled.
         let xdg_shell_state = XdgShellState::new_with_capabilities::<State>(
             &display_handle,
-            [WmCapabilities::Fullscreen, WmCapabilities::Maximize],
+            [
+                WmCapabilities::Minimize,
+                WmCapabilities::Fullscreen,
+                WmCapabilities::Maximize,
+            ],
         );
         let xdg_decoration_state =
             XdgDecorationState::new_with_filter::<State, _>(&display_handle, |client| {
@@ -3232,6 +3262,7 @@ impl Clarion {
 
             seat,
             keyboard_focus: KeyboardFocus::Layout { surface: None },
+            ime_virtual_keyboards: HashSet::new(),
             layer_shell_on_demand_focus: None,
             idle_inhibiting_surfaces: HashSet::new(),
             is_fdo_idle_inhibited: Arc::new(AtomicBool::new(false)),
@@ -7776,13 +7807,24 @@ impl Clarion {
     }
 
     /// Starts the configured locker. The session lock surface belongs to a
-    /// client, so the policy can only ask one to run.
-    fn request_lock(&mut self) {
+    /// client, so the policy can only ask one to run. This is the single path
+    /// for idle timeouts, `loginctl lock-session` and the Shell's lock action.
+    pub(crate) fn request_lock(&mut self) {
+        let already_locking = match &self.lock_state {
+            LockState::Unlocked => false,
+            LockState::WaitingForSurfaces { .. } | LockState::Locking(_) => true,
+            LockState::Locked(lock) => lock.is_alive(),
+        };
+        if already_locking {
+            debug!("lock: a locker is already locking or holding the session");
+            return;
+        }
+
         let Some(command) = self.idle_policy.lock_command() else {
-            warn!("idle: lock requested, but idle {{ lock-command }} is not configured");
+            warn!("lock requested, but idle {{ lock-command }} is not configured");
             return;
         };
-        debug!("idle: starting the lock command {command:?}");
+        debug!("lock: starting the lock command {command:?}");
         crate::utils::spawning::spawn(command, None);
     }
 

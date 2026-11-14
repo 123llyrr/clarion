@@ -64,6 +64,7 @@
               ./src
               ./third_party/smithay
               ./third_party/gpui
+              ./third_party/blade-graphics
               ./Cargo.toml
               ./Cargo.lock
             ];

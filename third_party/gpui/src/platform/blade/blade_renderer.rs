@@ -690,6 +690,16 @@ impl BladeRenderer {
     }
 
     pub fn draw(&mut self, scene: &Scene) {
+        // A driver can refuse to install the window's swapchain (NVIDIA's
+        // Wayland WSI intermittently answers `vkCreateSwapchainKHR` with
+        // `VK_SUBOPTIMAL_KHR` and no handle on fullscreen surfaces). Retry
+        // with a backoff and skip the frame until a swapchain exists, instead
+        // of letting the window creation abort the process.
+        self.gpu.recover_surface(&mut self.surface);
+        if !self.surface.has_swapchain() {
+            return;
+        }
+
         self.command_encoder.start();
         self.atlas.before_frame(&mut self.command_encoder);
 

@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::drm::DrmNode;
-use smithay::backend::input::{InputEvent, TabletToolDescriptor};
+use smithay::backend::input::{Event as _, InputEvent, KeyboardKeyEvent, TabletToolDescriptor};
 use smithay::desktop::{layer_map_for_output, utils, PopupKind, PopupManager, WindowSurfaceType};
 use smithay::input::dnd::{self, DnDGrab, DndGrabHandler, DndTarget};
 use smithay::input::pointer::{self, CursorIcon, CursorImageStatus, Focus, PointerHandle};
@@ -25,7 +25,7 @@ use smithay::reexports::wayland_protocols_wlr::screencopy::v1::server::zwlr_scre
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource;
-use smithay::utils::{Logical, Point, Rectangle, Serial};
+use smithay::utils::{Logical, Point, Rectangle, Serial, SERIAL_COUNTER};
 use smithay::wayland::compositor::{get_parent, with_states};
 use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier};
 use smithay::wayland::drm_lease::{
@@ -35,13 +35,13 @@ use smithay::wayland::drm_syncobj::{DrmSyncobjHandler, DrmSyncobjState};
 use smithay::wayland::fractional_scale::FractionalScaleHandler;
 use smithay::wayland::idle_inhibit::IdleInhibitHandler;
 use smithay::wayland::idle_notify::{IdleNotifierHandler, IdleNotifierState};
-use smithay::wayland::input_method::{InputMethodHandler, PopupSurface};
+use smithay::wayland::input_method::{InputMethodHandler, InputMethodSeat, PopupSurface};
 use smithay::wayland::keyboard_shortcuts_inhibit::{
     KeyboardShortcutsInhibitHandler, KeyboardShortcutsInhibitState, KeyboardShortcutsInhibitor,
 };
 use smithay::wayland::output::OutputHandler;
 use smithay::wayland::pointer_constraints::{
-    with_pointer_constraint, PointerConstraint, PointerConstraintsHandler,
+    with_pointer_constraint, ConstraintRemove, PointerConstraintsHandler,
 };
 use smithay::wayland::security_context::{
     SecurityContext, SecurityContextHandler, SecurityContextListenerSource,
@@ -62,6 +62,8 @@ use smithay::wayland::selection::{SelectionHandler, SelectionTarget};
 use smithay::wayland::session_lock::{
     LockSurface, SessionLockHandler, SessionLockManagerState, SessionLocker,
 };
+use smithay::wayland::text_input::TextInputActivation;
+use smithay::wayland::virtual_keyboard::{VirtualKeyboardBackend, VirtualKeyboardHandler};
 use smithay::wayland::xdg_activation::{
     XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
 };
@@ -245,7 +247,7 @@ impl PointerConstraintsHandler for State {
         &mut self,
         _surface: &WlSurface,
         pointer: &PointerHandle<Self>,
-        _constraint: Option<&PointerConstraint>,
+        _constraint: ConstraintRemove,
     ) {
         // Since a pointer constraint is broken when a surface loses pointer focus, and one surface
         // can only have a single pointer constraint at once, assume there can be only one
@@ -935,3 +937,59 @@ impl OutputManagementHandler for State {
 }
 
 impl MutterX11InteropHandler for State {}
+
+impl TextInputActivation for State {}
+
+impl VirtualKeyboardHandler for State {
+    fn process_virtual_keyboard_event(&mut self, event: InputEvent<VirtualKeyboardBackend>) {
+        if let InputEvent::Keyboard { event } = event {
+            let device = event.device();
+            let source = device.source();
+
+            // Identify the virtual keyboards owned by the input method that
+            // currently holds the keyboard grab. Track the device's source
+            // rather than its client: when fcitx5 deactivates it drops the grab
+            // first and only then destroys its virtual keyboard, and the
+            // synthetic releases Smithay emits for keys still down at that
+            // point come from an already inert object whose `client()` is
+            // `None`. The source stays unique to that device for its lifetime.
+            if let Some(grab_client) = self.clarion.seat.input_method().keyboard_grab_client() {
+                if device.client().as_ref() == Some(&grab_client) {
+                    self.clarion.ime_virtual_keyboards.insert(source);
+                }
+            }
+
+            if self.clarion.ime_virtual_keyboards.contains(&source) {
+                // IMEs forward the keys they did not consume through their own
+                // virtual keyboard. Sending those back through
+                // KeyboardHandle::input would feed them to the IME grab again
+                // (or loop forever), and would let the synthetic releases for
+                // keys the IME never released clear physically held modifiers.
+                let keyboard = self.clarion.seat.get_keyboard().unwrap();
+                keyboard.input_forward_bypassing_grab(
+                    self,
+                    event.key_code(),
+                    event.state(),
+                    SERIAL_COUNTER.next_serial(),
+                    event.time(),
+                    true,
+                );
+                return;
+            }
+
+            // Ordinary virtual keyboards are regular input sources. Attribute
+            // their keys to the device's own source so a synthetic release
+            // can't release a key that is still held on the physical keyboard.
+            self.process_input_event_from_source::<VirtualKeyboardBackend>(
+                InputEvent::Keyboard { event },
+                source,
+            );
+            return;
+        }
+
+        if let InputEvent::DeviceRemoved { device } = &event {
+            self.clarion.ime_virtual_keyboards.remove(&device.source());
+        }
+        self.process_input_event(event);
+    }
+}

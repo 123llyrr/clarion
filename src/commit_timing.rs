@@ -59,14 +59,14 @@ impl Dispatch2<WpCommitTimingManagerV1, State> for CommitTimingManagerData {
         &self,
         _state: &mut State,
         _client: &Client,
-        resource: &WpCommitTimingManagerV1,
+        _resource: &WpCommitTimingManagerV1,
         request: wp_commit_timing_manager_v1::Request,
         _display: &DisplayHandle,
         data_init: &mut DataInit<'_, State>,
     ) {
         match request {
             wp_commit_timing_manager_v1::Request::GetTimer { id, surface } => {
-                let (install_hook, has_active_timer) = with_states(&surface, |states| {
+                let (install_hook, replaced_live_timer) = with_states(&surface, |states| {
                     let Some(marker) = states.data_map.get::<RefCell<CommitTimerMarker>>() else {
                         return (true, false);
                     };
@@ -78,12 +78,16 @@ impl Dispatch2<WpCommitTimingManagerV1, State> for CommitTimingManagerData {
                     (false, active)
                 });
 
-                if has_active_timer {
-                    resource.post_error(
-                        wp_commit_timing_manager_v1::Error::CommitTimerExists,
-                        "the surface already has a commit timer object",
-                    );
-                    return;
+                if replaced_live_timer {
+                    // NVIDIA's Vulkan WSI binds this global by itself and asks
+                    // for a fresh timer whenever it recreates a swapchain on the
+                    // same surface without destroying the previous one. The
+                    // protocol calls that a client error, but disconnecting the
+                    // client would take the whole desktop shell down (and the
+                    // driver then segfaults while tearing the lost surface
+                    // down). Adopt the new timer instead; the previous object
+                    // stays inert and the newest one controls the surface.
+                    log::debug!("replacing a live commit timer for a surface");
                 }
 
                 if install_hook {

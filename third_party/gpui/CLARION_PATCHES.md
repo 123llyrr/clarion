@@ -13,21 +13,82 @@ Clarion additions:
 
 - `interactive.rs`: public `ExternalPaths::new` so embedders and tests can
   construct file-drop payloads without exposing GPUI internals.
+- `window.rs`: `Frame::clear` also drops the query-only `debug_bounds` map.
+  Frames are reused, so without this `VisualTestContext::debug_bounds` kept
+  reporting selectors from earlier frames after their element was removed.
+- `platform.rs` / `window.rs` / `platform/linux/wayland/{window,client}.rs`:
+  `start_file_drag`, a native `wl_data_device.start_drag` source offering
+  `text/uri-list` (plus plain text paths) for files dragged out of the Shell.
+  The request uses the tracked pointer-press serial and the dragging window's
+  surface, advertises `copy` and `move` so targets pick the cursor (and drop
+  semantics) they mean, and builds a `wl_shm` drag-icon surface from the
+  supplied `FileDragIcon` so the file follows the pointer. The
+  `wl_data_source` and icon stay alive until `dnd_finished`/`cancelled`, at
+  which point the origin window receives `PlatformInput::FileDragEnded` (a
+  `FileDragEndedEvent` routed to mouse listeners) — the only completion signal
+  a Wayland drag source gets. Platforms without drag support return `false`,
+  so the Shell can keep its in-process drag layer.
+- `platform.rs` / `platform/linux/{platform,wayland}.rs` / `platform/mac` /
+  `platform/windows`: `CursorStyle::{DragMove,DragNoDrop}` for the two drag
+  semantics GTK distinguishes (plain move pointer and refused drop); the
+  existing `DragCopy` now prefers the theme's `dnd-copy` glyph, the same family
+  Nautilus uses. While a native drag runs, the Wayland client filters
+  `set_cursor_style` (the origin surface keeps receiving motion and its hover
+  hit-testing would otherwise restore the arrow) and instead mirrors the
+  negotiated action from `wl_data_source.action` — `copy` becomes the plus
+  cursor, `move` the plain pointer, anything else the refusal cursor. The
+  arrow returns once `dnd_finished`/`cancelled` clears the source.
 - `platform.rs`: public `WindowKind::LayerShell` and copyable role options.
 - `platform.rs` / `window.rs` / `platform/linux/wayland/window.rs`:
   `set_glass_region`, a frosted shape independent of the input region. `None`
   falls back to the input region, so callers that only set one shape are
   unchanged. The Dock frosts only its resting tray while lifted icons stay
-  clickable outside it.
+  clickable outside it. Region requests keep every rectangle up to the protocol
+  encoder's bound: scanline masks (one row per rectangle for a tilted Dock
+  label) reach a few hundred rectangles, and a tighter cap silently starves the
+  shapes reported last.
 - `platform/linux/wayland/client.rs`: optional layer-shell global, role event
   dispatch, output resolution, optional xdg parent selection, and an opt-in
   keep-alive policy for applications reopening windows after IPC commands.
 - `platform/linux/wayland/window.rs`: mutually exclusive xdg/layer roles,
   layer configuration acknowledgement and resize, authoritative close, ordered
   destruction, and guarded xdg-only operations. Drawing waits for configure.
+- `platform.rs` / `window.rs` / `platform/linux/wayland/window.rs`:
+  `WindowParams::app_id` carries `WindowOptions::app_id` into window creation and
+  the Wayland window sets it on the toplevel before its first surface commit.
+  The initial configure therefore already carries the application id, so
+  compositor window rules (for example, open-floating) apply to the first frame
+  instead of the window being tiled once and resized afterwards.
 - `platform/mac/window.rs`: exhaustive matching of the new kind as a normal
   window; the Clarion launcher itself requires Wayland.
+- `platform.rs`: `PlatformInputHandler::selected_text_range` is marked
+  `dead_code` on Linux/FreeBSD. Only the X11, macOS and Windows backends query
+  it; the Wayland backend never does, so a Wayland-only build warned about it.
 - Both manifests: optional `wayland-protocols-wlr` client dependency in `wayland`.
+- `platform/blade/blade_renderer.rs`: `draw` asks the backend to retry a
+  surface configuration whose swapchain the driver refused to create and skips
+  the frame while none exists, instead of rendering into a missing swapchain.
+  NVIDIA's Wayland WSI intermittently answers `vkCreateSwapchainKHR` with
+  `VK_SUBOPTIMAL_KHR` and no handle while a fullscreen surface is created,
+  which used to abort `clarion-shell`. The recovery itself lives in the
+  vendored `blade-graphics` (`Context::recover_surface`).
+- `platform/linux/wayland/client.rs`: the event loop no longer swallows its
+  final error. When the display connection dies (the compositor killed it
+  after a protocol error), the process exits with status 1 so the user service
+  restarts the shell instead of leaving a frozen desktop that `Restart=on-failure`
+  would never relaunch.
+- Manifest: `stacksafe` moves from `0.1` to `1.0`. The `0.1` macro pulled
+  `proc-macro-error2`, whose private `proc_macro` re-export is a future
+  incompatibility (`E0365`) reported on every build; `1.0.3` drops it. `StackSafe`
+  and the `#[stacksafe]` attribute keep the same API, and the layout tests that
+  exercise the recursion guards pass.
+
+Upstream status: none of these patches are submitted to
+`zed-industries/zed`. The layer-shell window kind, glass regions,
+`keep_alive` policy and the Clarion-specific window roles are product
+requirements of this desktop and stay a downstream fork. The `app_id`
+ordering fix and the `debug_bounds` reset are small general bug fixes and
+remain candidates for an upstream PR.
 
 The fixed-size launcher uses no edge anchors, Overlay, exclusive zone -1,
 and exclusive keyboard focus. Blur is still owned by the Flutter Shell.

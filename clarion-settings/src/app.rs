@@ -2901,7 +2901,7 @@ impl ClarionSettingsApp {
                 crate::output_preferences::selector(ui, &self.cached_outputs, &mut self.selected_output);
             });
             if self.output_section == 1 {
-                ui.add_enabled_ui(!self.display.selection_locked(), |ui| self.ui_output_arrangement(ui));
+                self.ui_output_arrangement(ui);
                 ui.add_space(18.);
             }
             if selected != self.selected_output && !self.display.selection_locked() {
@@ -2928,75 +2928,18 @@ impl ClarionSettingsApp {
     }
 
     fn ui_output_arrangement(&mut self, ui: &mut Ui) {
-        ui.label("下图显示已连接屏幕的实际位置。选择屏幕后可配置它的分辨率与位置。");
+        ui.label("拖动屏幕调整位置；松开约 1 秒后自动预览。重叠时会吸附边缘并推开。");
         ui.add_space(10.);
-        let logical: Vec<_> = self
-            .cached_outputs
-            .iter()
-            .filter_map(|output| {
-                output
-                    .logical
-                    .as_ref()
-                    .map(|logical| (output.name.clone(), *logical))
-            })
-            .collect();
-        let (rect, _) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), 180.), Sense::hover());
-        ui.painter().rect(
-            rect,
-            4.,
-            palette::surface_hover(),
-            Stroke::new(1.0_f32, palette::border()),
-        );
-        if logical.is_empty() {
+        self.ensure_arrangement();
+        let available = self.display_controls_available();
+        let editable = self.display.arrangement_editable(available);
+        let selectable = !self.display.selection_locked();
+        let Some(arrangement) = &mut self.display.arrangement else {
             return;
-        }
-        let bounds = logical
-            .iter()
-            .fold(egui::Rect::NOTHING, |bounds, (_, output)| {
-                bounds.union(egui::Rect::from_min_size(
-                    egui::pos2(output.x as f32, output.y as f32),
-                    egui::vec2(output.width as f32, output.height as f32),
-                ))
-            });
-        if bounds.width() <= 0. || bounds.height() <= 0. {
-            return;
-        }
-        let scale =
-            ((rect.width() - 32.) / bounds.width()).min((rect.height() - 32.) / bounds.height());
-        for (name, output) in logical {
-            let top_left = rect.center() - bounds.size() * scale / 2.
-                + (egui::vec2(output.x as f32, output.y as f32) - bounds.min.to_vec2()) * scale;
-            let monitor = egui::Rect::from_min_size(
-                top_left,
-                egui::vec2(output.width as f32, output.height as f32) * scale,
-            );
-            let selected = self.selected_output.as_ref() == Some(&name);
-            let response = ui.interact(
-                monitor,
-                ui.id().with(("arranged-output", &name)),
-                Sense::click(),
-            );
-            ui.painter().rect(
-                monitor.shrink(1.),
-                2.,
-                if selected {
-                    palette::accent()
-                } else {
-                    palette::muted()
-                },
-                Stroke::new(1.0_f32, palette::border()),
-            );
-            ui.painter().text(
-                monitor.center(),
-                Align2::CENTER_CENTER,
-                &name,
-                egui::FontId::proportional(12.),
-                palette::on_accent(),
-            );
-            if response.clicked() {
-                self.selected_output = Some(name);
-            }
+        };
+        let outcome = arrangement.show(ui, &mut self.selected_output, editable, selectable);
+        if outcome.changed || outcome.released {
+            self.mark_arrangement_changed();
         }
     }
 

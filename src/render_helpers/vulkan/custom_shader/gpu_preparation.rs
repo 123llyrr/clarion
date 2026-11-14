@@ -51,7 +51,7 @@ impl OffscreenBudget {
     fn grow_to(&mut self, bytes: u64) -> Result<(), String> {
         let additional = bytes.saturating_sub(self.0);
         OFFSCREEN_PREPARATION_BYTES
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 current
                     .checked_add(additional)
                     .filter(|total| *total <= MAX_OFFSCREEN_PREPARATION_BYTES)

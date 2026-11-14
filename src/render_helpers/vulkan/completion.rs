@@ -312,7 +312,7 @@ impl CompletionQueue {
             return None;
         }
         self.outstanding
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                 (count < self.capacity).then_some(count + 1)
             })
             .ok()

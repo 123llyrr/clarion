@@ -16,6 +16,20 @@ the notices for Feather-derived icons. It is used as a monochrome action mark in
 the native menu bar and screenshot controls; the themed screenshot
 application artwork remains separate.
 
+`external-link.svg` is the unmodified `external-link` icon from the same Lucide
+revision and license. It is the Dock folder fan's terminal action mark (open the
+folder in the file manager), matching the `open_in_new` glyph used by the
+reference Dock.
+
+## Launcher action marks
+
+`chevron-left.svg` and `search.svg` are original Clarion action marks under
+GPL-3.0-or-later. The chevron is the fullscreen launcher's paging arrow pair
+(`chevron-right.svg` mirrors it) and `search.svg` is the magnifier prefix of its
+search capsule. The shell still prefers the current icon theme's
+`go-previous-symbolic` / `go-next-symbolic` / `system-search-symbolic` glyphs and
+uses these files only when the theme has no answer.
+
 ## Rasterized icons
 
 `activity-monitor.png`, `preview.png`, `launchpad.png`, `trash-empty.png`,
@@ -29,9 +43,18 @@ monitor and storage sections, alongside the project mark.
 `clarion-overview.png` is the circular About-panel artwork supplied by the
 project owner.
 
+## Desktop context-menu marks
+
+`menu-open.svg`, `menu-info.svg`, `menu-eye.svg`, `menu-pencil.svg`,
+`menu-trash.svg`, `menu-folder-plus.svg`, `menu-folder-open.svg` and
+`menu-refresh.svg` are original Clarion monochrome action marks under
+GPL-3.0-or-later. They are the bundled fallbacks for the desktop context
+menu's prefix icons; the shell prefers the current icon theme's symbolic
+marks when present.
+
 ## Native action icons
 
-`bell.svg`, `circle.svg`, `clipboard.svg`, `grid.svg`, `scan.svg`, `sliders.svg`,
+`bell.svg`, `bell-off.svg`, `circle.svg`, `clipboard.svg`, `grid.svg`, `scan.svg`, `sliders.svg`,
 `x.svg`, `control-center.svg` and `moon.svg` are compact geometric action marks authored for the native Shell and
 distributed under the project GPL-3.0-or-later license. The native GPUI interface
 uses a single macOS-inspired appearance; the retired Flutter and Material UIs
@@ -40,6 +63,13 @@ are not shipped as alternative styles.
 `sun.svg`, `speaker.svg`, `speaker-muted.svg`, `display.svg`, `settings.svg` and
 `wallpaper.svg` are also original Clarion action marks under GPL-3.0-or-later,
 used by the native Control Center. They contain no Apple artwork.
+
+`power-saver.svg`, `balanced.svg` and `performance.svg` are original Clarion
+marks for the battery popup's power-profile buttons. The popup always draws
+these bundled files: the icon themes' `power-profile-*-symbolic` artwork is
+drawn for 16 px status trays and turns into mush at the popup's 26 px.
+`power-spinner.svg` and `power-check.svg` are the original confirmation ring
+and completion badge for the same popup.
 
 `capture-screen.svg`, `capture-window.svg`, and `capture-region.svg` are original capture-toolbar glyphs under GPL-3.0-or-later.
 

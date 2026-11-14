@@ -100,7 +100,7 @@ fn grab(
             slot: Some(1).into(),
             location: point,
             serial: SERIAL_COUNTER.next_serial(),
-            time: 10,
+            time: smithay::backend::input::InputTime::from_millis(10),
         },
     );
     let grab = TouchOverviewGrab::new(
@@ -127,7 +127,7 @@ fn release(f: &mut Fixture, touch: &TouchHandle<State>) {
         &UpEvent {
             slot: Some(1).into(),
             serial: SERIAL_COUNTER.next_serial(),
-            time: 21,
+            time: smithay::backend::input::InputTime::from_millis(21),
         },
     );
     assert!(!touch.is_grabbed());
@@ -147,7 +147,7 @@ fn stage_touch_swipe_previews_without_committing_and_cancel_restores_selection()
                 &MotionEvent {
                     slot: Some(1).into(),
                     location: point - Point::from((96., 0.)),
-                    time: 20,
+                    time: smithay::backend::input::InputTime::from_millis(20),
                 },
             );
             touch.frame(f.clarion_state());
@@ -238,7 +238,7 @@ fn stage_long_press_starts_a_window_drag_and_touch_cancel_restores_its_workspace
             &MotionEvent {
                 slot: Some(1).into(),
                 location: point + Point::from((100., 20.)),
-                time: 520,
+                time: smithay::backend::input::InputTime::from_millis(520),
             },
         );
         touch.frame(f.clarion_state());

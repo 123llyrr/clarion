@@ -484,6 +484,10 @@ impl LayerSurface {
         compositor::with_states(surface, |states| {
             let mut role = states.data_map.get::<LayerSurfaceData>().unwrap().lock().unwrap();
 
+            if !role.surface.is_alive() {
+                return;
+            }
+
             let mut guard_layer = states.cached_state.get::<LayerSurfaceCachedState>();
             let pending = guard_layer.pending();
 
@@ -557,7 +561,11 @@ impl LayerSurface {
                 let pending_configures = std::mem::take(&mut role.pending_configures);
                 role.reset();
                 role.pending_configures = pending_configures;
-                *guard_layer.pending() = Default::default();
+                let layer = pending.layer;
+                *guard_layer.pending() = LayerSurfaceCachedState {
+                    layer,
+                    ..Default::default()
+                };
             }
         });
     }

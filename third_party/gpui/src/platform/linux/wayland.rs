@@ -37,6 +37,8 @@ impl CursorStyle {
             CursorStyle::OperationNotAllowed => Shape::NotAllowed,
             CursorStyle::DragLink => Shape::Alias,
             CursorStyle::DragCopy => Shape::Copy,
+            CursorStyle::DragMove => Shape::Move,
+            CursorStyle::DragNoDrop => Shape::NoDrop,
             CursorStyle::ContextualMenu => Shape::ContextMenu,
             CursorStyle::None => {
                 #[cfg(debug_assertions)]

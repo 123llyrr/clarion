@@ -2,15 +2,23 @@
 //! One native desktop, one visual language, one GPUI event loop.
 mod app;
 mod backend;
+mod battery;
 mod desktop;
 mod desktop_icons;
+mod desktop_menu;
 mod dock_folder;
 mod dock_motion;
+mod file_icons;
+mod icons;
 mod input;
 mod mime;
+mod polkit;
+mod power;
 mod preferences;
 mod services;
+mod system_info;
 mod view;
+mod wallpapers;
 
 use clap::Parser;
 

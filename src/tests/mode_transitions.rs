@@ -1108,7 +1108,7 @@ fn session_lock_and_mode_actions_cancel_all_compositor_grabs_before_any_final_mo
             f.clarion_state(),
             &ButtonEvent {
                 serial: SERIAL_COUNTER.next_serial(),
-                time: 10,
+                time: smithay::backend::input::InputTime::from_millis(10),
                 button: 0x110,
                 state: ButtonState::Pressed,
             },
@@ -1139,7 +1139,7 @@ fn session_lock_and_mode_actions_cancel_all_compositor_grabs_before_any_final_mo
                     location: position
                         + smithay::utils::Point::<f64, smithay::utils::Logical>::from((24., 24.)),
                     serial: SERIAL_COUNTER.next_serial(),
-                    time: 20,
+                    time: smithay::backend::input::InputTime::from_millis(20),
                 },
             );
             pointer.frame(f.clarion_state());
@@ -1157,7 +1157,7 @@ fn session_lock_and_mode_actions_cancel_all_compositor_grabs_before_any_final_mo
                 slot: Some(1).into(),
                 location: position,
                 serial: SERIAL_COUNTER.next_serial(),
-                time: 10,
+                time: smithay::backend::input::InputTime::from_millis(10),
             },
         );
         let grab = TouchOverviewGrab::new(
@@ -1196,14 +1196,14 @@ fn session_lock_and_mode_actions_cancel_all_compositor_grabs_before_any_final_mo
                 location: position,
                 axis: None,
                 serial: SERIAL_COUNTER.next_serial(),
-                time: 10,
+                time: smithay::backend::input::InputTime::from_millis(10),
             },
         );
         pen.down(
             f.clarion_state(),
             &tool::DownEvent {
                 serial: SERIAL_COUNTER.next_serial(),
-                time: 10,
+                time: smithay::backend::input::InputTime::from_millis(10),
             },
         );
         let grab = TouchOverviewGrab::new(
@@ -1223,7 +1223,7 @@ fn session_lock_and_mode_actions_cancel_all_compositor_grabs_before_any_final_mo
         pen.set_grab(
             f.clarion_state(),
             grab,
-            10,
+            smithay::backend::input::InputTime::from_millis(10),
             SERIAL_COUNTER.next_serial(),
             Focus::Clear,
         );
@@ -1261,7 +1261,7 @@ fn session_lock_and_mode_actions_cancel_all_compositor_grabs_before_any_final_mo
             f.clarion_state(),
             &ButtonEvent {
                 serial: SERIAL_COUNTER.next_serial(),
-                time: 21,
+                time: smithay::backend::input::InputTime::from_millis(21),
                 button: 0x110,
                 state: ButtonState::Released,
             },
@@ -1271,14 +1271,14 @@ fn session_lock_and_mode_actions_cancel_all_compositor_grabs_before_any_final_mo
             &UpEvent {
                 slot: Some(1).into(),
                 serial: SERIAL_COUNTER.next_serial(),
-                time: 21,
+                time: smithay::backend::input::InputTime::from_millis(21),
             },
         );
         pen.up(
             f.clarion_state(),
             &tool::UpEvent {
                 serial: SERIAL_COUNTER.next_serial(),
-                time: 21,
+                time: smithay::backend::input::InputTime::from_millis(21),
             },
         );
         f.clarion_complete_animations();

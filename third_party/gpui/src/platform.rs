@@ -470,6 +470,17 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     /// back to the input region so callers that only set one shape are
     /// unaffected.
     fn set_glass_region(&self, _rectangles: Option<&[Bounds<Pixels>]>) {}
+    /// Start a Wayland drag-and-drop offering these files as `text/uri-list`.
+    /// `icon` becomes the drag image shown at the pointer. Returns whether a
+    /// native drag actually started; platforms without drag support answer
+    /// `false` so the caller can keep its in-process drag.
+    fn start_file_drag(
+        &self,
+        _paths: Vec<std::path::PathBuf>,
+        _icon: Option<FileDragIcon>,
+    ) -> bool {
+        false
+    }
     /// Update a layer surface's reserved edge without destroying its window.
     fn set_layer_exclusive_zone(&self, _zone: i32) {}
     fn scale_factor(&self) -> f32;
@@ -876,6 +887,7 @@ impl PlatformInputHandler {
         Self { cx, handler }
     }
 
+    #[cfg_attr(any(target_os = "linux", target_os = "freebsd"), allow(dead_code))]
     fn selected_text_range(&mut self, ignore_disabled_input: bool) -> Option<UTF16Selection> {
         self.cx
             .update(|window, cx| {
@@ -1188,6 +1200,13 @@ pub(crate) struct WindowParams {
     pub display_id: Option<DisplayId>,
 
     pub window_min_size: Option<Size<Pixels>>,
+
+    /// Application identifier announced before the first surface commit, so
+    /// the compositor can match window rules against it when it answers the
+    /// initial configure.
+    #[cfg_attr(not(feature = "wayland"), allow(dead_code))]
+    pub app_id: Option<String>,
+
     #[cfg(target_os = "macos")]
     pub tabbing_identifier: Option<String>,
 }
@@ -1604,6 +1623,14 @@ pub enum CursorStyle {
     /// corresponds to the CSS cursor value `copy`
     DragCopy,
 
+    /// A cursor indicating that the operation will result in a move
+    /// corresponds to the CSS cursor value `move`
+    DragMove,
+
+    /// A cursor indicating that the drop target does not accept the payload
+    /// corresponds to the CSS cursor value `no-drop`
+    DragNoDrop,
+
     /// A cursor indicating that the operation will result in a context menu
     /// corresponds to the CSS cursor value `context-menu`
     ContextualMenu,
@@ -1741,6 +1768,17 @@ impl From<Image> for ClipboardItem {
     fn from(value: Image) -> Self {
         Self::from(ClipboardEntry::from(value))
     }
+}
+
+/// The image a native file drag shows at the pointer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileDragIcon {
+    /// Image width in physical pixels.
+    pub width: u32,
+    /// Image height in physical pixels.
+    pub height: u32,
+    /// Straight (unpremultiplied) RGBA8, row-major.
+    pub rgba: Vec<u8>,
 }
 
 /// One of the editor's supported image formats (e.g. PNG, JPEG) - used when dealing with images in the clipboard

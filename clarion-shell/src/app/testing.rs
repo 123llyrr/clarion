@@ -19,7 +19,22 @@ pub(crate) fn test_host(
         prefs: Preferences::default(),
         desktop: Default::default(),
         system: Default::default(),
+        tiling_mode: clarion_ipc::TilingMode::Scrolling,
+        power_profile_pending: None,
+        power_profile_epoch: 0,
+        battery_charge_limit: None,
+        battery_charge_epoch: 0,
         catalog: Arc::new(catalog),
+        launch_history: Arc::new(Default::default()),
+        file_hits: Arc::default(),
+        file_query: String::new(),
+        file_searching: false,
+        file_search_error: None,
+        wallpapers: Arc::default(),
+        wallpaper_scanning: false,
+        current_wallpaper: None,
+        bar_band: None,
+        bar_band_generation: 0,
         notifications: Vec::new(),
         tray: Vec::new(),
         history: Vec::new(),
@@ -31,6 +46,7 @@ pub(crate) fn test_host(
         error: None,
         error_generation: 0,
         panel: None,
+        panel_output: None,
         anchored: None,
         panel_exit: false,
         preview: true,
@@ -39,12 +55,21 @@ pub(crate) fn test_host(
         folder_drop_preview: false,
         revision: 0,
         backend,
+        file_search_generation: 0,
         service,
         desktop_actions,
         local_preferences: false,
         environment,
         outputs: BTreeMap::new(),
         popup: None,
+        menu: None,
+        menu_opening: false,
+        spotlight_menu: None,
+        spotlight_menu_opening: false,
+        auth: None,
+        auth_window: None,
+        auth_return: None,
+        dispatch_output: None,
         exiting: None,
         exit_generation: 0,
         toast: None,
@@ -89,7 +114,9 @@ pub(crate) fn open_folder(
     cx: &mut App,
 ) -> WindowHandle<ShellView> {
     host.update(cx, |host, cx| host.apply(Action::OpenFolder(root), cx));
-    host.read(cx).popup.expect("test folder panel was not created")
+    host.read(cx)
+        .popup
+        .expect("test folder panel was not created")
 }
 
 pub(crate) fn popup(host: &Entity<Host>, cx: &App) -> WindowHandle<ShellView> {
@@ -109,6 +136,41 @@ pub(crate) fn output_name(host: &Entity<Host>, cx: &App) -> String {
         .expect("test output was not created")
 }
 
+/// Register an extra monitor that shares the test platform's only display, so
+/// a dispatched action can name an output other than the one that holds focus.
+pub(crate) fn register_output(host: &Entity<Host>, name: &str, cx: &mut App) {
+    host.update(cx, |host, cx| {
+        let Some(view) = host.outputs.values().next() else {
+            return;
+        };
+        let view = OutputViews {
+            bar: view.bar,
+            dock: view.dock,
+            edge: view.edge,
+            desktop: view.desktop,
+            display: view.display,
+            width: view.width,
+            height: view.height,
+        };
+        host.outputs.insert(name.to_owned(), view);
+        host.changed(cx);
+    });
+}
+
+/// Apply an action tagged with the surface output that dispatched it, the way
+/// a bar or Dock click does.
+pub(crate) fn dispatch_on_output(
+    host: &Entity<Host>,
+    output: &str,
+    action: Action,
+    cx: &mut App,
+) -> WindowHandle<ShellView> {
+    host.update(cx, |host, cx| {
+        host.apply(Action::on_output(output, action), cx)
+    });
+    host.read(cx).popup.expect("test panel was not created")
+}
+
 pub(crate) fn open_dock(host: &Entity<Host>, cx: &mut App) -> WindowHandle<ShellView> {
     host.update(cx, |host, cx| host.reconcile_outputs(cx));
     host.read(cx)
@@ -118,12 +180,35 @@ pub(crate) fn open_dock(host: &Entity<Host>, cx: &mut App) -> WindowHandle<Shell
         .expect("test Dock was not created")
 }
 
+/// Replace the live service handle with a test channel so UI tests can assert
+/// the polkit commands a dialog emits.
+/// Deliver one service event exactly like the worker thread does, so a test
+/// can drive the polkit dialog without a session or system bus.
+pub(crate) fn service_event(host: &Entity<Host>, event: services::Event, cx: &mut App) {
+    host.update(cx, |host, cx| host.service_event(event, cx));
+}
+
+pub(crate) fn auth_window(host: &Entity<Host>, cx: &App) -> WindowHandle<ShellView> {
+    host.read(cx)
+        .auth_window
+        .expect("the auth dialog was not created")
+}
+
 pub(crate) fn capture_backend(
     host: &Entity<Host>,
     cx: &mut App,
 ) -> std::sync::mpsc::Receiver<backend::Command> {
     let (backend, received) = backend::Backend::test_channel(32);
     host.update(cx, |host, _| host.backend = backend);
+    received
+}
+
+pub(crate) fn capture_service(
+    host: &Entity<Host>,
+    cx: &mut App,
+) -> async_channel::Receiver<services::Command> {
+    let (service, received) = services::ServiceHandle::test_channel(32);
+    host.update(cx, |host, _| host.service = service);
     received
 }
 

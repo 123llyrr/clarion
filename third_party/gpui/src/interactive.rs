@@ -547,6 +547,20 @@ impl InputEvent for FileDropEvent {
 }
 impl MouseEvent for FileDropEvent {}
 
+/// A native file drag started by this window is over: the compositor delivered
+/// it to its target or the user cancelled it. The platform owns the drag from
+/// start to finish, so this is the only signal the source window receives.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FileDragEndedEvent;
+
+impl Sealed for FileDragEndedEvent {}
+impl InputEvent for FileDragEndedEvent {
+    fn to_platform_input(self) -> PlatformInput {
+        PlatformInput::FileDragEnded(self)
+    }
+}
+impl MouseEvent for FileDragEndedEvent {}
+
 /// An enum corresponding to all kinds of platform input events.
 #[derive(Clone, Debug)]
 pub enum PlatformInput {
@@ -568,6 +582,8 @@ pub enum PlatformInput {
     ScrollWheel(ScrollWheelEvent),
     /// Files were dragged and dropped onto the window.
     FileDrop(FileDropEvent),
+    /// A file drag started by this window has ended.
+    FileDragEnded(FileDragEndedEvent),
 }
 
 impl PlatformInput {
@@ -582,6 +598,7 @@ impl PlatformInput {
             PlatformInput::MouseExited(event) => Some(event),
             PlatformInput::ScrollWheel(event) => Some(event),
             PlatformInput::FileDrop(event) => Some(event),
+            PlatformInput::FileDragEnded(event) => Some(event),
         }
     }
 
@@ -596,6 +613,7 @@ impl PlatformInput {
             PlatformInput::MouseExited(_) => None,
             PlatformInput::ScrollWheel(_) => None,
             PlatformInput::FileDrop(_) => None,
+            PlatformInput::FileDragEnded(_) => None,
         }
     }
 }

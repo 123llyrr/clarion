@@ -6,7 +6,7 @@ use std::{
 use wayland_server::{Resource, protocol::wl_surface::WlSurface};
 
 use crate::{
-    backend::input::{ButtonState, KeyState, Keycode},
+    backend::input::{ButtonState, InputTime, KeyState, Keycode},
     input::{
         SeatHandler,
         keyboard::{
@@ -170,7 +170,7 @@ impl PopupGrabInner {
                 }
             }
             PopupUngrabStrategy::All => {
-                let grabs = guard.active_grabs.drain(..).collect::<Vec<_>>();
+                let grabs = std::mem::take(&mut guard.active_grabs);
 
                 if let Some(grab) = grabs.first() {
                     let dismissed = PopupManager::dismiss_popup(root, grab);
@@ -446,7 +446,7 @@ where
         state: KeyState,
         modifiers: Option<ModifiersState>,
         serial: Serial,
-        time: u32,
+        time: InputTime,
     ) {
         // Check if the grab changed and update the focus
         // If the grab has ended this will return the root

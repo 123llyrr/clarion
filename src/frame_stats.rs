@@ -167,7 +167,7 @@ impl Default for OutputGeneration {
         // IDs after theoretical exhaustion instead of silently wrapping the guard.
         Self(
             NEXT_OUTPUT_GENERATION
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |generation| {
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |generation| {
                     generation.checked_add(1)
                 })
                 .ok(),

@@ -4,6 +4,7 @@ use std::{
     os::fd::{AsRawFd, BorrowedFd},
     path::PathBuf,
     rc::{Rc, Weak},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -79,10 +80,11 @@ use super::{
 use crate::platform::{PlatformWindow, blade::BladeContext};
 use crate::{
     AnyWindowHandle, Bounds, Capslock, CursorStyle, DOUBLE_CLICK_INTERVAL, DevicePixels, DisplayId,
-    FileDropEvent, ForegroundExecutor, KeyDownEvent, KeyUpEvent, Keystroke, LinuxCommon,
-    LinuxKeyboardLayout, Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent,
-    MouseExitEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection, Pixels, PlatformDisplay,
-    PlatformInput, PlatformKeyboardLayout, Point, SCROLL_LINES, ScrollDelta, ScrollWheelEvent,
+    FileDragEndedEvent, FileDropEvent, ForegroundExecutor, KeyDownEvent, KeyUpEvent, Keystroke,
+    LinuxCommon, LinuxKeyboardLayout, Modifiers, ModifiersChangedEvent, MouseButton,
+    MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection, Pixels,
+    PlatformDisplay, PlatformInput, PlatformKeyboardLayout, Point, SCROLL_LINES, ScrollDelta,
+    ScrollWheelEvent,
     Size, TouchPhase, WindowParams, point, px, size,
 };
 use crate::{
@@ -228,6 +230,12 @@ pub(crate) struct WaylandClientState {
     keymap_state: Option<xkb::State>,
     compose_state: Option<xkb::compose::State>,
     drag: DragState,
+    /// The source kept alive for the duration of an outgoing file drag.
+    drag_source: Option<wl_data_source::WlDataSource>,
+    /// The shm surface showing the dragged file at the pointer.
+    drag_icon: Option<DragIconSurface>,
+    /// The window that started the outgoing drag, told when it ends.
+    drag_origin_window: Option<WaylandWindowStatePtr>,
     click: ClickState,
     repeat: KeyRepeat,
     pub modifiers: Modifiers,
@@ -280,6 +288,279 @@ pub(crate) enum PendingActivation {
 /// window to GPUI.
 #[derive(Clone)]
 pub struct WaylandClientStatePtr(Weak<RefCell<WaylandClientState>>);
+
+impl WaylandClientState {
+    /// Offer `paths` to the compositor as a native drag source. The drag only
+    /// becomes visible to other clients once the compositor routes the pointer
+    /// to them, so the shell must stop painting its own drag preview.
+    pub(crate) fn start_file_drag(
+        &mut self,
+        origin: &wl_surface::WlSurface,
+        paths: Vec<PathBuf>,
+        icon: Option<crate::FileDragIcon>,
+    ) -> bool {
+        let Some(manager) = self.globals.data_device_manager.as_ref() else {
+            eprintln!("file drag: compositor has no data-device manager");
+            return false;
+        };
+        let Some(device) = self.data_device.as_ref() else {
+            eprintln!("file drag: no data device on this seat");
+            return false;
+        };
+        let serial = self.serial_tracker.get(SerialKind::MousePress);
+        if serial == 0 || paths.is_empty() {
+            eprintln!("file drag: missing pointer serial or paths (serial={serial})");
+            return false;
+        }
+        let mut list = String::new();
+        let mut plain = String::new();
+        for path in &paths {
+            if !list.is_empty() {
+                list.push_str("\r\n");
+                plain.push('\n');
+            }
+            list.push_str(&file_uri(path));
+            plain.push_str(&path.to_string_lossy());
+        }
+        let payload = DragPayload {
+            uri_list: Arc::new(list.into_bytes()),
+            plain: Arc::new(plain.into_bytes()),
+        };
+        let source = manager.create_data_source(&self.globals.qh, payload);
+        source.offer("text/uri-list".into());
+        for mime_type in crate::platform::linux::wayland::clipboard::TEXT_MIME_TYPES {
+            source.offer(mime_type.to_string());
+        }
+        // Version 3 sources default to `none`; without an advertised action a
+        // target rejects the drop even though the drag itself is running.
+        // Offering both actions lets the target pick: file managers prefer a
+        // move (plain cursor) while receivers that import data pick a copy
+        // (the cursor gains a plus).
+        source.set_actions(DndAction::Copy | DndAction::Move);
+        let has_icon = icon.is_some();
+        let icon_surface = icon.and_then(|icon| self.create_drag_icon(icon));
+        if has_icon && icon_surface.is_none() {
+            eprintln!("file drag: could not create the drag icon surface");
+        }
+        device.start_drag(
+            Some(&source),
+            origin,
+            icon_surface.as_ref().map(|icon| &icon.surface),
+            serial,
+        );
+        eprintln!("file drag: started serial={serial} paths={}", paths.len());
+        self.drag_source = Some(source);
+        self.drag_icon = icon_surface;
+        self.drag_origin_window = self.windows.get(&origin.id()).cloned();
+        // The drag icon follows the pointer for the whole operation, so the
+        // plain move cursor is the right default until a target narrows the
+        // action down to copy or refuses the payload.
+        self.apply_cursor_style(CursorStyle::DragMove);
+        true
+    }
+
+    /// Build the drag image surface. The compositor places its origin at the
+    /// pointer, so the shell's icon is drawn down-right of the cursor.
+    fn create_drag_icon(&self, icon: crate::FileDragIcon) -> Option<DragIconSurface> {
+        use std::os::fd::{AsFd as _, AsRawFd as _, FromRawFd as _, OwnedFd};
+
+        let width = icon.width.max(1);
+        let height = icon.height.max(1);
+        let stride = width * 4;
+        let len = (stride as usize).checked_mul(height as usize)?;
+        if icon.rgba.len() < len {
+            return None;
+        }
+        let name = std::ffi::CString::new("clarion-drag-icon").ok()?;
+        let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC) };
+        if fd < 0 {
+            return None;
+        }
+        let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+        if unsafe { libc::ftruncate(fd.as_raw_fd(), len as i64) } != 0 {
+            return None;
+        }
+        let map = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                len,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                fd.as_raw_fd(),
+                0,
+            )
+        };
+        if map == libc::MAP_FAILED {
+            return None;
+        }
+        // wl_shm ARGB8888 is premultiplied and, on little-endian, stored B,G,R,A.
+        unsafe {
+            let dst = map as *mut u8;
+            for pixel in 0..(width as usize * height as usize) {
+                let r = icon.rgba[pixel * 4] as u32;
+                let g = icon.rgba[pixel * 4 + 1] as u32;
+                let b = icon.rgba[pixel * 4 + 2] as u32;
+                let a = icon.rgba[pixel * 4 + 3] as u32;
+                *dst.add(pixel * 4) = ((b * a + 127) / 255) as u8;
+                *dst.add(pixel * 4 + 1) = ((g * a + 127) / 255) as u8;
+                *dst.add(pixel * 4 + 2) = ((r * a + 127) / 255) as u8;
+                *dst.add(pixel * 4 + 3) = a as u8;
+            }
+            libc::munmap(map, len);
+        }
+        let pool = self
+            .globals
+            .shm
+            .create_pool(fd.as_fd(), len as i32, &self.globals.qh, ());
+        let buffer = pool.create_buffer(
+            0,
+            width as i32,
+            height as i32,
+            stride as i32,
+            wl_shm::Format::Argb8888,
+            &self.globals.qh,
+            (),
+        );
+        let surface = self
+            .globals
+            .compositor
+            .create_surface(&self.globals.qh, ());
+        surface.attach(Some(&buffer), 0, 0);
+        surface.damage(0, 0, width as i32, height as i32);
+        surface.commit();
+        Some(DragIconSurface {
+            surface,
+            pool,
+            buffer,
+        })
+    }
+
+    fn clear_drag_icon(&mut self) {
+        if let Some(icon) = self.drag_icon.take() {
+            icon.surface.destroy();
+            icon.buffer.destroy();
+            icon.pool.destroy();
+        }
+    }
+
+    /// Push a cursor style to the compositor. Unlike the window-facing
+    /// `set_cursor_style`, this is not filtered while a file drag is in
+    /// flight: the drag itself owns the pointer and the cursor has to show
+    /// the negotiated action.
+    fn apply_cursor_style(&mut self, style: CursorStyle) {
+        if self.cursor_style == Some(style) {
+            return;
+        }
+        let serial = self.serial_tracker.get(SerialKind::MouseEnter);
+        self.cursor_style = Some(style);
+
+        if let CursorStyle::None = style {
+            if let Some(wl_pointer) = self.wl_pointer.clone() {
+                wl_pointer.set_cursor(serial, None, 0, 0);
+            }
+        } else if let Some(cursor_shape_device) = &self.cursor_shape_device {
+            cursor_shape_device.set_shape(serial, style.to_shape());
+        } else if let (Some(wl_pointer), Some(focused_window)) =
+            (self.wl_pointer.clone(), self.mouse_focused_window.clone())
+        {
+            // cursor-shape-v1 isn't supported, set the cursor using a surface.
+            let scale = focused_window.primary_output_scale();
+            self.cursor
+                .set_icon(&wl_pointer, serial, style.to_icon_names(), scale);
+        }
+    }
+}
+
+/// The drag image surface kept alive while the drag runs.
+struct DragIconSurface {
+    surface: wl_surface::WlSurface,
+    pool: wl_shm_pool::WlShmPool,
+    buffer: wl_buffer::WlBuffer,
+}
+
+/// Payload for an outgoing file drag: the URI list and the plain paths.
+#[derive(Clone)]
+struct DragPayload {
+    uri_list: Arc<Vec<u8>>,
+    plain: Arc<Vec<u8>>,
+}
+
+impl Dispatch<wl_data_source::WlDataSource, DragPayload> for WaylandClientStatePtr {
+    fn event(
+        this: &mut Self,
+        data_source: &wl_data_source::WlDataSource,
+        event: wl_data_source::Event,
+        payload: &DragPayload,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            wl_data_source::Event::Send { mime_type, fd } => {
+                eprintln!("file drag: target requested {mime_type}");
+                use std::io::Write as _;
+                let mut file = std::fs::File::from(fd);
+                let bytes = if mime_type == "text/uri-list" {
+                    &payload.uri_list
+                } else {
+                    &payload.plain
+                };
+                let _ = file.write_all(bytes);
+            }
+            wl_data_source::Event::Action { dnd_action } => {
+                // The target narrowed the offer down to one action. Mirror it
+                // in the cursor: `+` for a copy, the plain move pointer
+                // otherwise, and a refusal when nothing accepts the payload.
+                let style = match dnd_action {
+                    WEnum::Value(action) if action.contains(DndAction::Copy) => {
+                        CursorStyle::DragCopy
+                    }
+                    WEnum::Value(action) if action.contains(DndAction::Move) => {
+                        CursorStyle::DragMove
+                    }
+                    _ => CursorStyle::DragNoDrop,
+                };
+                let client = this.get_client();
+                client.borrow_mut().apply_cursor_style(style);
+            }
+            wl_data_source::Event::Cancelled | wl_data_source::Event::DndFinished => {
+                eprintln!("file drag: finished/cancelled");
+                let window = {
+                    let client = this.get_client();
+                    let mut state = client.borrow_mut();
+                    state.drag_source = None;
+                    state.clear_drag_icon();
+                    // Hand the pointer back to normal hit-testing; the cursor
+                    // cache has to forget the drag glyph even though the
+                    // request may land on a target that now owns the pointer.
+                    state.apply_cursor_style(CursorStyle::Arrow);
+                    state.drag_origin_window.take()
+                };
+                data_source.destroy();
+                // The popup that started the drag retracts now: it would
+                // otherwise keep the keyboard grab and hide the target the
+                // compositor just activated.
+                if let Some(window) = window {
+                    window.handle_input(PlatformInput::FileDragEnded(FileDragEndedEvent));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn file_uri(path: &std::path::Path) -> String {
+    use std::os::unix::ffi::OsStrExt as _;
+    let mut uri = String::from("file://");
+    for byte in path.as_os_str().as_bytes() {
+        let character = *byte as char;
+        if byte.is_ascii_alphanumeric() || matches!(character, '-' | '.' | '_' | '~' | '/') {
+            uri.push(character);
+        } else {
+            uri.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    uri
+}
 
 impl WaylandClientStatePtr {
     pub fn get_client(&self) -> Rc<RefCell<WaylandClientState>> {
@@ -589,6 +870,9 @@ impl WaylandClient {
                 window: None,
                 position: Point::default(),
             },
+            drag_source: None,
+            drag_icon: None,
+            drag_origin_window: None,
             click: ClickState {
                 last_click: Instant::now(),
                 last_mouse_button: None,
@@ -755,32 +1039,14 @@ impl LinuxClient for WaylandClient {
     fn set_cursor_style(&self, style: CursorStyle) {
         let mut state = self.0.borrow_mut();
 
-        let need_update = state.cursor_style != Some(style);
-
-        if need_update {
-            let serial = state.serial_tracker.get(SerialKind::MouseEnter);
-            state.cursor_style = Some(style);
-
-            if let CursorStyle::None = style {
-                let wl_pointer = state
-                    .wl_pointer
-                    .clone()
-                    .expect("window is focused by pointer");
-                wl_pointer.set_cursor(serial, None, 0, 0);
-            } else if let Some(cursor_shape_device) = &state.cursor_shape_device {
-                cursor_shape_device.set_shape(serial, style.to_shape());
-            } else if let Some(focused_window) = &state.mouse_focused_window {
-                // cursor-shape-v1 isn't supported, set the cursor using a surface.
-                let wl_pointer = state
-                    .wl_pointer
-                    .clone()
-                    .expect("window is focused by pointer");
-                let scale = focused_window.primary_output_scale();
-                state
-                    .cursor
-                    .set_icon(&wl_pointer, serial, style.to_icon_names(), scale);
-            }
+        // A file drag owns the pointer until it ends: the origin surface keeps
+        // receiving motion, and its hover hit-testing must not overwrite the
+        // action cursor the drag negotiated.
+        if state.drag_source.is_some() {
+            return;
         }
+
+        state.apply_cursor_style(style);
     }
 
     fn open_uri(&self, uri: &str) {
@@ -831,13 +1097,19 @@ impl LinuxClient for WaylandClient {
             .take()
             .expect("App is already running");
 
-        event_loop
-            .run(
-                None,
-                &mut WaylandClientStatePtr(Rc::downgrade(&self.0)),
-                |_| {},
-            )
-            .log_err();
+        if let Err(error) = event_loop.run(
+            None,
+            &mut WaylandClientStatePtr(Rc::downgrade(&self.0)),
+            |_| {},
+        ) {
+            // The shell cannot work without its Wayland connection. A
+            // protocol error on the display (for example a compositor
+            // rejecting a driver request) closes it for good; exiting with a
+            // failure lets the user service restart the shell instead of
+            // leaving a frozen window behind.
+            log::error!("Wayland event loop stopped: {error:?}");
+            std::process::exit(1);
+        }
     }
 
     fn write_to_primary(&self, item: crate::ClipboardItem) {
@@ -2149,6 +2421,7 @@ impl Dispatch<wl_data_source::WlDataSource, ()> for WaylandClientStatePtr {
 
         match event {
             wl_data_source::Event::Send { mime_type, fd } => {
+                eprintln!("file drag: target requested {mime_type}");
                 state.clipboard.send(mime_type, fd);
             }
             wl_data_source::Event::Cancelled => {

@@ -128,11 +128,16 @@ pub struct ForeignToplevelHandle {
 }
 
 impl ForeignToplevelHandle {
-    fn new(title: String, app_id: String, instances: Vec<Weak<ExtForeignToplevelHandleV1>>) -> Self {
+    fn new(
+        title: String,
+        app_id: String,
+        identifier: String,
+        instances: Vec<Weak<ExtForeignToplevelHandleV1>>,
+    ) -> Self {
         Self {
             inner: Arc::new((
                 Mutex::new(ForeignToplevelHandleInner {
-                    identifier: Alphanumeric.sample_string(&mut rand::rng(), 32),
+                    identifier,
                     title,
                     app_id,
                     instances,
@@ -337,9 +342,40 @@ impl ForeignToplevelListState {
     where
         D: ForeignToplevelListHandler + Dispatch<ExtForeignToplevelHandleV1, ForeignToplevelHandle>,
     {
+        self.new_toplevel_with_identifier::<D>(
+            title,
+            app_id,
+            Alphanumeric.sample_string(&mut rand::rng(), 32),
+        )
+    }
+
+    /// Create a new [`ForeignToplevelHandle`] using an arbitrary identifier.
+    ///
+    /// This function is similar to [`new_toplevel`], but lets the compositor specify the toplevel
+    /// identifier. The identifier should be a non-empty string composed of up to 32 printable ascii
+    /// characters.
+    ///
+    /// [`new_toplevel`]: ForeignToplevelListState::new_toplevel
+    pub fn new_toplevel_with_identifier<D>(
+        &mut self,
+        title: impl Into<String>,
+        app_id: impl Into<String>,
+        identifier: impl Into<String>,
+    ) -> ForeignToplevelHandle
+    where
+        D: ForeignToplevelListHandler + Dispatch<ExtForeignToplevelHandleV1, ForeignToplevelHandle>,
+    {
+        let identifier = identifier.into();
+        assert!(
+            !identifier.is_empty() && identifier.len() <= 32 && identifier.is_ascii(),
+            "{} is not a valid identifier",
+            identifier
+        );
+
         let handle = ForeignToplevelHandle::new(
             title.into(),
             app_id.into(),
+            identifier,
             Vec::with_capacity(self.list_instances.len()),
         );
 
@@ -372,14 +408,10 @@ impl ForeignToplevelListState {
     pub fn remove_toplevel(&mut self, handle: &ForeignToplevelHandle) {
         handle.send_closed();
 
-        if let Some(pos) = self
-            .toplevels
-            .iter()
-            .filter_map(|h| h.upgrade())
-            .position(|h| Arc::ptr_eq(&h.inner, &handle.inner))
-        {
-            self.toplevels.remove(pos);
-        }
+        // Compare on the unfiltered list: the index of a filtered iterator would point at a
+        // different entry if a handle in front of this one was already dropped.
+        self.toplevels
+            .retain(|h| h.upgrade().is_some_and(|h| !Arc::ptr_eq(&h.inner, &handle.inner)));
     }
 
     /// Auto cleanup closed handles
@@ -502,5 +534,52 @@ impl<D: ForeignToplevelListHandler> Dispatch2<ExtForeignToplevelHandleV1, D> for
 
     fn destroyed(&self, _state: &mut D, _client: ClientId, resource: &ExtForeignToplevelHandleV1) {
         self.remove_instance(resource);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct State {
+        list: ForeignToplevelListState,
+    }
+
+    impl ForeignToplevelListHandler for State {
+        fn foreign_toplevel_list_state(&mut self) -> &mut ForeignToplevelListState {
+            &mut self.list
+        }
+    }
+
+    crate::delegate_dispatch2!(State);
+
+    fn titles(list: &ForeignToplevelListState) -> Vec<String> {
+        list.toplevels
+            .iter()
+            .filter_map(|h| h.upgrade())
+            .map(|h| h.title())
+            .collect()
+    }
+
+    #[test]
+    fn remove_toplevel_after_a_dropped_handle_keeps_the_others() {
+        let display = wayland_server::Display::<State>::new().unwrap();
+        let mut state = State {
+            list: ForeignToplevelListState::new::<State>(&display.handle()),
+        };
+        let a = state.list.new_toplevel::<State>("a", "a");
+        let b = state.list.new_toplevel::<State>("b", "b");
+        let c = state.list.new_toplevel::<State>("c", "c");
+
+        // Closed and dropped without remove_toplevel, to be cleaned up lazily.
+        a.send_closed();
+        drop(a);
+        state.list.remove_toplevel(&c);
+        assert!(c.is_closed());
+        assert_eq!(titles(&state.list), ["b"]);
+
+        state.list.cleanup_closed_handles();
+        assert_eq!(titles(&state.list), ["b"]);
+        assert!(!b.is_closed());
     }
 }

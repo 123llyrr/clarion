@@ -124,33 +124,31 @@ impl XdgShellHandler for State {
 
         // See if this comes from a tablet tool grab.
         let mut tablet_tool = None;
-        self.clarion.seat.tablet_seat().with_tools(|tools| {
-            for tool in tools.values() {
-                let found = tool.with_grab(|grab_serial, grab| {
-                    if grab_serial == serial {
-                        let start_data = grab.start_data();
-                        if let Some((focus, _)) = &start_data.focus {
-                            if focus.id().same_client_as(&wl_surface.id()) {
-                                // Deny move requests from DnD grabs to work around
-                                // https://gitlab.gnome.org/GNOME/gtk/-/issues/7113
-                                let is_dnd_grab = Self::is_dnd_grab(grab.as_any());
+        for tool in self.clarion.seat.tablet_seat().get_tools().values() {
+            let found = tool.with_grab(|grab_serial, grab| {
+                if grab_serial == serial {
+                    let start_data = grab.start_data();
+                    if let Some((focus, _)) = &start_data.focus {
+                        if focus.id().same_client_as(&wl_surface.id()) {
+                            // Deny move requests from DnD grabs to work around
+                            // https://gitlab.gnome.org/GNOME/gtk/-/issues/7113
+                            let is_dnd_grab = Self::is_dnd_grab(grab.as_any());
 
-                                if !is_dnd_grab {
-                                    grab_start_data =
-                                        Some(AnyStartData::TabletTool(start_data.clone()));
-                                    tablet_tool = Some(tool.clone());
-                                    return true;
-                                }
+                            if !is_dnd_grab {
+                                grab_start_data =
+                                    Some(AnyStartData::TabletTool(start_data.clone()));
+                                tablet_tool = Some(tool.clone());
+                                return true;
                             }
                         }
                     }
-                    false
-                });
-                if found == Some(true) {
-                    break;
                 }
+                false
+            });
+            if found == Some(true) {
+                break;
             }
-        });
+        }
 
         let Some(start_data) = grab_start_data else {
             return;
@@ -181,7 +179,7 @@ impl XdgShellHandler for State {
             }
             AnyStartData::TabletTool(_) => {
                 if let Some(grab) = MoveGrab::new(self, start_data, window.clone(), true, None) {
-                    let time = get_monotonic_time().as_millis() as u32;
+                    let time = crate::utils::input_time();
                     tablet_tool
                         .unwrap()
                         .set_grab(self, grab, time, serial, Focus::Clear);
@@ -238,21 +236,19 @@ impl XdgShellHandler for State {
 
         // See if this comes from a tablet tool grab.
         let mut tablet_tool = None;
-        self.clarion.seat.tablet_seat().with_tools(|tools| {
-            'outer: for tool in tools.values() {
-                if tool.has_grab(serial) {
-                    if let Some(start_data) = tool.grab_start_data() {
-                        if let Some((focus, _)) = &start_data.focus {
-                            if focus.id().same_client_as(&wl_surface.id()) {
-                                grab_start_data = Some(AnyStartData::TabletTool(start_data));
-                                tablet_tool = Some(tool.clone());
-                                break 'outer;
-                            }
+        'outer: for tool in self.clarion.seat.tablet_seat().get_tools().values() {
+            if tool.has_grab(serial) {
+                if let Some(start_data) = tool.grab_start_data() {
+                    if let Some((focus, _)) = &start_data.focus {
+                        if focus.id().same_client_as(&wl_surface.id()) {
+                            grab_start_data = Some(AnyStartData::TabletTool(start_data));
+                            tablet_tool = Some(tool.clone());
+                            break 'outer;
                         }
                     }
                 }
             }
-        });
+        }
 
         let Some(start_data) = grab_start_data else {
             return;
@@ -320,7 +316,7 @@ impl XdgShellHandler for State {
             }
             AnyStartData::TabletTool(_) => {
                 let grab = ResizeGrab::new(start_data, window);
-                let time = get_monotonic_time().as_millis() as u32;
+                let time = crate::utils::input_time();
                 tablet_tool
                     .unwrap()
                     .set_grab(self, grab, time, serial, Focus::Clear);
@@ -1716,7 +1712,9 @@ pub fn add_mapped_toplevel_pre_commit_hook(toplevel: &ToplevelSurface) -> HookId
                             add_blocker(surface, blocker);
                             trace!("added mapped toplevel syncobj acquire blocker");
                         } else {
-                            error!("failed to register mapped syncobj acquire source; cancelling commit");
+                            error!(
+                                "failed to register mapped syncobj acquire source; cancelling commit"
+                            );
                             add_blocker(surface, FailedAcquireBlocker);
                         }
                     }

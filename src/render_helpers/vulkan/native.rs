@@ -1419,6 +1419,7 @@ impl NativeRenderer {
                 crate::render_helpers::shaders::ProgramType::Resize
                     | crate::render_helpers::shaders::ProgramType::Close
                     | crate::render_helpers::shaders::ProgramType::Open
+                    | crate::render_helpers::shaders::ProgramType::Genie
             ),
             "unsupported native animation program kind"
         );

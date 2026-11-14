@@ -9,13 +9,18 @@ use smithay::{backend::renderer::DebugFlags, input::tablet};
 
 use smithay::{
     backend::input::{
-        self, Axis, AxisSource, Device, DeviceCapability, Event, InputBackend, InputEvent, KeyState,
-        KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, TouchEvent,
+        self, Axis, AxisSource, Device, DeviceCapability, Event, GestureBeginEvent, GestureEndEvent,
+        GesturePinchUpdateEvent as _, GestureSwipeUpdateEvent as _, InputBackend, InputEvent, InputTime,
+        KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, TouchEvent,
     },
     desktop::{WindowSurfaceType, layer_map_for_output},
     input::{
         keyboard::{FilterResult, Keysym, ModifiersState, keysyms as xkb},
         pointer::{AxisFrame, ButtonEvent, MotionEvent},
+        pointer::{
+            GestureHoldBeginEvent, GestureHoldEndEvent, GesturePinchBeginEvent, GesturePinchEndEvent,
+            GesturePinchUpdateEvent, GestureSwipeBeginEvent, GestureSwipeEndEvent, GestureSwipeUpdateEvent,
+        },
         tablet::{TabletDescriptor, TabletSeatTrait},
         touch::{DownEvent, UpEvent},
     },
@@ -29,6 +34,7 @@ use smithay::{
         input_method::InputMethodSeat,
         keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitorSeat,
         shell::wlr_layer::{KeyboardInteractivity, Layer as WlrLayer},
+        virtual_keyboard::{VirtualKeyboardBackend, VirtualKeyboardHandler, VirtualKeyboardSpecialEvent},
     },
 };
 
@@ -36,24 +42,19 @@ use smithay::backend::input::AbsolutePositionEvent;
 
 #[cfg(any(feature = "winit", feature = "x11"))]
 use smithay::output::Output;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::state::Backend;
 #[cfg(feature = "udev")]
 use smithay::{
     backend::{
         input::{
-            GestureBeginEvent, GestureEndEvent, GesturePinchUpdateEvent as _, GestureSwipeUpdateEvent as _,
             PointerMotionEvent, ProximityState, TabletToolButtonEvent, TabletToolEvent,
             TabletToolProximityEvent, TabletToolTipEvent, TabletToolTipState,
         },
         session::Session,
     },
-    input::pointer::{
-        GestureHoldBeginEvent, GestureHoldEndEvent, GesturePinchBeginEvent, GesturePinchEndEvent,
-        GesturePinchUpdateEvent, GestureSwipeBeginEvent, GestureSwipeEndEvent, GestureSwipeUpdateEvent,
-        RelativeMotionEvent,
-    },
+    input::pointer::RelativeMotionEvent,
     reexports::wayland_server::DisplayHandle,
     wayland::{
         pointer_constraints::{PointerConstraint, with_pointer_constraint},
@@ -137,7 +138,7 @@ impl<BackendData: Backend> AnvilState<BackendData> {
         let state = evt.state();
         debug!(?keycode, ?state, "key");
         let serial = SCOUNTER.next_serial();
-        let time = Event::time_msec(&evt);
+        let time = Event::time(&evt);
         let mut suppressed_keys = self.suppressed_keys.clone();
         let keyboard = self.seat.get_keyboard().unwrap();
 
@@ -233,10 +234,112 @@ impl<BackendData: Backend> AnvilState<BackendData> {
                 button,
                 state: state.try_into().unwrap(),
                 serial,
-                time: evt.time_msec(),
+                time: evt.time(),
             },
         );
         pointer.frame(self);
+    }
+
+    fn on_gesture_swipe_begin<B: InputBackend>(&mut self, evt: B::GestureSwipeBeginEvent) {
+        let serial = SCOUNTER.next_serial();
+        let pointer = self.pointer.clone();
+        pointer.gesture_swipe_begin(
+            self,
+            &GestureSwipeBeginEvent {
+                serial,
+                time: evt.time(),
+                fingers: evt.fingers(),
+            },
+        );
+    }
+
+    fn on_gesture_swipe_update<B: InputBackend>(&mut self, evt: B::GestureSwipeUpdateEvent) {
+        let pointer = self.pointer.clone();
+        pointer.gesture_swipe_update(
+            self,
+            &GestureSwipeUpdateEvent {
+                time: evt.time(),
+                delta: evt.delta(),
+            },
+        );
+    }
+
+    fn on_gesture_swipe_end<B: InputBackend>(&mut self, evt: B::GestureSwipeEndEvent) {
+        let serial = SCOUNTER.next_serial();
+        let pointer = self.pointer.clone();
+        pointer.gesture_swipe_end(
+            self,
+            &GestureSwipeEndEvent {
+                serial,
+                time: evt.time(),
+                cancelled: evt.cancelled(),
+            },
+        );
+    }
+
+    fn on_gesture_pinch_begin<B: InputBackend>(&mut self, evt: B::GesturePinchBeginEvent) {
+        let serial = SCOUNTER.next_serial();
+        let pointer = self.pointer.clone();
+        pointer.gesture_pinch_begin(
+            self,
+            &GesturePinchBeginEvent {
+                serial,
+                time: evt.time(),
+                fingers: evt.fingers(),
+            },
+        );
+    }
+
+    fn on_gesture_pinch_update<B: InputBackend>(&mut self, evt: B::GesturePinchUpdateEvent) {
+        let pointer = self.pointer.clone();
+        pointer.gesture_pinch_update(
+            self,
+            &GesturePinchUpdateEvent {
+                time: evt.time(),
+                delta: evt.delta(),
+                scale: evt.scale(),
+                rotation: evt.rotation(),
+            },
+        );
+    }
+
+    fn on_gesture_pinch_end<B: InputBackend>(&mut self, evt: B::GesturePinchEndEvent) {
+        let serial = SCOUNTER.next_serial();
+        let pointer = self.pointer.clone();
+        pointer.gesture_pinch_end(
+            self,
+            &GesturePinchEndEvent {
+                serial,
+                time: evt.time(),
+                cancelled: evt.cancelled(),
+            },
+        );
+    }
+
+    fn on_gesture_hold_begin<B: InputBackend>(&mut self, evt: B::GestureHoldBeginEvent) {
+        let serial = SCOUNTER.next_serial();
+        let pointer = self.pointer.clone();
+        pointer.gesture_hold_begin(
+            self,
+            &GestureHoldBeginEvent {
+                serial,
+                time: evt.time(),
+                fingers: evt.fingers(),
+            },
+        );
+    }
+
+    fn on_gesture_hold_end<B: InputBackend>(&mut self, evt: B::GestureHoldEndEvent) {
+        let serial = SCOUNTER.next_serial();
+        let pointer = self.pointer.clone();
+        pointer.gesture_hold_end(
+            self,
+            &GestureHoldEndEvent {
+                serial,
+                time: evt.time(),
+                cancelled: evt.cancelled(),
+            },
+        );
     }
 
     fn update_keyboard_focus(&mut self, location: Point<f64, Logical>, serial: Serial) {
@@ -405,7 +508,7 @@ impl<BackendData: Backend> AnvilState<BackendData> {
         let vertical_amount_discrete = evt.amount_v120(input::Axis::Vertical);
 
         {
-            let mut frame = AxisFrame::new(evt.time_msec()).source(evt.source());
+            let mut frame = AxisFrame::new(evt.time()).source(evt.source());
             if horizontal_amount != 0.0 {
                 frame = frame.relative_direction(Axis::Horizontal, evt.relative_direction(Axis::Horizontal));
                 frame = frame.value(Axis::Horizontal, horizontal_amount);
@@ -475,7 +578,7 @@ impl<BackendData: Backend> AnvilState<BackendData> {
                 slot: evt.slot(),
                 location: touch_location,
                 serial,
-                time: evt.time_msec(),
+                time: evt.time(),
             },
         );
     }
@@ -490,7 +593,7 @@ impl<BackendData: Backend> AnvilState<BackendData> {
             &UpEvent {
                 slot: evt.slot(),
                 serial,
-                time: evt.time_msec(),
+                time: evt.time(),
             },
         )
     }
@@ -510,7 +613,7 @@ impl<BackendData: Backend> AnvilState<BackendData> {
             &smithay::input::touch::MotionEvent {
                 slot: evt.slot(),
                 location: touch_location,
-                time: evt.time_msec(),
+                time: evt.time(),
             },
         );
     }
@@ -643,6 +746,16 @@ impl<BackendData: Backend> AnvilState<BackendData> {
             }
             InputEvent::PointerButton { event } => self.on_pointer_button::<B>(event),
             InputEvent::PointerAxis { event } => self.on_pointer_axis::<B>(event),
+
+            InputEvent::GestureSwipeBegin { event, .. } => self.on_gesture_swipe_begin::<B>(event),
+            InputEvent::GestureSwipeUpdate { event, .. } => self.on_gesture_swipe_update::<B>(event),
+            InputEvent::GestureSwipeEnd { event, .. } => self.on_gesture_swipe_end::<B>(event),
+            InputEvent::GesturePinchBegin { event, .. } => self.on_gesture_pinch_begin::<B>(event),
+            InputEvent::GesturePinchUpdate { event, .. } => self.on_gesture_pinch_update::<B>(event),
+            InputEvent::GesturePinchEnd { event, .. } => self.on_gesture_pinch_end::<B>(event),
+            InputEvent::GestureHoldBegin { event, .. } => self.on_gesture_hold_begin::<B>(event),
+            InputEvent::GestureHoldEnd { event, .. } => self.on_gesture_hold_end::<B>(event),
+
             InputEvent::TouchDown { event } => self.on_touch_down::<B>(event),
             InputEvent::TouchUp { event } => self.on_touch_up::<B>(event),
             InputEvent::TouchMotion { event } => self.on_touch_motion::<B>(event),
@@ -672,7 +785,7 @@ impl<BackendData: Backend> AnvilState<BackendData> {
             &MotionEvent {
                 location: pos,
                 serial,
-                time: evt.time_msec(),
+                time: evt.time(),
             },
         );
         pointer.frame(self);
@@ -686,7 +799,7 @@ impl<BackendData: Backend> AnvilState<BackendData> {
                 keycode,
                 KeyState::Released,
                 SCOUNTER.next_serial(),
-                0,
+                InputTime::now(),
                 |_, _, _| FilterResult::Forward::<bool>,
             );
         }
@@ -724,7 +837,7 @@ impl AnvilState<UdevData> {
                             &MotionEvent {
                                 location,
                                 serial: SCOUNTER.next_serial(),
-                                time: self.clock.now().as_millis(),
+                                time: InputTime::now(),
                             },
                         );
                         pointer.frame(self);
@@ -762,7 +875,7 @@ impl AnvilState<UdevData> {
                             &MotionEvent {
                                 location: pointer_location,
                                 serial: SCOUNTER.next_serial(),
-                                time: self.clock.now().as_millis(),
+                                time: InputTime::now(),
                             },
                         );
                         pointer.frame(self);
@@ -801,7 +914,7 @@ impl AnvilState<UdevData> {
                             &MotionEvent {
                                 location: pointer_location,
                                 serial: SCOUNTER.next_serial(),
-                                time: self.clock.now().as_millis(),
+                                time: InputTime::now(),
                             },
                         );
                         pointer.frame(self);
@@ -923,7 +1036,7 @@ impl AnvilState<UdevData> {
             &RelativeMotionEvent {
                 delta: evt.delta(),
                 delta_unaccel: evt.delta_unaccel(),
-                utime: evt.time(),
+                time: evt.time(),
             },
         );
 
@@ -977,7 +1090,7 @@ impl AnvilState<UdevData> {
             &MotionEvent {
                 location: pointer_location,
                 serial,
-                time: evt.time_msec(),
+                time: evt.time(),
             },
         );
         pointer.frame(self);
@@ -1033,7 +1146,7 @@ impl AnvilState<UdevData> {
             &MotionEvent {
                 location: pointer_location,
                 serial,
-                time: evt.time_msec(),
+                time: evt.time(),
             },
         );
         pointer.frame(self);
@@ -1046,7 +1159,7 @@ impl AnvilState<UdevData> {
             let pointer = self.pointer.clone();
             let under = self.surface_under(pointer_location);
             let tool = tablet_seat.get_tool(&evt.tool());
-            let time = self.clock.now().as_millis();
+            let time = InputTime::now();
 
             pointer.motion(
                 self,
@@ -1112,7 +1225,7 @@ impl AnvilState<UdevData> {
                 &MotionEvent {
                     location: pointer_location,
                     serial: SCOUNTER.next_serial(),
-                    time: evt.time_msec(),
+                    time: evt.time(),
                 },
             );
             pointer.frame(self);
@@ -1139,7 +1252,7 @@ impl AnvilState<UdevData> {
                                 location: pointer_location,
                                 axis: Some(frame),
                                 serial: SCOUNTER.next_serial(),
-                                time: evt.time_msec(),
+                                time: evt.time(),
                             },
                         );
                     }
@@ -1148,7 +1261,7 @@ impl AnvilState<UdevData> {
                             self,
                             &tablet::tool::ProximityOutEvent {
                                 serial: SCOUNTER.next_serial(),
-                                time: evt.time_msec(),
+                                time: evt.time(),
                             },
                         );
                     }
@@ -1157,7 +1270,7 @@ impl AnvilState<UdevData> {
                 // Doing this in an idle handler would allow other events (e.g. buttons) to be
                 // sent as part of the same frame, which is closer to what the protocol
                 // expect, and let well behaved clients accumulate events.
-                tool.frame(self, evt.time_msec());
+                tool.frame(self, evt.time());
             }
         }
     }
@@ -1174,7 +1287,7 @@ impl AnvilState<UdevData> {
                         self,
                         &tablet::tool::DownEvent {
                             serial,
-                            time: evt.time_msec(),
+                            time: evt.time(),
                         },
                     );
 
@@ -1186,13 +1299,13 @@ impl AnvilState<UdevData> {
                         self,
                         &tablet::tool::UpEvent {
                             serial,
-                            time: evt.time_msec(),
+                            time: evt.time(),
                         },
                     );
                 }
             }
 
-            tool.frame(self, evt.time_msec());
+            tool.frame(self, evt.time());
         }
     }
 
@@ -1206,114 +1319,12 @@ impl AnvilState<UdevData> {
                     serial: SCOUNTER.next_serial(),
                     button: evt.button(),
                     state: evt.button_state(),
-                    time: evt.time_msec(),
+                    time: evt.time(),
                 },
             );
 
-            tool.frame(self, evt.time_msec());
+            tool.frame(self, evt.time());
         }
-    }
-
-    fn on_gesture_swipe_begin<B: InputBackend>(&mut self, evt: B::GestureSwipeBeginEvent) {
-        let serial = SCOUNTER.next_serial();
-        let pointer = self.pointer.clone();
-        pointer.gesture_swipe_begin(
-            self,
-            &GestureSwipeBeginEvent {
-                serial,
-                time: evt.time_msec(),
-                fingers: evt.fingers(),
-            },
-        );
-    }
-
-    fn on_gesture_swipe_update<B: InputBackend>(&mut self, evt: B::GestureSwipeUpdateEvent) {
-        let pointer = self.pointer.clone();
-        pointer.gesture_swipe_update(
-            self,
-            &GestureSwipeUpdateEvent {
-                time: evt.time_msec(),
-                delta: evt.delta(),
-            },
-        );
-    }
-
-    fn on_gesture_swipe_end<B: InputBackend>(&mut self, evt: B::GestureSwipeEndEvent) {
-        let serial = SCOUNTER.next_serial();
-        let pointer = self.pointer.clone();
-        pointer.gesture_swipe_end(
-            self,
-            &GestureSwipeEndEvent {
-                serial,
-                time: evt.time_msec(),
-                cancelled: evt.cancelled(),
-            },
-        );
-    }
-
-    fn on_gesture_pinch_begin<B: InputBackend>(&mut self, evt: B::GesturePinchBeginEvent) {
-        let serial = SCOUNTER.next_serial();
-        let pointer = self.pointer.clone();
-        pointer.gesture_pinch_begin(
-            self,
-            &GesturePinchBeginEvent {
-                serial,
-                time: evt.time_msec(),
-                fingers: evt.fingers(),
-            },
-        );
-    }
-
-    fn on_gesture_pinch_update<B: InputBackend>(&mut self, evt: B::GesturePinchUpdateEvent) {
-        let pointer = self.pointer.clone();
-        pointer.gesture_pinch_update(
-            self,
-            &GesturePinchUpdateEvent {
-                time: evt.time_msec(),
-                delta: evt.delta(),
-                scale: evt.scale(),
-                rotation: evt.rotation(),
-            },
-        );
-    }
-
-    fn on_gesture_pinch_end<B: InputBackend>(&mut self, evt: B::GesturePinchEndEvent) {
-        let serial = SCOUNTER.next_serial();
-        let pointer = self.pointer.clone();
-        pointer.gesture_pinch_end(
-            self,
-            &GesturePinchEndEvent {
-                serial,
-                time: evt.time_msec(),
-                cancelled: evt.cancelled(),
-            },
-        );
-    }
-
-    fn on_gesture_hold_begin<B: InputBackend>(&mut self, evt: B::GestureHoldBeginEvent) {
-        let serial = SCOUNTER.next_serial();
-        let pointer = self.pointer.clone();
-        pointer.gesture_hold_begin(
-            self,
-            &GestureHoldBeginEvent {
-                serial,
-                time: evt.time_msec(),
-                fingers: evt.fingers(),
-            },
-        );
-    }
-
-    fn on_gesture_hold_end<B: InputBackend>(&mut self, evt: B::GestureHoldEndEvent) {
-        let serial = SCOUNTER.next_serial();
-        let pointer = self.pointer.clone();
-        pointer.gesture_hold_end(
-            self,
-            &GestureHoldEndEvent {
-                serial,
-                time: evt.time_msec(),
-                cancelled: evt.cancelled(),
-            },
-        );
     }
 
     fn clamp_coords(&self, pos: Point<f64, Logical>) -> Point<f64, Logical> {
@@ -1397,5 +1408,50 @@ fn process_keyboard_shortcut(modifiers: ModifiersState, keysym: Keysym) -> Optio
         Some(KeyAction::ToggleDecorations)
     } else {
         None
+    }
+}
+
+impl<BackendData: Backend> VirtualKeyboardHandler for AnvilState<BackendData> {
+    fn process_virtual_keyboard_event(&mut self, event: InputEvent<VirtualKeyboardBackend>) {
+        let keyboard = self.seat.get_keyboard().unwrap();
+
+        match event {
+            // The device's keycodes only mean anything under its own keymap, so
+            // activate it before processing events. Anvil never switches back;
+            // a real compositor should track which device the seat keymap came
+            // from and restore its configured one when a physical key arrives.
+            InputEvent::DeviceAdded { device }
+            | InputEvent::Special(VirtualKeyboardSpecialEvent::KeymapChanged { device }) => {
+                let Some(keymap) = device.keymap() else {
+                    return;
+                };
+                if let Err(err) = keyboard.set_keymap_from_string(self, keymap.to_string()) {
+                    warn!(?err, "Failed to apply virtual keyboard keymap");
+                }
+            }
+            InputEvent::Keyboard { event } => {
+                match self.keyboard_key_to_action::<VirtualKeyboardBackend>(event) {
+                    action @ (KeyAction::None
+                    | KeyAction::Quit
+                    | KeyAction::Run(_)
+                    | KeyAction::TogglePreview
+                    | KeyAction::ToggleDecorations) => self.process_common_key_action(action),
+                    // VT switching and output changes are out-of-scope for virtual keyboards.
+                    action => debug!(?action, "ignoring key action from a virtual keyboard"),
+                }
+            }
+            InputEvent::Special(VirtualKeyboardSpecialEvent::Modifiers {
+                mods_depressed,
+                mods_latched,
+                mods_locked,
+                group,
+                ..
+            }) => {
+                keyboard.with_xkb_state(self, |mut context| {
+                    context.set_modifier_mask(mods_depressed, mods_latched, mods_locked, group)
+                });
+            }
+            _ => (),
+        }
     }
 }

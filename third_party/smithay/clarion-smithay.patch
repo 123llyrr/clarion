@@ -1,0 +1,530 @@
+diff --git a/src/backend/allocator/swapchain.rs b/src/backend/allocator/swapchain.rs
+index 5dfb277..fa2753f 100644
+--- a/src/backend/allocator/swapchain.rs
++++ b/src/backend/allocator/swapchain.rs
+@@ -243,11 +243,11 @@ where
+     /// Resetting the buffer age will discard all damage information and force a
+     /// full redraw for the next frame.
+     pub fn reset_buffer_ages(&mut self) {
+-        for slot in &mut self.slots {
+-            match Arc::get_mut(slot) {
+-                Some(slot) => slot.age = AtomicU8::new(0),
+-                None => *slot = Default::default(),
+-            }
++        for slot in &self.slots {
++            // Age is only a damage-history hint. A held front/pending buffer
++            // must stay in this pool and remain acquired until its owner drops;
++            // replacing shared slots turns an age reset into an allocation reset.
++            slot.age.store(0, Ordering::SeqCst);
+         }
+     }
+ 
+diff --git a/src/backend/drm/compositor/mod.rs b/src/backend/drm/compositor/mod.rs
+index 3f471cf..fe9f955 100644
+--- a/src/backend/drm/compositor/mod.rs
++++ b/src/backend/drm/compositor/mod.rs
+@@ -2338,9 +2338,14 @@ where
+                     }
+                 }
+                 Err(err) => {
+-                    // Rendering failed at some point, reset the buffers
+-                    // as we probably now have some half drawn buffer
+-                    self.swapchain.reset_buffers();
++                    // The damage tracker already cleared its history. A deferred
++                    // renderer has not submitted output writes: retain its slots
++                    // so asynchronous target preparation can complete. Replacing
++                    // them here makes every retry allocate another cold target.
++                    // Unknown/hard failures still discard possibly partial images.
++                    if !matches!(&err, OutputDamageTrackerError::Rendering(error) if R::is_render_deferred(error)) {
++                        self.swapchain.reset_buffers();
++                    }
+                     return Err(RenderFrameError::from(err));
+                 }
+             }
+@@ -2609,6 +2614,14 @@ where
+         flip.map_err(FrameError::DrmError)
+     }
+ 
++    /// Whether a frame can still be submitted using the existing output state.
++    ///
++    /// Drain these frames before staging connector color properties so that an
++    /// already rendered framebuffer cannot acquire a different encoding.
++    pub fn has_pending_frames(&self) -> bool {
++        self.pending_frame.is_some() || self.queued_frame.is_some()
++    }
++
+     /// Marks the current frame as submitted.
+     ///
+     /// *Note*: Needs to be called, after the vblank event of the matching [`DrmDevice`](super::DrmDevice)
+diff --git a/src/backend/drm/surface/atomic.rs b/src/backend/drm/surface/atomic.rs
+index e7e1739..6293aac 100644
+--- a/src/backend/drm/surface/atomic.rs
++++ b/src/backend/drm/surface/atomic.rs
+@@ -44,6 +44,15 @@ pub struct State {
+     pub blob: property::Value<'static>,
+     pub vrr: bool,
+     pub connectors: HashSet<connector::Handle>,
++    /// Extra connector properties committed together with the matching framebuffer.
++    pub connector_properties: Vec<(
++        connector::Handle,
++        property::Handle,
++        property::RawValue,
++        property::RawValue,
++    )>,
++    /// CRTC color properties belonging to the same framebuffer transition.
++    pub crtc_properties: Vec<(property::Handle, property::RawValue)>,
+ }
+ 
+ impl PartialEq for State {
+@@ -53,6 +62,8 @@ impl PartialEq for State {
+             && self.mode == other.mode
+             && self.vrr == other.vrr
+             && self.connectors == other.connectors
++            && self.connector_properties == other.connector_properties
++            && self.crtc_properties == other.crtc_properties
+     }
+ }
+ 
+@@ -150,6 +161,8 @@ impl State {
+             // If we don't know the VRR state, the driver doesn't support the property
+             vrr: vrr.unwrap_or(false),
+             connectors: current_connectors,
++            connector_properties: Vec::new(),
++            crtc_properties: Vec::new(),
+         })
+     }
+ 
+@@ -159,6 +172,8 @@ impl State {
+         self.connectors.clear();
+         self.active = false;
+         self.vrr = false;
++        self.connector_properties.clear();
++        self.crtc_properties.clear();
+     }
+ }
+ 
+@@ -207,6 +222,8 @@ impl AtomicDrmSurface {
+             blob,
+             vrr: false,
+             connectors: connectors.iter().copied().collect(),
++            connector_properties: Vec::new(),
++            crtc_properties: Vec::new(),
+         };
+ 
+         drop(_guard);
+@@ -685,6 +702,49 @@ impl AtomicDrmSurface {
+         Ok(())
+     }
+ 
++    /// Stage connector properties for the next full atomic frame commit.
++    /// The caller retains ownership of any property blobs until replacement.
++    pub fn set_connector_properties(
++        &self,
++        connector: connector::Handle,
++        properties: &[(property::Handle, property::RawValue, property::RawValue)],
++    ) {
++        let mut pending = self.pending.write().unwrap();
++        pending
++            .connector_properties
++            .retain(|(conn, _, _, _)| *conn != connector);
++        pending.connector_properties.extend(
++            properties
++                .iter()
++                .map(|(property, value, reset)| (connector, *property, *value, *reset)),
++        );
++        pending
++            .connector_properties
++            .sort_by_key(|(conn, prop, _, _)| (Into::<u32>::into(*conn), Into::<u32>::into(*prop)));
++    }
++
++    pub fn set_crtc_properties(&self, properties: &[(property::Handle, property::RawValue)]) {
++        let mut pending = self.pending.write().unwrap();
++        pending.crtc_properties = properties.to_vec();
++        pending
++            .crtc_properties
++            .sort_by_key(|(property, _)| Into::<u32>::into(*property));
++    }
++
++    pub fn current_connector_property(
++        &self,
++        connector: connector::Handle,
++        property: property::Handle,
++    ) -> Option<property::RawValue> {
++        self.state
++            .read()
++            .unwrap()
++            .connector_properties
++            .iter()
++            .find(|(conn, prop, _, _)| *conn == connector && *prop == property)
++            .map(|(_, _, value, _)| *value)
++    }
++
+     pub fn commit_pending(&self) -> bool {
+         *self.pending.read().unwrap() != *self.state.read().unwrap()
+     }
+@@ -735,13 +795,18 @@ impl AtomicDrmSurface {
+         } else {
+             AtomicCommitFlags::TEST_ONLY
+         };
+-        self.fd.atomic_commit(flags, req.build()?).map_err(|source| {
+-            Error::Access(AccessError {
+-                errmsg: "Error testing state",
+-                dev: self.fd.dev_path(),
+-                source,
++        self.fd
++            .atomic_commit(
++                flags,
++                request_with_color_properties(&req, pending, self.crtc)?,
++            )
++            .map_err(|source| {
++                Error::Access(AccessError {
++                    errmsg: "Error testing state",
++                    dev: self.fd.dev_path(),
++                    source,
++                })
+             })
+-        })
+     }
+ 
+     #[instrument(level = "trace", parent = &self.span, skip(self, planes))]
+@@ -804,9 +869,12 @@ impl AtomicDrmSurface {
+ 
+             if let Err(err) = self.fd.atomic_commit(
+                 AtomicCommitFlags::ALLOW_MODESET | AtomicCommitFlags::TEST_ONLY,
+-                req.build()?,
++                request_with_color_properties(&req, &pending, self.crtc)?,
+             ) {
+-                warn!("New screen configuration invalid!:\n\t{:?}\n\t{}\n", req, err);
++                warn!(
++                    "New screen configuration invalid!:\n\t{:?}\n\t{}\n",
++                    req, err
++                );
+ 
+                 return Err(Error::TestFailed(self.crtc));
+             } else {
+@@ -839,7 +907,7 @@ impl AtomicDrmSurface {
+                 } else {
+                     AtomicCommitFlags::ALLOW_MODESET
+                 },
+-                req.build()?,
++                request_with_color_properties(&req, &pending, self.crtc)?,
+             )
+             .map_err(|source| {
+                 Error::Access(AccessError {
+@@ -978,11 +1046,20 @@ impl AtomicDrmSurface {
+ 
+         // disable crtc
+         req.reset_crtc(self.crtc)?;
++        let mut request = req.build()?;
++        // Return managed signal properties to their safe inactive values so
++        // the next compositor does not inherit PQ metadata for SDR buffers.
++        for (connector, property, _, reset) in &current.connector_properties {
++            request.add_raw_property((*connector).into(), *property, *reset);
++        }
++        for (connector, property, _, reset) in &self.pending.read().unwrap().connector_properties {
++            request.add_raw_property((*connector).into(), *property, *reset);
++        }
+         std::mem::drop(current);
+ 
+         let res = self
+             .fd
+-            .atomic_commit(AtomicCommitFlags::ALLOW_MODESET, req.build()?)
++            .atomic_commit(AtomicCommitFlags::ALLOW_MODESET, request)
+             .map_err(|source| {
+                 Error::Access(AccessError {
+                     errmsg: "Failed to commit on clear_state",
+@@ -1034,6 +1111,25 @@ impl AtomicDrmSurface {
+     }
+ }
+ 
++// Keep the same extra properties in TEST_ONLY and the real framebuffer commit.
++// Their state becomes current only after the real commit succeeds.
++fn request_with_color_properties(
++    request: &AtomicRequest<'_>,
++    state: &State,
++    crtc: crtc::Handle,
++) -> Result<AtomicModeReq, Error> {
++    let mut request = request.build()?;
++    for (property, value) in &state.crtc_properties {
++        request.add_raw_property(crtc.into(), *property, *value);
++    }
++    for (connector, property, value, _) in &state.connector_properties {
++        if state.connectors.contains(connector) {
++            request.add_raw_property((*connector).into(), *property, *value);
++        }
++    }
++    Ok(request)
++}
++
+ struct TestBuffer {
+     fd: Arc<DrmDeviceInternal>,
+     db: DumbBuffer,
+diff --git a/src/backend/drm/surface/mod.rs b/src/backend/drm/surface/mod.rs
+index 677fa13..be41a78 100644
+--- a/src/backend/drm/surface/mod.rs
++++ b/src/backend/drm/surface/mod.rs
+@@ -1,10 +1,10 @@
+ use std::io;
+ use std::os::unix::io::{AsFd, BorrowedFd};
+-use std::sync::Arc;
+ use std::sync::atomic::Ordering;
++use std::sync::Arc;
+ 
++use drm::control::{connector, crtc, framebuffer, plane, property, Device as ControlDevice, Mode};
+ use drm::Device as BasicDevice;
+-use drm::control::{Device as ControlDevice, Mode, connector, crtc, framebuffer, plane};
+ 
+ use libc::dev_t;
+ 
+@@ -351,6 +351,63 @@ impl DrmSurface {
+         }
+     }
+ 
++    /// Stage color-signaling properties together with the next framebuffer.
++    ///
++    /// Callers must first drain previously queued frames and retain creation
++    /// references to property blobs until those values have been replaced.
++    /// Entries are (property, frame value, inactive reset value). The reset is
++    /// included atomically when the CRTC is disabled or released. Frame values
++    /// participate in TEST_ONLY and the real commit and become current only
++    /// after success.
++    pub fn set_connector_properties(
++        &self,
++        connector: connector::Handle,
++        properties: &[(property::Handle, property::RawValue, property::RawValue)],
++    ) -> Result<(), Error> {
++        match &*self.internal {
++            DrmSurfaceInternal::Atomic(surf) => {
++                surf.set_connector_properties(connector, properties);
++                Ok(())
++            }
++            DrmSurfaceInternal::Legacy(_) => Err(Error::UnknownProperty {
++                handle: connector.into(),
++                name: "atomic connector properties",
++            }),
++        }
++    }
++
++    /// Stage CRTC color properties with the next full framebuffer commit.
++    /// Blob ownership and frame-draining rules match `set_connector_properties`.
++    pub fn set_crtc_properties(
++        &self,
++        properties: &[(property::Handle, property::RawValue)],
++    ) -> Result<(), Error> {
++        match &*self.internal {
++            DrmSurfaceInternal::Atomic(surf) => {
++                surf.set_crtc_properties(properties);
++                Ok(())
++            }
++            DrmSurfaceInternal::Legacy(_) => Err(Error::UnknownProperty {
++                handle: self.crtc.into(),
++                name: "atomic CRTC properties",
++            }),
++        }
++    }
++
++    /// Last successfully committed value of a managed connector property.
++    pub fn current_connector_property(
++        &self,
++        connector: connector::Handle,
++        property: property::Handle,
++    ) -> Option<property::RawValue> {
++        match &*self.internal {
++            DrmSurfaceInternal::Atomic(surf) => {
++                surf.current_connector_property(connector, property)
++            }
++            DrmSurfaceInternal::Legacy(_) => None,
++        }
++    }
++
+     /// Disables the given plane.
+     ///
+     /// Errors if the plane is not supported by this crtc or if the underlying
+diff --git a/src/backend/renderer/mod.rs b/src/backend/renderer/mod.rs
+index 2efa08c..e512442 100644
+--- a/src/backend/renderer/mod.rs
++++ b/src/backend/renderer/mod.rs
+@@ -436,6 +436,17 @@ pub trait Renderer: RendererSuper {
+     /// Wait for a [`SyncPoint`] to be signaled
+     fn wait(&mut self, sync: &sync::SyncPoint) -> Result<(), Self::Error>;
+ 
++    /// Whether an error requests a retry without invalidating output allocations.
++    ///
++    /// Return `true` only if this attempt submitted no writes to the output
++    /// framebuffer. The damage tracker still invalidates its history, so a retry
++    /// repaints the complete output. Retaining the swapchain lets asynchronous
++    /// target preparation finish without continually replacing its target.
++    /// Errors after output submission or with unknown contents must return `false`.
++    fn is_render_deferred(_error: &Self::Error) -> bool {
++        false
++    }
++
+     /// Forcibly clean up the renderer internal texture cache
+     ///
+     /// Note: Resources used by the renderer will be implicitly cleaned-up after finishing
+diff --git a/src/backend/renderer/utils/wayland.rs b/src/backend/renderer/utils/wayland.rs
+index ef9f5ed..7c4ecde 100644
+--- a/src/backend/renderer/utils/wayland.rs
++++ b/src/backend/renderer/utils/wayland.rs
+@@ -325,6 +325,16 @@ impl RendererSurfaceState {
+         self.textures.get(&id.erased()).and_then(|e| e.downcast_ref())
+     }
+ 
++    /// Invalidate imported textures after a committed color description changes.
++    /// The attached allocation is unchanged, but every visible pixel changes.
++    pub fn invalidate_color(&mut self) {
++        self.textures.clear();
++        self.renderer_seen.clear();
++        if let Some(size) = self.buffer_dimensions {
++            self.damage.add([Rectangle::from_size(size)]);
++        }
++    }
++
+     /// Gets the opaque regions of this surface
+     pub fn opaque_regions(&self) -> Option<&[Rectangle<i32, Logical>]> {
+         // If the surface is unmapped there can be no opaque regions
+diff --git a/src/backend/session/libseat.rs b/src/backend/session/libseat.rs
+index 8a47aaa..8c0722b 100644
+--- a/src/backend/session/libseat.rs
++++ b/src/backend/session/libseat.rs
+@@ -25,7 +25,9 @@ use calloop::{
+ 
+ use crate::backend::session::{AsErrno, Event as SessionEvent, Session};
+ 
+-use tracing::{debug, info_span, instrument};
++use tracing::{debug, info_span, instrument, warn};
++
++mod pause;
+ 
+ #[derive(Debug)]
+ struct LibSeatSessionImpl {
+@@ -225,8 +227,31 @@ impl EventSource for LibSeatSessionNotifier {
+                     }
+                     SeatEvent::Disable => {
+                         internal.active.store(false, Ordering::SeqCst);
+-                        internal.seat.borrow_mut().disable().unwrap();
+-                        callback(SessionEvent::PauseSession, &mut ());
++                        // The disable acknowledgement permits seatd/logind to revoke
++                        // device access. Let the compositor atomically release HDR
++                        // signaling first. Never hold the seat RefCell borrow across
++                        // its callback, and acknowledge even if that callback unwinds.
++                        let started = std::time::Instant::now();
++                        pause::pause_before_acknowledge(
++                            || callback(SessionEvent::PauseSession, &mut ()),
++                            || {
++                                if started.elapsed() > std::time::Duration::from_secs(1) {
++                                    warn!(
++                                        "Seat handoff cleanup exceeded one second; acknowledging disable now"
++                                    );
++                                }
++                                match internal.seat.try_borrow_mut() {
++                                    Ok(mut seat) => {
++                                        if let Err(error) = seat.disable() {
++                                            warn!(?error, "Failed to acknowledge disabled seat");
++                                        }
++                                    }
++                                    Err(error) => {
++                                        warn!(%error, "Seat remains borrowed during disable acknowledgement")
++                                    }
++                                }
++                            },
++                        );
+                     }
+                 },
+                 channel::Event::Closed => {
+diff --git a/src/backend/session/libseat/pause.rs b/src/backend/session/libseat/pause.rs
+new file mode 100644
+index 0000000..2896dae
+--- /dev/null
++++ b/src/backend/session/libseat/pause.rs
+@@ -0,0 +1,90 @@
++//! Release privileged output state before acknowledging a seat handoff.
++//!
++//! This helper has no seat or DRM dependency so unwind/error ordering can be
++//! tested without a real VT or DRM master. The acknowledgement closure must
++//! handle its own I/O errors without panicking, including during unwinding.
++
++pub(super) fn pause_before_acknowledge(pause: impl FnOnce(), acknowledge: impl FnOnce()) {
++    struct AcknowledgeOnDrop<A: FnOnce()>(Option<A>);
++    impl<A: FnOnce()> Drop for AcknowledgeOnDrop<A> {
++        fn drop(&mut self) {
++            if let Some(acknowledge) = self.0.take() {
++                acknowledge();
++            }
++        }
++    }
++    let acknowledge = AcknowledgeOnDrop(Some(acknowledge));
++    pause();
++    drop(acknowledge);
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::cell::RefCell;
++    use std::panic::{catch_unwind, AssertUnwindSafe};
++
++    #[test]
++    fn cleanup_finishes_before_disable_acknowledgement() {
++        let events = RefCell::new(Vec::new());
++        pause_before_acknowledge(
++            || {
++                events.borrow_mut().push("clear HDR and disable CRTC");
++                events.borrow_mut().push("pause DRM and suspend leases");
++            },
++            || events.borrow_mut().push("acknowledge disable seat"),
++        );
++        assert_eq!(
++            *events.borrow(),
++            [
++                "clear HDR and disable CRTC",
++                "pause DRM and suspend leases",
++                "acknowledge disable seat",
++            ]
++        );
++    }
++
++    #[test]
++    fn failed_cleanup_still_acknowledges_disable() {
++        let events = RefCell::new(Vec::new());
++        pause_before_acknowledge(
++            || {
++                let cleanup: Result<(), &str> = Err("master revoked / driver deadline");
++                if cleanup.is_err() {
++                    events
++                        .borrow_mut()
++                        .push("cleanup failed; signal state unknown");
++                    return;
++                }
++                events.borrow_mut().push("cleanup succeeded");
++            },
++            || events.borrow_mut().push("acknowledge disable seat"),
++        );
++        assert_eq!(
++            *events.borrow(),
++            [
++                "cleanup failed; signal state unknown",
++                "acknowledge disable seat"
++            ]
++        );
++    }
++
++    #[test]
++    fn unwinding_cleanup_acknowledges_disable_exactly_once() {
++        let events = RefCell::new(Vec::new());
++        let panic = catch_unwind(AssertUnwindSafe(|| {
++            pause_before_acknowledge(
++                || {
++                    events.borrow_mut().push("cleanup began");
++                    panic!("cleanup panicked");
++                },
++                || events.borrow_mut().push("acknowledge disable seat"),
++            );
++        }));
++        assert!(panic.is_err());
++        assert_eq!(
++            *events.borrow(),
++            ["cleanup began", "acknowledge disable seat"]
++        );
++    }
++}

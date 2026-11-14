@@ -11,7 +11,7 @@
 //!
 //! use smithay::wayland::cursor_shape::CursorShapeManagerState;
 //!
-//! # use smithay::backend::input::{KeyState, TabletToolDescriptor};
+//! # use smithay::backend::input::{InputTime, KeyState, TabletToolDescriptor};
 //! # use smithay::input::{
 //! #   pointer::{PointerTarget, AxisFrame, MotionEvent, ButtonEvent, RelativeMotionEvent,
 //! #             GestureSwipeBeginEvent, GestureSwipeUpdateEvent, GestureSwipeEndEvent,
@@ -44,7 +44,7 @@
 //! #   fn button(&self, seat: &Seat<State>, data: &mut State, event: &ButtonEvent) {}
 //! #   fn axis(&self, seat: &Seat<State>, data: &mut State, frame: AxisFrame) {}
 //! #   fn frame(&self, seat: &Seat<State>, data: &mut State) {}
-//! #   fn leave(&self, seat: &Seat<State>, data: &mut State, serial: Serial, time: u32) {}
+//! #   fn leave(&self, seat: &Seat<State>, data: &mut State, serial: Serial, time: InputTime) {}
 //! #   fn gesture_swipe_begin(&self, seat: &Seat<State>, data: &mut State, event: &GestureSwipeBeginEvent) {}
 //! #   fn gesture_swipe_update(&self, seat: &Seat<State>, data: &mut State, event: &GestureSwipeUpdateEvent) {}
 //! #   fn gesture_swipe_end(&self, seat: &Seat<State>, data: &mut State, event: &GestureSwipeEndEvent) {}
@@ -64,7 +64,7 @@
 //! #       key: KeysymHandle<'_>,
 //! #       state: KeyState,
 //! #       serial: Serial,
-//! #       time: u32,
+//! #       time: InputTime,
 //! #   ) {}
 //! #   fn modifiers(&self, seat: &Seat<State>, data: &mut State, modifiers: ModifiersState, serial: Serial) {}
 //! # }
@@ -86,7 +86,7 @@
 //! #   fn motion(&self, seat: &Seat<State>, data: &mut State, tool_descriptor: &TabletToolDescriptor, event: &tool::MotionEvent) {}
 //! #   fn axis(&self, seat: &Seat<State>, data: &mut State, tool_descriptor: &TabletToolDescriptor, frame: tool::AxisFrame) {}
 //! #   fn button(&self, seat: &Seat<State>, data: &mut State, tool_descriptor: &TabletToolDescriptor, event: &tool::ButtonEvent) {}
-//! #   fn frame(&self, seat: &Seat<State>, data: &mut State, tool_descriptor: &TabletToolDescriptor, time: u32) {}
+//! #   fn frame(&self, seat: &Seat<State>, data: &mut State, tool_descriptor: &TabletToolDescriptor, time: InputTime) {}
 //! # }
 //! # struct State {
 //! #     seat_state: SeatState<Self>,
@@ -124,15 +124,13 @@ use wayland_server::{Dispatch, DisplayHandle, backend::GlobalId};
 
 use crate::input::SeatHandler;
 use crate::input::WeakSeat;
-use crate::input::pointer::{CursorIcon, CursorImageStatus};
+use crate::input::pointer::{CursorIcon, CursorImageStatus, PointerHandle};
 use crate::input::tablet::TabletSeatHandler;
 use crate::utils::Serial;
 use crate::wayland::seat::{WaylandFocus, pointer::allow_setting_cursor};
 use crate::wayland::tablet_manager::TabletToolUserData;
 use crate::wayland::tablet_manager::tablet_tool;
 use crate::wayland::{Dispatch2, GlobalData, GlobalDispatch2};
-
-use super::seat::PointerUserData;
 
 /// State of the cursor shape manager.
 #[derive(Debug)]
@@ -197,8 +195,7 @@ where
                 cursor_shape_device,
                 pointer,
             } => {
-                let pointer_data = pointer.data::<PointerUserData<D>>();
-                let handle = match pointer_data.and_then(|data| data.handle.as_ref()) {
+                let handle = match PointerHandle::from_resource(&pointer) {
                     Some(handle) => handle,
                     None => return,
                 };
@@ -207,7 +204,7 @@ where
                     .seat_state()
                     .seats
                     .iter()
-                    .find(|seat| seat.get_pointer().map(|h| &h == handle).unwrap_or(false))
+                    .find(|seat| seat.get_pointer().map(|h| h == handle).unwrap_or(false))
                     .cloned()
                 else {
                     return;

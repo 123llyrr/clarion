@@ -2,6 +2,7 @@ use ::input as libinput;
 use smithay::backend::input;
 use smithay::backend::winit::WinitVirtualDevice;
 use smithay::output::Output;
+use smithay::wayland::virtual_keyboard::VirtualKeyboardDevice;
 
 use crate::compositor::State;
 use crate::protocols::virtual_pointer::VirtualPointer;
@@ -47,5 +48,11 @@ impl ClarionInputDevice for WinitVirtualDevice {
 impl ClarionInputDevice for VirtualPointer {
     fn output(&self, _: &State) -> Option<Output> {
         self.output().cloned()
+    }
+}
+
+impl ClarionInputDevice for VirtualKeyboardDevice {
+    fn output(&self, _: &State) -> Option<Output> {
+        None
     }
 }

@@ -23,10 +23,14 @@ pub(crate) mod client {
 
 /// Both input and effect regions use the same bounded, outward-rounded logical
 /// rectangles. Invalid geometry must not become huge protocol coordinates.
+///
+/// The cap is generous because scanline masks (a tilted Dock label follows its
+/// own outline one logical row at a time) legitimately reach a few hundred
+/// rectangles while still staying far below anything abusive.
 pub(crate) fn rectangles(bounds: &[crate::Bounds<crate::Pixels>]) -> Vec<[i32; 4]> {
     bounds
         .iter()
-        .take(256)
+        .take(4096)
         .filter_map(|bounds| {
             let (x, y, width, height) = (
                 bounds.origin.x.0,
@@ -86,7 +90,7 @@ mod tests {
         assert!(contains(50, 0));
         assert!(contains(0, 20));
         assert!(!contains(99, 39));
-        assert_eq!(rectangles(&vec![bounds[1]; 1000]).len(), 256);
+        assert_eq!(rectangles(&vec![bounds[1]; 5000]).len(), 4096);
         assert!(rectangles(&[]).is_empty());
     }
 }

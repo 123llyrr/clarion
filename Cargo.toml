@@ -1,5 +1,5 @@
 [workspace]
-exclude = ["third_party/smithay", "third_party/gpui"]
+exclude = ["third_party/smithay", "third_party/gpui", "third_party/blade-graphics"]
 members = [
     "clarion-core",
     "clarion-motion",
@@ -36,13 +36,13 @@ tracy-client = { version = "0.18.4", default-features = false }
 [workspace.dependencies.smithay]
 # version = "0.4.1"
 git = "https://github.com/Smithay/smithay.git"
-rev = "4cf0b62028039661477d482ec4758b687d8f4392"
+rev = "2923f2248508307687de4e1d84e4d208b937ad42"
 default-features = false
 
 [workspace.dependencies.smithay-drm-extras]
 # version = "0.1.0"
 git = "https://github.com/Smithay/smithay.git"
-rev = "4cf0b62028039661477d482ec4758b687d8f4392"
+rev = "2923f2248508307687de4e1d84e4d208b937ad42"
 # path = "../smithay/smithay-drm-extras"
 
 [package]
@@ -232,3 +232,6 @@ smithay = { path = "third_party/smithay" }
 
 [patch.crates-io]
 gpui = { path = "third_party/gpui" }
+# Some Vulkan drivers (NVIDIA Wayland WSI) return SUBOPTIMAL_KHR from a
+# successful swapchain creation; stock 0.7.1 unwraps it and aborts the shell.
+blade-graphics = { path = "third_party/blade-graphics" }

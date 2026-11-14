@@ -1,12 +1,15 @@
 //! Window composition from renderer-free state and scene-owned resources.
 
 use core::f64;
+use std::collections::HashMap;
 use std::ops::Deref;
 
 use clarion_config::{Color, CornerRadius, GradientInterpolation};
+use clarion_ipc::MinimizeEffect;
 use smithay::backend::renderer::element::utils::RescaleRenderElement;
 use smithay::backend::renderer::element::{Element, Kind};
 use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::backend::renderer::Texture;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Size};
 
 use super::focus_ring::FocusRingRenderElement;
@@ -24,11 +27,14 @@ use crate::render_helpers::mesh::MeshRenderElement;
 use crate::render_helpers::offscreen::{OffscreenData, OffscreenRenderElement};
 use crate::render_helpers::renderer::ClarionRenderer;
 use crate::render_helpers::resize::ResizeRenderElement;
+use crate::render_helpers::shader_element::ShaderRenderElement;
+use crate::render_helpers::shaders::{animation_source, ProgramType, Shaders};
 use crate::render_helpers::shadow::ShadowRenderElement;
 use crate::render_helpers::snapshot::RenderSnapshot;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::xray::XrayPos;
 use crate::render_helpers::RenderCtx;
+use crate::scene::genie::GenieShaderGeometry;
 use crate::scene::window_resources::{EffectRetirements, WindowResourceLease};
 
 clarion_render_elements! {
@@ -47,6 +53,7 @@ clarion_render_elements! {
         ExtraDamage = ExtraDamage,
         BackgroundEffect = BackgroundEffectElement,
         Mesh = MeshRenderElement,
+        Shader = ShaderRenderElement,
     }
 }
 
@@ -721,10 +728,6 @@ impl<W: LayoutElement> TileScene<'_, W> {
         let idx = ctx.target as usize;
         let scale = Scale::from(self.scale);
         if let Some(mut ctx) = ctx.as_gles() {
-            if !MeshRenderElement::is_available(ctx.renderer) {
-                self.request_genie_retirement();
-                return false;
-            }
             let mut elements = Vec::new();
             self.render_without_wobble(ctx.r(), (0., 0.).into(), xray_pos, false, &mut |element| {
                 elements.push(element)
@@ -735,6 +738,56 @@ impl<W: LayoutElement> TileScene<'_, W> {
             {
                 Ok((element, _sync, mut data)) => {
                     let texture_area = Rectangle::new(element.offset(), element.logical_size());
+                    // At the resting endpoint the texture element is exact by
+                    // construction; the inverse map would only resample it.
+                    if pose.progress <= 0. {
+                        let offset = element.offset();
+                        let element = element.with_offset(pose.source.loc + offset);
+                        data.id = element.id().clone();
+                        self.window.set_offscreen_data(Some(data));
+                        push(element.into());
+                        return true;
+                    }
+                    let texture_pixels = (
+                        element.texture().width() as f64,
+                        element.texture().height() as f64,
+                    );
+                    if pose.effect == MinimizeEffect::Genie {
+                        if let Some(geometry) = GenieShaderGeometry::new(
+                            &pose,
+                            texture_area,
+                            texture_pixels,
+                            self.scale,
+                        ) {
+                            if Shaders::get(ctx.renderer)
+                                .program(ProgramType::Genie)
+                                .is_some()
+                            {
+                                let element = ShaderRenderElement::new(
+                                    ProgramType::Genie,
+                                    geometry.area.size,
+                                    None,
+                                    self.scale as f32,
+                                    pose.fade(),
+                                    geometry.uniforms(),
+                                    HashMap::from([(
+                                        String::from("clarion_tex"),
+                                        element.texture().clone(),
+                                    )]),
+                                    Kind::Unspecified,
+                                )
+                                .with_location(geometry.area.loc);
+                                data.id = element.id().clone();
+                                self.window.set_offscreen_data(Some(data));
+                                push(element.into());
+                                return true;
+                            }
+                        }
+                    }
+                    if !MeshRenderElement::is_available(ctx.renderer) {
+                        self.request_genie_retirement();
+                        return false;
+                    }
                     let mesh = self.resources.genie_mesh.borrow_mut().sample(
                         &pose,
                         texture_area,
@@ -771,6 +824,46 @@ impl<W: LayoutElement> TileScene<'_, W> {
             {
                 Ok((texture, _sync, geo, states, source_commit)) => {
                     let texture_area = geo.to_f64().to_logical(scale);
+                    if pose.progress > 0. && pose.effect == MinimizeEffect::Genie {
+                        if let Some(geometry) = GenieShaderGeometry::new(
+                            &pose,
+                            texture_area,
+                            (texture.width() as f64, texture.height() as f64),
+                            self.scale,
+                        ) {
+                            match ShaderRenderElement::new_native(
+                                ctx.renderer,
+                                ProgramType::Genie,
+                                &animation_source(ProgramType::Genie, None),
+                                geometry.area.size,
+                                self.scale as f32,
+                                pose.fade(),
+                                geometry.uniforms(),
+                                HashMap::from([(String::from("clarion_tex"), texture.clone())]),
+                                Kind::Unspecified,
+                            ) {
+                                Ok(element) => {
+                                    let element = element.with_location(geometry.area.loc);
+                                    self.window.set_offscreen_data(Some(OffscreenData {
+                                        id: element.id().clone(),
+                                        states,
+                                    }));
+                                    push(element.into());
+                                    return true;
+                                }
+                                Err(err) => {
+                                    if crate::render_helpers::vulkan::native::NativeError::is_backpressure(
+                                        err.as_ref(),
+                                    ) {
+                                        return true;
+                                    }
+                                    warn!(
+                                        "error preparing Vulkan Genie shader; using mesh fallback: {err:?}"
+                                    );
+                                }
+                            }
+                        }
+                    }
                     let mesh = self.resources.genie_mesh.borrow_mut().sample(
                         &pose,
                         texture_area,

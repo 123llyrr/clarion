@@ -9,7 +9,7 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -20,6 +20,7 @@ use clarion_ipc::state::{EventStreamState, EventStreamStatePart};
 use clarion_ipc::{Action, KeyboardLayouts, Output, Reply, Request, Response, Window, Workspace};
 use clarion_launcher::catalog::AppCatalog;
 
+use crate::power::PowerProfile;
 use crate::preferences::{Environment, Preferences};
 
 const IPC_TIMEOUT: Duration = Duration::from_millis(900);
@@ -33,6 +34,7 @@ const PANEL_COMMANDS: &[&str] = &[
     "mission-control",
     "control-center",
     "quick-settings",
+    "battery",
     "notifications",
     "overview",
     "recent-content",
@@ -60,17 +62,120 @@ pub struct SystemSnapshot {
     pub volume: Option<f64>,
     pub muted: bool,
     pub brightness: Option<f64>,
+    /// The averaged charge of the machine's system batteries, 0–1.
     pub battery: Option<f64>,
-    pub charging: bool,
+    /// What the batteries are doing, before the charge level folds in.
+    pub battery_status: BatteryStatus,
+    /// Full-charge capacity divided by design capacity. Battery wear, not the
+    /// current charge: 50% here means the pack holds half of its original Wh.
+    pub battery_health: Option<f64>,
+    /// Mains present. Inferred from a charging/full battery when the platform
+    /// exposes no AC device of its own.
+    pub ac_online: bool,
+    /// The active platform power profile, when the machine exposes one.
+    pub power_profile: Option<PowerProfile>,
+    /// The profiles this machine advertises, in canonical order.
+    pub power_profiles: Vec<PowerProfile>,
     pub trash_full: bool,
     pub clock: String,
     pub date: String,
+    /// The local calendar day, so the notification center's month grid does
+    /// not have to parse the localized `date` label back into numbers.
+    pub today: Option<chrono::NaiveDate>,
+    /// Machine facts for the About card, collected once at worker start.
+    pub facts: crate::system_info::SystemFacts,
+    /// The active MPRIS player's metadata, when one is running.
+    pub media: Option<Box<MediaSnapshot>>,
+    /// The active network/Bluetooth connection, refreshed with the hardware
+    /// poll.
+    pub network: Box<NetworkSnapshot>,
+}
+
+/// The two connectivity rows at the top of the Control Center.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NetworkSnapshot {
+    /// SSID of the active Wi-Fi, or the connection name of an active wired
+    /// link. `None` means nothing is connected.
+    pub network: Option<String>,
+    pub wireless: bool,
+    /// The connected Bluetooth device's name, "已开启" when the adapter is on
+    /// without a device, or `None` when Bluetooth is off/unavailable.
+    pub bluetooth: Option<String>,
+}
+
+/// What the Control Center's media card shows. `playerctl` is the bridge; the
+/// shell never speaks MPRIS itself, matching the other tool-backed rows.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MediaSnapshot {
+    pub title: String,
+    pub artist: String,
+    pub playing: bool,
+    /// Elapsed time and track length in seconds, when the player reports them.
+    pub position: Option<f64>,
+    pub length: Option<f64>,
+    /// Cover art re-encoded to a small PNG, ready for GPUI's image cache.
+    pub art_png: Option<Vec<u8>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediaControl {
+    PlayPause,
+    Next,
+    Previous,
+}
+
+/// The kernel's `POWER_SUPPLY_STATUS`, reduced to the values the UI uses.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BatteryStatus {
+    #[default]
+    Unknown,
+    Charging,
+    Discharging,
+    NotCharging,
+    Full,
+}
+
+/// One pass over `/sys/class/power_supply`, kept separate from the snapshot so
+/// the bar, the popup and the tests read the same aggregation.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BatterySnapshot {
+    pub percent: Option<f64>,
+    pub status: BatteryStatus,
+    pub health: Option<f64>,
+    pub ac_online: bool,
+    /// The charge ceiling the firmware stops at, 0–1, but only when the
+    /// platform exposes a writable end-threshold attribute. `None` means the
+    /// popup cannot adjust it on this machine.
+    pub charge_limit: Option<f64>,
 }
 
 #[derive(Debug)]
 pub enum Event {
     Desktop(DesktopSnapshot),
     System(SystemSnapshot),
+    /// The machine's power profile, kept out of the one-second `System`
+    /// heartbeat so a cached snapshot can never undo a fresh switch.
+    PowerProfile {
+        profile: Option<PowerProfile>,
+        profiles: Vec<PowerProfile>,
+        /// True for the read-back that immediately follows a user request;
+        /// false for the ordinary three-second poll.
+        settled: bool,
+        /// Monotonic stamp shared by both workers. A poll that started before
+        /// a switch finishes carries an older stamp and must not paint the old
+        /// mode back after the settled read-back.
+        epoch: u64,
+    },
+    /// The battery's charge ceiling, owned by its own event for the same
+    /// reason as the power profile: the one-second heartbeat may carry a
+    /// sample taken before a slider write finished.
+    BatteryChargeLimit {
+        /// 0–1, or `None` when the platform has no writable threshold.
+        limit: Option<f64>,
+        /// Unique sample stamp. Every poll and every read-back takes a fresh
+        /// one, so an older sample can never overwrite a newer value.
+        epoch: u64,
+    },
     Catalog(AppCatalog),
     Preferences(Preferences),
     Command(String),
@@ -94,15 +199,38 @@ pub enum Command {
     LaunchDesktop(PathBuf),
     LaunchDesktopWithPaths(PathBuf, Vec<PathBuf>),
     OpenPath(PathBuf),
+    /// Move one path to the desktop trash.
+    Trash(PathBuf),
+    /// Show one local file in the desktop's quick previewer (GNOME Sushi, the
+    /// previewer Nautilus itself opens on space).
+    PreviewFile(PathBuf),
+    /// Open a web URL through the desktop handler.
+    OpenUrl(String),
     OpenSettings,
     SetVolume(f64),
     SetMuted(bool),
+    /// Drive the active MPRIS player through `playerctl`.
+    Media(MediaControl),
     SetOutputBrightness {
         output: String,
         value: f64,
     },
+    /// Switch the machine's ACPI/daemon power profile.
+    SetPowerProfile(PowerProfile),
+    /// Write the battery's charge ceiling, in percent (0–100).
+    SetBatteryChargeLimit(u8),
     RefreshCatalog,
     SavePreferences(Preferences),
+    /// Count one successful application launch in the palette history.
+    RecordLaunch(String),
+    /// Lock, suspend or power the session off through logind/systemd.
+    System(crate::app::SystemAction),
+    /// Surface a hint through the session's notification service instead of
+    /// painting a banner into the shell UI.
+    Notify {
+        summary: String,
+        body: String,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -156,10 +284,14 @@ impl Backend {
             None
         };
         let (commands, incoming) = mpsc::sync_channel(64);
+        let power_epoch = Arc::new(AtomicU64::new(0));
+        let charge_epoch = Arc::new(AtomicU64::new(0));
         {
             let options = options.clone();
             let events = events.clone();
             let alive = alive.clone();
+            let power_epoch = power_epoch.clone();
+            let charge_epoch = charge_epoch.clone();
             thread::Builder::new()
                 .name("clarion-shell-commands".into())
                 .spawn(move || {
@@ -181,7 +313,14 @@ impl Backend {
                             Err(mpsc::RecvTimeoutError::Timeout) => continue,
                             Err(_) => break,
                         };
-                        if let Err(error) = perform(command, &options, &events, &alive) {
+                        if let Err(error) = perform(
+                            command,
+                            &options,
+                            &events,
+                            &alive,
+                            &power_epoch,
+                            &charge_epoch,
+                        ) {
                             emit(
                                 &events,
                                 Event::Error(format!("操作未完成：{error:#}")),
@@ -202,9 +341,11 @@ impl Backend {
         {
             let events = events.clone();
             let alive = alive.clone();
+            let power_epoch = power_epoch.clone();
+            let charge_epoch = charge_epoch.clone();
             thread::Builder::new()
                 .name("clarion-shell-system".into())
-                .spawn(move || system_worker(options, events, alive))?;
+                .spawn(move || system_worker(options, events, alive, power_epoch, charge_epoch))?;
         }
         Ok((
             Self {
@@ -547,6 +688,8 @@ fn perform(
     options: &Options,
     events: &Sender<Event>,
     alive: &AtomicBool,
+    power_epoch: &AtomicU64,
+    charge_epoch: &AtomicU64,
 ) -> Result<()> {
     if options.preview
         && !matches!(
@@ -610,16 +753,50 @@ fn perform(
                 path.is_absolute() && !path.as_os_str().as_bytes().contains(&0),
                 "Invalid location"
             );
+            if let Err(error) = open_location(&path, &options.environment) {
+                report_failure(&options.environment, "无法打开文件", &path, &error)?;
+            }
+        }
+        Command::Trash(path) => {
+            anyhow::ensure!(
+                path.is_absolute() && !path.as_os_str().as_bytes().contains(&0),
+                "Invalid location"
+            );
+            let path = path.to_string_lossy().into_owned();
             run_tool(
                 "gio",
-                &[
-                    "open",
-                    "--",
-                    path.to_str().context("Location is not UTF-8")?,
-                ],
+                &["trash", "--", path.as_str()],
+                &options.environment,
+                Duration::from_secs(4),
+            )?;
+        }
+        Command::PreviewFile(path) => {
+            anyhow::ensure!(
+                path.is_absolute() && !path.as_os_str().as_bytes().contains(&0),
+                "Invalid location"
+            );
+            if let Err(error) = preview_location(&path, &options.environment) {
+                report_failure(&options.environment, "无法预览文件", &path, &error)?;
+            }
+        }
+        Command::OpenUrl(url) => {
+            let scheme = url.to_ascii_lowercase();
+            anyhow::ensure!(
+                (scheme.starts_with("https://") || scheme.starts_with("http://"))
+                    && !url.contains(char::is_whitespace)
+                    && !url.contains(char::is_control),
+                "Invalid URL"
+            );
+            run_tool(
+                "gio",
+                &["open", "--", url.as_str()],
                 &options.environment,
                 Duration::from_secs(3),
             )?;
+        }
+        Command::System(action) => run_system_action(action, options)?,
+        Command::Notify { summary, body } => {
+            notify(&options.environment, &summary, &body)?;
         }
         Command::OpenSettings => {
             request(
@@ -653,6 +830,14 @@ fn perform(
                 TOOL_TIMEOUT,
             )?;
         }
+        Command::Media(control) => {
+            let command = match control {
+                MediaControl::PlayPause => "play-pause",
+                MediaControl::Next => "next",
+                MediaControl::Previous => "previous",
+            };
+            run_tool("playerctl", &[command], &options.environment, TOOL_TIMEOUT)?;
+        }
         Command::SetOutputBrightness { output, value } => {
             anyhow::ensure!(
                 value.is_finite() && (0. ..=1.).contains(&value) && output.len() <= 1024,
@@ -685,13 +870,316 @@ fn perform(
                 )?;
             }
         }
+        Command::SetPowerProfile(profile) => {
+            let result = set_power_profile(profile, &options.environment);
+            // Everything polled before the switch is now stale. Bump the
+            // shared stamp, then read the platform back so the popup learns
+            // whether the switch actually took effect, even when the tool
+            // exits successfully but the daemon keeps the old profile.
+            let epoch = power_epoch.fetch_add(1, Ordering::SeqCst) + 1;
+            let (profile, profiles) =
+                power_profile_snapshot(Path::new("/sys/firmware/acpi"), &options.environment);
+            emit(
+                events,
+                Event::PowerProfile {
+                    profile,
+                    profiles,
+                    settled: true,
+                    epoch,
+                },
+                alive,
+            );
+            result?;
+        }
+        Command::SetBatteryChargeLimit(limit) => {
+            let result =
+                set_battery_charge_limit(Path::new("/sys/class/power_supply"), limit.min(100));
+            // Stamp the read-back after the write finished: a poll that began
+            // before this point carries an older stamp and cannot paint the
+            // old ceiling back over it.
+            let epoch = charge_epoch.fetch_add(1, Ordering::SeqCst) + 1;
+            let limit = battery_snapshot(Path::new("/sys/class/power_supply")).charge_limit;
+            emit(
+                events,
+                Event::BatteryChargeLimit { limit, epoch },
+                alive,
+            );
+            result?;
+        }
         Command::RefreshCatalog => load_catalog(&options.environment, events, alive),
         Command::SavePreferences(preferences) => {
             preferences.save(&options.environment, options.preview)?;
             emit(events, Event::Preferences(preferences), alive);
         }
+        Command::RecordLaunch(id) => {
+            let mut history = clarion_launcher::usage::LaunchHistory::load(&options.environment);
+            history.record_launch(&id, clarion_launcher::usage::unix_millis());
+            history.save(&options.environment)?;
+        }
     }
     Ok(())
+}
+
+/// Route a profile switch through power-profiles-daemon first; it is the
+/// unprivileged path every distribution ships. Kernels that expose the ACPI
+/// attribute directly are the fallback, which may require a writable profile
+/// (a udev rule or root-owned shell).
+fn set_power_profile(profile: PowerProfile, environment: &Environment) -> Result<()> {
+    if run_tool(
+        "powerprofilesctl",
+        &["set", profile.id()],
+        environment,
+        Duration::from_secs(3),
+    )
+    .is_ok()
+    {
+        return Ok(());
+    }
+    fs::write(
+        Path::new("/sys/firmware/acpi/platform_profile"),
+        profile.sysfs_name(),
+    )
+    .with_context(|| format!("无法切换到{}电源模式", profile.label()))
+}
+
+/// Read the ACPI platform profile, falling back to power-profiles-daemon.
+/// `powerprofilesctl list` carries both the active star and the available
+/// names, so one process call answers the whole question.
+fn power_profile_snapshot(
+    root: &Path,
+    environment: &Environment,
+) -> (Option<PowerProfile>, Vec<PowerProfile>) {
+    if let Some(snapshot) = crate::power::sysfs_snapshot(root) {
+        return snapshot;
+    }
+    match run_tool(
+        "powerprofilesctl",
+        &["list"],
+        environment,
+        TOOL_TIMEOUT,
+    ) {
+        Ok(text) => crate::power::parse_powerprofilesctl_list(&text),
+        Err(_) => (None, Vec::new()),
+    }
+}
+
+/// Run one of the session's power actions. `loginctl`/`systemctl` return once
+/// the request is queued, and the caller already runs on the worker thread.
+fn run_system_action(action: crate::app::SystemAction, options: &Options) -> Result<()> {
+    use crate::app::SystemAction;
+    let timeout = Duration::from_secs(10);
+    match action {
+        SystemAction::Lock => {
+            // Locking the caller's own session needs no id; passing the known
+            // one keeps it deterministic under nested sessions.
+            match options.environment.get("XDG_SESSION_ID") {
+                Some(session) => run_tool(
+                    "loginctl",
+                    &["lock-session", session],
+                    &options.environment,
+                    timeout,
+                )?,
+                None => run_tool("loginctl", &["lock-session"], &options.environment, timeout)?,
+            };
+        }
+        SystemAction::Logout => {
+            let session = options
+                .environment
+                .get("XDG_SESSION_ID")
+                .context("无法确定当前会话（XDG_SESSION_ID）")?;
+            run_tool(
+                "loginctl",
+                &["terminate-session", session],
+                &options.environment,
+                timeout,
+            )?;
+        }
+        SystemAction::Suspend => {
+            run_tool("systemctl", &["suspend"], &options.environment, timeout)?;
+        }
+        SystemAction::Reboot => {
+            run_tool("systemctl", &["reboot"], &options.environment, timeout)?;
+        }
+        SystemAction::Shutdown => {
+            run_tool("systemctl", &["poweroff"], &options.environment, timeout)?;
+        }
+    }
+    Ok(())
+}
+
+/// Open a local location the way a file manager's double click would: a
+/// directory goes to the desktop file manager, while a file goes to the
+/// application registered for its content type.
+///
+/// `gio open` cannot do the file case here: it turns the path into a `file:`
+/// URI and therefore follows `x-scheme-handler/file`. On systems where that
+/// scheme points at the file manager, every local file (an image, a PDF, an
+/// archive) would open the containing folder instead of its own application.
+fn open_location(path: &Path, environment: &Environment) -> Result<()> {
+    let location = path.to_str().context("Location is not UTF-8")?;
+    if path.is_dir() {
+        run_tool(
+            "gio",
+            &["open", "--", location],
+            environment,
+            Duration::from_secs(3),
+        )?;
+        return Ok(());
+    }
+    if let Some(desktop) = default_desktop_file(path, environment) {
+        return clarion_launcher::launch::launch_desktop_file_with_paths(
+            &desktop,
+            &[path.to_path_buf()],
+            environment,
+        );
+    }
+    // No application claims this type: let GIO show the location so the click
+    // still does something visible instead of failing silently.
+    run_tool(
+        "gio",
+        &["open", "--", location],
+        environment,
+        Duration::from_secs(3),
+    )?;
+    Ok(())
+}
+
+/// Show a local file in the desktop's quick previewer. Nautilus itself shells
+/// out to GNOME Sushi, so launching that previewer's desktop entry gives the
+/// same window without depending on the binary name or `PATH`.
+fn preview_location(path: &Path, environment: &Environment) -> Result<()> {
+    anyhow::ensure!(path.is_file(), "File is not available");
+    let previewer = resolve_desktop_file("org.gnome.NautilusPreviewer.desktop", environment)
+        .context("未安装文件快速预览（GNOME Sushi）")?;
+    clarion_launcher::launch::launch_desktop_file_with_paths(
+        &previewer,
+        &[path.to_path_buf()],
+        environment,
+    )
+}
+
+/// Post one hint through the session's notification service. The shell is the
+/// notification daemon as well, so this lands in the same toast surface other
+/// applications use instead of a banner painted over the user's files.
+fn notify(environment: &Environment, summary: &str, body: &str) -> Result<()> {
+    run_tool(
+        "notify-send",
+        &[
+            "--app-name=Clarion",
+            "--icon=dialog-information",
+            "--",
+            summary,
+            body,
+        ],
+        environment,
+        Duration::from_millis(900),
+    )
+    .context("无法发送系统通知")?;
+    Ok(())
+}
+
+/// Surface a failed open or preview through the session's notification service,
+/// the channel desktop applications already use. If the notification tool is
+/// unavailable the original error is returned so the shell can still show its
+/// own banner instead of failing silently.
+fn report_failure(
+    environment: &Environment,
+    summary: &str,
+    path: &Path,
+    error: &anyhow::Error,
+) -> Result<()> {
+    let name = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy();
+    let body = format!("{name}：{error:#}");
+    run_tool(
+        "notify-send",
+        &[
+            "--app-name=Clarion",
+            "--icon=dialog-error",
+            "--",
+            summary,
+            &body,
+        ],
+        environment,
+        Duration::from_millis(900),
+    )
+    .with_context(|| format!("无法发送系统通知（{error:#}）"))?;
+    Ok(())
+}
+
+/// Resolve the application registered for `path`'s content type, without
+/// consulting the `file:` scheme handler that `gio open` would use.
+fn default_desktop_file(path: &Path, environment: &Environment) -> Option<PathBuf> {
+    let mime = mime_guess::from_path(path).first_raw()?;
+    let id = default_handler_id(mime, environment)?;
+    resolve_desktop_file(&id, environment)
+}
+
+fn default_handler_id(mime: &str, environment: &Environment) -> Option<String> {
+    let mut environment = environment.clone();
+    // The sentence around the desktop id is localized; C keeps one stable
+    // shape, and the id is always the last whitespace-separated token.
+    environment.insert("LC_ALL".into(), "C".into());
+    let output = run_tool("gio", &["mime", mime], &environment, Duration::from_secs(2)).ok()?;
+    parse_default_handler(&output)
+}
+
+fn parse_default_handler(output: &str) -> Option<String> {
+    let id = output.lines().next()?.split_whitespace().last()?;
+    id.ends_with(".desktop").then(|| id.to_owned())
+}
+
+/// Find a desktop entry by the id GIO reports. Entries in subdirectories are
+/// addressed with the directory separator folded into a hyphen, e.g.
+/// `applications/foo/bar.desktop` becomes `foo-bar.desktop`.
+fn resolve_desktop_file(id: &str, environment: &Environment) -> Option<PathBuf> {
+    if id.contains('/') || id.contains('\\') || id == "." || id == ".." || !id.ends_with(".desktop")
+    {
+        return None;
+    }
+    let mut roots = Vec::new();
+    if let Some(data_home) = environment.get("XDG_DATA_HOME") {
+        roots.push(PathBuf::from(data_home));
+    } else if let Some(home) = environment.get("HOME") {
+        roots.push(PathBuf::from(home).join(".local/share"));
+    }
+    let data_dirs = environment
+        .get("XDG_DATA_DIRS")
+        .map(String::as_str)
+        .unwrap_or("/usr/local/share:/usr/share");
+    roots.extend(
+        data_dirs
+            .split(':')
+            .filter(|dir| !dir.is_empty())
+            .map(PathBuf::from),
+    );
+    roots
+        .into_iter()
+        .find_map(|root| desktop_file_in(&root.join("applications"), id))
+}
+
+fn desktop_file_in(applications: &Path, id: &str) -> Option<PathBuf> {
+    let direct = applications.join(id);
+    if direct.is_file() {
+        return Some(direct);
+    }
+    let mut pending = vec![(applications.to_path_buf(), String::new())];
+    while let Some((directory, prefix)) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if file_type.is_dir() {
+                pending.push((entry.path(), format!("{prefix}{name}-")));
+            } else if format!("{prefix}{name}") == id {
+                return Some(entry.path());
+            }
+        }
+    }
+    None
 }
 
 fn run_tool(
@@ -772,11 +1260,46 @@ fn run_tool(
     }
 }
 
-fn system_worker(options: Options, events: Sender<Event>, alive: Arc<AtomicBool>) {
-    let mut hardware = SystemSnapshot::default();
+fn system_worker(
+    options: Options,
+    events: Sender<Event>,
+    alive: Arc<AtomicBool>,
+    power_epoch: Arc<AtomicU64>,
+    charge_epoch: Arc<AtomicU64>,
+) {
+    let mut facts = crate::system_info::SystemFacts::collect(&options.environment);
+    // NVIDIA names the card in procfs, so hybrid laptops avoid launching a
+    // tool at all. Other drivers get their marketing name from `lspci -mm`;
+    // the sysfs driver + PCI id is the last resort.
+    if facts.gpu.is_empty() {
+        if let Ok(text) = run_tool(
+            "lspci",
+            &["-mm"],
+            &options.environment,
+            Duration::from_secs(2),
+        ) {
+            if let Some(gpu) = crate::system_info::parse_lspci_gpu(&text) {
+                facts.gpu = gpu;
+            }
+        }
+    }
+    if facts.gpu.is_empty() {
+        facts.gpu = crate::system_info::sysfs_gpu();
+    }
+    let mut hardware = SystemSnapshot {
+        facts,
+        ..SystemSnapshot::default()
+    };
+    let mut media_art_cache: Option<(String, Option<Vec<u8>>)> = None;
     let mut hardware_due = Instant::now();
     while alive.load(Ordering::Relaxed) {
         if !options.preview && Instant::now() >= hardware_due {
+            // Stamp the poll before it reads anything. A switch that finishes
+            // while this pass is running bumps the epoch past it.
+            let poll_epoch = power_epoch.load(Ordering::SeqCst);
+            // The charge-limit poll takes a fresh stamp: a write's read-back
+            // that completes later owns a newer one and wins.
+            let poll_charge_epoch = charge_epoch.fetch_add(1, Ordering::SeqCst) + 1;
             hardware.volume = None;
             hardware.muted = false;
             hardware.brightness = None;
@@ -804,9 +1327,35 @@ fn system_worker(options: Options, events: Sender<Event>, alive: Arc<AtomicBool>
                     })
                     .map(|value| (value / 100.).clamp(0., 1.));
             }
-            let (battery, charging) = battery_snapshot(Path::new("/sys/class/power_supply"));
-            hardware.battery = battery;
-            hardware.charging = charging;
+            let battery = battery_snapshot(Path::new("/sys/class/power_supply"));
+            hardware.battery = battery.percent;
+            hardware.battery_status = battery.status;
+            hardware.battery_health = battery.health;
+            hardware.ac_online = battery.ac_online;
+            let (profile, profiles) =
+                power_profile_snapshot(Path::new("/sys/firmware/acpi"), &options.environment);
+            hardware.power_profile = profile;
+            hardware.power_profiles = profiles.clone();
+            emit(
+                &events,
+                Event::PowerProfile {
+                    profile,
+                    profiles,
+                    settled: false,
+                    epoch: poll_epoch,
+                },
+                &alive,
+            );
+            // The charge ceiling has its own event so the one-second heartbeat
+            // can never overwrite a slider read-back with a stale sample.
+            emit(
+                &events,
+                Event::BatteryChargeLimit {
+                    limit: battery.charge_limit,
+                    epoch: poll_charge_epoch,
+                },
+                &alive,
+            );
             let data = options
                 .environment
                 .get("XDG_DATA_HOME")
@@ -820,6 +1369,8 @@ fn system_worker(options: Options, events: Sender<Event>, alive: Arc<AtomicBool>
             hardware.trash_full = data
                 .and_then(|data| fs::read_dir(data.join("Trash/files")).ok())
                 .is_some_and(|mut files| files.next().is_some());
+            hardware.media = media_snapshot(&options.environment, &mut media_art_cache).map(Box::new);
+            *hardware.network = network_snapshot(&options.environment);
             hardware_due = Instant::now() + Duration::from_secs(3);
         }
         let now = chrono::Local::now();
@@ -827,13 +1378,212 @@ fn system_worker(options: Options, events: Sender<Event>, alive: Arc<AtomicBool>
         let weekday = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
             [chrono::Datelike::weekday(&now).num_days_from_monday() as usize];
         hardware.date = format!("{} {weekday}", now.format("%m月%d日"));
+        hardware.today = Some(now.date_naive());
         emit(&events, Event::System(hardware.clone()), &alive);
         wait_alive(&alive, Duration::from_secs(1));
     }
 }
 
-fn parse_volume(value: &str) -> Option<f64> {
-    value
+/// Read the active MPRIS player through `playerctl`. No player exits non-zero,
+/// which reads as "nothing to show"; the card then keeps its idle state.
+fn media_snapshot(
+    environment: &Environment,
+    art_cache: &mut Option<(String, Option<Vec<u8>>)>,
+) -> Option<MediaSnapshot> {
+    let output = run_tool(
+        "playerctl",
+        &[
+            "metadata",
+            "--format",
+            "{{status}}\u{1f}{{title}}\u{1f}{{artist}}\u{1f}{{mpris:artUrl}}\u{1f}{{position}}\u{1f}{{mpris:length}}",
+        ],
+        environment,
+        TOOL_TIMEOUT,
+    )
+    .ok()?;
+    let mut fields = output.trim_end().split('\u{1f}');
+    let status = fields.next()?.trim();
+    if status.is_empty() || status == "Stopped" {
+        return None;
+    }
+    let title = fields.next().unwrap_or_default().trim().to_owned();
+    let artist = fields.next().unwrap_or_default().trim().to_owned();
+    let art_url = fields.next().unwrap_or_default().trim();
+    let position = fields
+        .next()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(|micros| micros as f64 / 1_000_000.);
+    let length = fields
+        .next()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(|micros| micros as f64 / 1_000_000.);
+    let art_png = if art_url.is_empty() {
+        None
+    } else if let Some((cached_url, cached)) = art_cache.as_ref() {
+        if cached_url == art_url {
+            cached.clone()
+        } else {
+            let decoded = media_art(art_url, environment);
+            *art_cache = Some((art_url.to_owned(), decoded.clone()));
+            decoded
+        }
+    } else {
+        let decoded = media_art(art_url, environment);
+        *art_cache = Some((art_url.to_owned(), decoded.clone()));
+        decoded
+    };
+    Some(MediaSnapshot {
+        title,
+        artist,
+        playing: status == "Playing",
+        position,
+        length,
+        art_png,
+    })
+}
+
+/// Turn an MPRIS `mpris:artUrl` into a small PNG. Local files are read
+/// directly; http(s) covers are fetched with curl into a bounded temp file.
+fn media_art(url: &str, environment: &Environment) -> Option<Vec<u8>> {
+    let bytes = if url.starts_with("http://") || url.starts_with("https://") {
+        fetch_remote_art(url, environment)?
+    } else {
+        let path = if let Some(rest) = url.strip_prefix("file://") {
+            let rest = rest.strip_prefix("localhost").unwrap_or(rest);
+            PathBuf::from(percent_decode(rest))
+        } else if url.starts_with('/') {
+            PathBuf::from(url)
+        } else {
+            return None;
+        };
+        if fs::metadata(&path).ok()?.len() > 8 * 1024 * 1024 {
+            return None;
+        }
+        fs::read(&path).ok()?
+    };
+    let image = image::load_from_memory(&bytes).ok()?;
+    let thumbnail = image.thumbnail(256, 256);
+    let mut png = Vec::new();
+    thumbnail
+        .write_to(
+            &mut std::io::Cursor::new(&mut png),
+            image::ImageFormat::Png,
+        )
+        .ok()?;
+    Some(png)
+}
+
+fn fetch_remote_art(url: &str, environment: &Environment) -> Option<Vec<u8>> {
+    let path = std::env::temp_dir().join(format!(
+        "clarion-media-art-{}.img",
+        std::process::id()
+    ));
+    let status = ProcessCommand::new("curl")
+        .args([
+            "-sL",
+            "--max-time",
+            "3",
+            "--max-filesize",
+            "8388608",
+            "-o",
+        ])
+        .arg(&path)
+        .arg("--")
+        .arg(url)
+        .env_clear()
+        .envs(environment)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .ok()?;
+    if !status.success() {
+        let _ = fs::remove_file(&path);
+        return None;
+    }
+    let bytes = fs::read(&path).ok();
+    let _ = fs::remove_file(&path);
+    bytes
+}
+
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).ok();
+            if let Some(byte) = hex.and_then(|hex| u8::from_str_radix(hex, 16).ok()) {
+                out.push(byte);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Read the active network and Bluetooth state through the usual desktop
+/// tools; a missing service simply leaves the row quiet.
+fn network_snapshot(environment: &Environment) -> NetworkSnapshot {
+    let mut snapshot = NetworkSnapshot::default();
+    // Read the active device connections rather than the Wi-Fi scan list: the
+    // scan reorders as access points appear, which made the pill flip between
+    // equally valid names. The connection name of the connected Wi-Fi is its
+    // current SSID; a wired link falls back to its profile name.
+    if let Ok(text) = run_tool(
+        "nmcli",
+        &["-t", "-f", "TYPE,STATE,CONNECTION", "device"],
+        environment,
+        TOOL_TIMEOUT,
+    ) {
+        let mut wireless = None;
+        let mut wired = None;
+        for line in text.lines() {
+            let mut parts = line.splitn(3, ':');
+            let kind = parts.next().unwrap_or_default();
+            let state = parts.next().unwrap_or_default();
+            let name = parts.next().unwrap_or_default().trim();
+            if state != "connected" || name.is_empty() {
+                continue;
+            }
+            match kind {
+                "wifi" => wireless = Some(name.replace("\\:", ":")),
+                "ethernet" => wired = Some(name.to_owned()),
+                _ => {}
+            }
+        }
+        snapshot.wireless = wireless.is_some();
+        snapshot.network = wireless.or(wired);
+    }
+    if let Ok(text) = run_tool(
+        "bluetoothctl",
+        &["devices", "Connected"],
+        environment,
+        TOOL_TIMEOUT,
+    ) {
+        snapshot.bluetooth = text.lines().find_map(|line| {
+            let mut parts = line.splitn(3, ' ');
+            parts.next()?; // "Device"
+            parts.next()?; // MAC address
+            let name = parts.next()?.trim();
+            (!name.is_empty()).then(|| name.to_owned())
+        });
+        if snapshot.bluetooth.is_none() {
+            if let Ok(text) = run_tool("bluetoothctl", &["show"], environment, TOOL_TIMEOUT) {
+                snapshot.bluetooth = text.lines().find_map(|line| {
+                    let powered = line.strip_prefix("Powered:")?.trim();
+                    (powered == "yes").then(|| "已开启".to_owned())
+                });
+            }
+        }
+    }
+    snapshot
+}
+
+fn parse_volume(value: &str) -> Option<f64> {    value
         .strip_prefix("Volume:")?
         .split_whitespace()
         .next()?
@@ -843,24 +1593,39 @@ fn parse_volume(value: &str) -> Option<f64> {
         .map(|v| v.clamp(0., 1.))
 }
 
-fn battery_snapshot(root: &Path) -> (Option<f64>, bool) {
+fn battery_snapshot(root: &Path) -> BatterySnapshot {
     let Ok(entries) = fs::read_dir(root) else {
-        return (None, false);
+        return BatterySnapshot::default();
     };
+    let mut snapshot = BatterySnapshot::default();
     let mut capacities = Vec::new();
+    let mut healths = Vec::new();
     let mut charging = false;
+    let mut full = false;
+    let mut discharging = false;
+    let mut not_charging = false;
+    let mut present = false;
     for entry in entries.flatten().take(32) {
         let path = entry.path();
-        if fs::read_to_string(path.join("type"))
+        let kind = fs::read_to_string(path.join("type"))
             .ok()
-            .is_none_or(|kind| kind.trim() != "Battery")
-        {
-            continue;
+            .map(|kind| kind.trim().to_owned());
+        match kind.as_deref() {
+            Some("Mains") => {
+                // Some platforms only expose the mains state here; not every
+                // AC adapter ships an `online` attribute.
+                if fs::read_to_string(path.join("online")).is_ok_and(|line| line.trim() == "1") {
+                    snapshot.ac_online = true;
+                }
+                continue;
+            }
+            Some("Battery") => {}
+            _ => continue,
         }
-        let present = fs::read_to_string(path.join("present"))
+        let battery_present = fs::read_to_string(path.join("present"))
             .ok()
             .and_then(|present| present.trim().parse::<u8>().ok());
-        if present == Some(0) {
+        if battery_present == Some(0) {
             continue;
         }
         // HID pens, touch controllers and similar per-device batteries are not
@@ -870,21 +1635,138 @@ fn battery_snapshot(root: &Path) -> (Option<f64>, bool) {
         if peripheral {
             continue;
         }
-        if let Some(capacity) = fs::read_to_string(path.join("capacity"))
-            .ok()
-            .and_then(|s| s.trim().parse::<f64>().ok())
-            .filter(|v| v.is_finite() && (0. ..=100.).contains(v))
-        {
-            capacities.push(capacity / 100.)
+        present = true;
+        if snapshot.charge_limit.is_none() {
+            snapshot.charge_limit = battery_charge_limit(&path);
         }
-        charging |= fs::read_to_string(path.join("status"))
+        let number = |key: &str| {
+            fs::read_to_string(path.join(key))
+                .ok()
+                .and_then(|value| value.trim().parse::<f64>().ok())
+                .filter(|value: &f64| value.is_finite() && *value >= 0.)
+        };
+        if let Some(capacity) = number("capacity").filter(|value| *value <= 100.) {
+            capacities.push(capacity / 100.);
+        }
+        // Packs report either charge (Ah) or energy (Wh); the ratio is the
+        // same wear figure either way.
+        let full_capacity = number("charge_full").or_else(|| number("energy_full"));
+        let design_capacity = number("charge_full_design").or_else(|| number("energy_full_design"));
+        if let (Some(full_capacity), Some(design_capacity)) = (full_capacity, design_capacity) {
+            if design_capacity > 0. && full_capacity > 0. {
+                healths.push((full_capacity / design_capacity).clamp(0., 1.));
+            }
+        }
+        match fs::read_to_string(path.join("status"))
             .ok()
-            .is_some_and(|s| matches!(s.trim(), "Charging" | "Full"));
+            .map(|status| status.trim().to_owned())
+            .as_deref()
+        {
+            Some("Charging") => charging = true,
+            Some("Full") => full = true,
+            Some("Discharging") => discharging = true,
+            Some("Not charging") => not_charging = true,
+            _ => {}
+        }
     }
-    (
-        (!capacities.is_empty()).then(|| capacities.iter().sum::<f64>() / capacities.len() as f64),
-        charging,
-    )
+    if !present {
+        return snapshot;
+    }
+    snapshot.status = if charging {
+        BatteryStatus::Charging
+    } else if full {
+        BatteryStatus::Full
+    } else if discharging {
+        BatteryStatus::Discharging
+    } else if not_charging {
+        BatteryStatus::NotCharging
+    } else {
+        BatteryStatus::Unknown
+    };
+    // Charging or full is proof of mains even when no AC device is exposed.
+    snapshot.ac_online |= matches!(
+        snapshot.status,
+        BatteryStatus::Charging | BatteryStatus::Full
+    );
+    if !capacities.is_empty() {
+        snapshot.percent = Some(capacities.iter().sum::<f64>() / capacities.len() as f64);
+    }
+    if !healths.is_empty() {
+        snapshot.health = Some(healths.iter().sum::<f64>() / healths.len() as f64);
+    }
+    snapshot
+}
+
+/// End-of-charge attributes drivers expose. Newer kernels use
+/// `charge_control_end_threshold`; older thinkpad_acpi packs use
+/// `charge_stop_threshold`.
+const CHARGE_LIMIT_ATTRS: [&str; 2] = ["charge_control_end_threshold", "charge_stop_threshold"];
+
+/// The current end threshold of one battery, but only when the attribute is
+/// writable by this process. A driver that exposes the number but not the
+/// permission is not adjustable from the shell, so it reads as unsupported.
+fn battery_charge_limit(dir: &Path) -> Option<f64> {
+    for attr in CHARGE_LIMIT_ATTRS {
+        let path = dir.join(attr);
+        if OpenOptions::new().write(true).open(&path).is_err() {
+            continue;
+        }
+        if let Some(value) = fs::read_to_string(&path)
+            .ok()
+            .and_then(|value| value.trim().parse::<u8>().ok())
+            .filter(|value| *value <= 100)
+        {
+            return Some(f64::from(value) / 100.);
+        }
+    }
+    None
+}
+
+/// Write the end threshold to the first battery that exposes a writable
+/// attribute. The caller re-reads the value afterwards so the popup shows what
+/// the firmware actually kept.
+fn set_battery_charge_limit(root: &Path, limit: u8) -> Result<()> {
+    let Ok(entries) = fs::read_dir(root) else {
+        bail!("当前系统不支持电池充电阈值调节");
+    };
+    let mut last_error = None;
+    for entry in entries.flatten().take(32) {
+        let dir = entry.path();
+        let battery =
+            fs::read_to_string(dir.join("type")).is_ok_and(|kind| kind.trim() == "Battery");
+        if !battery {
+            continue;
+        }
+        // Match `battery_snapshot`: an absent pack and a HID/pen battery are
+        // not the system battery, so never write their ceiling.
+        let present = fs::read_to_string(dir.join("present"))
+            .ok()
+            .and_then(|present| present.trim().parse::<u8>().ok());
+        if present == Some(0) {
+            continue;
+        }
+        let peripheral =
+            fs::read_to_string(dir.join("scope")).is_ok_and(|scope| scope.trim() == "Device");
+        if peripheral {
+            continue;
+        }
+        for attr in CHARGE_LIMIT_ATTRS {
+            let path = dir.join(attr);
+            if !path.exists() {
+                continue;
+            }
+            match fs::write(&path, format!("{limit}\n")) {
+                Ok(()) => return Ok(()),
+                Err(error) => last_error = Some((path, error)),
+            }
+        }
+    }
+    match last_error {
+        Some((path, error)) => {
+            Err(error).with_context(|| format!("无法写入 {}", path.display()))
+        }
+        None => bail!("当前系统不支持电池充电阈值调节"),
+    }
 }
 
 fn wait_alive(alive: &AtomicBool, duration: Duration) {
@@ -1069,14 +1951,148 @@ mod tests {
                 ("scope", "Device\n"),
             ],
         );
-        write("AC0", &[("type", "Mains\n"), ("status", "Online\n")]);
-        let (battery, charging) = battery_snapshot(directory.path());
+        write("AC0", &[("type", "Mains\n"), ("online", "1\n")]);
+        let snapshot = battery_snapshot(directory.path());
         assert!(
-            (battery.unwrap() - 0.9).abs() < 1e-6,
-            "the main battery must not be averaged with peripheral batteries: {battery:?}"
+            (snapshot.percent.unwrap() - 0.9).abs() < 1e-6,
+            "the main battery must not be averaged with peripheral batteries: {:?}",
+            snapshot.percent
         );
-        assert!(!charging);
+        assert_eq!(snapshot.status, BatteryStatus::NotCharging);
+        assert!(snapshot.ac_online, "the mains adapter is online");
+        assert_eq!(snapshot.health, None, "no full/design capacity was given");
     }
+
+    #[test]
+    fn battery_snapshot_reports_wear_and_infers_mains_from_charging() {
+        let directory = tempfile::tempdir().unwrap();
+        let write = |name: &str, files: &[(&str, &str)]| {
+            let path = directory.path().join(name);
+            fs::create_dir_all(&path).unwrap();
+            for (file, value) in files {
+                fs::write(path.join(file), value).unwrap();
+            }
+        };
+        write(
+            "BAT0",
+            &[
+                ("type", "Battery\n"),
+                ("present", "1\n"),
+                ("capacity", "80\n"),
+                ("status", "Charging\n"),
+                ("charge_full", "4000000\n"),
+                ("charge_full_design", "5000000\n"),
+            ],
+        );
+        // No AC entry: a charging battery is itself proof of mains power.
+        let snapshot = battery_snapshot(directory.path());
+        assert_eq!(snapshot.status, BatteryStatus::Charging);
+        assert!(snapshot.ac_online);
+        assert!((snapshot.health.unwrap() - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn battery_snapshot_prefers_charge_and_full_over_discharging() {
+        let directory = tempfile::tempdir().unwrap();
+        let write = |name: &str, files: &[(&str, &str)]| {
+            let path = directory.path().join(name);
+            fs::create_dir_all(&path).unwrap();
+            for (file, value) in files {
+                fs::write(path.join(file), value).unwrap();
+            }
+        };
+        write(
+            "BAT0",
+            &[
+                ("type", "Battery\n"),
+                ("present", "1\n"),
+                ("capacity", "100\n"),
+                ("status", "Full\n"),
+            ],
+        );
+        write(
+            "BAT1",
+            &[
+                ("type", "Battery\n"),
+                ("present", "1\n"),
+                ("capacity", "40\n"),
+                ("status", "Discharging\n"),
+            ],
+        );
+        let snapshot = battery_snapshot(directory.path());
+        // A full pack means the machine is on mains; the aggregate percent is
+        // still the average the bar has always shown.
+        assert_eq!(snapshot.status, BatteryStatus::Full);
+        assert!(snapshot.ac_online);
+        assert!((snapshot.percent.unwrap() - 0.7).abs() < 1e-6);
+        assert_eq!(snapshot.health, None);
+    }
+    #[test]
+    fn battery_snapshot_reads_a_writable_charge_ceiling() {
+        let directory = tempfile::tempdir().unwrap();
+        let battery = directory.path().join("BAT0");
+        fs::create_dir_all(&battery).unwrap();
+        for (file, value) in [
+            ("type", "Battery\n"),
+            ("present", "1\n"),
+            ("capacity", "60\n"),
+            ("status", "Charging\n"),
+            ("charge_control_end_threshold", "80\n"),
+        ] {
+            fs::write(battery.join(file), value).unwrap();
+        }
+        let snapshot = battery_snapshot(directory.path());
+        assert_eq!(
+            snapshot.charge_limit,
+            Some(0.8),
+            "the writable end threshold is the charge ceiling"
+        );
+
+        // Writing through the helper moves the ceiling, and the next poll sees
+        // exactly what the firmware kept.
+        set_battery_charge_limit(directory.path(), 65).unwrap();
+        assert_eq!(
+            fs::read_to_string(battery.join("charge_control_end_threshold"))
+                .unwrap()
+                .trim(),
+            "65"
+        );
+        assert_eq!(battery_snapshot(directory.path()).charge_limit, Some(0.65));
+    }
+
+    #[test]
+    fn battery_without_a_threshold_reads_as_unsupported() {
+        let directory = tempfile::tempdir().unwrap();
+        let battery = directory.path().join("BAT0");
+        fs::create_dir_all(&battery).unwrap();
+        for (file, value) in [
+            ("type", "Battery\n"),
+            ("present", "1\n"),
+            ("capacity", "60\n"),
+            ("status", "Charging\n"),
+        ] {
+            fs::write(battery.join(file), value).unwrap();
+        }
+        // A peripheral battery may expose its own threshold; it must never be
+        // mistaken for the system pack.
+        let pen = directory.path().join("hid-pen-battery");
+        fs::create_dir_all(&pen).unwrap();
+        for (file, value) in [
+            ("type", "Battery\n"),
+            ("present", "1\n"),
+            ("capacity", "20\n"),
+            ("scope", "Device\n"),
+            ("charge_control_end_threshold", "70\n"),
+        ] {
+            fs::write(pen.join(file), value).unwrap();
+        }
+        assert_eq!(battery_snapshot(directory.path()).charge_limit, None);
+        assert!(
+            set_battery_charge_limit(directory.path(), 80).is_err(),
+            "no writable attribute means no adjustable ceiling"
+        );
+    }
+
     #[test]
     fn new_generation_never_retains_previous_windows_or_outputs() {
         let mut state = EventStreamState::default();
@@ -1238,7 +2254,17 @@ mod tests {
         };
         let (tx, _) = async_channel::bounded(8);
         let alive = AtomicBool::new(true);
-        assert!(perform(Command::SetVolume(f64::NAN), &options, &tx, &alive).is_err());
+        let power_epoch = AtomicU64::new(0);
+        let charge_epoch = AtomicU64::new(0);
+        assert!(perform(
+            Command::SetVolume(f64::NAN),
+            &options,
+            &tx,
+            &alive,
+            &power_epoch,
+            &charge_epoch
+        )
+        .is_err());
         assert!(perform(
             Command::SetOutputBrightness {
                 output: "fixture-output".into(),
@@ -1246,7 +2272,9 @@ mod tests {
             },
             &options,
             &tx,
-            &alive
+            &alive,
+            &power_epoch,
+            &charge_epoch
         )
         .is_err());
         let before = Instant::now();
@@ -1302,11 +2330,15 @@ mod tests {
         };
         let (tx, _) = async_channel::bounded(8);
         let alive = AtomicBool::new(true);
+        let power_epoch = AtomicU64::new(0);
+        let charge_epoch = AtomicU64::new(0);
         assert!(perform(
             Command::Action(Action::CloseWindow { id: Some(123) }),
             &options,
             &tx,
-            &alive
+            &alive,
+            &power_epoch,
+            &charge_epoch
         )
         .is_err());
         assert!(
@@ -1320,5 +2352,93 @@ mod tests {
             .unwrap()
                 == std::path::Path::new("/stale")
         );
+    }
+    #[test]
+    fn the_content_type_handler_is_the_last_token_of_the_gio_line() {
+        assert_eq!(
+            parse_default_handler(
+                "Default application for “image/png”: feh.desktop\nRegistered applications:\n"
+            )
+            .as_deref(),
+            Some("feh.desktop")
+        );
+        assert_eq!(
+            parse_default_handler("No default applications for “application/octet-stream”\n"),
+            None
+        );
+        assert_eq!(parse_default_handler(""), None);
+    }
+    #[test]
+    fn desktop_entry_ids_resolve_direct_and_nested_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let applications = directory.path().join("applications");
+        fs::create_dir_all(applications.join("nested")).unwrap();
+        fs::write(applications.join("feh.desktop"), b"[Desktop Entry]\n").unwrap();
+        fs::write(
+            applications.join("nested").join("thing.desktop"),
+            b"[Desktop Entry]\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            desktop_file_in(&applications, "feh.desktop"),
+            Some(applications.join("feh.desktop"))
+        );
+        assert_eq!(
+            desktop_file_in(&applications, "nested-thing.desktop"),
+            Some(applications.join("nested").join("thing.desktop"))
+        );
+        assert_eq!(desktop_file_in(&applications, "missing.desktop"), None);
+        assert_eq!(desktop_file_in(&applications, "../escape.desktop"), None);
+    }
+    #[test]
+    fn the_quick_previewer_only_accepts_existing_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let environment = Environment::new();
+        assert!(
+            preview_location(&directory.path().join("missing.png"), &environment).is_err(),
+            "a preview never opens a path that is not there"
+        );
+    }
+
+    #[test]
+    fn media_art_urls_decode_to_png_thumbnails() {
+        assert_eq!(percent_decode("a%20b%2Fc"), "a b/c");
+        let directory = tempfile::tempdir().unwrap();
+        let cover = directory.path().join("cover with space.png");
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([20, 80, 100, 255]))
+            .save(&cover)
+            .unwrap();
+        let url = format!("file://{}", cover.display().to_string().replace(' ', "%20"));
+        let environment = Environment::new();
+        let png = media_art(&url, &environment).expect("a local cover decodes");
+        assert!(png.starts_with(&[0x89, b'P', b'N', b'G']));
+        assert!(media_art("ftp://example.com/cover.png", &environment).is_none());
+        assert!(media_art("file:///missing/cover.png", &environment).is_none());
+    }
+
+    #[test]
+    fn the_default_handler_is_looked_up_in_the_xdg_data_directories() {
+        let directory = tempfile::tempdir().unwrap();
+        let share = directory.path().join("share");
+        let applications = share.join("applications");
+        fs::create_dir_all(&applications).unwrap();
+        fs::write(applications.join("feh.desktop"), b"[Desktop Entry]\n").unwrap();
+        let environment: Environment = [
+            (
+                "HOME".into(),
+                directory.path().to_string_lossy().into_owned(),
+            ),
+            ("XDG_DATA_HOME".into(), share.to_string_lossy().into_owned()),
+            ("XDG_DATA_DIRS".into(), "/nonexistent".into()),
+        ]
+        .into();
+
+        assert_eq!(
+            resolve_desktop_file("feh.desktop", &environment),
+            Some(applications.join("feh.desktop"))
+        );
+        assert_eq!(resolve_desktop_file("other.desktop", &environment), None);
+        assert_eq!(resolve_desktop_file("../feh.desktop", &environment), None);
     }
 }

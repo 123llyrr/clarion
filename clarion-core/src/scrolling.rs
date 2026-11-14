@@ -15,7 +15,7 @@ static COLUMN_ID_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::Atom
 fn allocate_from(counter: &std::sync::atomic::AtomicU64) -> Option<u64> {
     use std::sync::atomic::Ordering;
     counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
         .ok()
 }
 fn reserve_in(counter: &std::sync::atomic::AtomicU64, id: u64) -> bool {

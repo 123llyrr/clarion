@@ -2,53 +2,105 @@
 use crate::{
     backend,
     desktop::{DesktopAction, DesktopView},
+    power::PowerProfile,
     preferences::{
-        DockFolderPreference, DockPosition, FolderDisplay, FolderLayout, FolderSort, Preferences,
+        DockFolderPreference, DockPosition, FolderDisplay, FolderLayout, FolderSort,
+        LauncherPresentation, Preferences,
     },
     services,
-    view::{ShellView, Surface},
+    view::{ShellView, SpotlightMenuSnapshot, Surface},
     Options,
 };
 use clarion_ipc::{Action as CoreAction, DockEdge, DockTarget, MinimizeEffect};
 use clarion_launcher::catalog::{AppCatalog, AppCategory, DesktopApp};
+use clarion_launcher::files::FileHit;
+use clarion_launcher::usage::{unix_millis, LaunchHistory};
 use gpui::{prelude::*, *};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-mod dock_folders;
-pub(crate) mod panels;
 #[cfg(test)]
 mod dock_folder_tests;
+mod dock_folders;
+pub(crate) mod panels;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Panel {
     Apps,
+    /// The compact launcher palette: scored search, modes and tools over the
+    /// same catalog the fullscreen Launchpad shows.
+    Spotlight,
     Recent,
     Notifications,
     Controls,
+    /// The standalone battery popup opened from the menu-bar indicator.
+    Battery,
     Preferences,
     Screenshot,
     Tray(String),
     Dock(String),
     /// A pinned folder's contents. The root identifies the Dock tile the popup
     /// points at; navigation state lives in `ViewState::folder_navigation`.
-    DockFolder { root: PathBuf },
+    DockFolder {
+        root: PathBuf,
+    },
     /// Configuration for one pinned folder.
-    DockFolderMenu { path: PathBuf },
+    DockFolderMenu {
+        path: PathBuf,
+    },
     /// The applications folded into the Dock's overflow tile, plus the fitted
     /// icon size (a discrete ladder step) the Dock row is drawing so the drawer
     /// tiles match it.
-    DockOverflow { ids: Vec<String>, icon_size: u16 },
+    DockOverflow {
+        ids: Vec<String>,
+        icon_size: u16,
+    },
+    /// The menu dropped from the bar's leading Clarion mark.
+    System,
+    /// The compact "About This Mac" card opened from the system menu.
+    About,
+    /// The desktop's "get info" card, opened as a top-level modal so it can
+    /// rise above application windows like the About card.
+    Info {
+        path: Option<PathBuf>,
+        title: String,
+        rows: Vec<(String, String)>,
+    },
+    /// The native application chooser for one file.
+    OpenWith {
+        path: PathBuf,
+        apps: Vec<OpenWithApp>,
+    },
+}
+
+/// One row of the native "open with" chooser.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenWithApp {
+    pub name: String,
+    pub desktop_file: PathBuf,
+    pub icon: Option<PathBuf>,
 }
 #[derive(Clone)]
 pub enum Action {
     Panel(Panel),
+    /// Open the desktop's file menu for one path (a Dock folder entry) on the
+    /// monitor that dispatched the click.
+    DesktopEntryMenu {
+        path: PathBuf,
+        x: f32,
+        y: f32,
+    },
     /// A bar-anchored opener: the panel plus the pointer x inside the bar's
     /// own coordinate space, so its popup drops from the clicked icon instead
     /// of the resting screen edge.
     AnchoredPanel(Panel, f32),
+    /// A surface-dispatched action that names the monitor it came from. A
+    /// panel it opens belongs to that monitor even when keyboard focus rests
+    /// on another one (a bar or Dock on a secondary output is still clickable
+    /// without focusing it).
+    OnOutput(String, Box<Action>),
     Close,
     Launch(String),
     Focus(u64),
@@ -71,7 +123,22 @@ pub enum Action {
     SetFolderDescending(PathBuf, bool),
     /// Hold open (or release) one extra folder slot for an external drop.
     FolderDropPreview(bool),
-    OpenPathsWithApp { app_id: String, paths: Vec<PathBuf> },
+    OpenPathsWithApp {
+        app_id: String,
+        paths: Vec<PathBuf>,
+    },
+    /// Open a web URL through the desktop handler (the `/web` page).
+    OpenUrl(String),
+    /// Start (or replace) the palette's built-in file search.
+    SearchFiles(String),
+    /// Gather the wallpaper library for the gallery.
+    ScanWallpapers,
+    /// Apply one gallery wallpaper to every output.
+    ApplyWallpaper(PathBuf),
+    /// Open the directory that contains a palette file row.
+    RevealFile(PathBuf),
+    /// Show one file in the desktop's quick previewer (Nautilus/Sushi).
+    PreviewFile(PathBuf),
     Core(CoreAction),
     Service(services::Command),
     Backend(backend::Command),
@@ -85,19 +152,86 @@ pub enum Action {
     SurfaceOpacity(f64),
     FrostStrength(f64),
     BarHeight(f64),
+    /// Draw the wallpaper-tinted scrim behind the menu bar.
+    BarBackground(bool),
     DockPosition(DockPosition),
     AutoHide(bool),
     Magnification(bool),
     ShowRecentApplications(bool),
+    LauncherPresentation(LauncherPresentation),
+    /// Open the launcher in whichever presentation the preferences select.
+    Launcher,
+    /// Open one launcher tile's application menu as a surface over the
+    /// launcher. The launcher stays open underneath.
+    OpenMenu {
+        id: String,
+        anchor: (i32, i32),
+    },
+    /// Fold the launcher's application menu away and hand the keyboard back to
+    /// the launcher it belongs to.
+    CloseMenu,
+    /// Open the palette's `Ctrl+B` card on its own frosted surface. The
+    /// snapshot carries the sheet's live selection, draft and mode.
+    OpenSpotlightMenu(SpotlightMenuSnapshot),
+    /// Fold the palette's action card away and hand the keyboard back.
+    CloseSpotlightMenu,
+    /// Run one row of the palette's action card on the sheet that owns it. The
+    /// card's own surface cannot mutate the sheet's palette, so it forwards.
+    SpotlightAction(usize),
+    /// Walk the palette's action card. The card lives on a second surface, so
+    /// whichever window holds the keyboard forwards the step to it.
+    SpotlightMenuStep(bool),
+    /// Run the highlighted row of the palette's action card, wherever the
+    /// keyboard focus sits.
+    SpotlightMenuActivate,
+    /// Submit the password typed into the polkit dialog. The host attaches the
+    /// current cookie so a stale surface cannot answer a new request.
+    AuthSubmit(String),
+    /// Dismiss and cancel the current polkit request.
+    AuthCancel,
     MagnificationScale(f64),
     AnimateOpeningApplications(bool),
     ReduceMotion(bool),
     Screenshot(u8),
     Settings,
+    /// Run one palette command row, addressed by its stable id. The session
+    /// lives in the popup view, so the click routes back through the host.
+    PaletteCommand(String),
+    /// Run one row of the `/actions` catalog by its stable id.
+    RunCatalog(String),
     DockHover(bool),
     DockEdgeHover(bool),
     DoNotDisturb(bool),
+    /// Cycle the workspace tiling mode between scrolling and dwindle.
+    ToggleTilingMode,
     PickWallpaper,
+    /// Switch the machine's ACPI/daemon power profile. The battery popup
+    /// keeps its active mark in sync optimistically, then the worker confirms.
+    PowerProfile(PowerProfile),
+    /// Adjust the battery's charge ceiling, in percent. The popup only offers
+    /// it when the platform exposes a writable end-threshold attribute.
+    BatteryChargeLimit(u8),
+    /// Lock, suspend or power the session off. The worker owns the bus
+    /// round-trip so a slow logind/systemd never blocks the UI.
+    System(SystemAction),
+}
+
+/// The session power actions the launcher's action catalog offers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SystemAction {
+    Lock,
+    Logout,
+    Suspend,
+    Reboot,
+    Shutdown,
+}
+impl Action {
+    /// Tag a panel opener with the monitor whose surface dispatched it, so a
+    /// click on a secondary bar or Dock still drops its popup on that monitor
+    /// instead of following keyboard focus.
+    pub fn on_output(output: impl Into<String>, action: Action) -> Self {
+        Action::OnOutput(output.into(), Box::new(action))
+    }
 }
 #[derive(Clone)]
 pub struct DockApp {
@@ -130,7 +264,33 @@ pub struct ViewState {
     pub prefs: Preferences,
     pub desktop: backend::DesktopSnapshot,
     pub system: backend::SystemSnapshot,
+    /// The tiling mode shown by the control center's layout button.
+    pub tiling_mode: clarion_ipc::TilingMode,
+    /// The power profile the worker is still confirming, if any. The battery
+    /// popup paints its spinner from this until the read-back settles it.
+    pub power_profile_pending: Option<PowerProfile>,
+    /// The battery's charge ceiling, 0–1, or `None` when the platform exposes
+    /// no writable end-threshold attribute.
+    pub battery_charge_limit: Option<f64>,
     pub catalog: Arc<AppCatalog>,
+    /// Launch counts used by the palette's usage-aware ordering.
+    pub launch_history: Arc<LaunchHistory>,
+    /// The user's home directory, used to shorten palette file paths to `~`.
+    pub home: PathBuf,
+    /// The session user's name, shown by the system menu's log-out row.
+    pub user_name: String,
+    /// Built-in file search results, newest generation only.
+    pub file_hits: Arc<Vec<FileHit>>,
+    pub file_query: String,
+    pub file_searching: bool,
+    pub file_search_error: Option<String>,
+    /// Wallpapers scanned from the user's picture folders.
+    pub wallpapers: Arc<Vec<crate::wallpapers::WallpaperEntry>>,
+    pub wallpaper_scanning: bool,
+    pub current_wallpaper: Option<PathBuf>,
+    /// The colour of the wallpaper strip behind the bar, sampled so the scrim
+    /// borrows the desktop instead of fighting it.
+    pub bar_band: Option<crate::wallpapers::BarBand>,
     pub notifications: Vec<services::Notification>,
     pub tray: Vec<services::TrayItem>,
     pub history: Vec<services::HistoryEntry>,
@@ -145,6 +305,9 @@ pub struct ViewState {
     pub collapsing_menus: Vec<i32>,
     pub error: Option<String>,
     pub panel: Option<Panel>,
+    /// The output whose bar or Dock opened the current panel. The fullscreen
+    /// launcher hides only this output's Dock; other monitors keep theirs.
+    pub panel_output: Option<String>,
     pub dnd: bool,
     pub dock_revealed: bool,
     pub launches: HashMap<String, Instant>,
@@ -160,6 +323,10 @@ pub struct ViewState {
     pub anchored: Option<f32>,
     /// The popup surface is being kept alive for its closing fade.
     pub panel_exit: bool,
+    /// The palette's `Ctrl+B` card is up on its own surface.
+    pub spotlight_menu_open: bool,
+    /// The polkit authentication dialog, if one is waiting for the user.
+    pub auth: Option<services::AuthView>,
     dock_apps: Vec<DockApp>,
 }
 impl ViewState {
@@ -184,7 +351,34 @@ pub struct Host {
     pub prefs: Preferences,
     pub desktop: backend::DesktopSnapshot,
     pub system: backend::SystemSnapshot,
+    /// The tiling mode the control center button last asked for. The compositor
+    /// has no readable state for it, so the shell keeps the optimistic toggle.
+    pub tiling_mode: clarion_ipc::TilingMode,
+    /// The profile the user just picked, kept until the worker reads the
+    /// platform back. Stale heartbeat snapshots cannot undo it meanwhile.
+    power_profile_pending: Option<PowerProfile>,
+    /// Highest power-profile stamp accepted. Polls that began before a switch
+    /// stay below it, so they cannot repaint the old mode after the read-back.
+    power_profile_epoch: u64,
+    /// The battery's charge ceiling, owned by the dedicated event so the
+    /// heartbeat cannot undo a slider write with a stale sample.
+    battery_charge_limit: Option<f64>,
+    /// Highest charge-limit stamp accepted, same rule as the profile epoch.
+    battery_charge_epoch: u64,
     pub catalog: Arc<AppCatalog>,
+    pub launch_history: Arc<LaunchHistory>,
+    pub file_hits: Arc<Vec<FileHit>>,
+    pub file_query: String,
+    pub file_searching: bool,
+    pub file_search_error: Option<String>,
+    pub wallpapers: Arc<Vec<crate::wallpapers::WallpaperEntry>>,
+    pub wallpaper_scanning: bool,
+    pub current_wallpaper: Option<PathBuf>,
+    /// The colour of the wallpaper strip behind the bar, sampled so the scrim
+    /// borrows the desktop instead of fighting it.
+    pub bar_band: Option<crate::wallpapers::BarBand>,
+    /// Newest bar-band sampling request; older decodes are discarded.
+    bar_band_generation: u64,
     pub notifications: Vec<services::Notification>,
     pub tray: Vec<services::TrayItem>,
     pub history: Vec<services::HistoryEntry>,
@@ -202,6 +396,9 @@ pub struct Host {
     /// release timer, and an older timer never erases a newer banner.
     pub error_generation: u64,
     pub panel: Option<Panel>,
+    /// The output that owns the open panel, so per-output chrome such as the
+    /// Dock can hide only where the launcher actually covers the screen.
+    pub panel_output: Option<String>,
     /// Bar-space x of the last anchored bar click; mirrored into snapshots so
     /// `placement` can drop its popup from the clicked icon.
     pub(crate) anchored: Option<f32>,
@@ -216,12 +413,36 @@ pub struct Host {
     pub folder_drop_preview: bool,
     pub revision: u64,
     backend: backend::Backend,
+    /// Newest file-search generation; a late worker result is dropped.
+    file_search_generation: u64,
     service: services::ServiceHandle,
     desktop_actions: async_channel::Sender<DesktopAction>,
     local_preferences: bool,
     environment: HashMap<String, String>,
     outputs: BTreeMap<String, OutputViews>,
     popup: Option<WindowHandle<ShellView>>,
+    /// The application menu surface floating over the launcher. It is kept
+    /// apart from `popup` so the launcher (and its draft) stays open underneath.
+    pub(crate) menu: Option<WindowHandle<ShellView>>,
+    /// A menu surface is being created right now. Mapping it takes the keyboard,
+    /// and the launcher's deactivation must not read that as a click elsewhere
+    /// before `menu` itself lands.
+    pub(crate) menu_opening: bool,
+    /// The palette's `Ctrl+B` card, likewise a surface over the sheet so the
+    /// compositor can frost it.
+    pub(crate) spotlight_menu: Option<WindowHandle<ShellView>>,
+    pub(crate) spotlight_menu_opening: bool,
+    /// The polkit dialog is its own exclusive overlay, so a pending launcher
+    /// or settings panel is not discarded by `Host::open`.
+    pub(crate) auth: Option<services::AuthView>,
+    pub(crate) auth_window: Option<WindowHandle<ShellView>>,
+    /// The window that held the keyboard before the modal dialog appeared.
+    auth_return: Option<WindowHandle<ShellView>>,
+    /// The monitor whose surface dispatched the action currently being
+    /// applied. A bar or Dock click can land on a monitor that does not hold
+    /// keyboard focus; its popup still belongs to that monitor, not to the
+    /// focused one.
+    dispatch_output: Option<String>,
     /// The platform window kept alive while a closing popup rides its fade
     /// out; superseded fades are cut short.
     exiting: Option<WindowHandle<ShellView>>,
@@ -249,6 +470,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
     let preview = options.preview || options.demo;
     let environment: HashMap<String, String> = std::env::vars().collect();
     let prefs = Preferences::load(&environment, preview)?;
+    crate::icons::set_dark(prefs.surface_appearance().dark);
     let (backend, events) = backend::Backend::start(backend::Options {
         environment: environment.clone(),
         preview,
@@ -264,11 +486,28 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             crate::input::TextInput::bind_keys(cx);
             DesktopView::bind_keys(cx);
             crate::view::bind_keys(cx);
+            let startup_wallpaper = crate::wallpapers::current_wallpaper(&environment);
+            let launch_history = Arc::new(LaunchHistory::load(&environment));
             let host = cx.new(|_| Host {
                 prefs,
                 desktop: Default::default(),
                 system: Default::default(),
+                tiling_mode: clarion_ipc::TilingMode::Scrolling,
+                power_profile_pending: None,
+                power_profile_epoch: 0,
+                battery_charge_limit: None,
+                battery_charge_epoch: 0,
                 catalog: Arc::new(AppCatalog::default()),
+                launch_history,
+                file_hits: Arc::default(),
+                file_query: String::new(),
+                file_searching: false,
+                file_search_error: None,
+                wallpapers: Arc::default(),
+                wallpaper_scanning: false,
+                current_wallpaper: None,
+                bar_band: None,
+                bar_band_generation: 0,
                 notifications: vec![],
                 tray: vec![],
                 history: vec![],
@@ -280,6 +519,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 error: None,
                 error_generation: 0,
                 panel: None,
+                panel_output: None,
                 anchored: None,
                 panel_exit: false,
                 preview,
@@ -288,12 +528,21 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 folder_drop_preview: false,
                 revision: 0,
                 backend,
+                file_search_generation: 0,
                 service,
                 desktop_actions,
                 local_preferences: false,
                 environment,
                 outputs: BTreeMap::new(),
                 popup: None,
+                menu: None,
+                menu_opening: false,
+                spotlight_menu: None,
+                spotlight_menu_opening: false,
+                auth: None,
+                auth_window: None,
+                auth_return: None,
+                dispatch_output: None,
                 exiting: None,
                 exit_generation: 0,
                 toast: None,
@@ -312,6 +561,10 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 dock_hover: false,
                 dock_edge_hover: false,
                 idle_since: Instant::now(),
+            });
+            host.update(cx, |host, cx| {
+                host.current_wallpaper = startup_wallpaper.clone();
+                host.refresh_bar_band(startup_wallpaper, cx);
             });
             let retained = host.clone();
             cx.spawn(async move |cx| {
@@ -369,11 +622,7 @@ struct ShellLifetime(#[allow(dead_code)] Entity<Host>);
 impl Global for ShellLifetime {}
 
 /// Record the labels of the expanded submenu parents whose id is listed.
-fn collect_expanded_labels(
-    items: &[services::MenuItem],
-    expanded: &[i32],
-    out: &mut Vec<String>,
-) {
+fn collect_expanded_labels(items: &[services::MenuItem], expanded: &[i32], out: &mut Vec<String>) {
     for item in items {
         if item.visible
             && !item.children.is_empty()
@@ -414,7 +663,31 @@ impl Host {
             prefs: self.prefs.clone(),
             desktop: self.desktop.clone(),
             system: self.system.clone(),
+            tiling_mode: self.tiling_mode,
+            power_profile_pending: self.power_profile_pending,
+            battery_charge_limit: self.battery_charge_limit,
             catalog: self.catalog.clone(),
+            launch_history: self.launch_history.clone(),
+            home: self
+                .environment
+                .get("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_default(),
+            user_name: self
+                .environment
+                .get("USER")
+                .or_else(|| self.environment.get("LOGNAME"))
+                .filter(|name| !name.is_empty())
+                .cloned()
+                .unwrap_or_else(|| "当前用户".into()),
+            file_hits: self.file_hits.clone(),
+            file_query: self.file_query.clone(),
+            file_searching: self.file_searching,
+            file_search_error: self.file_search_error.clone(),
+            wallpapers: self.wallpapers.clone(),
+            wallpaper_scanning: self.wallpaper_scanning,
+            current_wallpaper: self.current_wallpaper.clone(),
+            bar_band: self.bar_band,
             notifications: self.notifications.clone(),
             tray: self.tray.clone(),
             history: self.history.clone(),
@@ -425,6 +698,7 @@ impl Host {
             collapsing_menus: self.collapsing_menus.clone(),
             error: self.error.clone(),
             panel: self.panel.clone(),
+            panel_output: self.panel_output.clone(),
             dnd: self.dnd,
             dock_revealed: !self.auto_hidden,
             launches: self.launches.clone(),
@@ -435,15 +709,100 @@ impl Host {
             folder_errors: self.dock_folder_errors.clone(),
             anchored: self.anchored,
             panel_exit: self.panel_exit,
+            spotlight_menu_open: self.spotlight_menu.is_some(),
+            auth: self.auth.clone(),
             dock_apps: self.dock_apps(),
         }
     }
+    /// A Dock folder popup covers the whole output, so anything the menu opens
+    /// (an app, the portal chooser, a preview window) must first get the
+    /// surface out of the way; otherwise the new window is behind it.
+    fn close_folder_overlay(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.panel, Some(Panel::DockFolder { .. })) {
+            self.close(cx);
+        }
+    }
+
     fn desktop_action(&mut self, action: DesktopAction, cx: &mut Context<Self>) {
         match action {
             DesktopAction::Open(path) => {
                 let _ = self.backend.send(backend::Command::OpenPath(path));
+                self.close_folder_overlay(cx);
+            }
+            DesktopAction::OpenWith(path) => {
+                self.close_folder_overlay(cx);
+                // Build the chooser from the application catalog: the session
+                // portal's `ask` request never produces a visible dialog under
+                // this compositor, so the shell owns the chooser.
+                let mime = crate::mime::path_mime(&path);
+                let mut apps: Vec<OpenWithApp> = match mime {
+                    Some(mime) => self
+                        .catalog
+                        .apps()
+                        .iter()
+                        .filter(|app| crate::mime::app_supports_mime(app, &mime))
+                        .map(|app| OpenWithApp {
+                            name: app.name.clone(),
+                            desktop_file: app.desktop_file.clone(),
+                            icon: app.icon_path.clone(),
+                        })
+                        .collect(),
+                    None => Vec::new(),
+                };
+                apps.sort_by_key(|app| app.name.to_lowercase());
+                apps.dedup_by(|a, b| a.desktop_file == b.desktop_file);
+                if apps.is_empty() {
+                    let _ = self.backend.send(backend::Command::OpenPath(path));
+                } else {
+                    self.open(Panel::OpenWith { path, apps }, cx);
+                }
+            }
+            DesktopAction::Preview(path) => {
+                let _ = self.backend.send(backend::Command::PreviewFile(path));
+                self.close_folder_overlay(cx);
             }
             DesktopAction::Settings => self.handle(Action::Settings, cx),
+            DesktopAction::Trash(path) => {
+                let parent = path.parent().map(std::path::Path::to_path_buf);
+                let _ = self.backend.send(backend::Command::Trash(path));
+                if let Some(parent) = parent {
+                    // The folder snapshot is rebuilt from disk; wait for GIO to
+                    // finish moving the file so the entry actually disappears.
+                    cx.spawn(async move |host, cx| {
+                        cx.background_executor()
+                            .timer(Duration::from_millis(350))
+                            .await;
+                        let _ = host.update(cx, |host, cx| host.request_folder_scan(parent, cx));
+                    })
+                    .detach();
+                }
+            }
+            DesktopAction::Reveal(path) => {
+                let target = if path.is_dir() {
+                    path
+                } else {
+                    path.parent().unwrap_or(&path).to_path_buf()
+                };
+                let _ = self.backend.send(backend::Command::OpenPath(target));
+                self.close_folder_overlay(cx);
+            }
+            DesktopAction::Info {
+                output,
+                path,
+                title,
+                rows,
+            } => {
+                if self.outputs.contains_key(&output) {
+                    self.dispatch_output = Some(output);
+                }
+                self.open(Panel::Info { path, title, rows }, cx);
+            }
+            DesktopAction::Notify { body } => {
+                let _ = self.backend.send(backend::Command::Notify {
+                    summary: "Clarion 桌面".into(),
+                    body,
+                });
+            }
             DesktopAction::Wallpaper(Some(path)) => {
                 for output in self.outputs.values() {
                     if let Some(desktop) = output.desktop {
@@ -478,7 +837,7 @@ impl Host {
             }
         }
     }
-    fn backend_event(&mut self, event: backend::Event, cx: &mut Context<Self>) {
+    pub(crate) fn backend_event(&mut self, event: backend::Event, cx: &mut Context<Self>) {
         match event {
             backend::Event::Desktop(snapshot) => {
                 if snapshot.generation != self.desktop.generation
@@ -514,10 +873,49 @@ impl Host {
                 if !self.prefs.clock_show_seconds {
                     snapshot.clock.truncate(5);
                 }
+                // Power profiles have their own event. The one-second
+                // heartbeat can carry a snapshot cached before a switch, so it
+                // must never be allowed to paint the old mode back.
+                if !self.system.power_profiles.is_empty() || self.system.power_profile.is_some() {
+                    snapshot.power_profile = self.system.power_profile;
+                    snapshot.power_profiles = self.system.power_profiles.clone();
+                }
                 if snapshot == self.system {
                     return;
                 }
                 self.system = snapshot;
+            }
+            backend::Event::PowerProfile {
+                profile,
+                profiles,
+                settled,
+                epoch,
+            } => {
+                if epoch < self.power_profile_epoch {
+                    // A poll that started before the latest switch finished.
+                    return;
+                }
+                // While a switch is in flight, ignore a poll that still sees
+                // the old profile. The explicit read-back (`settled`) always
+                // wins, including when the switch failed.
+                let waiting = self.power_profile_pending;
+                if settled || waiting.is_none() || waiting == profile {
+                    self.power_profile_epoch = epoch;
+                    self.system.power_profile = profile;
+                    self.system.power_profiles = profiles;
+                    if settled || waiting == profile {
+                        self.power_profile_pending = None;
+                    }
+                }
+            }
+            backend::Event::BatteryChargeLimit { limit, epoch } => {
+                // Polls and write read-backs each take a fresh stamp, so the
+                // newest sample always wins.
+                if epoch <= self.battery_charge_epoch {
+                    return;
+                }
+                self.battery_charge_epoch = epoch;
+                self.battery_charge_limit = limit;
             }
             backend::Event::Preferences(prefs) => {
                 if !self.local_preferences && self.prefs != prefs {
@@ -534,7 +932,8 @@ impl Host {
                 self.targets();
             }
             backend::Event::Command(command) => match command.as_str() {
-                "launcher" | "spotlight" => self.handle(Action::Panel(Panel::Apps), cx),
+                "launcher" => self.handle(Action::Launcher, cx),
+                "spotlight" => self.handle(Action::Panel(Panel::Spotlight), cx),
                 "close" => self.handle(Action::Close, cx),
                 "preferences" => self.handle(Action::Panel(Panel::Preferences), cx),
                 "screenshot" => self.handle(Action::Panel(Panel::Screenshot), cx),
@@ -544,6 +943,7 @@ impl Host {
                 "control-center" | "quick-settings" => {
                     self.handle(Action::Panel(Panel::Controls), cx)
                 }
+                "battery" => self.handle(Action::Panel(Panel::Battery), cx),
                 "notifications" => self.handle(Action::Panel(Panel::Notifications), cx),
                 "clipboard" | "recent" | "recent-content" => {
                     self.handle(Action::Panel(Panel::Recent), cx)
@@ -590,7 +990,20 @@ impl Host {
                     }
                 }
             }
-            services::Event::Tray(items) => self.tray = items,
+            services::Event::Tray(items) => {
+                // A tray owner that exits (often from its own Quit row) takes
+                // its bar icon with it. The popup belongs to that icon, so a
+                // stale menu must not linger over the vanished anchor; drop it
+                // at once instead of riding the usual closing fade.
+                let owner_gone = match &self.panel {
+                    Some(Panel::Tray(id)) => !items.iter().any(|item| &item.id == id),
+                    _ => false,
+                };
+                self.tray = items;
+                if owner_gone {
+                    self.discard(cx);
+                }
+            }
             services::Event::History {
                 entries,
                 paused,
@@ -605,11 +1018,78 @@ impl Host {
                     self.tray_menu = self.remap_expanded(items);
                 }
             }
+            services::Event::AuthRequest(request) => {
+                if self.auth.is_none() {
+                    let prompt = String::new();
+                    self.auth = Some(services::AuthView {
+                        request,
+                        prompt,
+                        echo: false,
+                        error: None,
+                        info: None,
+                        submitting: false,
+                    });
+                    self.show_auth(cx);
+                }
+            }
+            services::Event::AuthPrompt {
+                cookie,
+                text,
+                echo,
+            } => {
+                if let Some(auth) = self.auth.as_mut().filter(|a| a.request.cookie == cookie) {
+                    auth.prompt = text;
+                    auth.echo = echo;
+                    auth.submitting = false;
+                }
+                self.changed(cx);
+            }
+            services::Event::AuthInfo { cookie, text } => {
+                if let Some(auth) = self.auth.as_mut().filter(|a| a.request.cookie == cookie) {
+                    auth.info = Some(text);
+                }
+                self.changed(cx);
+            }
+            services::Event::AuthError { cookie, text } => {
+                if let Some(auth) = self.auth.as_mut().filter(|a| a.request.cookie == cookie) {
+                    auth.error = Some(text);
+                    auth.submitting = false;
+                }
+                self.changed(cx);
+            }
+            services::Event::AuthFailed { cookie, text } => {
+                if let Some(auth) = self.auth.as_mut().filter(|a| a.request.cookie == cookie) {
+                    auth.error = Some(text);
+                    auth.submitting = false;
+                }
+                self.changed(cx);
+            }
+            services::Event::AuthClosed { cookie } => {
+                if self
+                    .auth
+                    .as_ref()
+                    .is_some_and(|auth| auth.request.cookie == cookie)
+                {
+                    self.dismiss_auth(cx);
+                }
+            }
+            services::Event::AuthStatus(status) => {
+                // P1 keeps the diagnostic quiet; the preferences surface will
+                // show it in P2. A conflict is the usual reason a third-party
+                // agent still owns the dialogs.
+                if let Some(reason) = status.reason {
+                    eprintln!("polkit: {reason}");
+                }
+            }
             services::Event::Error(error) => self.show_error(error, cx),
         }
         self.changed(cx);
     }
     pub fn changed(&mut self, cx: &mut Context<Self>) {
+        // The icon theme follows the shell appearance: dark uses the theme's
+        // `-dark` variant. Icon resolution only ever asks for "the current
+        // theme", so this is the single place that picks the variant.
+        crate::icons::set_dark(self.prefs.surface_appearance().dark);
         self.revision = self.revision.wrapping_add(1);
         cx.notify();
         let state = Arc::new(self.snapshot());
@@ -708,7 +1188,135 @@ impl Host {
                 cx.notify()
             });
         }
+        if let Some(menu) = self.menu {
+            // The card lists live windows, so it follows a refreshed snapshot
+            // just like the launcher under it.
+            let _ = menu.update(cx, |v, _, cx| {
+                v.state = state.clone();
+                cx.notify()
+            });
+        }
+        if let Some(menu) = self.spotlight_menu {
+            // Keep the card's host view current (e.g. a clipboard read-back)
+            // and let its trigger state settle after the window lands.
+            let _ = menu.update(cx, |v, _, cx| {
+                v.state = state.clone();
+                cx.notify()
+            });
+        }
+        if let Some(window) = self.auth_window {
+            // Prompts, PAM errors and the submitting flag all live in the
+            // snapshot; the dialog repaints from the same state as every other
+            // surface.
+            let _ = window.update(cx, |v, _, cx| {
+                v.state = state.clone();
+                cx.notify()
+            });
+        }
     }
+    /// Debounce a palette query, then walk the home directory off the UI
+    /// thread. Results carry the generation they were requested under, so a
+    /// slower walk cannot overwrite a newer query's rows.
+    fn search_files(&mut self, query: String, cx: &mut Context<Self>) {
+        self.file_search_generation = self.file_search_generation.wrapping_add(1);
+        let generation = self.file_search_generation;
+        self.file_query = query.clone();
+        self.file_search_error = None;
+        if query.trim().is_empty() {
+            self.file_hits = Arc::default();
+            self.file_searching = false;
+            self.changed(cx);
+            return;
+        }
+        self.file_searching = true;
+        self.changed(cx);
+        let root = self
+            .environment
+            .get("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/"));
+        if !root.is_dir() {
+            self.file_searching = false;
+            self.file_search_error = Some("找不到可搜索的主目录".to_owned());
+            self.changed(cx);
+            return;
+        }
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |host, cx| {
+            executor.timer(Duration::from_millis(140)).await;
+            let hits = executor
+                .spawn(async move { clarion_launcher::files::search(&root, &query, 50) })
+                .await;
+            let _ = host.update(cx, |host, cx| {
+                if host.file_search_generation != generation {
+                    return;
+                }
+                host.file_hits = Arc::new(hits);
+                host.file_searching = false;
+                host.changed(cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Sample the strip behind the menu bar on a worker thread. A missing or
+    /// unreadable wallpaper leaves the bar on its plain theme tint.
+    fn refresh_bar_band(&mut self, path: Option<PathBuf>, cx: &mut Context<Self>) {
+        self.bar_band_generation = self.bar_band_generation.wrapping_add(1);
+        let generation = self.bar_band_generation;
+        let Some(path) = path else {
+            if self.bar_band.take().is_some() {
+                self.changed(cx);
+            }
+            return;
+        };
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |host, cx| {
+            let band = executor
+                .spawn(async move { crate::wallpapers::bar_band(&path) })
+                .await;
+            let _ = host.update(cx, |host, cx| {
+                // A slower decode must not overwrite a newer wallpaper.
+                if host.bar_band_generation == generation && host.bar_band != band {
+                    host.bar_band = band;
+                    host.changed(cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Scan the picture folders once per gallery visit. The existing scan is
+    /// kept on screen while a refresh runs, so entering the mode never blinks.
+    fn scan_wallpapers(&mut self, cx: &mut Context<Self>) {
+        if self.wallpaper_scanning {
+            return;
+        }
+        self.wallpaper_scanning = true;
+        self.changed(cx);
+        let environment = self.environment.clone();
+        let current = crate::wallpapers::current_wallpaper(&environment);
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |host, cx| {
+            let entries = executor
+                .spawn(async move { crate::wallpapers::scan(&environment) })
+                .await;
+            let _ = host.update(cx, |host, cx| {
+                host.wallpapers = Arc::new(entries);
+                host.wallpaper_scanning = false;
+                if let Some(current) = current {
+                    let resample = host.current_wallpaper.as_ref() != Some(&current);
+                    host.current_wallpaper = Some(current.clone());
+                    if resample {
+                        host.refresh_bar_band(Some(current), cx);
+                    }
+                }
+                host.changed(cx);
+            });
+        })
+        .detach();
+    }
+
     pub fn core(&self, action: CoreAction) {
         let _ = self.backend.send(backend::Command::Action(action));
     }
@@ -742,8 +1350,58 @@ impl Host {
                 self.dnd = value;
                 self.service.send(services::Command::Dnd(value));
             }
+            Action::ToggleTilingMode => {
+                let next = match self.tiling_mode {
+                    clarion_ipc::TilingMode::Scrolling => clarion_ipc::TilingMode::Dwindle,
+                    clarion_ipc::TilingMode::Dwindle => clarion_ipc::TilingMode::Scrolling,
+                };
+                self.tiling_mode = next;
+                // The compositor owns the workspace mode. Send the explicit
+                // target rather than its own toggle so the button stays in
+                // step with the state it paints.
+                let _ = self.backend.send(backend::Command::Action(
+                    CoreAction::SwitchTilingMode { mode: Some(next) },
+                ));
+                self.changed(cx);
+            }
             Action::PickWallpaper => self.desktop_action(DesktopAction::Wallpaper(None), cx),
             Action::Close => self.close(cx),
+            Action::DesktopEntryMenu { path, x, y } => {
+                let output = self
+                    .dispatch_output
+                    .clone()
+                    .filter(|output| self.outputs.contains_key(output))
+                    .unwrap_or_else(|| self.active_output());
+                if let Some(desktop) = self
+                    .outputs
+                    .get(&output)
+                    .and_then(|view| view.desktop)
+                {
+                    let _ = desktop.update(cx, |desktop, window, cx| {
+                        desktop.open_entry_menu(path, point(px(x), px(y)), window, cx)
+                    });
+                }
+            }
+            Action::OnOutput(output, action) => {
+                // Bar and Dock surfaces live on every output. Carry the one
+                // that dispatched the action while it applies, so its popup is
+                // created there instead of on the keyboard-focused output.
+                let previous = self.dispatch_output.replace(output);
+                self.apply(*action, cx);
+                self.dispatch_output = previous;
+            }
+            Action::Launcher => {
+                self.anchored = None;
+                let panel = match self.prefs.launcher_presentation {
+                    LauncherPresentation::Fullscreen => Panel::Apps,
+                    LauncherPresentation::Palette => Panel::Spotlight,
+                };
+                if self.panel.as_ref() == Some(&panel) {
+                    self.close(cx);
+                } else {
+                    self.open(panel, cx);
+                }
+            }
             Action::Panel(panel) => {
                 // A non-anchored opener drops its popup at the resting edge.
                 self.anchored = None;
@@ -752,6 +1410,54 @@ impl Host {
                 } else {
                     self.open(panel, cx);
                 }
+            }
+            Action::OpenMenu { id, anchor } => self.open_menu(id, anchor, cx),
+            Action::CloseMenu => self.close_menu(cx),
+            Action::OpenSpotlightMenu(menu) => self.open_spotlight_menu(menu, cx),
+            Action::CloseSpotlightMenu => self.close_spotlight_menu(cx),
+            Action::SpotlightAction(index) => {
+                self.run_spotlight_action(index, cx);
+                self.close_spotlight_menu(cx);
+            }
+            Action::SpotlightMenuStep(forward) => {
+                if let Some(menu) = self.spotlight_menu {
+                    let state = Arc::new(self.snapshot());
+                    let _ = menu.update(cx, |view, _, cx| {
+                        view.state = state.clone();
+                        view.step_spotlight_action(forward, &state, cx);
+                    });
+                }
+            }
+            Action::SpotlightMenuActivate => {
+                let index = self
+                    .spotlight_menu
+                    .and_then(|menu| menu.read(cx).ok())
+                    .map(|view| view.spotlight_menu_selection())
+                    .unwrap_or(0);
+                self.run_spotlight_action(index, cx);
+                self.close_spotlight_menu(cx);
+            }
+            Action::AuthSubmit(secret) => {
+                let Some(auth) = self.auth.as_mut() else {
+                    return;
+                };
+                if auth.submitting {
+                    return;
+                }
+                let cookie = auth.request.cookie.clone();
+                auth.submitting = true;
+                auth.error = None;
+                self.service
+                    .send(services::Command::AuthSubmit { cookie, secret });
+            }
+            Action::AuthCancel => {
+                let Some(auth) = self.auth.as_ref() else {
+                    return;
+                };
+                let cookie = auth.request.cookie.clone();
+                self.service
+                    .send(services::Command::AuthCancel { cookie });
+                self.dismiss_auth(cx);
             }
             Action::AnchoredPanel(panel, x) => {
                 self.anchored = Some(x);
@@ -764,9 +1470,17 @@ impl Host {
             Action::Launch(id) => {
                 if let Some(app) = self.catalog.get(&id) {
                     self.auto_hidden = false;
+                    // Count the launch for the palette's smart ordering; the
+                    // worker owns the atomic file write so the UI never blocks.
+                    // The launch itself goes first: it is the command every
+                    // existing observer reads.
+                    Arc::make_mut(&mut self.launch_history).record_launch(&id, unix_millis());
                     let _ = self
                         .backend
                         .send(backend::Command::LaunchDesktop(app.desktop_file.clone()));
+                    let _ = self
+                        .backend
+                        .send(backend::Command::RecordLaunch(id.clone()));
                     if self.prefs.animate_opening_applications && !self.prefs.reduce_motion {
                         let now = Instant::now();
                         let started = self.launches.entry(id.clone()).or_insert(now);
@@ -838,6 +1552,32 @@ impl Host {
                 let _ = self.backend.send(backend::Command::OpenPath(path));
                 self.close(cx);
             }
+            Action::OpenUrl(url) => {
+                let _ = self.backend.send(backend::Command::OpenUrl(url));
+            }
+            Action::SearchFiles(query) => self.search_files(query, cx),
+            Action::ScanWallpapers => self.scan_wallpapers(cx),
+            Action::ApplyWallpaper(path) => {
+                self.current_wallpaper = Some(path.clone());
+                self.refresh_bar_band(Some(path.clone()), cx);
+                self.desktop_action(DesktopAction::Wallpaper(Some(path)), cx);
+                self.close(cx);
+            }
+            Action::RevealFile(path) => {
+                // `gio open` on the containing folder is the portable reveal:
+                // every desktop handler can open a directory, and the user
+                // lands one step away from the selected row.
+                let parent = path
+                    .parent()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from("/"));
+                let _ = self.backend.send(backend::Command::OpenPath(parent));
+                self.close(cx);
+            }
+            Action::PreviewFile(path) => {
+                let _ = self.backend.send(backend::Command::PreviewFile(path));
+                self.close(cx);
+            }
             Action::RefreshFolder(path) => self.request_folder_scan(path, cx),
             Action::SetFolderDisplay(path, display) => {
                 self.configure_folder(&path, |folder| folder.display = display, cx)
@@ -852,8 +1592,8 @@ impl Host {
                 self.configure_folder(&path, |folder| folder.descending = descending, cx)
             }
             Action::FolderDropPreview(active) => {
-                let active = active
-                    && self.prefs.dock_folders.len() < crate::preferences::MAX_DOCK_FOLDERS;
+                let active =
+                    active && self.prefs.dock_folders.len() < crate::preferences::MAX_DOCK_FOLDERS;
                 if self.folder_drop_preview != active {
                     self.folder_drop_preview = active;
                     self.changed(cx);
@@ -892,12 +1632,9 @@ impl Host {
                         self.collapsing_menus.push(id);
                         let target = id;
                         cx.spawn(async move |host, cx| {
-                            cx.background_executor()
-                                .timer(Self::SUBMENU_FADE)
-                                .await;
-                            let _ = host.update(cx, |host, cx| {
-                                host.finish_submenu_collapse(target, cx)
-                            });
+                            cx.background_executor().timer(Self::SUBMENU_FADE).await;
+                            let _ = host
+                                .update(cx, |host, cx| host.finish_submenu_collapse(target, cx));
                         })
                         .detach();
                     }
@@ -953,6 +1690,13 @@ impl Host {
                 self.prefs.bar_height = value.clamp(22., 48.);
                 self.save(cx);
             }
+            Action::BarBackground(value) => {
+                if self.prefs.bar_background != value {
+                    self.prefs.bar_background = value;
+                    self.save(cx);
+                    self.changed(cx);
+                }
+            }
             Action::DockPosition(value) => {
                 self.prefs.dock_position = value;
                 self.save(cx);
@@ -972,6 +1716,13 @@ impl Host {
                 self.prefs.show_recent_applications = value;
                 self.save(cx);
                 self.changed(cx);
+            }
+            Action::LauncherPresentation(value) => {
+                if self.prefs.launcher_presentation != value {
+                    self.prefs.launcher_presentation = value;
+                    self.save(cx);
+                    self.changed(cx);
+                }
             }
             Action::MagnificationScale(value) => {
                 if value.is_finite() {
@@ -995,6 +1746,16 @@ impl Host {
             Action::Settings => {
                 let _ = self.backend.send(backend::Command::OpenSettings);
                 self.close(cx);
+            }
+            Action::PaletteCommand(id) => {
+                if let Some(popup) = self.popup {
+                    let _ = popup.update(cx, |view, _, cx| view.palette_command_by_id(&id, cx));
+                }
+            }
+            Action::RunCatalog(id) => {
+                if let Some(popup) = self.popup {
+                    let _ = popup.update(cx, |view, _, cx| view.palette_action_by_id(&id, cx));
+                }
             }
             Action::Screenshot(mode) => {
                 self.close(cx);
@@ -1025,6 +1786,46 @@ impl Host {
                     });
                 })
                 .detach();
+            }
+            Action::PowerProfile(profile) => {
+                // The accent fill waits for the read-back; until then only the
+                // progress ring on the chosen button marks the request.
+                if self.power_profile_pending.is_none() && self.system.power_profile != Some(profile)
+                {
+                    self.power_profile_pending = Some(profile);
+                    if self
+                        .backend
+                        .send(backend::Command::SetPowerProfile(profile))
+                        .is_err()
+                    {
+                        // The queue refused the request, so no read-back will
+                        // ever settle it.
+                        self.power_profile_pending = None;
+                    }
+                }
+            }
+            Action::BatteryChargeLimit(limit) => {
+                // Only meaningful where the platform exposes a writable
+                // end threshold; the popup hides the slider otherwise.
+                let limit = limit.min(100);
+                if let Some(before) = self.battery_charge_limit {
+                    // Move the thumb at once; the worker's read-back settles
+                    // the value the firmware actually kept.
+                    self.battery_charge_limit = Some(f64::from(limit) / 100.);
+                    if self
+                        .backend
+                        .send(backend::Command::SetBatteryChargeLimit(limit))
+                        .is_err()
+                    {
+                        self.battery_charge_limit = Some(before);
+                    }
+                }
+            }
+            Action::System(action) => {
+                // The worker owns the bus round-trip; the palette just hands
+                // the request over and folds away.
+                let _ = self.backend.send(backend::Command::System(action));
+                self.close(cx);
             }
         }
         self.targets();
@@ -1057,15 +1858,29 @@ impl Host {
             .map(|view| (view.width, view.height))
             .unwrap_or((1200., 800.));
         let geometry = panels::placement(&self.snapshot(), &Panel::Preferences, w, h).bounds;
+        let centre = (
+            f64::from(f32::from(geometry.origin.x)),
+            f64::from(f32::from(geometry.origin.y)),
+        );
+        let width = f32::from(geometry.size.width).round() as i32;
+        let height = f32::from(geometry.size.height).round() as i32;
+        // A floating window rule opens this surface at its natural size in the
+        // middle of the working area, which already reads as centred. Only
+        // correct a window that landed somewhere else: a tiled first
+        // configure, a rule-positioned corner, or another output.
+        if preferences_window_is_placed(window, centre, (width, height)) {
+            self.preferences_placed = Some(id);
+            return;
+        }
         // xdg_toplevel's initial bounds are only a request on Wayland. Place
         // this one owned window explicitly, without changing any client rule.
         if self
             .backend
             .send(backend::Command::PlacePreferences {
                 id,
-                width: f32::from(geometry.size.width).round() as i32,
-                height: f32::from(geometry.size.height).round() as i32,
-                x: f64::from(f32::from(geometry.origin.x))
+                width,
+                height,
+                x: centre.0
                     - if self.prefs.dock_position == DockPosition::Left
                         && !self.prefs.dock_hidden
                         && !self.prefs.dock_auto_hide
@@ -1074,7 +1889,7 @@ impl Host {
                     } else {
                         0.
                     },
-                y: f64::from(f32::from(geometry.origin.y)) - self.prefs.bar_height,
+                y: centre.1 - self.prefs.bar_height,
             })
             .is_ok()
         {
@@ -1086,14 +1901,30 @@ impl Host {
     /// settles in about 150ms at the shared response frequency, so the release
     /// timer adds slack rather than a second animation driver.
     const POPUP_EXIT: Duration = Duration::from_millis(170);
+    /// A folder zoom-out runs 260ms and must visibly reach the Dock icon and
+    /// rest there for a beat before the surface is released.
+    const FOLDER_POPUP_EXIT: Duration = Duration::from_millis(320);
     fn close(&mut self, cx: &mut Context<Self>) {
         self.preferences_placed = None;
+        // The launcher's menu is not part of the panel's exit ride; it folds
+        // away at once and its launcher keeps focus for the fade.
+        self.dismiss_menu(cx);
+        self.dismiss_spotlight_menu(cx);
         // A fading bar popup repaints and rides out before its surface is
-        // released; anything else dismisses as before, right away.
-        let animate = self
+        // released; a grid/list folder does the same with its zoom back onto
+        // the Dock tile. Everything else dismisses right away.
+        let folder_zoom_out = match self.panel.as_ref() {
+            Some(Panel::DockFolder { root }) if !cfg!(test) => {
+                panels::resolved_folder_layout(&self.snapshot(), root) != FolderLayout::Fan
+            }
+            _ => false,
+        };
+        let animate = (self
             .panel
             .as_ref()
-            .is_some_and(|panel| panels::popup_exit_panel(panel) && !self.prefs.reduce_motion);
+            .is_some_and(panels::popup_exit_panel)
+            || folder_zoom_out)
+            && !self.prefs.reduce_motion;
         if !animate {
             self.discard(cx);
             return;
@@ -1101,6 +1932,7 @@ impl Host {
         self.cancel_popup_exit(cx);
         let Some(window) = self.popup.take() else {
             self.panel = None;
+            self.panel_output = None;
             self.folder_drag_layer = false;
             self.tray_menu.clear();
             self.expanded_menus.clear();
@@ -1119,10 +1951,13 @@ impl Host {
         });
         self.exiting = Some(window);
         cx.notify();
+        let wait = if folder_zoom_out {
+            Self::FOLDER_POPUP_EXIT
+        } else {
+            Self::POPUP_EXIT
+        };
         cx.spawn(async move |host, cx| {
-            cx.background_executor()
-                .timer(Self::POPUP_EXIT)
-                .await;
+            cx.background_executor().timer(wait).await;
             let _ = host.update(cx, |host, cx| host.finish_popup_exit(generation, cx));
         })
         .detach();
@@ -1132,7 +1967,11 @@ impl Host {
     fn discard(&mut self, cx: &mut Context<Self>) {
         self.preferences_placed = None;
         self.cancel_popup_exit(cx);
+        // The menu is a surface of its own; it never outlives its launcher.
+        self.dismiss_menu(cx);
+        self.dismiss_spotlight_menu(cx);
         self.panel = None;
+        self.panel_output = None;
         self.folder_drag_layer = false;
         self.tray_menu.clear();
         self.expanded_menus.clear();
@@ -1164,9 +2003,7 @@ impl Host {
         let generation = self.error_generation;
         cx.notify();
         cx.spawn(async move |host, cx| {
-            cx.background_executor()
-                .timer(Self::ERROR_BANNER)
-                .await;
+            cx.background_executor().timer(Self::ERROR_BANNER).await;
             let _ = host.update(cx, |host, cx| host.release_error(generation, cx));
         })
         .detach();
@@ -1222,6 +2059,7 @@ impl Host {
         }
         self.panel_exit = false;
         self.panel = None;
+        self.panel_output = None;
         self.folder_drag_layer = false;
         self.tray_menu.clear();
         self.expanded_menus.clear();
@@ -1237,7 +2075,7 @@ impl Host {
         if let Panel::Tray(id) = &panel {
             self.service.send(services::Command::GetMenu(id.clone()));
         }
-        if panel == Panel::Apps {
+        if panel == Panel::Apps || panel == Panel::Spotlight {
             let _ = self.backend.send(backend::Command::RefreshCatalog);
         }
         if panel == Panel::Notifications {
@@ -1250,7 +2088,14 @@ impl Host {
             }
         }
         self.panel = Some(panel);
-        let output = self.active_output();
+        // A popup opened from a bar or Dock belongs to that surface's monitor;
+        // keyboard focus may still sit on a different output.
+        let output = self
+            .dispatch_output
+            .clone()
+            .filter(|output| self.outputs.contains_key(output))
+            .unwrap_or_else(|| self.active_output());
+        self.panel_output = Some(output.clone());
         let view = self.outputs.get(&output);
         let display = view.map(|v| v.display);
         let (w, h) = view.map(|v| (v.width, v.height)).unwrap_or((1200., 800.));
@@ -1321,7 +2166,255 @@ impl Host {
             Err(error) => {
                 self.show_error(format!("无法打开面板：{error}"), cx);
                 self.panel = None;
+                self.panel_output = None;
             }
+        }
+    }
+    /// Open one launcher tile's application menu as a surface of its own over
+    /// the launcher. The launcher keeps its window, draft and selection; only
+    /// the keyboard moves to the menu while it is up. A card painted into the
+    /// launcher's window could never be frosted — the compositor blurs what lies
+    /// behind a surface, never its own content.
+    fn open_menu(&mut self, id: String, anchor: (i32, i32), cx: &mut Context<Self>) {
+        self.dismiss_menu(cx);
+        if !matches!(self.panel, Some(Panel::Apps | Panel::Spotlight)) {
+            return;
+        }
+        // The menu belongs to the launcher's monitor, not to whichever output
+        // happens to hold keyboard focus.
+        let output = self
+            .dispatch_output
+            .clone()
+            .filter(|output| self.outputs.contains_key(output))
+            .unwrap_or_else(|| self.active_output());
+        let view = self.outputs.get(&output);
+        let display = view.map(|v| v.display);
+        let (w, h) = view.map(|v| (v.width, v.height)).unwrap_or((1200., 800.));
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(w), px(h)));
+        let options = window_options(
+            "clarion-panel",
+            display,
+            bounds,
+            self.preview,
+            LayerShellAnchor::ALL,
+            -1,
+            LayerShellKeyboardInteractivity::Exclusive,
+            LayerShellMargins::default(),
+            LayerShellLayer::Overlay,
+        );
+        let host = cx.entity();
+        let state = Arc::new(self.snapshot());
+        self.menu_opening = true;
+        let opened = cx.open_window(options, move |window, cx| {
+            let view =
+                cx.new(|cx| ShellView::new_launcher_menu(host, output, state, id, anchor, cx));
+            view.update(cx, |view, cx| view.observe_activation(window, cx));
+            view.read(cx).focus(window, cx);
+            view
+        });
+        self.menu_opening = false;
+        match opened {
+            Ok(window) => {
+                self.menu = Some(window);
+                // Take the keyboard only once the host knows a menu is up: the
+                // launcher's deactivation must not dismiss it as "a click
+                // elsewhere".
+                let _ = window.update(cx, |_, window, _| window.activate_window());
+            }
+            Err(error) => self.show_error(format!("无法打开应用菜单：{error}"), cx),
+        }
+    }
+    /// Fold the launcher's application menu away and hand the keyboard back to
+    /// the launcher, so its field keeps typing.
+    fn close_menu(&mut self, cx: &mut Context<Self>) {
+        if self.dismiss_menu(cx) {
+            if let Some(launcher) = self.popup.as_ref() {
+                let _ = launcher.update(cx, |_, window, _| window.activate_window());
+            }
+        }
+    }
+    /// Release the menu surface without touching the launcher's focus.
+    fn dismiss_menu(&mut self, cx: &mut Context<Self>) -> bool {
+        match self.menu.take() {
+            Some(window) => {
+                let _ = window.update(cx, |_, window, _| window.remove_window());
+                true
+            }
+            None => false,
+        }
+    }
+    /// Present the polkit dialog as its own exclusive overlay. This is a modal
+    /// independent of `popup`: a permission prompt must not discard the
+    /// launcher or settings panel the user was working in.
+    fn show_auth(&mut self, cx: &mut Context<Self>) {
+        if self.auth_window.is_some() {
+            self.changed(cx);
+            return;
+        }
+        let output = self.active_output();
+        let view = self.outputs.get(&output);
+        let display = view.map(|v| v.display);
+        let (w, h) = view.map(|v| (v.width, v.height)).unwrap_or((1200., 800.));
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(w), px(h)));
+        let options = window_options(
+            "clarion-auth",
+            display,
+            bounds,
+            self.preview,
+            LayerShellAnchor::ALL,
+            -1,
+            LayerShellKeyboardInteractivity::Exclusive,
+            LayerShellMargins::default(),
+            LayerShellLayer::Overlay,
+        );
+        let host = cx.entity();
+        let state = Arc::new(self.snapshot());
+        self.auth_return = self.spotlight_menu.or(self.menu).or(self.popup);
+        let opened = cx.open_window(options, move |window, cx| {
+            let close_host = host.downgrade();
+            let view = cx.new(|cx| ShellView::new_auth(host, output, state, cx));
+            view.read(cx).focus(window, cx);
+            // A platform close (preview mode or a compositor taking the
+            // surface away) must cancel the pending request; otherwise the
+            // service keeps it at the head of the queue forever. Leave the
+            // close callback before touching the Host, as the panel window
+            // does, so the window lease is not held while it is replaced.
+            window.on_window_should_close(cx, move |_, cx| {
+                let close_host = close_host.clone();
+                cx.spawn(async move |cx| {
+                    let _ = close_host.update(cx, |host, cx| host.auth_window_closed(cx));
+                })
+                .detach();
+                false
+            });
+            view
+        });
+        match opened {
+            Ok(window) => {
+                self.auth_window = Some(window);
+                // Focus again after the platform activation: some backends
+                // reset the in-window focus when the surface takes the
+                // keyboard, which would leave the password field deaf to keys.
+                let _ = window.update(cx, |view, window, cx| {
+                    window.activate_window();
+                    view.focus(window, cx);
+                });
+                self.changed(cx);
+            }
+            Err(error) => {
+                self.auth = None;
+                self.auth_return = None;
+                self.show_error(format!("无法打开认证窗口：{error}"), cx);
+            }
+        }
+    }
+    /// The platform took the dialog's surface away without the user answering.
+    /// Cancel the request so the authority is not left waiting and a new
+    /// prompt can take the queue.
+    fn auth_window_closed(&mut self, cx: &mut Context<Self>) {
+        self.auth_window = None;
+        self.auth_return = None;
+        if let Some(auth) = self.auth.take() {
+            self.service.send(services::Command::AuthCancel {
+                cookie: auth.request.cookie,
+            });
+            self.changed(cx);
+        }
+    }
+    /// Fold the dialog away and hand the keyboard back to whatever owned it.
+    fn dismiss_auth(&mut self, cx: &mut Context<Self>) -> bool {
+        self.auth = None;
+        let removed = match self.auth_window.take() {
+            Some(window) => {
+                let _ = window.update(cx, |_, window, _| window.remove_window());
+                true
+            }
+            None => false,
+        };
+        if let Some(previous) = self.auth_return.take() {
+            let _ = previous.update(cx, |_, window, _| window.activate_window());
+        }
+        if removed {
+            self.changed(cx);
+        }
+        removed
+    }
+    /// Open the palette's `Ctrl+B` card as a frosted surface over the sheet.
+    /// The card's list is derived from the sheet's snapshot, so it answers the
+    /// live selection without a second command table.
+    fn open_spotlight_menu(
+        &mut self,
+        menu: SpotlightMenuSnapshot,
+        cx: &mut Context<Self>,
+    ) {
+        self.dismiss_spotlight_menu(cx);
+        if self.panel != Some(Panel::Spotlight) {
+            return;
+        }
+        let output = menu.output.clone();
+        let view = self.outputs.get(&output);
+        let display = view.map(|v| v.display);
+        let (w, h) = view.map(|v| (v.width, v.height)).unwrap_or((1200., 800.));
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(w), px(h)));
+        let options = window_options(
+            "clarion-panel",
+            display,
+            bounds,
+            self.preview,
+            LayerShellAnchor::ALL,
+            -1,
+            LayerShellKeyboardInteractivity::Exclusive,
+            LayerShellMargins::default(),
+            LayerShellLayer::Overlay,
+        );
+        let host = cx.entity();
+        let state = Arc::new(self.snapshot());
+        self.spotlight_menu_opening = true;
+        let opened = cx.open_window(options, move |window, cx| {
+            let view = cx.new(|cx| ShellView::new_spotlight_menu(host, state, menu, cx));
+            view.read(cx).focus(window, cx);
+            view
+        });
+        self.spotlight_menu_opening = false;
+        match opened {
+            Ok(window) => {
+                self.spotlight_menu = Some(window);
+                // The sheet's window must not read the menu's keyboard grab as
+                // "the user left the launcher".
+                let _ = window.update(cx, |_, window, _| window.activate_window());
+                self.changed(cx);
+            }
+            Err(error) => self.show_error(format!("无法打开快捷操作：{error}"), cx),
+        }
+    }
+    /// Fold the card and hand the keyboard back to the sheet.
+    fn close_spotlight_menu(&mut self, cx: &mut Context<Self>) {
+        if self.dismiss_spotlight_menu(cx) {
+            if let Some(popup) = self.popup {
+                let _ = popup.update(cx, |_, window, _| window.activate_window());
+            }
+            self.changed(cx);
+        }
+    }
+    /// Release the card surface without touching the sheet's focus.
+    fn dismiss_spotlight_menu(&mut self, cx: &mut Context<Self>) -> bool {
+        match self.spotlight_menu.take() {
+            Some(window) => {
+                let _ = window.update(cx, |_, window, _| window.remove_window());
+                true
+            }
+            None => false,
+        }
+    }
+    /// Run the card's row `index` on the sheet. The card surface mirrors the
+    /// sheet's selection, so the index is the same list the keyboard walks.
+    fn run_spotlight_action(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(popup) = self.popup {
+            let state = Arc::new(self.snapshot());
+            let _ = popup.update(cx, |view, _, cx| {
+                view.state = state.clone();
+                view.run_spotlight_action(index, &state, cx);
+            });
         }
     }
     fn show_toast(&mut self, id: u32, cx: &mut Context<Self>) {
@@ -1352,7 +2445,10 @@ impl Host {
                     0,
                     LayerShellKeyboardInteractivity::None,
                     LayerShellMargins {
-                        top: self.prefs.bar_height as i32 + 14,
+                        // The bar's exclusive zone already starts the overlay
+                        // below the menu bar; adding the bar height here again
+                        // pushed the banner a whole bar-height down.
+                        top: 14,
                         right: 14,
                         ..Default::default()
                     },
@@ -1930,12 +3026,8 @@ impl Host {
         if self.prefs.minimize_into_app && !self.prefs.dock_hidden {
             for (name, output) in &self.outputs {
                 let metrics = self.dock_metrics(output.width, output.height);
-                let (surface_x, surface_y) = panels::dock_surface_origin(
-                    &state,
-                    &metrics,
-                    output.width,
-                    output.height,
-                );
+                let (surface_x, surface_y) =
+                    panels::dock_surface_origin(&state, &metrics, output.width, output.height);
                 let slots = metrics.samples(None, 0.);
                 let icon = f64::from(metrics.icon_size);
                 let inset = f64::from(metrics.inset);
@@ -1953,10 +3045,7 @@ impl Host {
                             surface_x as f64 + main,
                             surface_y as f64 + f64::from(metrics.cross_padding) + inset,
                         ),
-                        DockPosition::Left => (
-                            surface_x as f64 + inset,
-                            surface_y as f64 + main,
-                        ),
+                        DockPosition::Left => (surface_x as f64 + inset, surface_y as f64 + main),
                         DockPosition::Right => (
                             surface_x as f64
                                 + f64::from(metrics.surface_width - metrics.thickness)
@@ -1964,9 +3053,7 @@ impl Host {
                             surface_y as f64 + main,
                         ),
                     };
-                    if main + icon
-                        > f64::from(metrics.main_padding + metrics.length) + 0.001
-                    {
+                    if main + icon > f64::from(metrics.main_padding + metrics.length) + 0.001 {
                         continue;
                     }
                     for window in &app.windows {
@@ -2089,9 +3176,34 @@ fn output_dimensions(
         .unwrap_or((f32::from(fallback.width), f32::from(fallback.height)))
 }
 
+/// How far a preferences window may sit from the requested output centre and
+/// still count as already placed. A new floating window is centred in the
+/// working area, which differs from the output centre by about half the gap
+/// between the top and bottom reserved zones: a few points, never a real jump.
+const PREFERENCES_PLACEMENT_SLACK: f64 = 64.;
+
+/// Whether the compositor already opened the preferences window floating at
+/// its natural size near the requested centre. Moving such a window would
+/// animate a visible drift after it appeared.
+fn preferences_window_is_placed(
+    window: &clarion_ipc::Window,
+    centre: (f64, f64),
+    size: (i32, i32),
+) -> bool {
+    window.is_floating
+        && window.layout.window_size == size
+        && window
+            .layout
+            .tile_pos_in_workspace_view
+            .is_some_and(|(x, y)| {
+                (x - centre.0).abs() <= PREFERENCES_PLACEMENT_SLACK
+                    && (y - centre.1).abs() <= PREFERENCES_PLACEMENT_SLACK
+            })
+}
+
 // Mirror the layer-shell role declaration at each call site.
 #[allow(clippy::too_many_arguments)]
-fn window_options(
+pub(crate) fn window_options(
     namespace: &'static str,
     display: Option<DisplayId>,
     bounds: Bounds<Pixels>,
@@ -2121,8 +3233,10 @@ fn window_options(
         },
         display_id: display,
         window_background: if preview
-            || matches!(namespace, "clarion-desktop" | "clarion-dock-edge")
-        {
+            || matches!(
+                namespace,
+                "clarion-desktop" | "clarion-desktop-menu" | "clarion-dock-edge"
+            ) {
             WindowBackgroundAppearance::Transparent
         } else {
             WindowBackgroundAppearance::Blurred
@@ -2149,6 +3263,7 @@ impl AssetSource for ShellAssets {
             "scan.svg" => include_bytes!("../assets/icons/scan.svg"),
             "sliders.svg" => include_bytes!("../assets/icons/sliders.svg"),
             "bell.svg" => include_bytes!("../assets/icons/bell.svg"),
+            "bell-off.svg" => include_bytes!("../assets/icons/bell-off.svg"),
             "circle.svg" => include_bytes!("../assets/icons/circle.svg"),
             "control-center.svg" => include_bytes!("../assets/icons/control-center.svg"),
             "moon.svg" => include_bytes!("../assets/icons/moon.svg"),
@@ -2164,6 +3279,8 @@ impl AssetSource for ShellAssets {
             "menu-ring.svg" => include_bytes!("../assets/icons/menu-ring.svg"),
             "menu-check.svg" => include_bytes!("../assets/icons/menu-check.svg"),
             "chevron-right.svg" => include_bytes!("../assets/icons/chevron-right.svg"),
+            "chevron-left.svg" => include_bytes!("../assets/icons/chevron-left.svg"),
+            "search.svg" => include_bytes!("../assets/icons/search.svg"),
             "chevron-down.svg" => include_bytes!("../assets/icons/chevron-down.svg"),
             // Absolute paths are resolved system theme icons; serve the file.
             _ => {
@@ -2428,6 +3545,9 @@ fn themed_dock_icons() -> &'static HashMap<&'static str, std::path::PathBuf> {
 mod dock_preferences_tests;
 
 #[cfg(test)]
+mod power_profile_tests;
+
+#[cfg(test)]
 mod notification_lifecycle_tests {
     use ::core::prelude::v1::test;
 
@@ -2437,11 +3557,13 @@ mod notification_lifecycle_tests {
         services::Notification {
             id,
             app: "Notification fixture".into(),
+            icon: None,
             title: "通知标题".into(),
             body: "通知正文".into(),
             actions: Vec::new(),
             created_at: u64::from(id),
             unread: true,
+            pinned: false,
         }
     }
 
@@ -2486,6 +3608,54 @@ mod notification_lifecycle_tests {
 }
 
 #[cfg(test)]
+mod tray_lifecycle_tests {
+    use ::core::prelude::v1::test;
+
+    use super::*;
+
+    fn tray_item(id: &str) -> services::TrayItem {
+        services::TrayItem {
+            id: id.into(),
+            owner: ":1.42".into(),
+            path: "/StatusNotifierItem".into(),
+            title: "Tray fixture".into(),
+            icon_name: String::new(),
+            icon_png: None,
+            status: "Active".into(),
+            menu_path: Some("/Menu".into()),
+            item_is_menu: true,
+        }
+    }
+
+    #[gpui::test]
+    fn a_tray_popup_closes_immediately_when_its_owner_exits(cx: &mut TestAppContext) {
+        let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
+        host.update(cx, |host, _| host.tray = vec![tray_item("fixture")]);
+        let popup = cx.update(|cx| testing::open_panel(&host, Panel::Tray("fixture".into()), cx));
+        host.read_with(cx, |host, _| {
+            assert_eq!(host.panel, Some(Panel::Tray("fixture".into())));
+        });
+
+        // The application exited from its own menu: its StatusNotifierItem is
+        // gone, so the popup anchored to that icon must go with it.
+        host.update(cx, |host, cx| {
+            host.service_event(services::Event::Tray(Vec::new()), cx)
+        });
+        host.read_with(cx, |host, _| {
+            assert!(host.panel.is_none());
+            assert!(host.tray.is_empty());
+            assert!(host.tray_menu.is_empty());
+            assert!(host.expanded_menus.is_empty());
+        });
+        cx.run_until_parked();
+        assert!(
+            popup.update(cx, |_, _, _| ()).is_err(),
+            "the tray surface is removed instead of lingering for a fade"
+        );
+    }
+}
+
+#[cfg(test)]
 mod error_banner_tests {
     use ::core::prelude::v1::test;
 
@@ -2521,3 +3691,113 @@ mod error_banner_tests {
     }
 }
 
+#[cfg(test)]
+mod preferences_placement_tests {
+    use ::core::prelude::v1::test;
+
+    use super::*;
+
+    fn preferences_window(
+        floating: bool,
+        size: (i32, i32),
+        pos: Option<(f64, f64)>,
+    ) -> clarion_ipc::Window {
+        clarion_ipc::Window {
+            id: 7,
+            title: Some("桌面与程序坞".into()),
+            app_id: Some("io.github.clarion.DesktopPreferences".into()),
+            pid: Some(std::process::id() as i32),
+            gtk_app_menu: None,
+            app_menu: None,
+            workspace_id: Some(1),
+            is_focused: true,
+            is_minimized: false,
+            is_floating: floating,
+            is_urgent: false,
+            focus_timestamp: None,
+            layout: clarion_ipc::WindowLayout {
+                pos_in_scrolling_layout: None,
+                tile_size: (f64::from(size.0), f64::from(size.1)),
+                window_size: size,
+                tile_pos_in_workspace_view: pos,
+                window_offset_in_tile: (0., 0.),
+            },
+        }
+    }
+
+    #[test]
+    fn a_window_already_centred_by_the_compositor_is_left_alone() {
+        let centre = (640., 280.);
+        for pos in [(640., 264.), (640., 280.), (628., 296.)] {
+            assert!(
+                preferences_window_is_placed(
+                    &preferences_window(true, (640, 520), Some(pos)),
+                    centre,
+                    (640, 520),
+                ),
+                "{pos:?} is already centred"
+            );
+        }
+    }
+
+    #[test]
+    fn a_tiled_or_off_centre_window_is_placed_explicitly() {
+        let centre = (640., 280.);
+        for (floating, size, pos) in [
+            (true, (640, 520), None),
+            (false, (640, 520), Some((640., 280.))),
+            (true, (2183, 1296), Some((189., 42.))),
+            (true, (640, 520), Some((640., 480.))),
+            (true, (640, 520), Some((0., 200.))),
+        ] {
+            assert!(
+                !preferences_window_is_placed(
+                    &preferences_window(floating, size, pos),
+                    centre,
+                    (640, 520),
+                ),
+                "{floating} {size:?} {pos:?} still needs placing"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod surface_backdrop_tests {
+    use ::core::prelude::v1::test;
+
+    use super::*;
+
+    fn options(namespace: &'static str) -> WindowOptions {
+        window_options(
+            namespace,
+            None,
+            Bounds::new(point(px(0.), px(0.)), size(px(1280.), px(32.))),
+            false,
+            LayerShellAnchor {
+                top: true,
+                left: true,
+                right: true,
+                ..Default::default()
+            },
+            32,
+            LayerShellKeyboardInteractivity::None,
+            LayerShellMargins::default(),
+            LayerShellLayer::Top,
+        )
+    }
+
+    #[test]
+    fn the_bar_keeps_the_compositor_frost() {
+        assert_eq!(
+            options("clarion-shell").window_background,
+            WindowBackgroundAppearance::Blurred,
+            "the bar is created frosted; only the clear preference drops it at render time"
+        );
+        assert_eq!(
+            options("clarion-panel").window_background,
+            WindowBackgroundAppearance::Blurred,
+            "popups keep their compositor frost"
+        );
+    }
+}

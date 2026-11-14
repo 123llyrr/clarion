@@ -160,8 +160,9 @@ impl Fixture {
     }
 
     fn glass_regions(&self) -> Vec<Bounds<Pixels>> {
-        self.view
-            .read_with(&self.visual, |view, _| view.dock_motion.glass_regions.clone())
+        self.view.read_with(&self.visual, |view, _| {
+            view.dock_motion.glass_regions.clone()
+        })
     }
 
     fn animation_active(&self) -> bool {
@@ -257,6 +258,79 @@ fn file_drag_over_an_app_keeps_the_hover_magnification(cx: &mut TestAppContext) 
 }
 
 #[gpui::test]
+fn the_fullscreen_launcher_hides_only_its_own_outputs_dock(cx: &mut TestAppContext) {
+    let mut fixture = Fixture::new(cx, false);
+    let idle = fixture.bounds();
+    let output = fixture
+        .view
+        .read_with(&fixture.visual, |view, _| view.output().to_owned());
+    assert!(fixture.contains_input(idle.center()));
+
+    fixture.host.update(cx, |host, cx| {
+        host.panel = Some(Panel::Apps);
+        host.panel_output = Some(output.clone());
+        host.changed(cx);
+    });
+    fixture.visual.run_until_parked();
+
+    assert!(
+        fixture.visual.debug_bounds(APP_SELECTOR).is_none(),
+        "the Dock must not paint underneath the fullscreen launcher"
+    );
+    assert!(
+        fixture.glass_regions().is_empty(),
+        "a hidden Dock must not blur a strip of the launcher"
+    );
+    assert!(
+        !fixture.contains_input(idle.center()),
+        "a hidden Dock must not keep its click targets"
+    );
+
+    fixture.host.update(cx, |host, cx| {
+        host.panel = None;
+        host.panel_output = None;
+        host.changed(cx);
+    });
+    fixture.visual.run_until_parked();
+
+    assert!(
+        fixture.visual.debug_bounds(APP_SELECTOR).is_some(),
+        "closing the launcher brings the Dock back"
+    );
+    assert!(
+        fixture.contains_input(idle.center()),
+        "the restored Dock accepts pointer input again"
+    );
+}
+
+#[gpui::test]
+fn another_outputs_dock_stays_visible_when_the_launcher_opens(cx: &mut TestAppContext) {
+    let mut fixture = Fixture::new(cx, false);
+    let idle = fixture.bounds();
+    assert!(fixture.contains_input(idle.center()));
+
+    fixture.host.update(cx, |host, cx| {
+        host.panel = Some(Panel::Apps);
+        host.panel_output = Some("another-output".to_owned());
+        host.changed(cx);
+    });
+    fixture.visual.run_until_parked();
+
+    assert!(
+        fixture.visual.debug_bounds(APP_SELECTOR).is_some(),
+        "a launcher on one output must leave the other outputs' Docks painted"
+    );
+    assert!(
+        fixture.contains_input(idle.center()),
+        "another output's Dock keeps its click targets"
+    );
+    assert!(
+        !fixture.glass_regions().is_empty(),
+        "another output's Dock keeps its frosted tray"
+    );
+}
+
+#[gpui::test]
 fn the_glass_region_frosts_only_the_resting_tray(cx: &mut TestAppContext) {
     let mut fixture = Fixture::new(cx, false);
     // Idle: the glass follows the tray, so it is non-empty and bounded.
@@ -268,9 +342,7 @@ fn the_glass_region_frosts_only_the_resting_tray(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn turning_frost_off_clears_the_glass_but_keeps_the_tray_clickable(
-    cx: &mut TestAppContext,
-) {
+fn turning_frost_off_clears_the_glass_but_keeps_the_tray_clickable(cx: &mut TestAppContext) {
     let mut fixture = Fixture::new(cx, false);
     let idle = fixture.bounds();
     assert!(!fixture.glass_regions().is_empty());
@@ -416,12 +488,35 @@ fn auto_hide_slides_the_same_surface_outside_input_and_reveals_it_again(cx: &mut
 }
 
 #[test]
+fn a_folder_stack_fans_its_cards_instead_of_twisting() {
+    let cards = super::macos_dock::folder_stack_layout(3, 100.);
+    let angles = cards.iter().map(|card| card.angle).collect::<Vec<_>>();
+    // Painted back to front: -40°, -20°, then the upright front card. Every
+    // card turns the same way, so the deck recedes instead of fanning out.
+    assert_eq!(angles, vec![-40., -20., 0.]);
+    // The back card rides up and to the right, smaller and dimmer.
+    assert!(cards[0].left > cards[2].left);
+    assert!(cards[0].top < cards[2].top);
+    assert!(cards[0].size < cards[2].size);
+    assert!(cards[0].opacity < cards[2].opacity);
+    assert_eq!(cards[2].opacity, 1.);
+    assert!(cards[0].size < 100.);
+    assert_eq!(cards[2].left, (100. - cards[2].size) / 2.);
+    // A folder with one item is not tilted or dimmed at all.
+    let single = super::macos_dock::folder_stack_layout(1, 100.);
+    assert_eq!(single.len(), 1);
+    assert_eq!(single[0].angle, 0.);
+    assert_eq!(single[0].opacity, 1.);
+}
+
+#[test]
 fn folder_stack_preview_puts_files_on_top_and_folders_at_the_back() {
     use crate::dock_folder::{FolderEntry, FolderEntryKind};
     let entry = |name: &str, kind: FolderEntryKind| FolderEntry {
         path: std::path::PathBuf::from(name),
         name: name.to_owned(),
         kind,
+        tags: Vec::new(),
         modified: None,
         size: 0,
     };
@@ -587,11 +682,9 @@ fn dragging_a_folder_over_a_lifted_dock_icon_keeps_the_preview(cx: &mut TestAppC
     fixture.visual.update(|window, _| window.refresh());
     fixture.visual.run_until_parked();
     let folder = fixture.visual.debug_bounds("dock-folder-0").unwrap();
-    let tray_top = fixture
-        .view
-        .read_with(&fixture.visual, |view, _| {
-            view.dock_motion.geometry.tray_cross_start
-        });
+    let tray_top = fixture.view.read_with(&fixture.visual, |view, _| {
+        view.dock_motion.geometry.tray_cross_start
+    });
     // Start inside the resting tray so the icon magnifies, then move onto the
     // lifted artwork that is still part of the Dock's input region.
     let low = point(folder.center().x, px(tray_top + 1.));
@@ -657,13 +750,14 @@ fn leaving_a_folder_drag_clears_the_magnified_icon(cx: &mut TestAppContext) {
         enlarged.size.width > idle.size.width + px(10.),
         "the drag should magnify the icon: {idle:?} / {enlarged:?}"
     );
-    fixture
-        .visual
-        .simulate_event(gpui::FileDropEvent::Exited);
+    fixture.visual.simulate_event(gpui::FileDropEvent::Exited);
     fixture.visual.run_until_parked();
     fixture.advance_motion(Duration::from_millis(500));
     let settled = fixture.bounds();
-    assert_eq!(settled.size, idle.size, "the icon returns to its resting size");
+    assert_eq!(
+        settled.size, idle.size,
+        "the icon returns to its resting size"
+    );
     fixture.view.read_with(&fixture.visual, |view, _| {
         assert!(view.dock_motion.pointer_target.is_none());
         assert!(!view.dock_motion.hovered);
@@ -721,11 +815,9 @@ fn dragging_a_folder_over_a_pinned_app_only_offers_opening(cx: &mut TestAppConte
         trash_before,
         "the trash does not shift while the pointer is over an application"
     );
-    fixture
-        .visual
-        .simulate_event(gpui::FileDropEvent::Submit {
-            position: app.center(),
-        });
+    fixture.visual.simulate_event(gpui::FileDropEvent::Submit {
+        position: app.center(),
+    });
     fixture.visual.run_until_parked();
     host.read_with(&fixture.visual, |host, _| {
         assert_eq!(
@@ -741,9 +833,7 @@ fn dragging_a_folder_over_a_pinned_app_only_offers_opening(cx: &mut TestAppConte
 }
 
 #[gpui::test]
-fn dropping_a_folder_on_an_app_that_opens_directories_launches_that_app(
-    cx: &mut TestAppContext,
-) {
+fn dropping_a_folder_on_an_app_that_opens_directories_launches_that_app(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().unwrap();
     let folder = directory.path().join("Pinned");
     std::fs::create_dir(&folder).unwrap();
@@ -901,9 +991,7 @@ fn a_new_folder_previews_after_the_existing_folder_group(cx: &mut TestAppContext
 }
 
 #[gpui::test]
-fn dropping_a_folder_after_magnified_hovering_exits_is_cleared(
-    cx: &mut TestAppContext,
-) {
+fn dropping_a_folder_after_magnified_hovering_exits_is_cleared(cx: &mut TestAppContext) {
     // Regression for the follow-up to the placeholder work: completing a
     // folder drop must not leave the next hover stuck. Hover a neighbour,
     // then leave the Dock; the magnified tile must relax again.
@@ -930,11 +1018,7 @@ fn dropping_a_folder_after_magnified_hovering_exits_is_cleared(
     });
     fixture.visual.update(|window, _| window.refresh());
     fixture.visual.run_until_parked();
-    let neighbour_idle = fixture
-        .visual
-        .debug_bounds("dock-folder-0")
-        .unwrap()
-        .size;
+    let neighbour_idle = fixture.visual.debug_bounds("dock-folder-0").unwrap().size;
     // Drop the new folder on the reserved slot right after the folder tiles.
     let pinned_tile = fixture.visual.debug_bounds("dock-folder-0").unwrap();
     let offset = point(pinned_tile.right() + px(10.), pinned_tile.center().y);
@@ -947,19 +1031,14 @@ fn dropping_a_folder_after_magnified_hovering_exits_is_cleared(
         .visual
         .debug_bounds("dock-folder-drop-placeholder")
         .expect("the reserved slot shows its placeholder");
-    fixture
-        .visual
-        .simulate_event(gpui::FileDropEvent::Submit {
-            position: slot.center(),
-        });
+    fixture.visual.simulate_event(gpui::FileDropEvent::Submit {
+        position: slot.center(),
+    });
     fixture.visual.run_until_parked();
     let dragged = dragged.canonicalize().unwrap();
     host.read_with(&fixture.visual, |host, _| {
         assert_eq!(host.prefs.dock_folders.len(), 2);
-        assert_eq!(
-            host.prefs.dock_folders[1].path,
-            dragged.to_string_lossy()
-        );
+        assert_eq!(host.prefs.dock_folders[1].path, dragged.to_string_lossy());
     });
     // Hover the neighbouring folder with the plain pointer.
     let neighbour = fixture.visual.debug_bounds("dock-folder-0").unwrap();
@@ -972,11 +1051,7 @@ fn dropping_a_folder_after_magnified_hovering_exits_is_cleared(
         assert!(view.dock_motion.pointer_target.is_some());
     });
     fixture.advance_motion(Duration::from_millis(250));
-    let neighbour_big = fixture
-        .visual
-        .debug_bounds("dock-folder-0")
-        .unwrap()
-        .size;
+    let neighbour_big = fixture.visual.debug_bounds("dock-folder-0").unwrap().size;
     assert!(
         neighbour_big.width > neighbour_idle.width,
         "the hovered folder magnifies: {neighbour_idle:?} -> {neighbour_big:?}"
@@ -1002,9 +1077,7 @@ fn dropping_a_folder_after_magnified_hovering_exits_is_cleared(
 }
 
 #[gpui::test]
-fn an_exit_after_plain_moves_clears_the_magnification_target(
-    cx: &mut TestAppContext,
-) {
+fn an_exit_after_plain_moves_clears_the_magnification_target(cx: &mut TestAppContext) {
     // Regression for the real Wayland ordering captured while chasing the
     // post-pin stuck icon: the drop's end-drag cleanup resets `hovered`, then
     // plain surface moves re-establish the magnification target through the
@@ -1052,9 +1125,7 @@ fn an_exit_after_plain_moves_clears_the_magnification_target(
 }
 
 #[gpui::test]
-fn an_inactive_dock_does_not_release_the_folder_slot_during_a_drag(
-    cx: &mut TestAppContext,
-) {
+fn an_inactive_dock_does_not_release_the_folder_slot_during_a_drag(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().unwrap();
     let folder = directory.path().join("Dragged");
     std::fs::create_dir(&folder).unwrap();
@@ -1085,9 +1156,7 @@ fn an_inactive_dock_does_not_release_the_folder_slot_during_a_drag(
             "an inactive output must not cancel the active Dock's folder slot"
         );
     });
-    fixture
-        .visual
-        .simulate_event(gpui::FileDropEvent::Exited);
+    fixture.visual.simulate_event(gpui::FileDropEvent::Exited);
     fixture.visual.run_until_parked();
 }
 
@@ -1178,11 +1247,9 @@ fn moving_a_folder_drag_over_the_trash_hides_the_slot(cx: &mut TestAppContext) {
     });
     fixture.visual.run_until_parked();
     let trash_after = fixture.visual.debug_bounds("dock-trash").unwrap();
-    fixture
-        .visual
-        .simulate_event(gpui::FileDropEvent::Pending {
-            position: trash_after.center(),
-        });
+    fixture.visual.simulate_event(gpui::FileDropEvent::Pending {
+        position: trash_after.center(),
+    });
     fixture.visual.run_until_parked();
     fixture.view.read_with(&fixture.visual, |view, _| {
         assert!(
@@ -1272,7 +1339,10 @@ fn the_icon_is_centered_with_the_same_clearance_on_every_side(cx: &mut TestAppCo
     let slots = metrics.samples(None, 0.);
     let slot = &slots[app_slot];
     assert_eq!(f32::from(bounds.left()), slot.origin_main);
-    assert_eq!(f32::from(bounds.top()), metrics.cross_padding + metrics.inset);
+    assert_eq!(
+        f32::from(bounds.top()),
+        metrics.cross_padding + metrics.inset
+    );
     assert_eq!(f32::from(bounds.size.width), metrics.icon_size);
     // The cross-axis clearance is the same above and below the icon.
     let above = f32::from(bounds.top()) - metrics.cross_padding;
@@ -1336,7 +1406,10 @@ fn hovering_a_tile_reveals_its_name_and_leaving_hides_it(cx: &mut TestAppContext
     // The label is armed but waits out its delay before it appears.
     fixture.view.read_with(&fixture.visual, |view, _| {
         assert_eq!(
-            view.dock_motion.tooltip_armed.as_ref().map(|(name, _)| name.as_str()),
+            view.dock_motion
+                .tooltip_armed
+                .as_ref()
+                .map(|(name, _)| name.as_str()),
             Some(APP_ID),
             "the hovered application name is armed"
         );
@@ -1383,12 +1456,12 @@ fn the_drag_leaves_a_shadowed_placeholder_and_lifts_the_icon(cx: &mut TestAppCon
         .visual
         .debug_bounds("dock-org.clarion.DockC.desktop")
         .expect("pinned application C");
-    fixture.visual.simulate_mouse_down(a.center(), MouseButton::Left, Modifiers::default());
-    fixture.visual.simulate_mouse_move(
-        c.center(),
-        Some(MouseButton::Left),
-        Modifiers::default(),
-    );
+    fixture
+        .visual
+        .simulate_mouse_down(a.center(), MouseButton::Left, Modifiers::default());
+    fixture
+        .visual
+        .simulate_mouse_move(c.center(), Some(MouseButton::Left), Modifiers::default());
     fixture.visual.run_until_parked();
     // The dragged icon floats on its own selector and keeps the running order
     // hole; the placeholder occupies the landing slot instead of nothing.
@@ -1417,9 +1490,13 @@ fn a_reorder_slides_the_untouched_icons_towards_their_new_slots(cx: &mut TestApp
         .debug_bounds("dock-org.clarion.DockC.desktop")
         .expect("pinned application C");
     // Lift A and drag it past C, so B and C move a slot towards the leading edge.
-    fixture.visual.simulate_mouse_down(a.center(), MouseButton::Left, Modifiers::default());
+    fixture
+        .visual
+        .simulate_mouse_down(a.center(), MouseButton::Left, Modifiers::default());
     let drop = c.center() + point(px(64.), px(0.));
-    fixture.visual.simulate_mouse_move(drop, Some(MouseButton::Left), Modifiers::default());
+    fixture
+        .visual
+        .simulate_mouse_move(drop, Some(MouseButton::Left), Modifiers::default());
     fixture.visual.run_until_parked();
     // The in-flight arrangement tracks each sliding icon with a motion that is
     // still settling, so the Dock keeps asking for frames.
@@ -1435,7 +1512,9 @@ fn a_reorder_slides_the_untouched_icons_towards_their_new_slots(cx: &mut TestApp
         );
     });
     // A released drag snaps the icons back onto their slots and drains the map.
-    fixture.visual.simulate_mouse_up(drop, MouseButton::Left, Modifiers::default());
+    fixture
+        .visual
+        .simulate_mouse_up(drop, MouseButton::Left, Modifiers::default());
     fixture.visual.run_until_parked();
     fixture.view.read_with(&fixture.visual, |view, _| {
         assert!(view.dock_motion.drag.is_none());
@@ -1457,12 +1536,12 @@ fn dragging_a_pinned_icon_reorders_it_and_never_launches(cx: &mut TestAppContext
         .visual
         .debug_bounds("dock-org.clarion.DockC.desktop")
         .expect("pinned application C");
-    fixture.visual.simulate_mouse_down(a.center(), MouseButton::Left, Modifiers::default());
-    fixture.visual.simulate_mouse_move(
-        c.center(),
-        Some(MouseButton::Left),
-        Modifiers::default(),
-    );
+    fixture
+        .visual
+        .simulate_mouse_down(a.center(), MouseButton::Left, Modifiers::default());
+    fixture
+        .visual
+        .simulate_mouse_move(c.center(), Some(MouseButton::Left), Modifiers::default());
     fixture.visual.run_until_parked();
     fixture.view.read_with(&fixture.visual, |view, _| {
         let drag = view
@@ -1474,12 +1553,16 @@ fn dragging_a_pinned_icon_reorders_it_and_never_launches(cx: &mut TestAppContext
     });
     // Release past the last pinned slot: A lands at the end of the group.
     let drop = c.center() + point(px(64.), px(0.));
-    fixture.visual.simulate_mouse_move(drop, Some(MouseButton::Left), Modifiers::default());
+    fixture
+        .visual
+        .simulate_mouse_move(drop, Some(MouseButton::Left), Modifiers::default());
     fixture.visual.run_until_parked();
     fixture.view.read_with(&fixture.visual, |view, _| {
         assert!(view.dock_motion.drag.is_some());
     });
-    fixture.visual.simulate_mouse_up(drop, MouseButton::Left, Modifiers::default());
+    fixture
+        .visual
+        .simulate_mouse_up(drop, MouseButton::Left, Modifiers::default());
     fixture.visual.run_until_parked();
     fixture.host.read_with(&fixture.visual, |host, _| {
         assert_eq!(
@@ -1533,7 +1616,9 @@ fn a_running_application_is_not_reordered(cx: &mut TestAppContext) {
         .visual
         .debug_bounds("dock-org.clarion.DockC.desktop")
         .expect("the running application");
-    fixture.visual.simulate_mouse_down(c.center(), MouseButton::Left, Modifiers::default());
+    fixture
+        .visual
+        .simulate_mouse_down(c.center(), MouseButton::Left, Modifiers::default());
     fixture.visual.simulate_mouse_move(
         c.center() + point(px(200.), px(0.)),
         Some(MouseButton::Left),
@@ -1567,9 +1652,12 @@ fn running_and_recent_applications_keep_slots_when_the_pinned_group_overflows(
         "org.clarion.RecentC.desktop",
     ];
     let running = "org.clarion.Running.desktop";
-    let mut fixture = Fixture::with_mixed_apps(cx, false, APP_OVERFLOW, &[
-        recent[0], recent[1], recent[2], running,
-    ]);
+    let mut fixture = Fixture::with_mixed_apps(
+        cx,
+        false,
+        APP_OVERFLOW,
+        &[recent[0], recent[1], recent[2], running],
+    );
     let name = fixture
         .visual
         .cx
@@ -1651,9 +1739,7 @@ fn running_and_recent_applications_keep_slots_when_the_pinned_group_overflows(
 }
 
 #[gpui::test]
-fn a_crowded_dock_shows_the_overflow_tile_and_the_hidden_apps_panel(
-    cx: &mut TestAppContext,
-) {
+fn a_crowded_dock_shows_the_overflow_tile_and_the_hidden_apps_panel(cx: &mut TestAppContext) {
     let mut fixture = Fixture::with_apps(cx, false, APP_OVERFLOW);
     // Shrink the logical output so twelve icons no longer fit the row.
     let name = fixture
@@ -1712,8 +1798,7 @@ fn a_crowded_dock_shows_the_overflow_tile_and_the_hidden_apps_panel(
         .visual
         .debug_bounds("dock-overflow-badge")
         .expect("the hidden-app count badge is painted");
-    let badge_ratio = |icon: gpui::Bounds<gpui::Pixels>,
-                       badge: gpui::Bounds<gpui::Pixels>| {
+    let badge_ratio = |icon: gpui::Bounds<gpui::Pixels>, badge: gpui::Bounds<gpui::Pixels>| {
         (
             f32::from(badge.center().x - icon.center().x) / f32::from(icon.size.width),
             f32::from(badge.center().y - icon.center().y) / f32::from(icon.size.height),
@@ -1924,8 +2009,10 @@ fn dragging_a_pinned_drawer_tile_reorders_the_pinned_group(cx: &mut TestAppConte
         window.refresh();
     });
     panel_visual.run_until_parked();
-    let first_selector: &'static str = Box::leak(format!("overflow-{}", hidden[0]).into_boxed_str());
-    let third_selector: &'static str = Box::leak(format!("overflow-{}", hidden[2]).into_boxed_str());
+    let first_selector: &'static str =
+        Box::leak(format!("overflow-{}", hidden[0]).into_boxed_str());
+    let third_selector: &'static str =
+        Box::leak(format!("overflow-{}", hidden[2]).into_boxed_str());
     let first = panel_visual
         .debug_bounds(first_selector)
         .expect("the first drawer tile");
@@ -1941,7 +2028,11 @@ fn dragging_a_pinned_drawer_tile_reorders_the_pinned_group(cx: &mut TestAppConte
         Some(MouseButton::Left),
         Modifiers::default(),
     );
-    panel_visual.simulate_mouse_move(third.center(), Some(MouseButton::Left), Modifiers::default());
+    panel_visual.simulate_mouse_move(
+        third.center(),
+        Some(MouseButton::Left),
+        Modifiers::default(),
+    );
     panel_visual.run_until_parked();
     let dragging = panel_visual
         .debug_bounds(Box::leak(
@@ -1953,7 +2044,10 @@ fn dragging_a_pinned_drawer_tile_reorders_the_pinned_group(cx: &mut TestAppConte
     panel_visual.run_until_parked();
     // The drag is over once the pointer releases.
     fixture.view.read_with(&fixture.visual, |view, _| {
-        assert!(view.drawer.drag.is_none(), "the release ends the drawer drag");
+        assert!(
+            view.drawer.drag.is_none(),
+            "the release ends the drawer drag"
+        );
     });
     // The dragged application left the first cell for the third, so it now sits
     // behind the application that used to be third. The full pinned order
@@ -2061,8 +2155,7 @@ fn clicking_a_drawer_tile_activates_the_app_and_dismisses_the_drawer(cx: &mut Te
         window.refresh();
     });
     panel_visual.run_until_parked();
-    let cell_selector: &'static str =
-        Box::leak(format!("overflow-{}", hidden[0]).into_boxed_str());
+    let cell_selector: &'static str = Box::leak(format!("overflow-{}", hidden[0]).into_boxed_str());
     let cell = panel_visual
         .debug_bounds(cell_selector)
         .expect("the drawer shows the folded application");
@@ -2076,7 +2169,6 @@ fn clicking_a_drawer_tile_activates_the_app_and_dismisses_the_drawer(cx: &mut Te
         );
     });
 }
-
 
 #[gpui::test]
 fn pinning_and_unpinning_a_folder_grows_the_icon_in_and_rides_it_out(cx: &mut TestAppContext) {
@@ -2159,10 +2251,7 @@ fn pinning_and_unpinning_a_folder_grows_the_icon_in_and_rides_it_out(cx: &mut Te
             "the unpinned folder rides an exit slide on a reserved slot"
         );
         assert_eq!(
-            view.dock_motion.folder_exiting[0]
-                .0
-                .path
-                .to_string_lossy(),
+            view.dock_motion.folder_exiting[0].0.path.to_string_lossy(),
             path.as_str()
         );
     });

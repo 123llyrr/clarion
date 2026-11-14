@@ -88,7 +88,7 @@ impl Reader {
                 io::Error::new(io::ErrorKind::InvalidInput, "gamma size exceeds bound")
             })?;
         self.slots
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |slots| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |slots| {
                 (slots < CAPACITY).then_some(slots + 1)
             })
             .map_err(|_| {

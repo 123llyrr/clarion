@@ -21,6 +21,7 @@ use gpui::*;
 use image::ImageReader;
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::desktop_menu::{DesktopMenuView, MenuColors};
 use crate::input::{QueryChanged, TextInput};
 use crate::preferences::SurfaceAppearance;
 
@@ -28,13 +29,16 @@ const MAX_ENTRIES: usize = 500;
 const MAX_VISITED: usize = 4096;
 const MAX_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
 const CONFIG_LIMIT: u64 = 65536;
-const MAX_PREVIEW_TEXT: u64 = 256 * 1024;
 const MAX_OPEN_SELECTION: usize = 16;
 const DESKTOP_MARGIN: f32 = 16.;
 const DESKTOP_CELL_WIDTH: f32 = 112.;
 const DESKTOP_CELL_HEIGHT: f32 = 112.;
 const DESKTOP_ICON_SIZE: f32 = 64.;
 const DESKTOP_LABEL_WIDTH: f32 = 104.;
+/// The inline rename/new-folder field. One compact capsule for both so a
+/// tile never grows a control larger than its own grid cell.
+const DESKTOP_EDIT_FIELD_HEIGHT: f32 = 28.;
+const DESKTOP_EDIT_FIELD_RADIUS: f32 = 7.;
 
 actions!(
     clarion_desktop,
@@ -61,9 +65,28 @@ actions!(
 #[derive(Clone, Debug)]
 pub enum DesktopAction {
     Open(PathBuf),
+    /// Open one file through the desktop's application chooser.
+    OpenWith(PathBuf),
+    /// Show one file in the shell's quick previewer (GNOME Sushi, the same
+    /// window Nautilus opens on space).
+    Preview(PathBuf),
     Settings,
     /// None asks the host to choose an image; Some supplies a desktop image.
     Wallpaper(Option<PathBuf>),
+    /// Show one path in the file manager (its folder for a file).
+    Reveal(PathBuf),
+    /// Move one path (from any folder) to the trash.
+    Trash(PathBuf),
+    /// Show the finished inspector card as a modal on the desktop's output.
+    Info {
+        output: String,
+        path: Option<PathBuf>,
+        title: String,
+        rows: Vec<(String, String)>,
+    },
+    /// Ask the host to surface a hint through the session's notification
+    /// service. The desktop itself never paints a banner over the files.
+    Notify { body: String },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,6 +102,8 @@ struct DesktopEntry {
     path: PathBuf,
     name: String,
     kind: EntryKind,
+    /// Finder-style tags (`user.xdg.tags`), drawn as dots on the artwork.
+    tags: Vec<String>,
     modified: Option<SystemTime>,
 }
 
@@ -92,15 +117,14 @@ struct DesktopSnapshot {
 struct Inspector {
     title: String,
     rows: Vec<(String, String)>,
-    image: Option<Arc<Image>>,
-    text: Option<String>,
+    /// The file the card belongs to; `None` for a multi-selection.
+    path: Option<PathBuf>,
 }
 
 enum Work {
     Inspect {
         generation: u64,
         paths: Vec<PathBuf>,
-        quick_look: bool,
     },
     CreateFolder(String),
     Refresh,
@@ -305,11 +329,23 @@ pub struct DesktopView {
     inspector: Option<Inspector>,
     inspection_generation: u64,
     menu: Option<Point<Pixels>>,
+    /// The path a menu opened for a Dock folder entry acts on. `None` means
+    /// the menu belongs to the desktop grid and uses the grid selection.
+    menu_target: Option<PathBuf>,
+    /// The overlay surface painting the context menu. It is a window of its
+    /// own so the compositor can frost the desktop behind it.
+    menu_window: Option<WindowHandle<DesktopMenuView>>,
+    /// This window's handle, captured when the menu first opens so closing it
+    /// can hand activation back to the desktop.
+    own_window: Option<WindowHandle<DesktopView>>,
     rename: Option<PathBuf>,
     rename_name: String,
     input: Entity<TextInput>,
     focus: FocusHandle,
-    error: Option<String>,
+    /// The last hint already handed to the notification service. A repeated
+    /// failure (a rescan that keeps hitting the same unreadable directory) is
+    /// posted once until something succeeds in between.
+    last_notice: Option<String>,
     busy: bool,
     work: mpsc::SyncSender<Work>,
     alive: Arc<AtomicBool>,
@@ -351,7 +387,11 @@ impl DesktopView {
         appearance: SurfaceAppearance,
         cx: &mut Context<Self>,
     ) -> Self {
-        let input = cx.new(|cx| TextInput::new(cx).with_placeholder("文件名称"));
+        let input = cx.new(|cx| {
+            TextInput::new(cx)
+                .with_placeholder("文件名称")
+                .with_capsule(appearance.dark)
+        });
         cx.subscribe(&input, |this, _, QueryChanged(name), cx| {
             this.rename_name = name.clone();
             cx.notify();
@@ -366,6 +406,9 @@ impl DesktopView {
             .spawn(move || worker(environment, preview, incoming, updates, worker_alive))
             .err()
             .map(|error| format!("无法启动桌面文件服务：{error}"));
+        if let Some(error) = startup_error {
+            let _ = actions.try_send(DesktopAction::Notify { body: error });
+        }
         cx.spawn(async move |this, cx| {
             while let Ok(update) = received.recv().await {
                 if this
@@ -380,7 +423,10 @@ impl DesktopView {
                                 this.marquee = None;
                                 this.directory = snapshot.directory;
                                 this.wallpaper = snapshot.wallpaper;
-                                this.error = snapshot.error;
+                                match snapshot.error {
+                                    Some(error) => this.send_notice(error, cx),
+                                    None => this.clear_notice(),
+                                }
                                 this.selected_many.retain(|path| {
                                     this.entries.iter().any(|entry| &entry.path == path)
                                 });
@@ -395,8 +441,9 @@ impl DesktopView {
                                     this.selection_anchor = None;
                                 }
                             }
-                            Update::Error(error) => this.error = Some(error),
+                            Update::Error(error) => this.send_notice(error, cx),
                             Update::Created(path) => {
+                                this.clear_notice();
                                 this.selected = Some(path.clone());
                                 this.selection_anchor = Some(path.clone());
                                 this.selected_many = [path].into();
@@ -404,8 +451,18 @@ impl DesktopView {
                             Update::Inspector { generation, result } => {
                                 if generation == this.inspection_generation {
                                     match result {
-                                        Ok(inspector) => this.inspector = Some(inspector),
-                                        Err(error) => this.error = Some(error),
+                                        // The card is a modal of its own so it can
+                                        // rise above application windows instead
+                                        // of living on the desktop layer.
+                                        Ok(inspector) => {
+                                            let _ = this.actions.try_send(DesktopAction::Info {
+                                                output: this.output.clone(),
+                                                path: inspector.path,
+                                                title: inspector.title,
+                                                rows: inspector.rows,
+                                            });
+                                        }
+                                        Err(error) => this.send_notice(error, cx),
                                     }
                                 }
                             }
@@ -435,11 +492,14 @@ impl DesktopView {
             inspector: None,
             inspection_generation: 0,
             menu: None,
+            menu_target: None,
+            menu_window: None,
+            own_window: None,
             rename: None,
             rename_name: String::new(),
             input,
             focus: cx.focus_handle(),
-            error: startup_error,
+            last_notice: None,
             busy: false,
             work,
             alive,
@@ -477,7 +537,120 @@ impl DesktopView {
     pub fn set_appearance(&mut self, appearance: SurfaceAppearance, cx: &mut Context<Self>) {
         if self.appearance != appearance {
             self.appearance = appearance;
+            self.input
+                .update(cx, |input, cx| input.set_dark(appearance.dark, cx));
+            if let Some(menu) = self.menu_window {
+                let _ = menu.update(cx, |menu, _, cx| menu.set_appearance(appearance, cx));
+            }
             cx.notify();
+        }
+    }
+
+    /// Open the context menu as its own overlay surface. `position` is the
+    /// click point in the desktop window's logical coordinates; the overlay
+    /// covers the same output, so the card lands where the user clicked while
+    /// the compositor can still frost the desktop below it.
+    /// Open the desktop's context menu for one file that is not on the
+    /// desktop: a Dock folder entry. The file rows act on that path, and the
+    /// menu keeps its own frosted overlay.
+    pub(crate) fn open_entry_menu(
+        &mut self,
+        path: PathBuf,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.menu_target = Some(path);
+        self.open_menu(position, window, cx);
+    }
+
+    fn open_menu(&mut self, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        // Take the target before closing: `close_menu` clears it.
+        let target = self.menu_target.take();
+        self.close_menu(cx);
+        let Some(desktop) = window.window_handle().downcast::<DesktopView>() else {
+            return;
+        };
+        self.own_window = Some(desktop);
+        let viewport = window.viewport_size();
+        let width = f32::from(viewport.width);
+        let height = f32::from(viewport.height);
+        let display = window.display(cx).map(|display| display.id());
+        let has_selection = target.is_some() || self.selected.is_some();
+        let has_image = match &target {
+            Some(path) => {
+                crate::file_icons::kind(path, path.is_dir()) == crate::file_icons::FileKind::Image
+            }
+            None => self
+                .entries
+                .iter()
+                .find(|entry| Some(&entry.path) == self.selected.as_ref())
+                .is_some_and(|entry| entry.kind == EntryKind::Image),
+        };
+        let selected = target.clone().or_else(|| self.selected.clone());
+        let reserved = self.reserved_edges;
+        let appearance = self.appearance;
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(width), px(height)));
+        let options = crate::app::window_options(
+            "clarion-desktop-menu",
+            display,
+            bounds,
+            false,
+            LayerShellAnchor::ALL,
+            -1,
+            LayerShellKeyboardInteractivity::Exclusive,
+            LayerShellMargins::default(),
+            LayerShellLayer::Overlay,
+        );
+        match cx.open_window(options, move |window, cx| {
+            let menu = cx.new(|cx| {
+                DesktopMenuView::new(
+                    desktop,
+                    position,
+                    width,
+                    height,
+                    reserved,
+                    appearance,
+                    has_selection,
+                    has_image,
+                    selected,
+                    target,
+                    cx,
+                )
+            });
+            let focus = menu.read(cx).focus_handle();
+            window.focus(&focus);
+            window.activate_window();
+            menu
+        }) {
+            Ok(menu) => {
+                self.menu = Some(position);
+                self.menu_window = Some(menu);
+            }
+            Err(error) => self.send_notice(format!("无法打开桌面菜单：{error}"), cx),
+        }
+        cx.notify();
+    }
+
+    /// Release the menu surface and clear its anchor. The removal is deferred so
+    /// a row click can close the very surface that is currently dispatching.
+    pub(crate) fn close_menu(&mut self, cx: &mut Context<Self>) {
+        self.menu = None;
+        self.menu_target = None;
+        let own = self.own_window;
+        if let Some(menu) = self.menu_window.take() {
+            cx.defer(move |cx| {
+                let _ = menu.update(cx, |_, window, _| window.remove_window());
+                if let Some(own) = own {
+                    let _ = own.update(cx, |_, window, _| window.activate_window());
+                }
+            });
+        }
+    }
+
+    pub(crate) fn open_desktop_folder(&mut self, cx: &mut Context<Self>) {
+        if let Some(path) = self.directory.clone() {
+            self.send(DesktopAction::Open(path), cx)
         }
     }
 
@@ -488,47 +661,65 @@ impl DesktopView {
     }
 
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.close_menu(cx);
         self.enqueue(Work::Refresh, cx);
+    }
+
+    /// Hints never paint a banner over the user's files: they go through the
+    /// session's notification service like any other desktop application. A
+    /// message that repeats because the same operation keeps failing is only
+    /// posted once until something succeeds in between.
+    fn send_notice(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
+        let message = message.into();
+        if self.last_notice.as_deref() == Some(message.as_str()) {
+            return;
+        }
+        self.last_notice = Some(message.clone());
+        let _ = self.actions.try_send(DesktopAction::Notify { body: message });
+        cx.notify();
+    }
+
+    /// The condition that produced the last hint is gone: a later failure is
+    /// worth posting again.
+    fn clear_notice(&mut self) {
+        self.last_notice = None;
     }
 
     fn enqueue(&mut self, work: Work, cx: &mut Context<Self>) {
         if self.preview && !matches!(work, Work::Refresh) {
-            self.error = Some("预览模式不会修改文件".into());
-            cx.notify();
+            self.send_notice("预览模式不会修改文件", cx);
             return;
         }
         match self.work.try_send(work) {
             Ok(()) => {
                 self.busy = true;
-                self.error = None;
+                self.clear_notice();
             }
-            Err(_) => self.error = Some("文件操作正在处理中，请稍后重试".into()),
+            Err(_) => self.send_notice("文件操作正在处理中，请稍后重试", cx),
         }
         cx.notify();
     }
 
-    fn send(&mut self, action: DesktopAction, cx: &mut Context<Self>) {
+    pub(crate) fn send(&mut self, action: DesktopAction, cx: &mut Context<Self>) {
         if self.preview {
-            self.error = Some("预览模式不会打开或修改用户文件".into());
+            self.send_notice("预览模式不会打开或修改用户文件", cx);
         } else if self.actions.try_send(action).is_err() {
-            self.error = Some("桌面操作暂时不可用".into());
+            self.send_notice("桌面操作暂时不可用", cx);
         }
-        self.menu = None;
+        self.close_menu(cx);
         cx.notify();
     }
 
-    fn begin_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn begin_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.busy || self.rename.is_some() || self.new_folder || self.inspector.is_some() {
             return;
         }
         if self.preview {
-            self.error = Some("预览模式不会修改文件".into());
-            cx.notify();
+            self.send_notice("预览模式不会修改文件", cx);
             return;
         }
         if self.selected_many.len() != 1 {
-            self.error = Some("请选择一个项目进行重命名".into());
-            cx.notify();
+            self.send_notice("请选择一个项目进行重命名", cx);
             return;
         }
         let Some(entry) = self
@@ -539,16 +730,17 @@ impl DesktopView {
         else {
             return;
         };
-        self.menu = None;
+        self.close_menu(cx);
         self.rename = Some(entry.path);
         self.rename_name = entry.name.clone();
         self.input
             .update(cx, |input, cx| input.set_text(&entry.name, true, cx));
+        window.activate_window();
         window.focus(&self.input.focus_handle(cx));
         cx.notify();
     }
 
-    fn activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.inspector.is_some() {
             return;
         }
@@ -557,8 +749,7 @@ impl DesktopView {
                 return;
             }
             if let Err(error) = validate_name(&self.rename_name) {
-                self.error = Some(error.to_string());
-                cx.notify();
+                self.send_notice(error.to_string(), cx);
                 return;
             }
             self.new_folder = false;
@@ -573,8 +764,7 @@ impl DesktopView {
                 return;
             }
             if let Err(error) = validate_name(&self.rename_name) {
-                self.error = Some(error.to_string());
-                cx.notify();
+                self.send_notice(error.to_string(), cx);
                 return;
             }
             self.rename = None;
@@ -589,10 +779,10 @@ impl DesktopView {
         } else {
             let paths = self.selection();
             if paths.len() > MAX_OPEN_SELECTION {
-                self.error = Some(format!(
-                    "一次最多打开 {MAX_OPEN_SELECTION} 个项目，请缩小选择范围"
-                ));
-                cx.notify();
+                self.send_notice(
+                    format!("一次最多打开 {MAX_OPEN_SELECTION} 个项目，请缩小选择范围"),
+                    cx,
+                );
                 return;
             }
             for path in paths {
@@ -609,7 +799,7 @@ impl DesktopView {
             .collect()
     }
 
-    fn select_all(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn select_all(&mut self, cx: &mut Context<Self>) {
         if self.rename.is_some() || self.new_folder || self.inspector.is_some() {
             return;
         }
@@ -620,77 +810,97 @@ impl DesktopView {
             .collect();
         self.selected = self.entries.first().map(|entry| entry.path.clone());
         self.selection_anchor = self.selected.clone();
-        self.menu = None;
+        self.close_menu(cx);
         cx.notify();
     }
 
-    fn inspect(&mut self, quick_look: bool, cx: &mut Context<Self>) {
+    /// Inspect one path that is not on the desktop: the Dock folder menu knows
+    /// its target, so it never has to touch the desktop grid selection.
+    pub(crate) fn inspect_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         if self.rename.is_some() || self.new_folder {
             return;
         }
-        if quick_look && self.inspector.is_some() {
-            self.inspector = None;
-            self.inspection_generation = self.inspection_generation.wrapping_add(1);
-            cx.notify();
-            return;
-        }
-        let paths = self.selection();
-        if paths.is_empty() {
-            self.error = Some("请先选择桌面项目".into());
-            cx.notify();
-            return;
-        }
         self.inspection_generation = self.inspection_generation.wrapping_add(1);
-        self.menu = None;
+        self.close_menu(cx);
         self.enqueue(
             Work::Inspect {
                 generation: self.inspection_generation,
-                paths,
-                quick_look,
+                paths: vec![path],
             },
             cx,
         );
     }
 
-    fn begin_new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn inspect(&mut self, quick_look: bool, cx: &mut Context<Self>) {
+        if self.rename.is_some() || self.new_folder {
+            return;
+        }
+        let paths = self.selection();
+        if quick_look {
+            // Quick Look belongs to GNOME Sushi, the previewer Nautilus opens
+            // on space. The shell never paints its own preview sheet, so a
+            // large file lands in a proper preview window (and an unsupported
+            // one is reported by the system notification service).
+            if paths.len() != 1 {
+                self.send_notice("快速查看一次只预览一个项目", cx);
+                return;
+            }
+            self.send(DesktopAction::Preview(paths[0].clone()), cx);
+            return;
+        }
+        if paths.is_empty() {
+            self.send_notice("请先选择桌面项目", cx);
+            return;
+        }
+        self.inspection_generation = self.inspection_generation.wrapping_add(1);
+        self.close_menu(cx);
+        self.enqueue(
+            Work::Inspect {
+                generation: self.inspection_generation,
+                paths,
+            },
+            cx,
+        );
+    }
+
+    pub(crate) fn begin_new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.busy || self.rename.is_some() || self.new_folder || self.inspector.is_some() {
             return;
         }
         if self.preview || self.directory.is_none() {
-            self.error = Some("预览模式不会创建文件夹".into());
-            cx.notify();
+            self.send_notice("预览模式不会创建文件夹", cx);
             return;
         }
         self.rename_name = available_folder_name(&self.entries);
         self.new_folder = true;
-        self.menu = None;
+        self.close_menu(cx);
         self.selected = None;
         self.selection_anchor = None;
         self.selected_many.clear();
         self.input
             .update(cx, |input, cx| input.set_text(&self.rename_name, true, cx));
+        window.activate_window();
         window.focus(&self.input.focus_handle(cx));
         cx.notify();
     }
 
-    fn trash(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn trash(&mut self, cx: &mut Context<Self>) {
         if self.rename.is_none() && !self.new_folder && self.inspector.is_none() && !self.busy {
             let paths = self.selection();
             if !paths.is_empty() {
-                self.menu = None;
+                self.close_menu(cx);
                 self.enqueue(Work::Trash(paths), cx);
             }
         }
     }
 
     fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.menu = None;
+        self.close_menu(cx);
         self.marquee = None;
         self.rename = None;
         self.new_folder = false;
         self.inspector = None;
         self.inspection_generation = self.inspection_generation.wrapping_add(1);
-        self.error = None;
         window.focus(&self.focus);
         cx.notify();
     }
@@ -756,7 +966,7 @@ impl DesktopView {
             offset.y = px(grid.height) - bounds.bottom();
         }
         self.scroll.set_offset(offset);
-        self.menu = None;
+        self.close_menu(cx);
         cx.notify();
     }
 
@@ -788,90 +998,36 @@ impl DesktopView {
         cx.notify();
     }
 
-    /// The desktop window has no compositor frost region of its own, so its
-    /// contextual surfaces borrow the same tint and opacity controls and add a
-    /// gentle wash. That keeps them coherent with shell menus without blurring
-    /// the whole output.
-    fn menu_surface(&self) -> Hsla {
-        let appearance = self.appearance;
-        let base: Hsla = if appearance.dark {
-            rgb(0x202631).into()
+    /// The desktop window has no compositor frost region of its own; the
+    /// inline editor therefore borrows the context menu's tint and rules so the
+    /// two controls read as one material.
+    fn edit_field(&self, focused: bool) -> AnyElement {
+        let colors = MenuColors::new(self.appearance);
+        let line = if focused {
+            colors.text().opacity(0.30)
         } else {
-            rgb(0xf7f8fc).into()
+            colors.line()
         };
-        let alpha = (0.55 + 0.45 * appearance.surface_opacity).clamp(0., 1.);
-        let wash = Hsla::from(rgb(0xffffff)).opacity(
-            if appearance.dark {
-                0.02 + 0.04 * appearance.frost
-            } else {
-                0.03 + 0.06 * appearance.frost
-            },
-        );
-        base.opacity(alpha).blend(wash)
-    }
-
-    fn menu_text(&self) -> Hsla {
-        if self.appearance.dark {
-            rgb(0xf4f5fa).into()
-        } else {
-            rgb(0x23242a).into()
-        }
-    }
-
-    fn menu_line(&self) -> Hsla {
-        Hsla::from(rgb(if self.appearance.dark {
-            0xd9e3ff
-        } else {
-            0x355578
-        }))
-        .opacity(0.12 + 0.06 * self.appearance.frost)
-    }
-
-    fn menu_hover(&self) -> Hsla {
-        Hsla::from(rgb(if self.appearance.dark {
-            0xffffff
-        } else {
-            0x344966
-        }))
-        .opacity(0.07 + 0.04 * self.appearance.frost)
-    }
-
-    fn menu_shadow(&self) -> Hsla {
-        Hsla::from(rgb(0x000000)).opacity(0.20 + 0.12 * self.appearance.frost)
-    }
-
-    fn context_button(
-        &self,
-        id: &'static str,
-        label: &'static str,
-        action: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
-        cx: &Context<Self>,
-    ) -> AnyElement {
-        let hover = self.menu_hover();
         div()
-            .id(id)
-            .px_3()
-            .py_2()
-            .rounded(px(6.))
-            .text_sm()
-            .cursor_pointer()
-            .hover(move |style| style.bg(hover))
-            .child(label)
-            .on_click(cx.listener(move |this, _, window, cx| action(this, window, cx)))
+            .debug_selector(|| "desktop-edit-field".into())
+            .w_full()
+            .h(px(DESKTOP_EDIT_FIELD_HEIGHT))
+            .flex()
+            .items_center()
+            .rounded(px(DESKTOP_EDIT_FIELD_RADIUS))
+            .bg(colors.surface())
+            .border_1()
+            .border_color(line)
+            .overflow_hidden()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(self.input.clone())
             .into_any_element()
     }
 
-    fn file_icon(kind: EntryKind) -> AnyElement {
-        use crate::desktop_icons::{self, DesktopIconKind};
-        desktop_icons::icon(
-            match kind {
-                EntryKind::Directory => DesktopIconKind::Folder,
-                EntryKind::File => DesktopIconKind::Document,
-                EntryKind::Image => DesktopIconKind::Image,
-                EntryKind::Application => DesktopIconKind::Application,
-            },
-            DESKTOP_ICON_SIZE,
-        )
+    /// Type-matched artwork from the current icon theme, with the path's tags
+    /// riding on it. `None` is the bare folder the "new folder" tile shows.
+    fn file_icon(path: Option<&Path>, is_dir: bool, tags: &[String]) -> AnyElement {
+        crate::file_icons::icon(path, is_dir, tags, DESKTOP_ICON_SIZE, 0.)
     }
 }
 
@@ -891,17 +1047,7 @@ impl Render for DesktopView {
         let viewport = window.viewport_size();
         let width = f32::from(viewport.width);
         let height = f32::from(viewport.height);
-        let [top, bottom, left, right] = self.reserved_edges;
-        let menu_position = self.menu.map(|position| {
-            point(
-                px(f32::from(position.x).clamp(left + 8., (width - right - 238.).max(left + 8.))),
-                px(f32::from(position.y).clamp(
-                    top + 8.,
-                    (height - bottom - if self.selected.is_some() { 430. } else { 270. })
-                        .max(top + 8.),
-                )),
-            )
-        });
+        let [top, bottom, _, _] = self.reserved_edges;
         let mut root = div()
             .id("clarion-desktop")
             .size_full()
@@ -964,7 +1110,7 @@ impl Render for DesktopView {
                     this.selected = None;
                     this.selection_anchor = None;
                     this.selected_many = base.clone();
-                    this.menu = None;
+                    this.close_menu(cx);
                     this.rename = None;
                     this.new_folder = false;
                     this.marquee = grid.contains(event.position).then_some(MarqueeSelection {
@@ -1009,9 +1155,8 @@ impl Render for DesktopView {
                     this.marquee = None;
                     this.rename = None;
                     this.new_folder = false;
-                    this.menu = Some(event.position);
                     window.focus(&this.focus);
-                    cx.notify();
+                    this.open_menu(event.position, window, cx);
                 }),
             );
         if let Some(image) = &self.wallpaper {
@@ -1066,16 +1211,8 @@ impl Render for DesktopView {
                     .items_center()
                     .gap(px(3.))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(Self::file_icon(EntryKind::Directory))
-                    .child(
-                        div()
-                            .w_full()
-                            .px_1()
-                            .py_1()
-                            .rounded(px(4.))
-                            .bg(rgb(0x202b37))
-                            .child(self.input.clone()),
-                    ),
+                    .child(Self::file_icon(None, true, &[]))
+                    .child(self.edit_field(self.input.read(cx).focused(window))),
             );
         }
         for (index, entry) in self.entries.iter().enumerate() {
@@ -1114,14 +1251,18 @@ impl Render for DesktopView {
                         } else {
                             rgba(0xffffff00)
                         })
-                        .child(Self::file_icon(entry.kind)),
+                        .child(Self::file_icon(
+                            Some(&entry.path),
+                            entry.kind == EntryKind::Directory,
+                            &entry.tags,
+                        )),
                 )
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                         cx.stop_propagation();
                         window.focus(&this.focus);
-                        this.menu = None;
+                        this.close_menu(cx);
                         this.marquee = None;
                         if this.rename.as_ref() != Some(&path) {
                             this.rename = None;
@@ -1171,21 +1312,11 @@ impl Render for DesktopView {
                         if !this.selected_many.contains(&context_path) {
                             this.selected_many = [context_path.clone()].into();
                         }
-                        this.menu = Some(event.position);
-                        cx.notify();
+                        this.open_menu(event.position, window, cx);
                     }),
                 );
             if editing {
-                icon = icon.child(
-                    div()
-                        .w_full()
-                        .px_1()
-                        .py_1()
-                        .rounded(px(4.))
-                        .bg(rgb(0x202b37))
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .child(self.input.clone()),
-                );
+                icon = icon.child(self.edit_field(self.input.read(cx).focused(window)));
             } else {
                 let mut caption = div()
                     .max_w_full()
@@ -1244,140 +1375,7 @@ impl Render for DesktopView {
                     )),
             );
         }
-        if let Some(error) = &self.error {
-            root = root.child(
-                div()
-                    .absolute()
-                    .left(px(16.))
-                    .bottom(px(12.))
-                    .right(px(16.))
-                    .p_3()
-                    .rounded(px(8.))
-                    .bg(rgba(0x382923ee))
-                    .text_sm()
-                    .child(error.clone()),
-            );
-        }
-        let menu_surface = self.menu_surface();
-        let menu_text = self.menu_text();
-        let menu_line = self.menu_line();
-        let menu_shadow = self.menu_shadow();
-        if let Some(position) = menu_position {
-            let mut menu = div()
-                .id("desktop-context-menu")
-                .absolute()
-                .left(position.x)
-                .top(position.y)
-                .w(px(230.))
-                .max_h(px((height - top - bottom - 16.).max(80.)))
-                .overflow_y_scroll()
-                .p_1()
-                .rounded(px(12.))
-                .bg(menu_surface)
-                .text_color(menu_text)
-                .border_1()
-                .border_color(menu_line)
-                .shadow(vec![BoxShadow {
-                    color: menu_shadow,
-                    offset: point(px(0.), px(8.)),
-                    blur_radius: px(24.),
-                    spread_radius: px(0.),
-                }])
-                .flex()
-                .flex_col()
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation());
-            if self.selected.is_some() {
-                menu = menu
-                    .child(self.context_button(
-                        "desktop-open",
-                        "打开",
-                        |this, window, cx| this.activate(window, cx),
-                        cx,
-                    ))
-                    .child(self.context_button(
-                        "desktop-info",
-                        "显示简介",
-                        |this, _, cx| this.inspect(false, cx),
-                        cx,
-                    ))
-                    .child(self.context_button(
-                        "desktop-quick-look",
-                        "快速查看",
-                        |this, _, cx| this.inspect(true, cx),
-                        cx,
-                    ))
-                    .child(self.context_button(
-                        "desktop-rename",
-                        "重命名…",
-                        |this, window, cx| this.begin_rename(window, cx),
-                        cx,
-                    ))
-                    .child(self.context_button(
-                        "desktop-trash",
-                        "移到废纸篓",
-                        |this, _, cx| this.trash(cx),
-                        cx,
-                    ));
-                if self
-                    .entries
-                    .iter()
-                    .find(|entry| Some(&entry.path) == self.selected.as_ref())
-                    .is_some_and(|entry| entry.kind == EntryKind::Image)
-                {
-                    menu = menu.child(self.context_button(
-                        "desktop-wallpaper-file",
-                        "设为桌面壁纸",
-                        |this, _, cx| {
-                            if let Some(path) = this.selected.clone() {
-                                this.send(DesktopAction::Wallpaper(Some(path)), cx)
-                            }
-                        },
-                        cx,
-                    ));
-                }
-                menu = menu.child(div().h(px(1.)).my_1().bg(menu_line));
-            }
-            root = root.child(
-                menu.child(self.context_button(
-                    "desktop-new-folder",
-                    "新建文件夹…",
-                    |this, window, cx| this.begin_new_folder(window, cx),
-                    cx,
-                ))
-                .child(self.context_button(
-                    "desktop-refresh",
-                    "刷新桌面",
-                    |this, _, cx| {
-                        this.menu = None;
-                        this.refresh(cx)
-                    },
-                    cx,
-                ))
-                .child(self.context_button(
-                    "desktop-open-directory",
-                    "打开桌面文件夹",
-                    |this, _, cx| {
-                        if let Some(path) = this.directory.clone() {
-                            this.send(DesktopAction::Open(path), cx)
-                        }
-                    },
-                    cx,
-                ))
-                .child(self.context_button(
-                    "desktop-wallpaper",
-                    "更换壁纸…",
-                    |this, _, cx| this.send(DesktopAction::Wallpaper(None), cx),
-                    cx,
-                ))
-                .child(self.context_button(
-                    "desktop-settings",
-                    "桌面设置…",
-                    |this, _, cx| this.send(DesktopAction::Settings, cx),
-                    cx,
-                )),
-            );
-        }
+        let colors = MenuColors::new(self.appearance);
         if let Some(inspector) = &self.inspector {
             let panel_width = (width - 64.).clamp(220., 760.);
             let panel_height = (height - top - bottom - 32.).clamp(180., 640.);
@@ -1390,18 +1388,6 @@ impl Render for DesktopView {
                 .flex_col()
                 .gap_3()
                 .p_5();
-            if let Some(image) = &inspector.image {
-                content = content.child(
-                    img(image.clone())
-                        .w_full()
-                        .h(px((panel_height - 140.).max(80.)))
-                        .object_fit(ObjectFit::Contain),
-                );
-            }
-            if let Some(text) = &inspector.text {
-                content =
-                    content.child(div().text_sm().font_family("monospace").child(text.clone()));
-            }
             for (label, value) in &inspector.rows {
                 content = content.child(
                     div()
@@ -1443,12 +1429,12 @@ impl Render for DesktopView {
                             .max_h(px(panel_height))
                             .rounded(px(16.))
                             .overflow_hidden()
-                            .bg(menu_surface)
-                            .text_color(menu_text)
+                            .bg(colors.surface())
+                            .text_color(colors.text())
                             .border_1()
-                            .border_color(menu_line)
+                            .border_color(colors.line())
                             .shadow(vec![BoxShadow {
-                                color: menu_shadow,
+                                color: colors.shadow(),
                                 offset: point(px(0.), px(8.)),
                                 blur_radius: px(24.),
                                 spread_radius: px(0.),
@@ -1464,7 +1450,7 @@ impl Render for DesktopView {
                                     .px_4()
                                     .py_3()
                                     .border_b_1()
-                                    .border_color(menu_line)
+                                    .border_color(colors.line())
                                     .child(
                                         div()
                                             .id("desktop-inspector-close")
@@ -1517,7 +1503,7 @@ fn create_folder(directory: &Path, name: &str) -> Result<PathBuf> {
 }
 
 fn trash_entries(
-    directory: &Path,
+    _directory: &Path,
     paths: &[PathBuf],
     environment: &HashMap<String, String>,
 ) -> Result<()> {
@@ -1528,7 +1514,10 @@ fn trash_entries(
     // Validate the complete batch before handing literal paths to GIO. A single
     // bounded process avoids one service startup and timeout per selected file.
     for path in paths {
-        validate_source(directory, path)?;
+        anyhow::ensure!(
+            path.is_absolute() && !path.as_os_str().as_bytes().contains(&0),
+            "无效的项目路径"
+        );
     }
     let mut child = Command::new("gio")
         .arg("trash")
@@ -1571,25 +1560,21 @@ fn display_size(bytes: u64) -> String {
     }
 }
 
-fn inspect_paths(directory: &Path, paths: &[PathBuf], quick_look: bool) -> Result<Inspector> {
+fn inspect_paths(directory: &Path, paths: &[PathBuf]) -> Result<Inspector> {
     anyhow::ensure!(
         !paths.is_empty() && paths.len() <= MAX_ENTRIES,
         "请选择桌面项目"
     );
     for path in paths {
-        validate_source(directory, path)?;
-    }
-    if quick_look {
         anyhow::ensure!(
-            paths.len() == 1,
-            "快速查看一次只预览一个项目，请缩小选择范围"
+            path.is_absolute() && !path.as_os_str().as_bytes().contains(&0),
+            "无效的项目路径"
         );
     }
     let mut inspector = Inspector {
         title: "显示简介".into(),
         rows: Vec::new(),
-        image: None,
-        text: None,
+        path: (paths.len() == 1).then(|| paths[0].clone()),
     };
     if paths.len() > 1 {
         let mut bytes = 0u64;
@@ -1607,7 +1592,7 @@ fn inspect_paths(directory: &Path, paths: &[PathBuf], quick_look: bool) -> Resul
                 bytes = bytes.saturating_add(metadata.len());
             }
         }
-        inspector.title = format!("{} 个项目的简介", paths.len());
+        inspector.title = format!("{} 个项目", paths.len());
         inspector.rows = vec![
             (
                 "包含".into(),
@@ -1638,13 +1623,8 @@ fn inspect_paths(directory: &Path, paths: &[PathBuf], quick_look: bool) -> Resul
     } else {
         "特殊文件"
     };
-    inspector.title = if quick_look {
-        name.clone()
-    } else {
-        format!("{name} 简介")
-    };
+    inspector.title = name;
     inspector.rows = vec![
-        ("名称".into(), name),
         ("种类".into(), kind.into()),
         ("位置".into(), path.display().to_string()),
     ];
@@ -1677,35 +1657,6 @@ fn inspect_paths(directory: &Path, paths: &[PathBuf], quick_look: bool) -> Resul
             "链接目标".into(),
             fs::read_link(path)?.display().to_string(),
         ));
-    }
-    if quick_look {
-        anyhow::ensure!(
-            metadata.is_file(),
-            "快速查看支持普通图片和 UTF-8 文本；该项目是{kind}，可使用显示简介查看属性"
-        );
-        let extension = path
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        if matches!(extension.as_str(), "png" | "jpg" | "jpeg") {
-            inspector.image = Some(
-                decode_image(path, 16 * 1024 * 1024, 1600, 1000, libc::O_NOFOLLOW)
-                    .context("无法快速查看此图片")?,
-            );
-        } else {
-            let bytes = read_regular_with_flags(path, MAX_PREVIEW_TEXT, libc::O_NOFOLLOW)
-                .context("文本快速查看上限为256 KB；较大文件请使用默认应用打开")?;
-            let text = String::from_utf8(bytes)
-                .context("该格式不支持快速查看，目前支持 PNG、JPEG 和 UTF-8 文本")?;
-            anyhow::ensure!(
-                !text
-                    .chars()
-                    .any(|ch| ch.is_control() && !matches!(ch, '\n' | '\r' | '\t')),
-                "该文件包含二进制内容，不能作为文本快速查看"
-            );
-            inspector.text = Some(text);
-        }
     }
     Ok(inspector)
 }
@@ -1819,6 +1770,7 @@ fn scan(directory: &Path) -> Result<Vec<DesktopEntry>> {
             path: path.clone(),
             name: raw_name.to_string_lossy().into_owned(),
             kind,
+            tags: crate::file_icons::tags(&path),
             modified: metadata.modified().ok(),
         });
     }
@@ -1994,12 +1946,14 @@ fn worker(
                     path: PathBuf::from("/clarion-preview/Documents"),
                     name: "文档".into(),
                     kind: EntryKind::Directory,
+                    tags: Vec::new(),
                     modified: None,
                 },
                 DesktopEntry {
                     path: PathBuf::from("/clarion-preview/Welcome.txt"),
                     name: "欢迎使用 Clarion.txt".into(),
                     kind: EntryKind::File,
+                    tags: Vec::new(),
                     modified: None,
                 },
             ],
@@ -2041,9 +1995,8 @@ fn worker(
                         Work::Inspect {
                             generation,
                             paths,
-                            quick_look,
                         } => {
-                            let result = inspect_paths(&directory, &paths, quick_look)
+                            let result = inspect_paths(&directory, &paths)
                                 .map_err(|error| format!("{error:#}"));
                             let _ = updates.send_blocking(Update::Inspector { generation, result });
                             continue;
@@ -2233,13 +2186,13 @@ mod tests {
         fs::write(folder.join("not-counted"), b"nested bytes").unwrap();
         let link = directory.join("external link");
         std::os::unix::fs::symlink(root.path().join("missing target"), &link).unwrap();
-        let info = inspect_paths(&directory, std::slice::from_ref(&link), false).unwrap();
+        let info = inspect_paths(&directory, std::slice::from_ref(&link)).unwrap();
         assert!(info
             .rows
             .iter()
             .any(|(label, value)| label == "种类" && value == "符号链接"));
         assert!(info.rows.iter().any(|(label, _)| label == "链接目标"));
-        let info = inspect_paths(&directory, &[file.clone(), folder, link.clone()], false).unwrap();
+        let info = inspect_paths(&directory, &[file.clone(), folder, link.clone()]).unwrap();
         assert!(info
             .rows
             .iter()
@@ -2248,43 +2201,289 @@ mod tests {
             .rows
             .iter()
             .any(|(label, value)| label == "文件大小" && value.starts_with("16 字节")));
-        assert!(inspect_paths(&directory, &[link], true).is_err());
-        assert!(inspect_paths(&directory, &[root.path().join("outside")], false).is_err());
+        assert!(inspect_paths(&directory, &[root.path().join("outside")]).is_err());
         assert_eq!(fs::read_to_string(file).unwrap(), "你好，Clarion");
     }
 
-    #[::core::prelude::v1::test]
-    fn quick_look_previews_bounded_text_and_png_and_rejects_binary_special_and_large_files() {
+    fn desktop_fixture<'a>(
+        cx: &'a mut TestAppContext,
+        directory: &Path,
+    ) -> (
+        Entity<DesktopView>,
+        &'a mut VisualTestContext,
+        async_channel::Receiver<DesktopAction>,
+        mpsc::Receiver<Work>,
+    ) {
+        let entries = scan(directory).unwrap();
+        let (actions, received_actions) = async_channel::unbounded();
+        let (work, received_work) = mpsc::sync_channel(16);
+        cx.update(|cx| {
+            TextInput::bind_keys(cx);
+            DesktopView::bind_keys(cx);
+        });
+        let (view, visual) = cx.add_window_view(|window, cx| {
+            let input = cx.new(|cx| {
+                TextInput::new(cx)
+                    .with_placeholder("文件名称")
+                    .with_capsule(true)
+            });
+            cx.subscribe(
+                &input,
+                |this: &mut DesktopView, _, QueryChanged(name), cx| {
+                    this.rename_name = name.clone();
+                    cx.notify();
+                },
+            )
+            .detach();
+            let focus = cx.focus_handle();
+            window.focus(&focus);
+            window.activate_window();
+            DesktopView {
+                output: "isolated".into(),
+                actions,
+                preview: false,
+                entries,
+                directory: Some(directory.to_path_buf()),
+                wallpaper: None,
+                selected: None,
+                selected_many: BTreeSet::new(),
+                selection_anchor: None,
+                marquee: None,
+                labels: HashMap::new(),
+                new_folder: false,
+                inspector: None,
+                inspection_generation: 0,
+                menu: None,
+                menu_target: None,
+                menu_window: None,
+                own_window: None,
+                rename: None,
+                rename_name: String::new(),
+                input,
+                focus,
+                last_notice: None,
+                busy: false,
+                work,
+                alive: Arc::new(AtomicBool::new(true)),
+                scroll: ScrollHandle::new(),
+                reserved_edges: [0.; 4],
+                appearance: Default::default(),
+            }
+        });
+        (view, visual, received_actions, received_work)
+    }
+
+    #[gpui::test]
+    fn rename_and_context_menu_use_the_compact_shell_style(cx: &mut TestAppContext) {
         let root = tempfile::tempdir().unwrap();
         let directory = root.path().join("Desktop");
         fs::create_dir(&directory).unwrap();
-        let text = directory.join("text.txt");
-        fs::write(&text, "Hello\n你好\tClarion").unwrap();
-        let preview = inspect_paths(&directory, std::slice::from_ref(&text), true).unwrap();
-        assert_eq!(preview.text.as_deref(), Some("Hello\n你好\tClarion"));
-        assert!(preview.image.is_none());
-        let image = directory.join("sample.png");
-        image::RgbaImage::from_pixel(4, 4, image::Rgba([20, 80, 100, 255]))
-            .save(&image)
-            .unwrap();
-        assert!(inspect_paths(&directory, &[image], true)
-            .unwrap()
-            .image
-            .is_some());
-        let binary = directory.join("binary.pdf");
-        fs::write(&binary, [0, 1, 2, 3]).unwrap();
-        assert!(inspect_paths(&directory, &[binary], true).is_err());
-        let large = directory.join("large.txt");
-        File::create(&large)
-            .unwrap()
-            .set_len(MAX_PREVIEW_TEXT + 1)
-            .unwrap();
-        assert!(inspect_paths(&directory, &[large], true).is_err());
-        let fifo = directory.join("fifo.txt");
-        let raw = CString::new(fifo.as_os_str().as_bytes()).unwrap();
-        assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
-        assert!(inspect_paths(&directory, &[fifo], true).is_err());
-        assert!(inspect_paths(&directory, &[text.clone(), text], true).is_err());
+        fs::write(directory.join("first.txt"), b"keep").unwrap();
+        let (view, visual, _actions, _work) = desktop_fixture(cx, &directory);
+        let tile = visual.update(|window, cx| {
+            let grid = view.read(cx).grid(window);
+            Bounds::new(grid.origin + grid.tile(0).origin, grid.tile(0).size)
+        });
+
+        visual.simulate_click(tile.center(), Modifiers::default());
+        visual.simulate_keystrokes("f2");
+        visual.run_until_parked();
+        let rename = visual
+            .debug_bounds("desktop-edit-field")
+            .expect("the rename field is painted");
+        assert!(
+            f32::from(rename.size.height) <= 30.,
+            "the rename field must stay compact inside a desktop tile: {:?}",
+            rename
+        );
+
+        visual.simulate_keystrokes("escape");
+        visual.simulate_keystrokes("super-shift-n");
+        visual.run_until_parked();
+        let new_folder = visual
+            .debug_bounds("desktop-edit-field")
+            .expect("the new-folder field is painted");
+        assert_eq!(
+            rename.size, new_folder.size,
+            "rename and new folder share one field style"
+        );
+        visual.simulate_keystrokes("escape");
+
+        let windows_before = visual.cx.windows();
+        visual.simulate_mouse_down(tile.center(), MouseButton::Right, Modifiers::default());
+        visual.run_until_parked();
+        // A card painted into the desktop surface can never be frosted: the
+        // compositor blurs what lies behind a surface, never its own icons.
+        // The menu therefore has to be a surface of its own, like the
+        // launcher's application menu.
+        assert_eq!(
+            visual.cx.windows().len(),
+            windows_before.len() + 1,
+            "the context menu must open its own overlay surface"
+        );
+        let handle = view
+            .read_with(visual, |view, _| view.menu_window)
+            .expect("the desktop records its menu surface");
+        let menu_entity = handle
+            .root(&mut visual.cx)
+            .expect("the menu surface has a root view");
+        let mut menu = VisualTestContext::from_window(*handle, &visual.cx);
+        menu.run_until_parked();
+        let card = menu
+            .debug_bounds("desktop-context-menu")
+            .expect("the context menu is painted in its own surface");
+        assert!(
+            f32::from(card.size.width) <= 220.,
+            "the context menu stays compact: {card:?}"
+        );
+        let row = menu
+            .debug_bounds("desktop-open")
+            .expect("the open row is painted");
+        assert!(
+            f32::from(row.size.height) <= 28.,
+            "menu rows stay compact: {row:?}"
+        );
+        for id in [
+            "desktop-menu-separator-0",
+            "desktop-menu-separator-1",
+            "desktop-menu-separator-2",
+            "desktop-menu-separator-3",
+        ] {
+            assert!(
+                menu.debug_bounds(id).is_some(),
+                "the context menu must group its actions with {id}"
+            );
+        }
+        for id in [
+            "desktop-menu-icon-desktop-open",
+            "desktop-menu-icon-desktop-open-with",
+            "desktop-menu-icon-desktop-info",
+            "desktop-menu-icon-desktop-quick-look",
+            "desktop-menu-icon-desktop-rename",
+            "desktop-menu-icon-desktop-trash",
+            "desktop-menu-icon-desktop-new-folder",
+            "desktop-menu-icon-desktop-refresh",
+            "desktop-menu-icon-desktop-open-directory",
+            "desktop-menu-icon-desktop-wallpaper",
+            "desktop-menu-icon-desktop-settings",
+        ] {
+            assert!(
+                menu.debug_bounds(id).is_some(),
+                "the context menu row must carry the {id} prefix"
+            );
+        }
+        assert_eq!(
+            menu_entity.read_with(&menu, |menu, _| menu.glass),
+            Some(card),
+            "the frosted mask must be the exact painted card outline"
+        );
+        view.update(visual, |view, cx| {
+            view.set_appearance(
+                SurfaceAppearance {
+                    frost: 0.,
+                    ..view.appearance
+                },
+                cx,
+            );
+        });
+        menu.run_until_parked();
+        assert!(
+            menu_entity.read_with(&menu, |menu, _| menu.glass.is_none()),
+            "zero frost must drop the glass region instead of blurring the desktop"
+        );
+
+        // The inline editor lives in the desktop window, so a menu action has
+        // to hand focus back there and take its own surface down.
+        let new_folder = menu
+            .debug_bounds("desktop-new-folder")
+            .expect("the new-folder row is painted");
+        menu.simulate_click(new_folder.center(), Modifiers::default());
+        visual.run_until_parked();
+        assert!(
+            view.read_with(visual, |view, _| view.new_folder),
+            "the menu action starts the inline new-folder field"
+        );
+        assert!(
+            view.read_with(visual, |view, _| view.menu_window.is_none()),
+            "the menu surface closes once its action has run"
+        );
+        assert!(
+            visual.debug_bounds("desktop-edit-field").is_some(),
+            "the field is painted back in the desktop window"
+        );
+        let input_focus = view.read_with(visual, |view, cx| view.input.focus_handle(cx));
+        assert_eq!(
+            visual.update(|window, cx| window.focused(cx)),
+            Some(input_focus),
+            "the inline field must own keyboard focus after the menu closes"
+        );
+        visual.simulate_keystrokes("escape");
+        visual.run_until_parked();
+
+        visual.simulate_mouse_down(tile.center(), MouseButton::Right, Modifiers::default());
+        visual.run_until_parked();
+        let escape = view
+            .read_with(visual, |view, _| view.menu_window)
+            .expect("a fresh menu surface");
+        let mut escape = VisualTestContext::from_window(*escape, &visual.cx);
+        escape.simulate_keystrokes("escape");
+        escape.run_until_parked();
+        visual.run_until_parked();
+        assert_eq!(
+            visual.cx.windows().len(),
+            windows_before.len(),
+            "escape must dismiss the menu surface"
+        );
+    }
+
+    #[gpui::test]
+    fn desktop_hints_go_through_the_notification_service(cx: &mut TestAppContext) {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("Desktop");
+        fs::create_dir(&directory).unwrap();
+        fs::write(directory.join("first.txt"), b"keep").unwrap();
+        let (_view, visual, actions, _work) = desktop_fixture(cx, &directory);
+
+        // Nothing is selected, so rename is refused. The explanation belongs to
+        // the session's notification service, not a banner over the files.
+        visual.simulate_keystrokes("f2");
+        visual.run_until_parked();
+        assert!(
+            matches!(
+                actions.try_recv(),
+                Ok(DesktopAction::Notify { body }) if body == "请选择一个项目进行重命名"
+            ),
+            "a refused rename must be reported as a system notification"
+        );
+
+        // Hitting the same refusal again is not worth a second toast.
+        visual.simulate_keystrokes("f2");
+        visual.run_until_parked();
+        assert!(
+            actions.try_recv().is_err(),
+            "an identical hint must not be posted twice in a row"
+        );
+
+        // A different hint still gets through: dedupe is only about immediate
+        // repeats, not about silencing the desktop for the rest of the session.
+        visual.simulate_keystrokes("super-i");
+        visual.run_until_parked();
+        assert!(
+            matches!(
+                actions.try_recv(),
+                Ok(DesktopAction::Notify { body }) if body == "请先选择桌面项目"
+            ),
+            "a new hint is posted even right after another one"
+        );
+        visual.simulate_keystrokes("f2");
+        visual.run_until_parked();
+        assert!(
+            matches!(
+                actions.try_recv(),
+                Ok(DesktopAction::Notify { body }) if body == "请选择一个项目进行重命名"
+            ),
+            "the earlier hint may be repeated once something else was posted"
+        );
     }
 
     #[gpui::test]
@@ -2333,11 +2532,14 @@ mod tests {
                 inspector: None,
                 inspection_generation: 0,
                 menu: None,
+                menu_target: None,
+                menu_window: None,
+                own_window: None,
                 rename: None,
                 rename_name: String::new(),
                 input,
                 focus,
-                error: None,
+                last_notice: None,
                 busy: false,
                 work,
                 alive: Arc::new(AtomicBool::new(true)),
@@ -2409,16 +2611,35 @@ mod tests {
         }
         visual.simulate_keystrokes("super-i");
         assert!(
-            matches!(received_work.try_recv(), Ok(Work::Inspect { quick_look: false, paths, .. }) if paths.len() == 2)
+            matches!(received_work.try_recv(), Ok(Work::Inspect { paths, .. }) if paths.len() == 2)
         );
         view.update(visual, |view, _| view.busy = false);
         visual.simulate_keystrokes("super-y");
         assert!(
-            matches!(received_work.try_recv(), Ok(Work::Inspect { quick_look: true, paths, .. }) if paths.len() == 2)
+            matches!(
+                received_actions.try_recv(),
+                Ok(DesktopAction::Notify { body }) if body == "快速查看一次只预览一个项目"
+            ),
+            "Quick Look previews one file at a time and says so through a notification"
         );
         assert!(
             received_actions.try_recv().is_err(),
-            "Quick Look must not silently launch an app"
+            "Quick Look must not silently launch an app for a multi-selection"
+        );
+        visual.simulate_click(first_bounds.center(), Modifiers::default());
+        visual.simulate_keystrokes("super-y");
+        assert!(
+            matches!(received_actions.try_recv(), Ok(DesktopAction::Preview(path)) if path == directory.join("first.txt")),
+            "Quick Look hands the file to the system previewer"
+        );
+        assert!(
+            received_work.try_recv().is_err(),
+            "Quick Look never reads the file in the desktop worker"
+        );
+        visual.simulate_keystrokes("super-a");
+        assert_eq!(
+            view.read_with(visual, |view, _| view.selected_many.len()),
+            2
         );
         view.update(visual, |view, _| view.busy = false);
         visual.simulate_keystrokes("super-backspace");
@@ -2552,9 +2773,11 @@ mod tests {
             ]
         );
         let before = fs::read(&capture).unwrap();
+        // Paths outside the desktop directory are allowed now that the same
+        // menu serves Dock folder entries; only a malformed path is refused.
         assert!(trash_entries(
             &directory,
-            &[path.clone(), root.path().join("outside")],
+            &[path.clone(), PathBuf::from("relative")],
             &environment
         )
         .is_err());
@@ -2564,7 +2787,7 @@ mod tests {
             "the complete batch must validate before GIO starts"
         );
         assert_eq!(fs::read(second).unwrap(), b"second");
-        assert!(trash_entry(&directory, &root.path().join("outside"), &environment).is_err());
+        assert!(trash_entry(&directory, &PathBuf::from("relative"), &environment).is_err());
     }
 
     #[::core::prelude::v1::test]
@@ -2613,7 +2836,6 @@ mod tests {
         work.send(Work::Inspect {
             generation: 1,
             paths: vec![path.clone()],
-            quick_look: true,
         })
         .unwrap();
         let deadline = Instant::now() + Duration::from_secs(1);

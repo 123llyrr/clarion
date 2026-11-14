@@ -77,6 +77,38 @@ fn coalesced_move_releases_at_the_latest_pose_in_every_layout() {
 }
 
 #[test]
+fn cross_output_flush_keeps_the_core_move_owner_until_the_drag_ends() {
+    let mut layout = desktop(clarion_ipc::TilingMode::Scrolling, true);
+    let source = begin(&mut layout);
+    // Establish the Moving phase on the source output.
+    assert!(layout.interactive_move_update(&0, (400., 50.).into(), source, (500., 150.).into()));
+    assert!(matches!(
+        layout.interactive_move,
+        Some(InteractiveMoveState::Moving(_))
+    ));
+
+    let target = layout.monitors().nth(1).unwrap().output().clone();
+    assert!(layout.queue_interactive_move_update(
+        &0,
+        (400., 50.).into(),
+        target,
+        (500., 150.).into()
+    ));
+    // The compositor flushes coalesced motion outside of any desktop
+    // transition. Changing outputs here must not let the nested focus update
+    // acknowledge a move that still owns its tile.
+    layout.flush_pending_move();
+    assert!(layout.core.borrow().interaction().is_some());
+    assert!(matches!(
+        layout.interactive_move,
+        Some(InteractiveMoveState::Moving(_))
+    ));
+    layout.interactive_move_end(&0);
+    assert!(layout.core.borrow().interaction().is_none());
+    layout.verify_invariants();
+}
+
+#[test]
 fn cancel_and_destroy_discard_pending_motion_without_resurrection() {
     for destroy in [false, true] {
         let mut layout = desktop(clarion_ipc::TilingMode::Scrolling, true);

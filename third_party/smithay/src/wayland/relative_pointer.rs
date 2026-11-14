@@ -1,14 +1,14 @@
 //! Utilities for relative pointer support
 //!
-//! [PointerHandle::relative_motion] sends relative pointer events to any
-//! [ZwpRelativePointerV1] objects created by the client.
+//! [PointerHandle::relative_motion][crate::input::pointer::PointerHandle::relative_motion]
+//! sends relative pointer events to any [ZwpRelativePointerV1] objects created by the client.
 //!
 //! ```
 //! extern crate wayland_server;
 //! extern crate smithay;
 //!
 //! use smithay::wayland::relative_pointer::RelativePointerManagerState;
-//! # use smithay::backend::input::KeyState;
+//! # use smithay::backend::input::{InputTime, KeyState};
 //! # use smithay::input::{
 //! #   pointer::{PointerTarget, AxisFrame, MotionEvent, ButtonEvent, RelativeMotionEvent,
 //! #             GestureSwipeBeginEvent, GestureSwipeUpdateEvent, GestureSwipeEndEvent,
@@ -32,7 +32,7 @@
 //! #   fn button(&self, seat: &Seat<State>, data: &mut State, event: &ButtonEvent) {}
 //! #   fn axis(&self, seat: &Seat<State>, data: &mut State, frame: AxisFrame) {}
 //! #   fn frame(&self, seat: &Seat<State>, data: &mut State) {}
-//! #   fn leave(&self, seat: &Seat<State>, data: &mut State, serial: Serial, time: u32) {}
+//! #   fn leave(&self, seat: &Seat<State>, data: &mut State, serial: Serial, time: InputTime) {}
 //! #   fn gesture_swipe_begin(&self, seat: &Seat<State>, data: &mut State, event: &GestureSwipeBeginEvent) {}
 //! #   fn gesture_swipe_update(&self, seat: &Seat<State>, data: &mut State, event: &GestureSwipeUpdateEvent) {}
 //! #   fn gesture_swipe_end(&self, seat: &Seat<State>, data: &mut State, event: &GestureSwipeEndEvent) {}
@@ -52,7 +52,7 @@
 //! #       key: KeysymHandle<'_>,
 //! #       state: KeyState,
 //! #       serial: Serial,
-//! #       time: u32,
+//! #       time: InputTime,
 //! #   ) {}
 //! #   fn modifiers(&self, seat: &Seat<State>, data: &mut State, modifiers: ModifiersState, serial: Serial) {}
 //! # }
@@ -84,7 +84,7 @@
 //! smithay::delegate_dispatch2!(State);
 //! ```
 
-use std::sync::{Arc, Mutex, atomic::Ordering};
+use std::sync::{Arc, Mutex, Weak, atomic::Ordering};
 
 use portable_atomic::AtomicF64;
 use wayland_protocols::wp::relative_pointer::zv1::server::{
@@ -100,7 +100,7 @@ use wayland_server::{
 use crate::{
     input::{
         SeatHandler,
-        pointer::{PointerHandle, RelativeMotionEvent},
+        pointer::{PointerRc, RelativeMotionEvent},
     },
     wayland::{Dispatch2, GlobalData, GlobalDispatch2, seat::PointerUserData},
 };
@@ -131,8 +131,9 @@ impl WpRelativePointerHandle {
             let delta = event.delta.to_client(client_scale);
             let delta_unaccel = event.delta_unaccel;
 
-            let utime_hi = (event.utime >> 32) as u32;
-            let utime_lo = (event.utime & 0xffffffff) as u32;
+            let utime = event.time.micros();
+            let utime_hi = (utime >> 32) as u32;
+            let utime_lo = (utime & 0xffffffff) as u32;
             ptr.relative_motion(
                 utime_hi,
                 utime_lo,
@@ -157,7 +158,7 @@ impl WpRelativePointerHandle {
 /// User data of ZwpRelativePointerV1 object
 #[derive(Debug)]
 pub struct RelativePointerUserData<D: SeatHandler> {
-    handle: Option<PointerHandle<D>>,
+    arc: Weak<PointerRc<D>>,
     client_scale: Arc<AtomicF64>,
 }
 
@@ -207,12 +208,12 @@ where
             zwp_relative_pointer_manager_v1::Request::GetRelativePointer { id, pointer } => {
                 let data = pointer.data::<PointerUserData<D>>().unwrap();
                 let user_data = RelativePointerUserData {
-                    handle: data.handle.clone(),
+                    arc: data.arc.clone(),
                     client_scale: data.client_scale.clone(),
                 };
                 let pointer = data_init.init(id, user_data);
-                if let Some(handle) = &data.handle {
-                    handle.wp_relative.new_relative_pointer(pointer);
+                if let Some(arc) = data.arc.upgrade() {
+                    arc.wp_relative.new_relative_pointer(pointer);
                 }
             }
             zwp_relative_pointer_manager_v1::Request::Destroy => {}
@@ -258,9 +259,8 @@ where
     }
 
     fn destroyed(&self, _state: &mut D, _: ClientId, object: &ZwpRelativePointerV1) {
-        if let Some(ref handle) = self.handle {
-            handle
-                .wp_relative
+        if let Some(arc) = self.arc.upgrade() {
+            arc.wp_relative
                 .known_relative_pointers
                 .lock()
                 .unwrap()

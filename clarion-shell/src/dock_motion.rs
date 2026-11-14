@@ -39,7 +39,11 @@ pub const DRAG_THRESHOLD: f32 = 4.;
 /// Diameter of the running indicator dot. It stays small so a shrunk icon is
 /// not dominated by the dot; the two steps keep the dot legible but subordinate.
 pub fn indicator_diameter(icon: f32) -> f32 {
-    if icon < 40. { 4. } else { 5. }
+    if icon < 40. {
+        4.
+    } else {
+        5.
+    }
 }
 
 /// Separation between two adjacent icons. It follows the icon size so a shrunk
@@ -52,9 +56,7 @@ pub fn row_gap(icon: f32) -> f32 {
 /// indicator lives in this band on the screen-facing side, so the band also
 /// sets the minimum clearance.
 pub fn cross_clearance(icon: f32) -> f32 {
-    (icon / 3.)
-        .max(indicator_diameter(icon) + 4.)
-        .min(20.)
+    (icon / 3.).max(indicator_diameter(icon) + 4.).min(20.)
 }
 
 /// Clearance between the first or last icon and the tray end along the row. It
@@ -110,9 +112,7 @@ fn fit_icon_size(preferred: f32, count: usize, separators: usize, limit: f32) ->
     let ceiling = snap_icon_step(preferred);
     for step in ICON_STEPS {
         if step <= ceiling + 0.001
-            && tray_length(count, step)
-                + separators as f32 * separator_clearance(step)
-                <= limit
+            && tray_length(count, step) + separators as f32 * separator_clearance(step) <= limit
         {
             return step;
         }
@@ -138,8 +138,7 @@ fn slot_capacity(icon: f32, separators: usize, limit: f32) -> usize {
     if span <= 0. {
         return 0;
     }
-    let room =
-        limit - 2. * end_gap(icon) + gap - separators as f32 * separator_clearance(icon);
+    let room = limit - 2. * end_gap(icon) + gap - separators as f32 * separator_clearance(icon);
     (room / span).floor().max(0.) as usize
 }
 
@@ -362,8 +361,8 @@ impl DockMetrics {
             folder_count,
             slot_count,
         );
-        let length = tray_length(slot_count, icon_size)
-            + separator_before.len() as f32 * separator_extra;
+        let length =
+            tray_length(slot_count, icon_size) + separator_before.len() as f32 * separator_extra;
         let bounce_amplitude = (icon_size * 0.35).min((cross_budget - thickness - SHADOW).max(0.));
         let desired_growth = if magnification_enabled {
             icon_size * (finite(scale, 1.).clamp(1., 2.) - 1.)
@@ -392,7 +391,11 @@ impl DockMetrics {
         // A horizontal Dock shows the label above the tray, so only its height
         // is needed; a vertical Dock shows it beside the tray, so the band must
         // fit the widest label.
-        let tooltip = if vertical { TOOLTIP_REACH } else { TOOLTIP_BAND };
+        let tooltip = if vertical {
+            TOOLTIP_REACH
+        } else {
+            TOOLTIP_BAND
+        };
         let surface_cross = (thickness + SHADOW + growth + bounce_amplitude + tooltip)
             .ceil()
             .min(output_cross.floor().max(1.));
@@ -516,8 +519,7 @@ impl DockMetrics {
             center_cursor += self.item;
             let influence = pointer
                 .map(|pointer| {
-                    let normalized =
-                        (center - pointer).abs() / (MAGNIFICATION_SUPPORT * self.item);
+                    let normalized = (center - pointer).abs() / (MAGNIFICATION_SUPPORT * self.item);
                     if normalized >= 1. {
                         0.
                     } else {
@@ -629,8 +631,7 @@ impl Elastic {
         let angle = damped * elapsed;
         let displacement = (offset * angle.cos() + carry * angle.sin()) * decay;
         let velocity = ((carry * damped - self.damping * omega * offset) * angle.cos()
-            + (-offset * damped - self.damping * omega * carry)
-                * angle.sin())
+            + (-offset * damped - self.damping * omega * carry) * angle.sin())
             * decay;
         let active = displacement.abs() > POSITION_EPSILON
             || velocity.abs() > POSITION_EPSILON * self.frequency;
@@ -919,14 +920,20 @@ mod tests {
         let mut few = full.clone();
         few.restrict_overflow(8, 2, 3);
         assert_eq!(few.hidden_apps, 0, "a small pinned group never overflows");
-        assert!(few.visible_apps >= 8, "every pinned application stays visible");
+        assert!(
+            few.visible_apps >= 8,
+            "every pinned application stays visible"
+        );
         assert_eq!(few.visible_pinned, 8);
 
         // A large pinned group overflows, and only its tail folds away.
         let mut many = full.clone();
         many.restrict_overflow(45, 0, 0);
         assert!(many.hidden_apps > 0, "the pinned group overflows");
-        assert!(many.hidden_apps <= 45, "the drawer never exceeds the pinned group");
+        assert!(
+            many.hidden_apps <= 45,
+            "the drawer never exceeds the pinned group"
+        );
         // The folded tail is exactly the pinned applications beyond the row: the
         // visible leading apps plus the folded apps cover the pinned group and
         // never spill into the running/recent remainder.
@@ -958,7 +965,10 @@ mod tests {
             metrics.visible_apps + 1 <= app_room,
             "the overflow tile and the recent group fit the capacity"
         );
-        assert_eq!(metrics.slot_count, metrics.visible_apps + metrics.utilities + 1);
+        assert_eq!(
+            metrics.slot_count,
+            metrics.visible_apps + metrics.utilities + 1
+        );
 
         // Running applications are preserved before the pinned tail is folded.
         let mut with_running = DockMetrics::new(60, 64., 1.45, true, true, false, 1280., 800.);

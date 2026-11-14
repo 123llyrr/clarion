@@ -160,7 +160,7 @@ impl<P: Send + 'static> Endpoint<P> {
             return Err("shader compiler is shutting down".into());
         }
         self.slots
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |slots| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |slots| {
                 (slots < CAPACITY).then_some(slots + 1)
             })
             .map_err(|_| "shader compiler capacity reached".to_owned())?;

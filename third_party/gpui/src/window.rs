@@ -752,6 +752,12 @@ impl Frame {
         self.tab_stops.clear();
         self.focus = None;
 
+        // Query-only map for `VisualTestContext::debug_bounds`. Frames are
+        // reused, so a selector painted in an earlier frame would otherwise
+        // still report bounds after its element is gone.
+        #[cfg(any(test, feature = "test-support"))]
+        self.debug_bounds.clear();
+
         #[cfg(any(feature = "inspector", debug_assertions))]
         {
             self.next_inspector_instance_ids.clear();
@@ -969,6 +975,7 @@ impl Window {
                 show,
                 display_id,
                 window_min_size,
+                app_id: app_id.clone(),
                 #[cfg(target_os = "macos")]
                 tabbing_identifier,
             },
@@ -1802,6 +1809,17 @@ impl Window {
     /// input region. `None` restores the input region as the glass shape.
     pub fn set_glass_region(&self, rectangles: Option<&[Bounds<Pixels>]>) {
         self.platform_window.set_glass_region(rectangles);
+    }
+
+    /// Begin a native drag-and-drop for these files, so other applications can
+    /// accept them. The compositor takes over pointer routing for the duration
+    /// of the drag; use this instead of a purely in-process drag preview.
+    pub fn start_file_drag(
+        &self,
+        paths: Vec<std::path::PathBuf>,
+        icon: Option<crate::FileDragIcon>,
+    ) -> bool {
+        self.platform_window.start_file_drag(paths, icon)
     }
 
     /// Change the reserved edge of a layer-shell surface in logical pixels.
@@ -3714,6 +3732,12 @@ impl Window {
                 }
             },
             PlatformInput::KeyDown(_) | PlatformInput::KeyUp(_) => event,
+            PlatformInput::FileDragEnded(_) => {
+                // A native drag has no mouse up on this window: the element
+                // drag started through `on_drag` must not linger.
+                cx.active_drag.take();
+                event
+            }
         };
 
         if let Some(any_mouse_event) = event.mouse_event() {

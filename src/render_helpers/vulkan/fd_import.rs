@@ -25,7 +25,7 @@ impl FailureBudget {
     }
     fn reserve(&self) -> Option<Permit<'_>> {
         self.occupied
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |occupied| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |occupied| {
                 (occupied < self.limit).then(|| occupied + 1)
             })
             .ok()

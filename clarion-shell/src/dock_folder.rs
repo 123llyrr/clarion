@@ -26,6 +26,8 @@ pub struct FolderEntry {
     pub path: PathBuf,
     pub name: String,
     pub kind: FolderEntryKind,
+    /// Finder-style tags (`user.xdg.tags`), drawn as dots on the artwork.
+    pub tags: Vec<String>,
     pub modified: Option<SystemTime>,
     pub size: u64,
 }
@@ -41,8 +43,7 @@ pub fn scan_folder(
     sort: FolderSort,
     descending: bool,
 ) -> anyhow::Result<FolderSnapshot> {
-    let directory =
-        fs::read_dir(path).with_context(|| format!("读取文件夹 {}", path.display()))?;
+    let directory = fs::read_dir(path).with_context(|| format!("读取文件夹 {}", path.display()))?;
     let mut entries = Vec::new();
     let mut visited = 0usize;
     let mut truncated = false;
@@ -81,10 +82,12 @@ pub fn scan_folder(
             FolderEntryKind::Document
         };
         let name = file_name.to_string_lossy().into_owned();
+        let tags = crate::file_icons::tags(&entry_path);
         entries.push(FolderEntry {
             path: entry_path,
             name,
             kind,
+            tags,
             modified: metadata.modified().ok(),
             size: if metadata.is_file() {
                 metadata.len()
@@ -99,8 +102,8 @@ pub fn scan_folder(
 
 pub fn sort_folder_entries(entries: &mut [FolderEntry], sort: FolderSort, descending: bool) {
     entries.sort_by(|a, b| {
-        let group = (a.kind != FolderEntryKind::Directory)
-            .cmp(&(b.kind != FolderEntryKind::Directory));
+        let group =
+            (a.kind != FolderEntryKind::Directory).cmp(&(b.kind != FolderEntryKind::Directory));
         if group != Ordering::Equal {
             return group;
         }
@@ -117,9 +120,7 @@ pub fn sort_folder_entries(entries: &mut [FolderEntry], sort: FolderSort, descen
         };
         let names = natural_name_cmp(&a.name, &b.name);
         let names = if descending { names.reverse() } else { names };
-        primary
-            .then(names)
-            .then_with(|| a.path.cmp(&b.path))
+        primary.then(names).then_with(|| a.path.cmp(&b.path))
     });
 }
 
@@ -177,7 +178,9 @@ fn take_number(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> u64 {
         if !ch.is_ascii_digit() {
             break;
         }
-        value = value.saturating_mul(10).saturating_add(ch as u64 - b'0' as u64);
+        value = value
+            .saturating_mul(10)
+            .saturating_add(ch as u64 - b'0' as u64);
         chars.next();
     }
     value
