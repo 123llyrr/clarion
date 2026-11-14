@@ -1811,6 +1811,17 @@ impl Window {
         self.platform_window.set_glass_region(rectangles);
     }
 
+    /// Begin a native drag-and-drop for these files, so other applications can
+    /// accept them. The compositor takes over pointer routing for the duration
+    /// of the drag; use this instead of a purely in-process drag preview.
+    pub fn start_file_drag(
+        &self,
+        paths: Vec<std::path::PathBuf>,
+        icon: Option<crate::FileDragIcon>,
+    ) -> bool {
+        self.platform_window.start_file_drag(paths, icon)
+    }
+
     /// Change the reserved edge of a layer-shell surface in logical pixels.
     /// Other window roles and platforms ignore this request.
     pub fn set_layer_exclusive_zone(&self, zone: i32) {
@@ -3721,6 +3732,12 @@ impl Window {
                 }
             },
             PlatformInput::KeyDown(_) | PlatformInput::KeyUp(_) => event,
+            PlatformInput::FileDragEnded(_) => {
+                // A native drag has no mouse up on this window: the element
+                // drag started through `on_drag` must not linger.
+                cx.active_drag.take();
+                event
+            }
         };
 
         if let Some(any_mouse_event) = event.mouse_event() {

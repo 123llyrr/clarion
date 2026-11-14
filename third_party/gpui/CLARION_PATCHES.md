@@ -16,6 +16,28 @@ Clarion additions:
 - `window.rs`: `Frame::clear` also drops the query-only `debug_bounds` map.
   Frames are reused, so without this `VisualTestContext::debug_bounds` kept
   reporting selectors from earlier frames after their element was removed.
+- `platform.rs` / `window.rs` / `platform/linux/wayland/{window,client}.rs`:
+  `start_file_drag`, a native `wl_data_device.start_drag` source offering
+  `text/uri-list` (plus plain text paths) for files dragged out of the Shell.
+  The request uses the tracked pointer-press serial and the dragging window's
+  surface, advertises `copy` and `move` so targets pick the cursor (and drop
+  semantics) they mean, and builds a `wl_shm` drag-icon surface from the
+  supplied `FileDragIcon` so the file follows the pointer. The
+  `wl_data_source` and icon stay alive until `dnd_finished`/`cancelled`, at
+  which point the origin window receives `PlatformInput::FileDragEnded` (a
+  `FileDragEndedEvent` routed to mouse listeners) — the only completion signal
+  a Wayland drag source gets. Platforms without drag support return `false`,
+  so the Shell can keep its in-process drag layer.
+- `platform.rs` / `platform/linux/{platform,wayland}.rs` / `platform/mac` /
+  `platform/windows`: `CursorStyle::{DragMove,DragNoDrop}` for the two drag
+  semantics GTK distinguishes (plain move pointer and refused drop); the
+  existing `DragCopy` now prefers the theme's `dnd-copy` glyph, the same family
+  Nautilus uses. While a native drag runs, the Wayland client filters
+  `set_cursor_style` (the origin surface keeps receiving motion and its hover
+  hit-testing would otherwise restore the arrow) and instead mirrors the
+  negotiated action from `wl_data_source.action` — `copy` becomes the plus
+  cursor, `move` the plain pointer, anything else the refusal cursor. The
+  arrow returns once `dnd_finished`/`cancelled` clears the source.
 - `platform.rs`: public `WindowKind::LayerShell` and copyable role options.
 - `platform.rs` / `window.rs` / `platform/linux/wayland/window.rs`:
   `set_glass_region`, a frosted shape independent of the input region. `None`

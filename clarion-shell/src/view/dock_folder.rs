@@ -24,6 +24,9 @@ struct FolderDragPreview {
     path: PathBuf,
     is_dir: bool,
     tags: Vec<String>,
+    /// The compositor owns the drag: the shell must not paint a second ghost
+    /// that cannot follow the pointer anymore.
+    hidden: bool,
 }
 
 /// Applies a glyph-only rotation while an element paints. The element keeps an
@@ -360,6 +363,9 @@ fn fan_label_background(radians: f32, p: Palette) -> AnyElement {
 
 impl Render for FolderDragPreview {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        if self.hidden {
+            return div().size(px(1.)).into_any_element();
+        }
         div()
             .debug_selector(|| "folder-drag-preview".into())
             .opacity(0.8)
@@ -370,6 +376,7 @@ impl Render for FolderDragPreview {
                 64.,
                 0.,
             ))
+            .into_any_element()
     }
 }
 
@@ -885,6 +892,34 @@ impl ShellView {
         cx.notify();
     }
 
+    /// Mark the popup as the origin of a native drag: its fullscreen catcher
+    /// must stop swallowing the pointer so other surfaces can be the target.
+    pub(super) fn begin_native_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.native_drag = true;
+        // Keep the visible popup as the drop target: a file released back on
+        // it must not fall through to the window it covers, while the rest of
+        // the output has to reach the application under the pointer.
+        let region: Vec<Bounds<Pixels>> = self
+            .panel_frost
+            .or(self.folder_fan_region)
+            .into_iter()
+            .collect();
+        window.set_input_region(Some(&region));
+        cx.notify();
+    }
+
+    /// A native drag that started from this popup is over. Retract the popup so
+    /// the application the compositor just activated gets the keyboard back.
+    pub(super) fn finish_native_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.native_drag {
+            return;
+        }
+        self.native_drag = false;
+        let full = vec![Bounds::new(point(px(0.), px(0.)), window.viewport_size())];
+        window.set_input_region(Some(&full));
+        self.dismiss_folder_fan(cx);
+    }
+
     /// Keeps the folder surface alive for the duration of a file drag, but
     /// makes it invisible and empty. The surface still owns the implicit
     /// pointer grab so it can paint the drag preview anywhere on the output;
@@ -1079,7 +1114,7 @@ impl ShellView {
             .take(visible)
             .map(|entry| entry.name.as_str())
             .collect();
-        let (items, _fan_bounds) = fan_geometry(
+        let (items, fan_bounds) = fan_geometry(
             anchor,
             host.prefs.dock_position,
             entries.len(),
@@ -1150,6 +1185,31 @@ impl ShellView {
             host.prefs.dock_position,
             DockPosition::Left | DockPosition::Right
         );
+        // The fan's visible footprint is also its input shape while a native
+        // drag runs: the overflow stack and the reveal control ride past the
+        // last card, so the plain geometry bounds alone would leave their tips
+        // transparent to drops.
+        let mut fan_region = fan_bounds;
+        if visible > 0 {
+            let deepest = if stack_count > 0 {
+                (stack_head + (stack_count - 1) as f32 * stack_pacing) / step
+            } else {
+                0.
+            };
+            let (center, _) = terminal(deepest);
+            let reach = icon_size / 2.;
+            fan_region = Bounds::from_corners(
+                point(
+                    px(f32::from(fan_region.origin.x).min(f32::from(center.x) - reach)),
+                    px(f32::from(fan_region.origin.y).min(f32::from(center.y) - reach)),
+                ),
+                point(
+                    px(f32::from(fan_region.right()).max(f32::from(center.x) + reach)),
+                    px(f32::from(fan_region.bottom()).max(f32::from(center.y) + reach)),
+                ),
+            );
+        }
+        self.folder_fan_region = Some(fan_region);
         for depth in 1..=stack_count {
             let Some(entry) = entries.get(stack_start + depth - 1) else {
                 break;
@@ -1267,11 +1327,27 @@ impl ShellView {
                         // position through forwarded events.
                         // A native drag: the compositor routes the pointer, so
                         // other applications can accept the file too.
-                        drag_view.update(cx, |this, cx| this.begin_folder_drag(window, cx));
+                        let icon = crate::file_icons::drag_icon(
+                            Some(&drag.path),
+                            drag_is_dir,
+                            &drag_tags,
+                        )
+                        .map(|(width, height, rgba)| gpui::FileDragIcon {
+                            width,
+                            height,
+                            rgba,
+                        });
+                        let native = window.start_file_drag(vec![drag.path.clone()], icon);
+                        if native {
+                            drag_view.update(cx, |this, cx| this.begin_native_drag(window, cx));
+                        } else {
+                            drag_view.update(cx, |this, cx| this.begin_folder_drag(window, cx));
+                        }
                         cx.new(|_| FolderDragPreview {
                             path: drag.path.clone(),
                             is_dir: drag_is_dir,
                             tags: drag_tags.clone(),
+                            hidden: native,
                         })
                     },
                 );
@@ -1735,6 +1811,7 @@ impl ShellView {
         let name = entry.name.clone();
         let kind = entry.kind;
         let view = cx.entity();
+        let drag_view = view.clone();
         let drag_tags = entry.tags.clone();
         let drag_is_dir = kind == FolderEntryKind::Directory;
         let menu_path = path.clone();
@@ -1767,11 +1844,27 @@ impl ShellView {
                     // The popup becomes an invisible fullscreen drag layer so
                     // the preview follows the pointer everywhere; its pointer
                     // events are forwarded to the Dock.
-                    view.update(cx, |this, cx| this.begin_folder_drag(window, cx));
+                    let icon = crate::file_icons::drag_icon(
+                        Some(&drag.path),
+                        drag_is_dir,
+                        &drag_tags,
+                    )
+                    .map(|(width, height, rgba)| gpui::FileDragIcon {
+                        width,
+                        height,
+                        rgba,
+                    });
+                    let native = window.start_file_drag(vec![drag.path.clone()], icon);
+                    if native {
+                        drag_view.update(cx, |this, cx| this.begin_native_drag(window, cx));
+                    } else {
+                        drag_view.update(cx, |this, cx| this.begin_folder_drag(window, cx));
+                    }
                     cx.new(|_| FolderDragPreview {
                         path: drag.path.clone(),
                         is_dir: drag_is_dir,
                         tags: drag_tags.clone(),
+                        hidden: native,
                     })
                 },
             )
@@ -1812,6 +1905,7 @@ impl ShellView {
         let name = entry.name.clone();
         let kind = entry.kind;
         let view = cx.entity();
+        let drag_view = view.clone();
         let drag_tags = entry.tags.clone();
         let drag_is_dir = kind == FolderEntryKind::Directory;
         let menu_path = path.clone();
@@ -1853,11 +1947,27 @@ impl ShellView {
                 move |drag, _offset, window, cx| {
                     // The grid popup becomes the same invisible fullscreen drag
                     // layer as the fan and list layouts.
-                    view.update(cx, |this, cx| this.begin_folder_drag(window, cx));
+                    let icon = crate::file_icons::drag_icon(
+                        Some(&drag.path),
+                        drag_is_dir,
+                        &drag_tags,
+                    )
+                    .map(|(width, height, rgba)| gpui::FileDragIcon {
+                        width,
+                        height,
+                        rgba,
+                    });
+                    let native = window.start_file_drag(vec![drag.path.clone()], icon);
+                    if native {
+                        drag_view.update(cx, |this, cx| this.begin_native_drag(window, cx));
+                    } else {
+                        drag_view.update(cx, |this, cx| this.begin_folder_drag(window, cx));
+                    }
                     cx.new(|_| FolderDragPreview {
                         path: drag.path.clone(),
                         is_dir: drag_is_dir,
                         tags: drag_tags.clone(),
+                        hidden: native,
                     })
                 },
             )

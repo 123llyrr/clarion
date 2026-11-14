@@ -359,6 +359,41 @@ fn icon_fit(
     stack.into_any_element()
 }
 
+/// The image a native drag shows at the pointer: the entry's preview or type
+/// artwork, scaled to 64px and padded so the cursor does not cover it.
+pub(crate) fn drag_icon(
+    path: Option<&Path>,
+    is_dir: bool,
+    tags: &[String],
+) -> Option<(u32, u32, Vec<u8>)> {
+    let kind = match path {
+        Some(path) => kind(path, is_dir),
+        None => FileKind::Folder,
+    };
+    let (_, bytes, _) = artwork(path, kind, Fit::Whole);
+    let image =
+        ::image::load_from_memory_with_format(&bytes, ::image::ImageFormat::Png).ok()?.to_rgba8();
+    let (width, height) = image.dimensions();
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let _ = tags;
+    let scale = 64. / width.max(height) as f32;
+    let target_width = ((width as f32 * scale).round() as u32).max(1);
+    let target_height = ((height as f32 * scale).round() as u32).max(1);
+    let image = ::image::imageops::resize(
+        &image,
+        target_width,
+        target_height,
+        ::image::imageops::FilterType::Triangle,
+    );
+    // The drag surface's origin is the pointer: pad so the icon trails it.
+    let pad = 16;
+    let mut canvas = ::image::RgbaImage::new(target_width + pad, target_height + pad);
+    ::image::imageops::overlay(&mut canvas, &image, pad as i64, pad as i64);
+    Some((canvas.width(), canvas.height(), canvas.into_raw()))
+}
+
 /// The artwork behind one entry: cache key plus PNG bytes.
 fn artwork(path: Option<&Path>, kind: FileKind, fit: Fit) -> (String, Arc<Vec<u8>>, bool) {
     if let Some(path) = path.filter(|_| kind != FileKind::Folder) {

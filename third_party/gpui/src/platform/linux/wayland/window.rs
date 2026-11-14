@@ -1109,6 +1109,24 @@ impl PlatformWindow for WaylandWindow {
         state.surface.commit();
     }
 
+    fn start_file_drag(
+        &self,
+        paths: Vec<std::path::PathBuf>,
+        icon: Option<crate::FileDragIcon>,
+    ) -> bool {
+        let state = self.borrow();
+        if state.closed {
+            return false;
+        }
+        let surface = state.surface.clone();
+        let client = state.client.clone();
+        drop(state);
+        client
+            .get_client()
+            .borrow_mut()
+            .start_file_drag(&surface, paths, icon)
+    }
+
     fn scale_factor(&self) -> f32 {
         self.borrow().scale
     }

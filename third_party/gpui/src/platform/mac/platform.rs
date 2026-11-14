@@ -1003,6 +1003,10 @@ impl Platform for MacPlatform {
                 }
                 CursorStyle::DragLink => msg_send![class!(NSCursor), dragLinkCursor],
                 CursorStyle::DragCopy => msg_send![class!(NSCursor), dragCopyCursor],
+                // macOS has no dedicated move cursor: a plain arrow is what
+                // Finder shows while an item is carried.
+                CursorStyle::DragMove => msg_send![class!(NSCursor), arrowCursor],
+                CursorStyle::DragNoDrop => msg_send![class!(NSCursor), operationNotAllowedCursor],
                 CursorStyle::ContextualMenu => msg_send![class!(NSCursor), contextualMenuCursor],
                 CursorStyle::None => unreachable!(),
             };

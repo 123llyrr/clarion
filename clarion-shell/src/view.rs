@@ -210,6 +210,15 @@ pub struct ShellView {
     /// Host keeps the surface alive for the exit ride, so the zoom-out needs
     /// its own clock.
     folder_zoom_out: Option<std::time::Instant>,
+    /// A native (compositor) file drag is in flight from this panel. The
+    /// fullscreen popup must stop catching the pointer so the drag can target
+    /// the application underneath it.
+    native_drag: bool,
+    /// Visible footprint of the Dock folder fan, in surface coordinates. A
+    /// native drag shrinks the input region to this rect so the fan still
+    /// catches a file dropped back onto it, while the rest of the output
+    /// targets whatever lies below.
+    folder_fan_region: Option<Bounds<Pixels>>,
     /// The popup outline the last panel render actually painted. The frost is
     /// a binary compositor region, so it cannot fade with the content: it has
     /// to follow the animated box and disappear as soon as the popup starts
@@ -695,6 +704,8 @@ impl ShellView {
             palette_glyph: None,
             popup_epoch: std::time::Instant::now(),
             folder_zoom_out: None,
+            native_drag: false,
+            folder_fan_region: None,
             panel_frost: None,
             power_switch: RefCell::new(PowerSwitchAnim::default()),
             folder_drag_layer: false,
@@ -3348,7 +3359,21 @@ impl Render for ShellView {
                     window.set_glass_region(Some(&[]));
                 }
             }
-            window.set_input_region(Some(&full));
+            // A native drag must be able to target the application under the
+            // pointer, so the fullscreen catcher shrinks to the popup itself.
+            // Keeping the visible rect (instead of an empty region) means a
+            // file dropped back onto the popup is caught here rather than
+            // falling through to the window the popup covers.
+            if self.native_drag {
+                let popup_rect = if matches!(host.panel, Some(Panel::DockFolder { .. })) {
+                    self.panel_frost.or(self.folder_fan_region)
+                } else {
+                    self.panel_frost
+                };
+                window.set_input_region(Some(popup_rect.as_slice()));
+            } else {
+                window.set_input_region(Some(&full));
+            }
         } else if matches!(self.kind, Surface::Panel) && host.panel != Some(Panel::Notifications) {
             let is_apps = host.panel == Some(Panel::Apps);
             let (x, y, w, h, radius) = if is_apps {
@@ -3377,6 +3402,18 @@ impl Render for ShellView {
                 window.set_glass_region(Some(&[]));
             }
             window.set_input_region(Some(&regions));
+        }
+        if self.native_drag {
+            // The platform reports the end of the drag the popup started: the
+            // surface has to give the keyboard back and close like any other
+            // one-shot panel, otherwise the drop target stays unfocused.
+            let view = cx.entity().downgrade();
+            window.on_mouse_event(
+                move |_: &FileDragEndedEvent, _: DispatchPhase, window, cx| {
+                    view.update(cx, |this, cx| this.finish_native_drag(window, cx))
+                        .ok();
+                },
+            );
         }
         let surface = div()
             .id("clarion-surface")
