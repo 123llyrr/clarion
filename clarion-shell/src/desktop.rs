@@ -84,6 +84,9 @@ pub enum DesktopAction {
         title: String,
         rows: Vec<(String, String)>,
     },
+    /// Ask the host to surface a hint through the session's notification
+    /// service. The desktop itself never paints a banner over the files.
+    Notify { body: String },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -339,7 +342,10 @@ pub struct DesktopView {
     rename_name: String,
     input: Entity<TextInput>,
     focus: FocusHandle,
-    error: Option<String>,
+    /// The last hint already handed to the notification service. A repeated
+    /// failure (a rescan that keeps hitting the same unreadable directory) is
+    /// posted once until something succeeds in between.
+    last_notice: Option<String>,
     busy: bool,
     work: mpsc::SyncSender<Work>,
     alive: Arc<AtomicBool>,
@@ -400,6 +406,9 @@ impl DesktopView {
             .spawn(move || worker(environment, preview, incoming, updates, worker_alive))
             .err()
             .map(|error| format!("无法启动桌面文件服务：{error}"));
+        if let Some(error) = startup_error {
+            let _ = actions.try_send(DesktopAction::Notify { body: error });
+        }
         cx.spawn(async move |this, cx| {
             while let Ok(update) = received.recv().await {
                 if this
@@ -414,7 +423,10 @@ impl DesktopView {
                                 this.marquee = None;
                                 this.directory = snapshot.directory;
                                 this.wallpaper = snapshot.wallpaper;
-                                this.error = snapshot.error;
+                                match snapshot.error {
+                                    Some(error) => this.send_notice(error, cx),
+                                    None => this.clear_notice(),
+                                }
                                 this.selected_many.retain(|path| {
                                     this.entries.iter().any(|entry| &entry.path == path)
                                 });
@@ -429,8 +441,9 @@ impl DesktopView {
                                     this.selection_anchor = None;
                                 }
                             }
-                            Update::Error(error) => this.error = Some(error),
+                            Update::Error(error) => this.send_notice(error, cx),
                             Update::Created(path) => {
+                                this.clear_notice();
                                 this.selected = Some(path.clone());
                                 this.selection_anchor = Some(path.clone());
                                 this.selected_many = [path].into();
@@ -449,7 +462,7 @@ impl DesktopView {
                                                 rows: inspector.rows,
                                             });
                                         }
-                                        Err(error) => this.error = Some(error),
+                                        Err(error) => this.send_notice(error, cx),
                                     }
                                 }
                             }
@@ -486,7 +499,7 @@ impl DesktopView {
             rename_name: String::new(),
             input,
             focus: cx.focus_handle(),
-            error: startup_error,
+            last_notice: None,
             busy: false,
             work,
             alive,
@@ -614,7 +627,7 @@ impl DesktopView {
                 self.menu = Some(position);
                 self.menu_window = Some(menu);
             }
-            Err(error) => self.error = Some(format!("无法打开桌面菜单：{error}")),
+            Err(error) => self.send_notice(format!("无法打开桌面菜单：{error}"), cx),
         }
         cx.notify();
     }
@@ -652,27 +665,46 @@ impl DesktopView {
         self.enqueue(Work::Refresh, cx);
     }
 
+    /// Hints never paint a banner over the user's files: they go through the
+    /// session's notification service like any other desktop application. A
+    /// message that repeats because the same operation keeps failing is only
+    /// posted once until something succeeds in between.
+    fn send_notice(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
+        let message = message.into();
+        if self.last_notice.as_deref() == Some(message.as_str()) {
+            return;
+        }
+        self.last_notice = Some(message.clone());
+        let _ = self.actions.try_send(DesktopAction::Notify { body: message });
+        cx.notify();
+    }
+
+    /// The condition that produced the last hint is gone: a later failure is
+    /// worth posting again.
+    fn clear_notice(&mut self) {
+        self.last_notice = None;
+    }
+
     fn enqueue(&mut self, work: Work, cx: &mut Context<Self>) {
         if self.preview && !matches!(work, Work::Refresh) {
-            self.error = Some("预览模式不会修改文件".into());
-            cx.notify();
+            self.send_notice("预览模式不会修改文件", cx);
             return;
         }
         match self.work.try_send(work) {
             Ok(()) => {
                 self.busy = true;
-                self.error = None;
+                self.clear_notice();
             }
-            Err(_) => self.error = Some("文件操作正在处理中，请稍后重试".into()),
+            Err(_) => self.send_notice("文件操作正在处理中，请稍后重试", cx),
         }
         cx.notify();
     }
 
     pub(crate) fn send(&mut self, action: DesktopAction, cx: &mut Context<Self>) {
         if self.preview {
-            self.error = Some("预览模式不会打开或修改用户文件".into());
+            self.send_notice("预览模式不会打开或修改用户文件", cx);
         } else if self.actions.try_send(action).is_err() {
-            self.error = Some("桌面操作暂时不可用".into());
+            self.send_notice("桌面操作暂时不可用", cx);
         }
         self.close_menu(cx);
         cx.notify();
@@ -683,13 +715,11 @@ impl DesktopView {
             return;
         }
         if self.preview {
-            self.error = Some("预览模式不会修改文件".into());
-            cx.notify();
+            self.send_notice("预览模式不会修改文件", cx);
             return;
         }
         if self.selected_many.len() != 1 {
-            self.error = Some("请选择一个项目进行重命名".into());
-            cx.notify();
+            self.send_notice("请选择一个项目进行重命名", cx);
             return;
         }
         let Some(entry) = self
@@ -719,8 +749,7 @@ impl DesktopView {
                 return;
             }
             if let Err(error) = validate_name(&self.rename_name) {
-                self.error = Some(error.to_string());
-                cx.notify();
+                self.send_notice(error.to_string(), cx);
                 return;
             }
             self.new_folder = false;
@@ -735,8 +764,7 @@ impl DesktopView {
                 return;
             }
             if let Err(error) = validate_name(&self.rename_name) {
-                self.error = Some(error.to_string());
-                cx.notify();
+                self.send_notice(error.to_string(), cx);
                 return;
             }
             self.rename = None;
@@ -751,10 +779,10 @@ impl DesktopView {
         } else {
             let paths = self.selection();
             if paths.len() > MAX_OPEN_SELECTION {
-                self.error = Some(format!(
-                    "一次最多打开 {MAX_OPEN_SELECTION} 个项目，请缩小选择范围"
-                ));
-                cx.notify();
+                self.send_notice(
+                    format!("一次最多打开 {MAX_OPEN_SELECTION} 个项目，请缩小选择范围"),
+                    cx,
+                );
                 return;
             }
             for path in paths {
@@ -814,16 +842,14 @@ impl DesktopView {
             // large file lands in a proper preview window (and an unsupported
             // one is reported by the system notification service).
             if paths.len() != 1 {
-                self.error = Some("快速查看一次只预览一个项目".into());
-                cx.notify();
+                self.send_notice("快速查看一次只预览一个项目", cx);
                 return;
             }
             self.send(DesktopAction::Preview(paths[0].clone()), cx);
             return;
         }
         if paths.is_empty() {
-            self.error = Some("请先选择桌面项目".into());
-            cx.notify();
+            self.send_notice("请先选择桌面项目", cx);
             return;
         }
         self.inspection_generation = self.inspection_generation.wrapping_add(1);
@@ -842,8 +868,7 @@ impl DesktopView {
             return;
         }
         if self.preview || self.directory.is_none() {
-            self.error = Some("预览模式不会创建文件夹".into());
-            cx.notify();
+            self.send_notice("预览模式不会创建文件夹", cx);
             return;
         }
         self.rename_name = available_folder_name(&self.entries);
@@ -876,7 +901,6 @@ impl DesktopView {
         self.new_folder = false;
         self.inspector = None;
         self.inspection_generation = self.inspection_generation.wrapping_add(1);
-        self.error = None;
         window.focus(&self.focus);
         cx.notify();
     }
@@ -1349,20 +1373,6 @@ impl Render for DesktopView {
                         "Clarion 桌面预览 · {} · 不读取或修改用户目录",
                         self.output
                     )),
-            );
-        }
-        if let Some(error) = &self.error {
-            root = root.child(
-                div()
-                    .absolute()
-                    .left(px(16.))
-                    .bottom(px(12.))
-                    .right(px(16.))
-                    .p_3()
-                    .rounded(px(8.))
-                    .bg(rgba(0x382923ee))
-                    .text_sm()
-                    .child(error.clone()),
             );
         }
         let colors = MenuColors::new(self.appearance);
@@ -2251,7 +2261,7 @@ mod tests {
                 rename_name: String::new(),
                 input,
                 focus,
-                error: None,
+                last_notice: None,
                 busy: false,
                 work,
                 alive: Arc::new(AtomicBool::new(true)),
@@ -2427,6 +2437,56 @@ mod tests {
     }
 
     #[gpui::test]
+    fn desktop_hints_go_through_the_notification_service(cx: &mut TestAppContext) {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("Desktop");
+        fs::create_dir(&directory).unwrap();
+        fs::write(directory.join("first.txt"), b"keep").unwrap();
+        let (_view, visual, actions, _work) = desktop_fixture(cx, &directory);
+
+        // Nothing is selected, so rename is refused. The explanation belongs to
+        // the session's notification service, not a banner over the files.
+        visual.simulate_keystrokes("f2");
+        visual.run_until_parked();
+        assert!(
+            matches!(
+                actions.try_recv(),
+                Ok(DesktopAction::Notify { body }) if body == "请选择一个项目进行重命名"
+            ),
+            "a refused rename must be reported as a system notification"
+        );
+
+        // Hitting the same refusal again is not worth a second toast.
+        visual.simulate_keystrokes("f2");
+        visual.run_until_parked();
+        assert!(
+            actions.try_recv().is_err(),
+            "an identical hint must not be posted twice in a row"
+        );
+
+        // A different hint still gets through: dedupe is only about immediate
+        // repeats, not about silencing the desktop for the rest of the session.
+        visual.simulate_keystrokes("super-i");
+        visual.run_until_parked();
+        assert!(
+            matches!(
+                actions.try_recv(),
+                Ok(DesktopAction::Notify { body }) if body == "请先选择桌面项目"
+            ),
+            "a new hint is posted even right after another one"
+        );
+        visual.simulate_keystrokes("f2");
+        visual.run_until_parked();
+        assert!(
+            matches!(
+                actions.try_recv(),
+                Ok(DesktopAction::Notify { body }) if body == "请选择一个项目进行重命名"
+            ),
+            "the earlier hint may be repeated once something else was posted"
+        );
+    }
+
+    #[gpui::test]
     fn forwarded_desktop_shortcuts_dispatch_real_actions_and_inline_folder_creation(
         cx: &mut TestAppContext,
     ) {
@@ -2479,7 +2539,7 @@ mod tests {
                 rename_name: String::new(),
                 input,
                 focus,
-                error: None,
+                last_notice: None,
                 busy: false,
                 work,
                 alive: Arc::new(AtomicBool::new(true)),
@@ -2555,10 +2615,12 @@ mod tests {
         );
         view.update(visual, |view, _| view.busy = false);
         visual.simulate_keystrokes("super-y");
-        assert_eq!(
-            view.read_with(visual, |view, _| view.error.clone()).as_deref(),
-            Some("快速查看一次只预览一个项目"),
-            "Quick Look previews one file at a time"
+        assert!(
+            matches!(
+                received_actions.try_recv(),
+                Ok(DesktopAction::Notify { body }) if body == "快速查看一次只预览一个项目"
+            ),
+            "Quick Look previews one file at a time and says so through a notification"
         );
         assert!(
             received_actions.try_recv().is_err(),

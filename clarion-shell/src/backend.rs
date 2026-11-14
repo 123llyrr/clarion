@@ -225,6 +225,12 @@ pub enum Command {
     RecordLaunch(String),
     /// Lock, suspend or power the session off through logind/systemd.
     System(crate::app::SystemAction),
+    /// Surface a hint through the session's notification service instead of
+    /// painting a banner into the shell UI.
+    Notify {
+        summary: String,
+        body: String,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -789,6 +795,9 @@ fn perform(
             )?;
         }
         Command::System(action) => run_system_action(action, options)?,
+        Command::Notify { summary, body } => {
+            notify(&options.environment, &summary, &body)?;
+        }
         Command::OpenSettings => {
             request(
                 &options.environment,
@@ -1047,6 +1056,26 @@ fn preview_location(path: &Path, environment: &Environment) -> Result<()> {
         &[path.to_path_buf()],
         environment,
     )
+}
+
+/// Post one hint through the session's notification service. The shell is the
+/// notification daemon as well, so this lands in the same toast surface other
+/// applications use instead of a banner painted over the user's files.
+fn notify(environment: &Environment, summary: &str, body: &str) -> Result<()> {
+    run_tool(
+        "notify-send",
+        &[
+            "--app-name=Clarion",
+            "--icon=dialog-information",
+            "--",
+            summary,
+            body,
+        ],
+        environment,
+        Duration::from_millis(900),
+    )
+    .context("无法发送系统通知")?;
+    Ok(())
 }
 
 /// Surface a failed open or preview through the session's notification service,

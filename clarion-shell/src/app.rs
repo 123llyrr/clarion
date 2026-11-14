@@ -797,6 +797,12 @@ impl Host {
                 }
                 self.open(Panel::Info { path, title, rows }, cx);
             }
+            DesktopAction::Notify { body } => {
+                let _ = self.backend.send(backend::Command::Notify {
+                    summary: "Clarion 桌面".into(),
+                    body,
+                });
+            }
             DesktopAction::Wallpaper(Some(path)) => {
                 for output in self.outputs.values() {
                     if let Some(desktop) = output.desktop {
