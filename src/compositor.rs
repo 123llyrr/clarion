@@ -2776,10 +2776,16 @@ impl State {
 
     #[cfg(feature = "dbus")]
     pub fn on_login1_msg(&mut self, msg: Login1ToClarion) {
-        let Login1ToClarion::LidClosedChanged(is_closed) = msg;
-
-        trace!("login1 lid {}", if is_closed { "closed" } else { "opened" });
-        self.set_lid_closed(is_closed);
+        match msg {
+            Login1ToClarion::LidClosedChanged(is_closed) => {
+                trace!("login1 lid {}", if is_closed { "closed" } else { "opened" });
+                self.set_lid_closed(is_closed);
+            }
+            Login1ToClarion::LockRequested => {
+                trace!("login1 requested a session lock");
+                self.clarion.request_lock();
+            }
+        }
     }
 
     #[cfg(feature = "dbus")]
@@ -7801,13 +7807,24 @@ impl Clarion {
     }
 
     /// Starts the configured locker. The session lock surface belongs to a
-    /// client, so the policy can only ask one to run.
-    fn request_lock(&mut self) {
+    /// client, so the policy can only ask one to run. This is the single path
+    /// for idle timeouts, `loginctl lock-session` and the Shell's lock action.
+    pub(crate) fn request_lock(&mut self) {
+        let already_locking = match &self.lock_state {
+            LockState::Unlocked => false,
+            LockState::WaitingForSurfaces { .. } | LockState::Locking(_) => true,
+            LockState::Locked(lock) => lock.is_alive(),
+        };
+        if already_locking {
+            debug!("lock: a locker is already locking or holding the session");
+            return;
+        }
+
         let Some(command) = self.idle_policy.lock_command() else {
-            warn!("idle: lock requested, but idle {{ lock-command }} is not configured");
+            warn!("lock requested, but idle {{ lock-command }} is not configured");
             return;
         };
-        debug!("idle: starting the lock command {command:?}");
+        debug!("lock: starting the lock command {command:?}");
         crate::utils::spawning::spawn(command, None);
     }
 

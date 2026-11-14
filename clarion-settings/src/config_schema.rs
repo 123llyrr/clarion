@@ -107,7 +107,7 @@ sections![
         "idle",
         "空闲、锁屏与挂起",
         "IdlePart",
-        "idle {\n    timeout 300\n    action \"lock\"\n    lock-command \"swaylock\"\n}",
+        "idle {\n    timeout 300\n    action \"lock\"\n    lock-command \"hyprlock\"\n}",
         false
     ),
     (

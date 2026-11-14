@@ -112,7 +112,7 @@ Recommends:     gnome-keyring
 # Suggested utilities, bound in the default config
 Recommends:     alacritty
 Recommends:     fuzzel
-Recommends:     swaylock
+Recommends:     hyprlock
 Recommends:     waybar
 # Suggested utilities
 Recommends:     swaybg
