@@ -7,7 +7,8 @@ use gpui::{px, TestAppContext, VisualTestContext};
 
 use super::dock_folder::{
     fan_capacity, fan_close_progress, fan_extension, fan_extension_center, fan_geometry,
-    fan_label_text_size, fan_open_progress, rotated_plate_rows,
+    fan_label_text_size, fan_open_progress, folder_popup_close_progress,
+    folder_popup_progress, rotated_plate_rows,
 };
 use super::*;
 use crate::app::testing;
@@ -548,6 +549,46 @@ fn side_labels_rotate_with_their_icon_below_the_card() {
 }
 
 #[test]
+fn folder_popup_unfolds_from_the_top_then_settles() {
+    let (start, active) = folder_popup_progress(std::time::Duration::ZERO);
+    assert!(start.abs() < 1e-5, "the popup starts closed: {start}");
+    assert!(active);
+    // The first frames stay near the tile instead of snapping open.
+    let (early, active) = folder_popup_progress(std::time::Duration::from_millis(10));
+    assert!(active);
+    assert!(early < 0.05, "the zoom starts gently, got {early}");
+    let (middle, active) = folder_popup_progress(std::time::Duration::from_millis(150));
+    assert!(active);
+    assert!(
+        middle > 0.3 && middle < 1.,
+        "the box grows towards its resting size, got {middle}"
+    );
+    let (end, active) = folder_popup_progress(std::time::Duration::from_millis(300));
+    assert_eq!(end, 1.);
+    assert!(!active);
+}
+
+#[test]
+fn folder_popup_zooms_back_into_its_tile() {
+    let (start, active) = folder_popup_close_progress(std::time::Duration::ZERO);
+    assert!((start - 1.).abs() < 1e-5, "the closing box starts full: {start}");
+    assert!(active);
+    // The shrink also starts gently instead of dropping away at once.
+    let (early, active) = folder_popup_close_progress(std::time::Duration::from_millis(10));
+    assert!(active);
+    assert!(early > 0.95, "the box leaves its resting size slowly, got {early}");
+    let (middle, active) = folder_popup_close_progress(std::time::Duration::from_millis(80));
+    assert!(active);
+    assert!(
+        middle > 0. && middle < 1.,
+        "the box shrinks towards the tile, got {middle}"
+    );
+    let (end, active) = folder_popup_close_progress(std::time::Duration::from_millis(260));
+    assert_eq!(end, 0.);
+    assert!(!active);
+}
+
+#[test]
 fn fan_open_curve_overshoots_then_settles() {
     let (start, active) = fan_open_progress(std::time::Duration::ZERO);
     assert!(start.abs() < 1e-5, "the fan must start collapsed: {start}");
@@ -1008,9 +1049,12 @@ fn terminal_reveal_button_and_label_rotate_as_one_group(cx: &mut TestAppContext)
     let dx = f32::from(label.center().x - button.center().x);
     let dy = f32::from(label.center().y - button.center().y);
     let distance = (dx * dx + dy * dy).sqrt();
+    // Half the button, the fixed gap, and half the plate: the pair hangs off
+    // the same tangent no matter what size the fan cards are drawn at.
+    let expected = f32::from(button.size.width) / 2. + 8. + f32::from(label.size.width) / 2.;
     assert!(
-        (distance - 103.6).abs() < 1.,
-        "the terminal pair must stay rigid, got {distance}"
+        (distance - expected).abs() < 1.,
+        "the terminal pair must stay rigid, got {distance} vs {expected}"
     );
     assert!(
         dy.abs() > 5.,
@@ -1448,10 +1492,11 @@ fn folder_menu_changes_display_layout_and_sort(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn auto_layout_opens_a_fan_from_the_folder_tile(cx: &mut TestAppContext) {
+fn auto_layout_opens_a_grid_from_the_folder_tile(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
-    std::fs::write(root.path().join("a.txt"), b"x").unwrap();
-    std::fs::write(root.path().join("b.txt"), b"x").unwrap();
+    for name in ["a.txt", "b.txt", "c.txt", "d.txt"] {
+        std::fs::write(root.path().join(name), b"x").unwrap();
+    }
     let root = root.path().canonicalize().unwrap();
     let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
     host.update(cx, |host, cx| {
@@ -1466,15 +1511,42 @@ fn auto_layout_opens_a_fan_from_the_folder_tile(cx: &mut TestAppContext) {
         window.refresh();
     });
     visual.run_until_parked();
-    assert!(visual.debug_bounds("folder-fan-0").is_some());
-    assert!(visual.debug_bounds("folder-fan-1").is_some());
-    assert!(visual.debug_bounds("folder-fan-back").is_none());
-    let reveal = visual
-        .debug_bounds("folder-fan-reveal")
-        .expect("the fan exposes the current folder");
+    assert!(
+        visual.debug_bounds("folder-fan-0").is_none(),
+        "Auto lays pinned folders out as a grid, not a fan"
+    );
+    let first = visual
+        .debug_bounds("folder-entry-0")
+        .expect("the grid paints its first entry");
+    let second = visual
+        .debug_bounds("folder-entry-1")
+        .expect("the grid paints its second entry");
+    let third = visual
+        .debug_bounds("folder-entry-2")
+        .expect("the grid paints its third entry");
+    let fourth = visual
+        .debug_bounds("folder-entry-3")
+        .expect("the grid wraps its fourth entry");
+    assert!(
+        first.size.width >= px(110.),
+        "the grid cell grows to fit a two-line name: {first:?}"
+    );
+    assert!(
+        second.left() > first.right() && third.left() > second.right(),
+        "three entries share the first row: {first:?} {second:?} {third:?}"
+    );
+    assert!(
+        (second.top() - first.top()).abs() < px(0.01)
+            && (third.top() - first.top()).abs() < px(0.01),
+        "the first row aligns: {first:?} {second:?} {third:?}"
+    );
+    assert!(
+        fourth.top() > third.bottom() && (fourth.left() - first.left()).abs() < px(0.01),
+        "the fourth entry wraps under the first column: {fourth:?} {first:?}"
+    );
     let viewport = visual.update(|window, _| window.viewport_size());
-    assert!(reveal.left() >= px(0.) && reveal.top() >= px(0.));
-    assert!(reveal.right() <= viewport.width && reveal.bottom() <= viewport.height);
+    assert!(first.left() >= px(0.) && first.top() >= px(0.));
+    assert!(third.right() <= viewport.width && fourth.bottom() <= viewport.height);
 }
 
 #[gpui::test]
@@ -1485,6 +1557,7 @@ fn clicking_the_fan_backdrop_dismisses_the_folder(cx: &mut TestAppContext) {
     let host = cx.update(|cx| testing::test_host(cx, AppCatalog::default(), HashMap::new()));
     host.update(cx, |host, cx| {
         host.handle(Action::PinFolder(root.clone()), cx);
+        host.handle(Action::SetFolderLayout(root.clone(), FolderLayout::Fan), cx);
     });
     cx.run_until_parked();
     let window = cx.update(|cx| testing::open_folder(&host, root, cx));
@@ -1516,6 +1589,7 @@ fn escape_dismisses_an_open_fan(cx: &mut TestAppContext) {
     cx.update(super::bind_keys);
     host.update(cx, |host, cx| {
         host.handle(Action::PinFolder(root.clone()), cx);
+        host.handle(Action::SetFolderLayout(root.clone(), FolderLayout::Fan), cx);
     });
     cx.run_until_parked();
     let window = cx.update(|cx| testing::open_folder(&host, root, cx));
@@ -1535,7 +1609,7 @@ fn escape_dismisses_an_open_fan(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn list_and_grid_render_entries_without_wrapping_long_names(cx: &mut TestAppContext) {
+fn list_rows_do_not_wrap_or_grow_long_names(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(
         root.path()

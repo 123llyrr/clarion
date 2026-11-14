@@ -201,7 +201,7 @@ impl ShellView {
         let connectivity = div()
             .w(px(row_width))
             .flex()
-            .gap(px(10.))
+            .gap(px(12.))
             .child(
                 div()
                     .flex_1()
@@ -218,7 +218,7 @@ impl ShellView {
             .w(px(row_width))
             .flex()
             .items_center()
-            .gap(px(10.))
+            .gap(px(12.))
             .child(
                 div()
                     .flex_1()
@@ -289,7 +289,7 @@ impl ShellView {
             .w(px(row_width))
             .flex()
             .flex_col()
-            .gap(px(12.))
+            .gap(px(16.))
             .child(self.media_card(host, p, row_width))
             .child(connectivity)
             .child(quick)

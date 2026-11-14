@@ -433,7 +433,6 @@ fn the_system_menu_carries_every_row_and_fits_its_popup(cx: &mut TestAppContext)
     for id in [
         "system-menu-about",
         "system-menu-settings",
-        "system-menu-recent",
         "system-menu-sleep",
         "system-menu-reboot",
         "system-menu-shutdown",
@@ -3017,7 +3016,7 @@ fn right_clicking_a_launchpad_tile_keeps_the_launchpad_closeable(cx: &mut TestAp
 }
 
 #[gpui::test]
-fn mode_shortcuts_switch_all_four_pages_and_tab_walks_them(cx: &mut TestAppContext) {
+fn mode_shortcuts_and_tab_walk_every_page_including_commands(cx: &mut TestAppContext) {
     let (_fixture, _host, view, mut visual, _window) = panel(cx, Panel::Spotlight);
     visual.run_until_parked();
     let mode = |visual: &mut VisualTestContext| {
@@ -3036,10 +3035,21 @@ fn mode_shortcuts_switch_all_four_pages_and_tab_walks_them(cx: &mut TestAppConte
 
     visual.simulate_keystrokes("tab");
     visual.run_until_parked();
-    assert_eq!(mode(&mut visual), Mode::Apps, "Tab wraps to the first button");
+    assert_eq!(
+        mode(&mut visual),
+        Mode::Commands,
+        "Tab walks past files into the command list"
+    );
+    visual.simulate_keystrokes("tab");
+    visual.run_until_parked();
+    assert_eq!(mode(&mut visual), Mode::Apps, "Tab wraps after the commands");
     visual.simulate_keystrokes("shift-tab");
     visual.run_until_parked();
-    assert_eq!(mode(&mut visual), Mode::Files, "Shift+Tab walks backwards");
+    assert_eq!(
+        mode(&mut visual),
+        Mode::Commands,
+        "Shift+Tab walks back into the command list"
+    );
 
     visual.simulate_keystrokes("ctrl-0");
     visual.run_until_parked();
@@ -3048,8 +3058,8 @@ fn mode_shortcuts_switch_all_four_pages_and_tab_walks_them(cx: &mut TestAppConte
     visual.run_until_parked();
     assert_eq!(
         mode(&mut visual),
-        Mode::Apps,
-        "a mode outside the rail enters it at the front"
+        Mode::Wallpapers,
+        "the opening search shares the Apps page, so the first Tab lands on a different body"
     );
 }
 

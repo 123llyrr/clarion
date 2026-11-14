@@ -4,8 +4,9 @@
 
 use super::*;
 use crate::app::panels::{
-    FOLDER_MENU_ACTION_ROW, FOLDER_MENU_CHOICE_GAP, FOLDER_MENU_CHOICE_ROW, FOLDER_MENU_HEADER_ROW,
-    FOLDER_MENU_INNER_GAP, FOLDER_MENU_LABEL_ROW, FOLDER_MENU_SEPARATOR_ROW,
+    FOLDER_GRID_CELL_HEIGHT, FOLDER_GRID_CELL_WIDTH, FOLDER_GRID_GAP, FOLDER_GRID_IMAGE_HEIGHT,
+    FOLDER_GRID_IMAGE_WIDTH, FOLDER_MENU_ACTION_ROW, FOLDER_MENU_CHOICE_GAP, FOLDER_MENU_CHOICE_ROW,
+    FOLDER_MENU_HEADER_ROW, FOLDER_MENU_INNER_GAP, FOLDER_MENU_LABEL_ROW, FOLDER_MENU_SEPARATOR_ROW,
 };
 use crate::dock_folder::{FolderEntry, FolderEntryKind};
 use crate::preferences::{FolderDisplay, FolderLayout, FolderSort};
@@ -102,6 +103,9 @@ fn rotate_text(child: AnyElement, center: Point<Pixels>, angle: f32) -> AnyEleme
 
 const FAN_LABEL_TEXT_SIZE: f32 = 12.;
 const FAN_SIDE_LABEL_TEXT_SIZE: f32 = 14.;
+/// Fan cards read a size above the Dock tiles: a fan is the focus of the
+/// interaction, so its icons and picture previews get a little more room.
+const FAN_CARD_SCALE: f32 = 1.15;
 
 pub(super) fn fan_label_text_size(position: DockPosition) -> f32 {
     match position {
@@ -297,6 +301,37 @@ pub(super) fn fan_close_progress(elapsed: std::time::Duration) -> (f32, f32, boo
     (open, open.clamp(0., 1.), true)
 }
 
+/// The folder grid/list entrance: the popup box unfolds downwards from its top
+/// edge while the last few points drop into place. Values below 1 mean the
+/// animation is still running.
+pub(super) fn folder_popup_progress(elapsed: std::time::Duration) -> (f32, bool) {
+    const DURATION: f32 = 0.3;
+    let t = elapsed.as_secs_f32() / DURATION;
+    if t >= 1. {
+        return (1., false);
+    }
+    // Smoothstep: the box leaves the tile gently instead of snapping open,
+    // then settles without overshoot.
+    (smoothstep(t), true)
+}
+
+/// The reverse of [`folder_popup_progress`]: the box shrinks back onto its Dock
+/// tile. Values above zero mean it is still running.
+pub(super) fn folder_popup_close_progress(elapsed: std::time::Duration) -> (f32, bool) {
+    const DURATION: f32 = 0.26;
+    let t = elapsed.as_secs_f32() / DURATION;
+    if t >= 1. {
+        return (0., false);
+    }
+    (1. - smoothstep(t), true)
+}
+
+/// Ease-in-out with zero velocity at both ends.
+fn smoothstep(t: f32) -> f32 {
+    let t = t.clamp(0., 1.);
+    t * t * (3. - 2. * t)
+}
+
 fn fan_label_background(radians: f32, p: Palette) -> AnyElement {
     canvas(
         |_, _, _| (),
@@ -361,6 +396,7 @@ fn section_label(label: &'static str, p: Palette) -> AnyElement {
 }
 
 /// Theme-matched artwork for one folder entry, with its tags riding along.
+/// Folder contents show the whole picture rather than a cropped 4:3 card.
 fn entry_icon(
     path: Option<&std::path::Path>,
     kind: FolderEntryKind,
@@ -368,7 +404,41 @@ fn entry_icon(
     size: f32,
     angle: f32,
 ) -> AnyElement {
-    crate::file_icons::icon(path, kind == FolderEntryKind::Directory, tags, size, angle)
+    crate::file_icons::whole_icon(path, kind == FolderEntryKind::Directory, tags, size, angle)
+}
+
+/// A folder entry whose picture box is not square: the grid gives the picture
+/// the cell's width and the height left over by the name, so it fills one of
+/// them instead of sitting small in a padded square.
+fn entry_icon_box(
+    path: Option<&std::path::Path>,
+    kind: FolderEntryKind,
+    tags: &[String],
+    width: f32,
+    height: f32,
+    angle: f32,
+) -> AnyElement {
+    crate::file_icons::whole_icon_in(
+        path,
+        kind == FolderEntryKind::Directory,
+        tags,
+        width,
+        height,
+        angle,
+    )
+}
+
+/// The host action that opens the desktop's file menu for one folder entry on
+/// the monitor this surface belongs to.
+fn entry_menu(output: &str, path: &std::path::Path, position: Point<Pixels>) -> Action {
+    Action::on_output(
+        output.to_owned(),
+        Action::DesktopEntryMenu {
+            path: path.to_path_buf(),
+            x: f32::from(position.x),
+            y: f32::from(position.y),
+        },
+    )
 }
 
 const FAN_LABEL_W: f32 = 112.;
@@ -630,7 +700,13 @@ pub(super) fn fan_geometry(
         let label_width = match position {
             DockPosition::Bottom => labels
                 .get(step)
-                .map(|name| (label_text_width(name) + 24.).clamp(64., 240.))
+                .map(|name| {
+                    // Content-sized plate: the whole name is painted, so the
+                    // plate has to cover every glyph. Only an output-width cap
+                    // keeps an extreme name from running off the screen.
+                    (label_text_width(name) + 34.)
+                        .clamp(64., (f32::from(viewport.width) - 16.).max(64.))
+                })
                 .unwrap_or(FAN_LABEL_W),
             DockPosition::Left | DockPosition::Right => side_label_width(icon),
         };
@@ -820,8 +896,7 @@ impl ShellView {
         self.folder_drag_layer = true;
         self.folder_fan_closed = false;
         self.folder_fan_closing = None;
-        self.host
-            .update(cx, |host, _| host.folder_drag_layer = true);
+        self.host.update(cx, |host, _| host.folder_drag_layer = true);
         window.set_background_appearance(WindowBackgroundAppearance::Transparent);
         window.refresh();
         cx.notify();
@@ -986,7 +1061,7 @@ impl ShellView {
         self.folder_fan_active = true;
         let anchor = point(px(anchor_x), px(anchor_y));
         let viewport = size(px(width), px(height));
-        let icon_size = host.prefs.dock_size as f32;
+        let icon_size = host.prefs.dock_size as f32 * FAN_CARD_SCALE;
         let label_size = fan_label_text_size(host.prefs.dock_position);
         let entries = host
             .folder_snapshots
@@ -1113,16 +1188,16 @@ impl ShellView {
             let path = entry.path.clone();
             let name = entry.name.clone();
             let kind = entry.kind;
-            let reveal = if kind == FolderEntryKind::Directory {
-                path.clone()
-            } else {
-                path.parent().unwrap_or(&path).to_path_buf()
-            };
+            let menu_path = path.clone();
+            let menu_output = self.output.clone();
+            let icon_menu_path = path.clone();
+            let icon_menu_output = self.output.clone();
             let icon_host = self.host.clone();
             let label_host = self.host.clone();
             let label_click_host = self.host.clone();
             let icon_click_view = view.clone();
             let icon_reveal_view = view.clone();
+            let drag_view = view.clone();
             let label_click_view = view.clone();
             let label_path = path.clone();
             let final_icon_center = item.icon.center();
@@ -1145,11 +1220,16 @@ impl ShellView {
             let label_left = f32::from(label_center.x) - f32::from(item.label.size.width) / 2.;
             let label_top = f32::from(label_center.y) - f32::from(item.label.size.height) / 2.;
             let label_angle = (item.label_angle * fan_open).to_radians();
-            let label_text = fit_label(
-                &name,
-                (f32::from(item.label.size.width) - 24.).max(1.),
-                label_size,
-            );
+            let label_text = match host.prefs.dock_position {
+                // The bottom fan's plate is sized to the name, so the full
+                // name is painted instead of being cut with an ellipsis.
+                DockPosition::Bottom => name.clone(),
+                _ => fit_label(
+                    &name,
+                    (f32::from(item.label.size.width) - 24.).max(1.),
+                    label_size,
+                ),
+            };
             let mut icon = div()
                 .id(SharedString::from(id.clone()))
                 .debug_selector({
@@ -1176,7 +1256,6 @@ impl ShellView {
                             icon_angle,
                         )),
                 );
-            let drag_view = view.clone();
             let drag_tags = entry.tags.clone();
             let drag_is_dir = kind == FolderEntryKind::Directory;
             if !closing {
@@ -1186,6 +1265,8 @@ impl ShellView {
                         // Keep the surface as an invisible drag layer so the
                         // preview follows the pointer; the Dock gets the same
                         // position through forwarded events.
+                        // A native drag: the compositor routes the pointer, so
+                        // other applications can accept the file too.
                         drag_view.update(cx, |this, cx| this.begin_folder_drag(window, cx));
                         cx.new(|_| FolderDragPreview {
                             path: drag.path.clone(),
@@ -1215,18 +1296,14 @@ impl ShellView {
                         icon_click_view.update(cx, |this, cx| this.dismiss_folder_fan(cx));
                     }
                 })
-                .on_mouse_down(MouseButton::Right, move |_, _, cx| {
+                .on_mouse_down(MouseButton::Right, move |event, _, cx| {
                     cx.stop_propagation();
                     if closing {
                         return;
                     }
-                    label_host.update(cx, |host, cx| {
-                        host.handle(
-                            Action::Backend(backend::Command::OpenPath(reveal.clone())),
-                            cx,
-                        )
-                    });
-                    icon_reveal_view.update(cx, |this, cx| this.dismiss_folder_fan(cx));
+                    let action = entry_menu(&icon_menu_output, &icon_menu_path, event.position);
+                    label_host.update(cx, |host, cx| host.handle(action, cx));
+                    icon_reveal_view.update(cx, |_, cx| cx.notify());
                 });
             let label = div()
                 .id(SharedString::from(format!(
@@ -1243,7 +1320,19 @@ impl ShellView {
                 .opacity(label_reveal)
                 .cursor_pointer()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+                .on_mouse_down(MouseButton::Right, {
+                    let menu_path = menu_path.clone();
+                    let menu_output = menu_output.clone();
+                    let label_menu_host = label_click_host.clone();
+                    move |event, _, cx| {
+                        cx.stop_propagation();
+                        if closing {
+                            return;
+                        }
+                        let action = entry_menu(&menu_output, &menu_path, event.position);
+                        label_menu_host.update(cx, |host, cx| host.handle(action, cx));
+                    }
+                })
                 .on_click(move |_, _, cx| {
                     if closing {
                         return;
@@ -1522,8 +1611,6 @@ impl ShellView {
     pub(super) fn dock_folder_content(
         &self,
         host: &ViewState,
-        width: f32,
-        height: f32,
         p: Palette,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -1544,7 +1631,7 @@ impl ShellView {
             .map(|folder| folder.layout)
             .unwrap_or(FolderLayout::Auto);
         let layout = if layout == FolderLayout::Auto {
-            crate::app::panels::resolved_folder_layout(host, &navigation.root, width, height)
+            crate::app::panels::resolved_folder_layout(host, &navigation.root)
         } else {
             layout
         };
@@ -1553,7 +1640,7 @@ impl ShellView {
         } else if entries.is_empty() {
             self.empty("文件夹为空", "此文件夹中没有可显示的项目", p)
         } else if layout == FolderLayout::Grid {
-            let mut grid = div().flex().flex_wrap().gap_2();
+            let mut grid = div().flex().flex_wrap().gap(px(FOLDER_GRID_GAP));
             for (index, entry) in entries.iter().enumerate() {
                 grid = grid.child(self.folder_grid_cell(entry, index, p, cx));
             }
@@ -1647,14 +1734,11 @@ impl ShellView {
         let path = entry.path.clone();
         let name = entry.name.clone();
         let kind = entry.kind;
-        let reveal = if kind == FolderEntryKind::Directory {
-            path.clone()
-        } else {
-            path.parent().unwrap_or(&path).to_path_buf()
-        };
         let view = cx.entity();
         let drag_tags = entry.tags.clone();
         let drag_is_dir = kind == FolderEntryKind::Directory;
+        let menu_path = path.clone();
+        let menu_output = self.output.clone();
         div()
             .id(SharedString::from(id))
             .debug_selector(move || selector.clone())
@@ -1706,10 +1790,9 @@ impl ShellView {
                     }
                 });
             })
-            .on_mouse_down(MouseButton::Right, move |_, _, cx| {
-                h.update(cx, |host, cx| {
-                    host.handle(Action::RevealFolder(reveal.clone()), cx)
-                });
+            .on_mouse_down(MouseButton::Right, move |event, _, cx| {
+                let action = entry_menu(&menu_output, &menu_path, event.position);
+                h.update(cx, |host, cx| host.handle(action, cx));
             })
             .into_any_element()
     }
@@ -1728,35 +1811,40 @@ impl ShellView {
         let path = entry.path.clone();
         let name = entry.name.clone();
         let kind = entry.kind;
-        let reveal = if kind == FolderEntryKind::Directory {
-            path.clone()
-        } else {
-            path.parent().unwrap_or(&path).to_path_buf()
-        };
         let view = cx.entity();
         let drag_tags = entry.tags.clone();
         let drag_is_dir = kind == FolderEntryKind::Directory;
+        let menu_path = path.clone();
+        let menu_output = self.output.clone();
         div()
             .id(SharedString::from(id))
             .debug_selector(move || selector.clone())
-            .w(px(84.))
-            .h(px(84.))
+            .w(px(FOLDER_GRID_CELL_WIDTH))
+            .h(px(FOLDER_GRID_CELL_HEIGHT))
             .flex()
             .flex_col()
             .items_center()
             .justify_center()
-            .gap_1()
-            .rounded(px(8.))
+            .gap(px(4.))
+            .p(px(4.))
+            .rounded(px(10.))
             .cursor_pointer()
             .hover(|style| style.bg(p.line))
-            .child(entry_icon(Some(&entry.path), kind, &entry.tags, 40., 0.))
+            .child(entry_icon_box(
+                Some(&entry.path),
+                kind,
+                &entry.tags,
+                FOLDER_GRID_IMAGE_WIDTH,
+                FOLDER_GRID_IMAGE_HEIGHT,
+                0.,
+            ))
             .child(
                 div()
                     .w_full()
-                    .text_xs()
+                    .text_size(px(11.5))
+                    .line_height(px(13.))
                     .text_center()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
+                    .line_clamp(2)
                     .text_ellipsis()
                     .child(name),
             )
@@ -1788,10 +1876,9 @@ impl ShellView {
                     }
                 });
             })
-            .on_mouse_down(MouseButton::Right, move |_, _, cx| {
-                h.update(cx, |host, cx| {
-                    host.handle(Action::RevealFolder(reveal.clone()), cx)
-                });
+            .on_mouse_down(MouseButton::Right, move |event, _, cx| {
+                let action = entry_menu(&menu_output, &menu_path, event.position);
+                h.update(cx, |host, cx| host.handle(action, cx));
             })
             .into_any_element()
     }
@@ -1986,7 +2073,9 @@ impl ShellView {
             id,
             label,
             action,
-            selected.then_some("✓"),
+            // Every choice reserves the check column so selected and
+            // unselected rows stay aligned.
+            Some(if selected { "✓" } else { "" }),
             FOLDER_MENU_CHOICE_ROW,
             p,
         )
@@ -2015,7 +2104,7 @@ impl ShellView {
         // The row surface (like the popup background) may be translucent, but
         // label and check colours stay fully opaque so lowering menu opacity
         // never fades the text.
-        div()
+        let mut row = div()
             .id(id)
             .debug_selector(move || id.to_owned())
             .h(px(height))
@@ -2025,26 +2114,30 @@ impl ShellView {
             .px(px(6.))
             .rounded(px(5.))
             .cursor_pointer()
-            .hover(move |style| style.bg(p.line))
-            .child(
+            .hover(move |style| style.bg(p.line));
+        // Choices reserve the check column; the bottom action group starts at
+        // the same edge as the section labels ("显示", "布局", "排序").
+        if let Some(check) = check {
+            row = row.child(
                 div()
                     .w(px(16.))
                     .text_size(px(12.))
                     .text_color(p.fg)
-                    .child(check.unwrap_or("")),
-            )
-            .child(
-                div()
-                    .min_w_0()
-                    .max_w_full()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .text_size(px(12.))
-                    .text_color(p.fg)
-                    .child(label),
-            )
-            .on_click(move |_, _, cx| host.update(cx, |host, cx| host.handle(action.clone(), cx)))
-            .into_any_element()
+                    .child(check),
+            );
+        }
+        row.child(
+            div()
+                .min_w_0()
+                .max_w_full()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .text_size(px(12.))
+                .text_color(p.fg)
+                .child(label),
+        )
+        .on_click(move |_, _, cx| host.update(cx, |host, cx| host.handle(action.clone(), cx)))
+        .into_any_element()
     }
 }

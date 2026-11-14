@@ -59,11 +59,19 @@ pub(crate) const SPOTLIGHT_HEIGHT: f32 = 668.;
 /// Keep the sheet's proportions when a small output clamps its width.
 const SPOTLIGHT_ASPECT: f32 = SPOTLIGHT_HEIGHT / SPOTLIGHT_WIDTH;
 pub(crate) const FOLDER_LIST_WIDTH: f32 = 300.;
-pub(crate) const FOLDER_GRID_WIDTH: f32 = 380.;
+/// The grid keeps three columns; wider cells leave room for a two-line name
+/// and let a picture fill the cell's width or the height above the name.
+pub(crate) const FOLDER_GRID_COLUMNS: usize = 3;
+pub(crate) const FOLDER_GRID_CELL_WIDTH: f32 = 116.;
+pub(crate) const FOLDER_GRID_CELL_HEIGHT: f32 = 120.;
+pub(crate) const FOLDER_GRID_IMAGE_WIDTH: f32 = 108.;
+pub(crate) const FOLDER_GRID_IMAGE_HEIGHT: f32 = 82.;
+pub(crate) const FOLDER_GRID_GAP: f32 = 12.;
+pub(crate) const FOLDER_GRID_WIDTH: f32 = 2. * DOCK_MENU_PAD
+    + FOLDER_GRID_COLUMNS as f32 * FOLDER_GRID_CELL_WIDTH
+    + (FOLDER_GRID_COLUMNS - 1) as f32 * FOLDER_GRID_GAP;
 pub(crate) const FOLDER_MENU_WIDTH: f32 = 240.;
 const FOLDER_LIST_ROW: f32 = 34.;
-const FOLDER_GRID_ROW: f32 = 84.;
-const FOLDER_GRID_COLUMNS: usize = 4;
 const FOLDER_HEADER: f32 = 34.;
 const FOLDER_FOOTER: f32 = 34.;
 /// Compact metrics shared with the folder menu view. The menu packs four
@@ -226,7 +234,7 @@ fn folder_popup_size(
     h: f32,
 ) -> (f32, f32) {
     let count = folder_entry_count(state, root);
-    let (width, rows, row_height) = match layout {
+    let (width, rows, row_height, row_gap) = match layout {
         FolderLayout::Grid => (
             FOLDER_GRID_WIDTH,
             if count == 0 {
@@ -234,16 +242,18 @@ fn folder_popup_size(
             } else {
                 count.div_ceil(FOLDER_GRID_COLUMNS)
             },
-            FOLDER_GRID_ROW,
+            FOLDER_GRID_CELL_HEIGHT,
+            FOLDER_GRID_GAP,
         ),
         _ => (
             FOLDER_LIST_WIDTH,
             if count == 0 { 3 } else { count },
             FOLDER_LIST_ROW,
+            4.,
         ),
     };
     let width = width.min(w - 24.);
-    let content = rows as f32 * row_height + (rows.saturating_sub(1)) as f32 * 4.;
+    let content = rows as f32 * row_height + (rows.saturating_sub(1)) as f32 * row_gap;
     let height = 2. * DOCK_MENU_PAD
         + FOLDER_HEADER
         + 8.
@@ -300,37 +310,10 @@ pub(crate) fn folder_tile_center(
     Some(dock_tile_center(state, &metrics, slot, w, h))
 }
 
-fn fan_fits(state: &ViewState, root: &std::path::Path, count: usize, w: f32, h: f32) -> bool {
-    if count == 0 || count > 8 {
-        return false;
-    }
-    let Some((x, y)) = folder_tile_center(state, root, w, h) else {
-        return false;
-    };
-    let icon = state.prefs.dock_size as f32;
-    let spacing = icon * 0.94;
-    let margin = 16.;
-    let available = match state.prefs.dock_position {
-        DockPosition::Bottom => y - margin,
-        DockPosition::Left | DockPosition::Right => h - 32.,
-    };
-    let capacity = ((available / spacing).floor() as usize).clamp(1, 10);
-    let label_room = 112.;
-    count <= capacity
-        && match state.prefs.dock_position {
-            DockPosition::Bottom => x >= label_room || w - x >= label_room,
-            DockPosition::Left => w - x >= 220.,
-            DockPosition::Right => x >= 220.,
-        }
-}
-
 pub(crate) fn resolved_folder_layout(
     state: &ViewState,
     root: &std::path::Path,
-    w: f32,
-    h: f32,
 ) -> FolderLayout {
-    let count = folder_entry_count(state, root);
     let configured = state
         .dock_folders
         .iter()
@@ -338,16 +321,11 @@ pub(crate) fn resolved_folder_layout(
         .map(|folder| folder.layout)
         .unwrap_or(FolderLayout::Auto);
     match configured {
-        FolderLayout::Auto => match state.prefs.dock_position {
-            DockPosition::Bottom
-                if count > 0 && count <= 8 && fan_fits(state, root, count, w, h) =>
-            {
-                FolderLayout::Fan
-            }
-            DockPosition::Bottom => FolderLayout::Grid,
-            _ if count > 0 && count <= 12 => FolderLayout::List,
-            _ => FolderLayout::Grid,
-        },
+        // Pinned folders open as a grid: a stable four-column body that keeps
+        // names readable and grows in rows, and one entrance animation for
+        // every folder. The fan stays available as an explicit choice (and so
+        // does the list) for users who prefer it.
+        FolderLayout::Auto => FolderLayout::Grid,
         layout => layout,
     }
 }
@@ -593,7 +571,7 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
             };
         }
         Panel::DockFolder { root } => {
-            let layout = resolved_folder_layout(state, root, w, h);
+            let layout = resolved_folder_layout(state, root);
             if layout == FolderLayout::Fan {
                 return Placement {
                     bounds: Bounds::new(point(px(0.), px(0.)), size(px(w), px(h))),
@@ -735,7 +713,9 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
             // on the button that opened it; the clamp pulls the rectangle
             // back inside the output when the click sits near an edge.
             let ceiling = available.min(h * BAR_POPUP_MAX_HEIGHT_SHARE);
-            let (width, height): (f32, f32) = (334f32.min(w - 24.), 580f32.min(ceiling));
+            // 600 keeps every row visible with the roomier 16-point gaps; the
+            // body still scrolls when a short output clamps the sheet.
+            let (width, height): (f32, f32) = (334f32.min(w - 24.), 600f32.min(ceiling));
             let x = state.anchored.map_or(w - width - 12., |x| {
                 (x - width / 2.).clamp(8., (w - width - 8.).max(8.))
             });
@@ -790,6 +770,22 @@ pub(crate) fn placement(state: &ViewState, panel: &Panel, w: f32, h: f32) -> Pla
             let height = (width * 1.7).min(available);
             return modal_popup(w, h, (w - width) / 2., (h - height) / 2., width, height);
         }
+        Panel::OpenWith { apps, .. } => {
+            let width = 420f32.min(w - 24.);
+            let height = (96. + apps.len() as f32 * 42.)
+                .min(available)
+                .min(h * 0.8);
+            return modal_popup(w, h, (w - width) / 2., (h - height) / 2., width, height);
+        }
+        Panel::Info { rows, .. } => {
+            // A centered info card, sized by its rows and scrollable when a
+            // long metadata list would run past the output.
+            // Artwork (140) + close control + title + margins, then one row
+            // per fact; the card is tall enough that the body never scrolls.
+            let width = 440f32.min(w - 24.);
+            let height = (252. + rows.len() as f32 * 21.).min(available);
+            return modal_popup(w, h, (w - width) / 2., (h - height) / 2., width, height);
+        }
         Panel::Notifications => {
             // A full-output catcher lets a click anywhere outside the column
             // dismiss the center; only the column itself is visible. The
@@ -828,10 +824,10 @@ const NESTED_CONTAINER: f32 = 8.;
 /// The 6pt rhythm between the popup's top-level entries.
 const TOP_GAP: f32 = 6.;
 
-/// The system menu's fixed content: eight action rows split by two rules.
+/// The system menu's fixed content: seven action rows split by two rules.
 /// Keep these counts in step with `view::system_menu`'s table; the UI test
 /// asserts the painted rows fit the popup.
-const SYSTEM_MENU_ACTIONS: f32 = 8.;
+const SYSTEM_MENU_ACTIONS: f32 = 7.;
 const SYSTEM_MENU_SEPARATORS: f32 = 2.;
 
 /// The exact height of the bar mark's menu, using the same row, separator,

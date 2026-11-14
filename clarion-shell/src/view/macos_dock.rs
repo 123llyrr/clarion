@@ -155,7 +155,29 @@ fn folder_tile_icon(
         // The pinned folder itself always reads as a folder, with its own
         // tags on the corner — and the theme's place emblem when it is one of
         // the well-known directories (Downloads, Pictures, the home folder).
-        return crate::file_icons::icon(Some(&folder.path), true, &tags, size, 0.);
+        // Theme folder artwork carries transparent margins, so a stack's
+        // front card would dwarf it next to the same row: draw the plain
+        // folder a little larger, still centred inside the tile.
+        // The enlarged artwork is pinned to the tile's centre rather than laid
+        // out in a flex row, so a bigger box cannot be shrunk to the tile.
+        let grow = size * 1.08;
+        return div()
+            .relative()
+            .size(px(size))
+            .child(
+                div()
+                    .absolute()
+                    .left(px((size - grow) / 2.))
+                    .top(px((size - grow) / 2.))
+                    .child(crate::file_icons::icon(
+                        Some(&folder.path),
+                        true,
+                        &tags,
+                        grow,
+                        0.,
+                    )),
+            )
+            .into_any_element();
     }
     let picked = folder_preview_entries(entries);
     let mut stack = div().relative().w(px(size)).h(px(size));

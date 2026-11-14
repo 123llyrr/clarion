@@ -1061,16 +1061,22 @@ impl ShellView {
         cx.notify();
     }
 
-    /// Walk the four mode buttons with `Tab` / `Shift+Tab`, wrapping at the
-    /// ends. A mode outside the rail (scored search, the command list) enters
-    /// the rail at its first or last button.
+    /// Walk every body with `Tab` / `Shift+Tab`, wrapping at the ends. The
+    /// scored search paints the applications body, so it shares the Apps stop:
+    /// the first Tab from the opening page lands on a page that actually looks
+    /// different instead of repainting the same list. The command list closes
+    /// the cycle so it is reachable without typing `>`.
     pub(super) fn palette_cycle_mode(&mut self, forward: bool, cx: &mut Context<Self>) {
-        let rail = Mode::RAIL;
-        let next = match rail.iter().position(|mode| *mode == self.palette.mode) {
-            Some(index) if forward => rail[(index + 1) % rail.len()],
-            Some(index) => rail[(index + rail.len() - 1) % rail.len()],
-            None if forward => rail[0],
-            None => rail[rail.len() - 1],
+        let order = Mode::TAB_ORDER;
+        let current = match self.palette.mode {
+            Mode::Search => Mode::Apps,
+            mode => mode,
+        };
+        let next = match order.iter().position(|mode| *mode == current) {
+            Some(index) if forward => order[(index + 1) % order.len()],
+            Some(index) => order[(index + order.len() - 1) % order.len()],
+            None if forward => order[0],
+            None => order[order.len() - 1],
         };
         self.palette_switch_mode(next, cx);
     }

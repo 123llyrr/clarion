@@ -65,12 +65,25 @@ actions!(
 #[derive(Clone, Debug)]
 pub enum DesktopAction {
     Open(PathBuf),
+    /// Open one file through the desktop's application chooser.
+    OpenWith(PathBuf),
     /// Show one file in the shell's quick previewer (GNOME Sushi, the same
     /// window Nautilus opens on space).
     Preview(PathBuf),
     Settings,
     /// None asks the host to choose an image; Some supplies a desktop image.
     Wallpaper(Option<PathBuf>),
+    /// Show one path in the file manager (its folder for a file).
+    Reveal(PathBuf),
+    /// Move one path (from any folder) to the trash.
+    Trash(PathBuf),
+    /// Show the finished inspector card as a modal on the desktop's output.
+    Info {
+        output: String,
+        path: Option<PathBuf>,
+        title: String,
+        rows: Vec<(String, String)>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,6 +114,8 @@ struct DesktopSnapshot {
 struct Inspector {
     title: String,
     rows: Vec<(String, String)>,
+    /// The file the card belongs to; `None` for a multi-selection.
+    path: Option<PathBuf>,
 }
 
 enum Work {
@@ -311,6 +326,9 @@ pub struct DesktopView {
     inspector: Option<Inspector>,
     inspection_generation: u64,
     menu: Option<Point<Pixels>>,
+    /// The path a menu opened for a Dock folder entry acts on. `None` means
+    /// the menu belongs to the desktop grid and uses the grid selection.
+    menu_target: Option<PathBuf>,
     /// The overlay surface painting the context menu. It is a window of its
     /// own so the compositor can frost the desktop behind it.
     menu_window: Option<WindowHandle<DesktopMenuView>>,
@@ -420,7 +438,17 @@ impl DesktopView {
                             Update::Inspector { generation, result } => {
                                 if generation == this.inspection_generation {
                                     match result {
-                                        Ok(inspector) => this.inspector = Some(inspector),
+                                        // The card is a modal of its own so it can
+                                        // rise above application windows instead
+                                        // of living on the desktop layer.
+                                        Ok(inspector) => {
+                                            let _ = this.actions.try_send(DesktopAction::Info {
+                                                output: this.output.clone(),
+                                                path: inspector.path,
+                                                title: inspector.title,
+                                                rows: inspector.rows,
+                                            });
+                                        }
                                         Err(error) => this.error = Some(error),
                                     }
                                 }
@@ -451,6 +479,7 @@ impl DesktopView {
             inspector: None,
             inspection_generation: 0,
             menu: None,
+            menu_target: None,
             menu_window: None,
             own_window: None,
             rename: None,
@@ -508,7 +537,23 @@ impl DesktopView {
     /// click point in the desktop window's logical coordinates; the overlay
     /// covers the same output, so the card lands where the user clicked while
     /// the compositor can still frost the desktop below it.
+    /// Open the desktop's context menu for one file that is not on the
+    /// desktop: a Dock folder entry. The file rows act on that path, and the
+    /// menu keeps its own frosted overlay.
+    pub(crate) fn open_entry_menu(
+        &mut self,
+        path: PathBuf,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.menu_target = Some(path);
+        self.open_menu(position, window, cx);
+    }
+
     fn open_menu(&mut self, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        // Take the target before closing: `close_menu` clears it.
+        let target = self.menu_target.take();
         self.close_menu(cx);
         let Some(desktop) = window.window_handle().downcast::<DesktopView>() else {
             return;
@@ -518,13 +563,18 @@ impl DesktopView {
         let width = f32::from(viewport.width);
         let height = f32::from(viewport.height);
         let display = window.display(cx).map(|display| display.id());
-        let has_selection = self.selected.is_some();
-        let has_image = self
-            .entries
-            .iter()
-            .find(|entry| Some(&entry.path) == self.selected.as_ref())
-            .is_some_and(|entry| entry.kind == EntryKind::Image);
-        let selected = self.selected.clone();
+        let has_selection = target.is_some() || self.selected.is_some();
+        let has_image = match &target {
+            Some(path) => {
+                crate::file_icons::kind(path, path.is_dir()) == crate::file_icons::FileKind::Image
+            }
+            None => self
+                .entries
+                .iter()
+                .find(|entry| Some(&entry.path) == self.selected.as_ref())
+                .is_some_and(|entry| entry.kind == EntryKind::Image),
+        };
+        let selected = target.clone().or_else(|| self.selected.clone());
         let reserved = self.reserved_edges;
         let appearance = self.appearance;
         let bounds = Bounds::new(point(px(0.), px(0.)), size(px(width), px(height)));
@@ -551,6 +601,7 @@ impl DesktopView {
                     has_selection,
                     has_image,
                     selected,
+                    target,
                     cx,
                 )
             });
@@ -572,6 +623,7 @@ impl DesktopView {
     /// a row click can close the very surface that is currently dispatching.
     pub(crate) fn close_menu(&mut self, cx: &mut Context<Self>) {
         self.menu = None;
+        self.menu_target = None;
         let own = self.own_window;
         if let Some(menu) = self.menu_window.take() {
             cx.defer(move |cx| {
@@ -732,6 +784,23 @@ impl DesktopView {
         self.selection_anchor = self.selected.clone();
         self.close_menu(cx);
         cx.notify();
+    }
+
+    /// Inspect one path that is not on the desktop: the Dock folder menu knows
+    /// its target, so it never has to touch the desktop grid selection.
+    pub(crate) fn inspect_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if self.rename.is_some() || self.new_folder {
+            return;
+        }
+        self.inspection_generation = self.inspection_generation.wrapping_add(1);
+        self.close_menu(cx);
+        self.enqueue(
+            Work::Inspect {
+                generation: self.inspection_generation,
+                paths: vec![path],
+            },
+            cx,
+        );
     }
 
     pub(crate) fn inspect(&mut self, quick_look: bool, cx: &mut Context<Self>) {
@@ -1424,7 +1493,7 @@ fn create_folder(directory: &Path, name: &str) -> Result<PathBuf> {
 }
 
 fn trash_entries(
-    directory: &Path,
+    _directory: &Path,
     paths: &[PathBuf],
     environment: &HashMap<String, String>,
 ) -> Result<()> {
@@ -1435,7 +1504,10 @@ fn trash_entries(
     // Validate the complete batch before handing literal paths to GIO. A single
     // bounded process avoids one service startup and timeout per selected file.
     for path in paths {
-        validate_source(directory, path)?;
+        anyhow::ensure!(
+            path.is_absolute() && !path.as_os_str().as_bytes().contains(&0),
+            "无效的项目路径"
+        );
     }
     let mut child = Command::new("gio")
         .arg("trash")
@@ -1484,11 +1556,15 @@ fn inspect_paths(directory: &Path, paths: &[PathBuf]) -> Result<Inspector> {
         "请选择桌面项目"
     );
     for path in paths {
-        validate_source(directory, path)?;
+        anyhow::ensure!(
+            path.is_absolute() && !path.as_os_str().as_bytes().contains(&0),
+            "无效的项目路径"
+        );
     }
     let mut inspector = Inspector {
         title: "显示简介".into(),
         rows: Vec::new(),
+        path: (paths.len() == 1).then(|| paths[0].clone()),
     };
     if paths.len() > 1 {
         let mut bytes = 0u64;
@@ -1506,7 +1582,7 @@ fn inspect_paths(directory: &Path, paths: &[PathBuf]) -> Result<Inspector> {
                 bytes = bytes.saturating_add(metadata.len());
             }
         }
-        inspector.title = format!("{} 个项目的简介", paths.len());
+        inspector.title = format!("{} 个项目", paths.len());
         inspector.rows = vec![
             (
                 "包含".into(),
@@ -1537,9 +1613,8 @@ fn inspect_paths(directory: &Path, paths: &[PathBuf]) -> Result<Inspector> {
     } else {
         "特殊文件"
     };
-    inspector.title = format!("{name} 简介");
+    inspector.title = name;
     inspector.rows = vec![
-        ("名称".into(), name),
         ("种类".into(), kind.into()),
         ("位置".into(), path.display().to_string()),
     ];
@@ -2169,6 +2244,7 @@ mod tests {
                 inspector: None,
                 inspection_generation: 0,
                 menu: None,
+                menu_target: None,
                 menu_window: None,
                 own_window: None,
                 rename: None,
@@ -2270,6 +2346,7 @@ mod tests {
         }
         for id in [
             "desktop-menu-icon-desktop-open",
+            "desktop-menu-icon-desktop-open-with",
             "desktop-menu-icon-desktop-info",
             "desktop-menu-icon-desktop-quick-look",
             "desktop-menu-icon-desktop-rename",
@@ -2395,6 +2472,7 @@ mod tests {
                 inspector: None,
                 inspection_generation: 0,
                 menu: None,
+                menu_target: None,
                 menu_window: None,
                 own_window: None,
                 rename: None,
@@ -2633,9 +2711,11 @@ mod tests {
             ]
         );
         let before = fs::read(&capture).unwrap();
+        // Paths outside the desktop directory are allowed now that the same
+        // menu serves Dock folder entries; only a malformed path is refused.
         assert!(trash_entries(
             &directory,
-            &[path.clone(), root.path().join("outside")],
+            &[path.clone(), PathBuf::from("relative")],
             &environment
         )
         .is_err());
@@ -2645,7 +2725,7 @@ mod tests {
             "the complete batch must validate before GIO starts"
         );
         assert_eq!(fs::read(second).unwrap(), b"second");
-        assert!(trash_entry(&directory, &root.path().join("outside"), &environment).is_err());
+        assert!(trash_entry(&directory, &PathBuf::from("relative"), &environment).is_err());
     }
 
     #[::core::prelude::v1::test]

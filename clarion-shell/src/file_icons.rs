@@ -227,6 +227,10 @@ pub(crate) fn tag_color(name: &str) -> Hsla {
 /// A file icon: the desktop's preview when one exists, otherwise the theme's
 /// type artwork, rotated as the surface needs, with its tags on the lower
 /// corner. `path` is `None` for a bare folder.
+///
+/// Pictures and videos take a 4:3 card: the preview crops to the middle of the
+/// frame so every icon in a Dock stack has the same weight. Folder contents use
+/// [`whole_icon`], which keeps the frame's own shape instead.
 pub(crate) fn icon(
     path: Option<&Path>,
     is_dir: bool,
@@ -234,16 +238,82 @@ pub(crate) fn icon(
     size: f32,
     angle: f32,
 ) -> AnyElement {
+    icon_fit(path, is_dir, tags, size, size, angle, Fit::Card)
+}
+
+/// The whole artwork inside the icon box. Pictures and videos keep their own
+/// aspect ratio rather than being cropped to the 4:3 card, so a folder fan or
+/// grid shows the complete frame; everything else looks like [`icon`].
+pub(crate) fn whole_icon(
+    path: Option<&Path>,
+    is_dir: bool,
+    tags: &[String],
+    size: f32,
+    angle: f32,
+) -> AnyElement {
+    icon_fit(path, is_dir, tags, size, size, angle, Fit::Whole)
+}
+
+/// [`whole_icon`] in a box that need not be square, so a folder grid can give
+/// the picture the cell's full width and the height left over by its name.
+pub(crate) fn whole_icon_in(
+    path: Option<&Path>,
+    is_dir: bool,
+    tags: &[String],
+    width: f32,
+    height: f32,
+    angle: f32,
+) -> AnyElement {
+    icon_fit(path, is_dir, tags, width, height, angle, Fit::Whole)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Fit {
+    /// The uniform 4:3 preview card.
+    Card,
+    /// The file's own frame, contained in the icon box.
+    Whole,
+}
+
+fn icon_fit(
+    path: Option<&Path>,
+    is_dir: bool,
+    tags: &[String],
+    width: f32,
+    height: f32,
+    angle: f32,
+    fit: Fit,
+) -> AnyElement {
     let kind = match path {
         Some(path) => kind(path, is_dir),
         None => FileKind::Folder,
     };
-    let (key, bytes, preview) = artwork(path, kind);
-    let artwork = rotated_artwork(&key, bytes, angle);
+    let (key, bytes, preview) = artwork(path, kind, fit);
+    // Rasterize near the painted size: the sprite atlas has no mipmaps, so a
+    // 256px raster minified onto a small fan card would alias its edges.
+    let target = (width.max(height) * 2.).ceil() as u32;
+    let artwork = rotated_artwork(&key, bytes, angle, target);
     // The rotation canvas is larger than the card so tilting never clips its
     // corners; scale it so the card itself keeps the size the surface asked
-    // for.
-    let card_width = if preview { size * PREVIEW_SCALE } else { size };
+    // for. A whole preview fits its own frame inside the box instead.
+    let (card_width, card_height) = match fit {
+        Fit::Card => {
+            let width = if preview { width * PREVIEW_SCALE } else { width };
+            (width, if preview { width * 3. / 4. } else { height })
+        }
+        Fit::Whole => {
+            let (source_width, source_height) = artwork.source;
+            let scale = if source_width > 0 && source_height > 0 {
+                (width / source_width as f32).min(height / source_height as f32)
+            } else {
+                1.
+            };
+            (
+                source_width as f32 * scale,
+                source_height as f32 * scale,
+            )
+        }
+    };
     let scale = if artwork.source.0 > 0 {
         card_width / artwork.source.0 as f32
     } else {
@@ -251,28 +321,27 @@ pub(crate) fn icon(
     };
     let draw_width = artwork.canvas.0 as f32 * scale;
     let draw_height = artwork.canvas.1 as f32 * scale;
-    // A preview card is 4:3, so its lower edge sits above the square's.
-    let card_height = if preview { card_width * 3. / 4. } else { size };
-    let card_bottom = (size - card_height) / 2.;
-    let mut stack = div().relative().w(px(size)).h(px(size)).child(
+    let card_bottom = (height - card_height) / 2.;
+    let unit = width.min(height);
+    let mut stack = div().relative().w(px(width)).h(px(height)).child(
         img(artwork.image)
             .absolute()
-            .left(px((size - draw_width) / 2.))
-            .top(px((size - draw_height) / 2.))
+            .left(px((width - draw_width) / 2.))
+            .top(px((height - draw_height) / 2.))
             .w(px(draw_width))
             .h(px(draw_height))
             .object_fit(ObjectFit::Contain)
-            .with_fallback(move || desktop_icons::icon(fallback(kind), size * 0.86)),
+            .with_fallback(move || desktop_icons::icon(fallback(kind), unit * 0.86)),
     );
     if tags.is_empty() {
         return stack.into_any_element();
     }
-    let dot = (size * 0.18).clamp(5., 11.);
+    let dot = (unit * 0.18).clamp(5., 11.);
     let gap = (dot * 0.35).max(2.);
     let mut dots = div()
         .absolute()
-        .left(px(size * 0.03))
-        .bottom(px(card_bottom + size * 0.02))
+        .left(px(width * 0.03))
+        .bottom(px(card_bottom + height * 0.02))
         .flex()
         .items_center()
         .gap(px(gap));
@@ -291,13 +360,26 @@ pub(crate) fn icon(
 }
 
 /// The artwork behind one entry: cache key plus PNG bytes.
-fn artwork(path: Option<&Path>, kind: FileKind) -> (String, Arc<Vec<u8>>, bool) {
+fn artwork(path: Option<&Path>, kind: FileKind, fit: Fit) -> (String, Arc<Vec<u8>>, bool) {
     if let Some(path) = path.filter(|_| kind != FileKind::Folder) {
         // A vector document shows its own drawing: the theme's generic image
         // mark would hide the artwork the file exists for.
         if kind == FileKind::Image && is_svg(path) {
-            let key = format!("file:{}", path.display());
-            if let Some(bytes) = icons::cached(&key, || read_svg(path).map(preview_png)) {
+            let whole = fit == Fit::Whole;
+            let key = if whole {
+                format!("file:{}:whole", path.display())
+            } else {
+                format!("file:{}", path.display())
+            };
+            if let Some(bytes) = icons::cached(&key, || {
+                read_svg(path).map(|png| {
+                    if whole {
+                        preview_whole_png(png)
+                    } else {
+                        preview_png(png)
+                    }
+                })
+            }) {
                 return (key, bytes, true);
             }
         }
@@ -308,13 +390,20 @@ fn artwork(path: Option<&Path>, kind: FileKind) -> (String, Arc<Vec<u8>>, bool) 
             // Pictures and videos fill the icon square like a photo card; a
             // PDF keeps its page shape so the sheet stays readable.
             let cover = matches!(kind, FileKind::Image | FileKind::Video);
-            let key = format!("thumb:{}", path.display());
+            let whole = cover && fit == Fit::Whole;
+            let key = if whole {
+                format!("thumb:{}:whole", path.display())
+            } else {
+                format!("thumb:{}", path.display())
+            };
             if let Some(bytes) = icons::cached(&key, || {
                 thumbnail_png(path).map(|png| {
-                    if cover {
-                        preview_png(png)
-                    } else {
+                    if !cover {
                         page_png(png)
+                    } else if whole {
+                        preview_whole_png(png)
+                    } else {
+                        preview_png(png)
                     }
                 })
             }) {
@@ -479,6 +568,41 @@ fn preview_png(bytes: Vec<u8>) -> Vec<u8> {
     }
 }
 
+/// A preview that keeps the frame whole: the longest side scales to `RASTER`
+/// and nothing is cropped, so a folder grid or fan shows the entire picture at
+/// its own aspect ratio.
+fn preview_whole_png(bytes: Vec<u8>) -> Vec<u8> {
+    let Ok(image) = ::image::load_from_memory_with_format(&bytes, ::image::ImageFormat::Png) else {
+        return bytes;
+    };
+    let (width, height) = (image.width(), image.height());
+    if width == 0 || height == 0 {
+        return bytes;
+    }
+    let scale = RASTER / width.max(height) as f32;
+    let target_width = ((width as f32 * scale).round() as u32).max(1);
+    let target_height = ((height as f32 * scale).round() as u32).max(1);
+    let mut scaled = ::image::imageops::resize(
+        &image,
+        target_width,
+        target_height,
+        ::image::imageops::FilterType::Triangle,
+    );
+    round_corners(
+        &mut scaled,
+        target_width.min(target_height) as f32 * PREVIEW_RADIUS,
+    );
+    let mut encoded = Cursor::new(Vec::new());
+    if scaled
+        .write_to(&mut encoded, ::image::ImageFormat::Png)
+        .is_ok()
+    {
+        encoded.into_inner()
+    } else {
+        bytes
+    }
+}
+
 /// Soft rounded corners, one pixel of coverage at the edge.
 fn round_corners(image: &mut ::image::RgbaImage, radius: f32) {
     let (width, height) = image.dimensions();
@@ -603,8 +727,8 @@ fn md5(input: &[u8]) -> [u8; 16] {
     digest
 }
 
-/// Rasterized artwork by key and rotation (whole degrees).
-type RotationCache = Mutex<HashMap<(String, i16), Rotated>>;
+/// Rasterized artwork by key, rotation (whole degrees) and raster bucket.
+type RotationCache = Mutex<HashMap<(String, i16, u32), Rotated>>;
 /// Bundled PNG bytes, decoded once per coarse kind.
 type EmbeddedCache = Mutex<HashMap<DesktopIconKind, Arc<Vec<u8>>>>;
 
@@ -630,30 +754,44 @@ struct Rotated {
     canvas: (u32, u32),
 }
 
-/// The artwork for one key at one angle, cached. Rotation happens on the PNG
-/// bytes inside a canvas large enough for the tilted card, so the corners are
-/// never cut off; angles are quantized to whole degrees because the surfaces
-/// animate the tilt continuously.
-fn rotated_artwork(key: &str, bytes: Arc<Vec<u8>>, angle: f32) -> Rotated {
+/// The artwork for one key at one angle, cached.
+///
+/// The source is first fitted into a raster bucket sized from the card being
+/// painted (about twice its logical pixels) and only then rotated with bilinear
+/// sampling. GPUI's sprite atlas has no mipmaps, so rotating the full 256px
+/// artwork and shrinking it to a 50px fan card undersamples its edges and
+/// produces hard jaggies; rasterizing near the painted size keeps the GPU's
+/// minification close to 1:1.
+///
+/// Angles are quantized to whole degrees because the surfaces animate the tilt
+/// continuously. The bucket is a multiple of 32px, so the icon's grow-in also
+/// reuses entries instead of producing one raster per animation frame.
+fn rotated_artwork(key: &str, bytes: Arc<Vec<u8>>, angle: f32, target: u32) -> Rotated {
     static CACHE: OnceLock<RotationCache> = OnceLock::new();
     let degrees = angle.round() as i16;
-    let cache_key = (key.to_owned(), degrees);
+    let source = png_size(&bytes).unwrap_or((RASTER as u32, RASTER as u32));
+    let longest = source.0.max(source.1).max(1);
+    let bucket = target
+        .max(24)
+        .div_ceil(32)
+        .saturating_mul(32)
+        .clamp(32, longest.max(32));
+    let cache_key = (key.to_owned(), degrees, bucket);
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(cached) = cache.lock().unwrap().get(&cache_key).cloned() {
         return cached;
     }
-    let source = png_size(&bytes).unwrap_or((RASTER as u32, RASTER as u32));
-    let (image, canvas) = match rotate_expanded(&bytes, degrees as f32) {
-        Some((png, canvas)) => (Arc::new(Image::from_bytes(ImageFormat::Png, png)), canvas),
-        None => (
-            Arc::new(Image::from_bytes(ImageFormat::Png, bytes.as_ref().clone())),
+    let rotated = match render_artwork(&bytes, degrees as f32, bucket) {
+        Some((png, source, canvas)) => Rotated {
+            image: Arc::new(Image::from_bytes(ImageFormat::Png, png)),
             source,
-        ),
-    };
-    let rotated = Rotated {
-        image,
-        source,
-        canvas,
+            canvas,
+        },
+        None => Rotated {
+            image: Arc::new(Image::from_bytes(ImageFormat::Png, bytes.as_ref().clone())),
+            source,
+            canvas: source,
+        },
     };
     let mut cache = cache.lock().unwrap();
     if cache.len() >= CACHE_LIMIT {
@@ -673,18 +811,35 @@ fn png_size(bytes: &[u8]) -> Option<(u32, u32)> {
     Some((width, height))
 }
 
-/// Rotate a PNG into a canvas that fits the whole tilted card, with a pixel of
-/// breathing room. Returns the encoded PNG and its size.
-fn rotate_expanded(bytes: &[u8], degrees: f32) -> Option<(Vec<u8>, (u32, u32))> {
-    if degrees == 0. {
-        return None;
-    }
-    let source = ::image::load_from_memory_with_format(bytes, ::image::ImageFormat::Png)
+/// The encoded PNG, the card size it was made from and the canvas size.
+type RenderedArtwork = (Vec<u8>, (u32, u32), (u32, u32));
+
+/// Fit the source into `bucket` pixels on its longest side, then rotate it into
+/// a canvas that holds the whole tilted card with a pixel of breathing room.
+fn render_artwork(bytes: &[u8], degrees: f32, bucket: u32) -> Option<RenderedArtwork> {
+    let image = ::image::load_from_memory_with_format(bytes, ::image::ImageFormat::Png)
         .ok()?
         .to_rgba8();
-    let (width, height) = source.dimensions();
+    let (width, height) = image.dimensions();
     if width == 0 || height == 0 {
         return None;
+    }
+    let image = if width.max(height) > bucket {
+        let scale = bucket as f32 / width.max(height) as f32;
+        let target_width = ((width as f32 * scale).round() as u32).max(1);
+        let target_height = ((height as f32 * scale).round() as u32).max(1);
+        ::image::imageops::resize(
+            &image,
+            target_width,
+            target_height,
+            ::image::imageops::FilterType::CatmullRom,
+        )
+    } else {
+        image
+    };
+    let (width, height) = image.dimensions();
+    if degrees == 0. {
+        return Some((encode_png(&image)?, (width, height), (width, height)));
     }
     let radians = degrees.to_radians();
     let (sin, cos) = radians.sin_cos();
@@ -702,14 +857,22 @@ fn rotate_expanded(bytes: &[u8], degrees: f32) -> Option<(Vec<u8>, (u32, u32))> 
             let dx = x as f32 + 0.5 - center_x;
             let sx = cos * dx + sin * dy + source_x;
             let sy = -sin * dx + cos * dy + source_y;
-            canvas.put_pixel(x, y, sample(&source, sx, sy));
+            canvas.put_pixel(x, y, sample(&image, sx, sy));
         }
     }
+    Some((
+        encode_png(&canvas)?,
+        (width, height),
+        (canvas_width, canvas_height),
+    ))
+}
+
+fn encode_png(image: &::image::RgbaImage) -> Option<Vec<u8>> {
     let mut encoded = Cursor::new(Vec::new());
-    canvas
+    image
         .write_to(&mut encoded, ::image::ImageFormat::Png)
         .ok()?;
-    Some((encoded.into_inner(), (canvas_width, canvas_height)))
+    Some(encoded.into_inner())
 }
 
 /// Bilinear sample, transparent outside the source.
@@ -789,8 +952,10 @@ mod tests {
         card.write_to(&mut encoded, ::image::ImageFormat::Png)
             .unwrap();
         let degrees = 16.;
-        let (png, (canvas_width, canvas_height)) =
-            rotate_expanded(&encoded.into_inner(), degrees).expect("the card rotates");
+        let (png, (source_width, source_height), (canvas_width, canvas_height)) =
+            render_artwork(&encoded.into_inner(), degrees, 64).expect("the card rotates");
+        assert_eq!((source_width, source_height), (64, 48));
+        assert!(canvas_width > source_width && canvas_height > source_height);
         assert!(canvas_width > 64 && canvas_height > 48);
         let rotated = ::image::load_from_memory_with_format(&png, ::image::ImageFormat::Png)
             .unwrap()
@@ -814,6 +979,25 @@ mod tests {
             0,
             "the canvas corner stays empty"
         );
+    }
+
+    #[test]
+    fn rotation_rasters_are_fitted_to_the_painted_size() {
+        // A 256px source drawn on a 48pt fan card must be fitted to the bucket
+        // before it is rotated, or the GPU minifies five texels into one and
+        // the tilted edges alias.
+        let source = ::image::RgbaImage::from_pixel(256, 128, ::image::Rgba([200, 100, 50, 255]));
+        let mut encoded = Cursor::new(Vec::new());
+        source
+            .write_to(&mut encoded, ::image::ImageFormat::Png)
+            .unwrap();
+        let bytes = encoded.into_inner();
+        let (_, card, canvas) = render_artwork(&bytes, 0., 64).expect("the card renders");
+        assert_eq!(card, (64, 32));
+        assert_eq!(canvas, (64, 32));
+        let (_, card, canvas) = render_artwork(&bytes, 20., 64).expect("the card rotates");
+        assert_eq!(card, (64, 32));
+        assert!(canvas.0 > 64 && canvas.1 > 32);
     }
 
     #[test]
@@ -877,6 +1061,40 @@ mod tests {
                 255
             );
             assert_eq!(decoded.get_pixel(0, 0).0[3], 0);
+        }
+    }
+
+    #[test]
+    fn whole_previews_keep_the_frames_own_aspect_ratio() {
+        for (width, height, expected) in [
+            (16u32, 8u32, (RASTER as u32, RASTER as u32 / 2)),
+            (8, 16, (RASTER as u32 / 2, RASTER as u32)),
+            (16, 16, (RASTER as u32, RASTER as u32)),
+            (25, 9, (RASTER as u32, (RASTER * 9. / 25.).round() as u32)),
+        ] {
+            let source =
+                ::image::RgbaImage::from_pixel(width, height, ::image::Rgba([200, 100, 50, 255]));
+            let mut encoded = Cursor::new(Vec::new());
+            source
+                .write_to(&mut encoded, ::image::ImageFormat::Png)
+                .unwrap();
+            let decoded = ::image::load_from_memory_with_format(
+                &preview_whole_png(encoded.into_inner()),
+                ::image::ImageFormat::Png,
+            )
+            .unwrap()
+            .to_rgba8();
+            let (framed_width, framed_height) = decoded.dimensions();
+            assert_eq!(
+                (framed_width, framed_height),
+                expected,
+                "a {width}x{height} frame must not be cropped"
+            );
+            assert_eq!(
+                decoded.get_pixel(framed_width / 2, framed_height / 2).0[3],
+                255,
+                "the middle of the frame stays painted"
+            );
         }
     }
 

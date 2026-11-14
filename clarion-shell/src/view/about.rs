@@ -60,9 +60,7 @@ impl ShellView {
                             .on_click(move |_, _, cx| {
                                 close.update(cx, |host, cx| host.handle(Action::Close, cx))
                             }),
-                    )
-                    .child(div().size(px(12.)).rounded_full().bg(rgba(0xfebc2e4d)))
-                    .child(div().size(px(12.)).rounded_full().bg(rgba(0x28c8404d))),
+                    ),
             )
             .child(
                 div()
@@ -140,6 +138,226 @@ impl ShellView {
                     ),
             );
         card.into_any_element()
+    }
+
+    /// The desktop's "get info" card as a top-level modal: the file's artwork
+    /// or type mark on top, its metadata below, and a single close control at
+    /// the top-left (like the About card).
+    pub(super) fn info_card(
+        &self,
+        path: Option<&std::path::Path>,
+        title: &str,
+        rows: &[(String, String)],
+        p: Palette,
+    ) -> AnyElement {
+        let close = self.host.clone();
+        let is_dir = path.map(|path| path.is_dir()).unwrap_or(true);
+        let filename = path
+            .and_then(|path| path.file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| title.to_owned());
+        let artwork = crate::file_icons::whole_icon(path, is_dir, &[], 140., 0.);
+        let mut specs = div().w(px(320.)).flex().flex_col().gap(px(6.));
+        for (label, value) in rows {
+            specs = specs.child(
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(px(12.))
+                    .text_size(px(12.))
+                    .line_height(px(17.))
+                    .child(
+                        div()
+                            .w(px(56.))
+                            .flex_none()
+                            .pt(px(1.))
+                            .text_right()
+                            .text_color(p.muted)
+                            .child(label.clone()),
+                    )
+                    .child({
+                        let mut value_row = div()
+                            .flex()
+                            .items_start()
+                            .gap(px(6.))
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().flex_1().min_w_0().child(value.clone()));
+                        if label == "位置" {
+                            let copy_text = value.clone();
+                            value_row = value_row.child(
+                                div()
+                                    .id("info-copy-path")
+                                    .debug_selector(|| "info-copy-path".into())
+                                    .size(px(18.))
+                                    .flex_none()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(5.))
+                                    .cursor_pointer()
+                                    .hover(move |style| style.bg(p.line))
+                                    .child(self.glyph(
+                                        &self.themed_glyph_path("edit-copy-symbolic", "clipboard.svg"),
+                                        13.,
+                                        p,
+                                    ))
+                                    .on_click(move |_, _, cx| {
+                                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                            copy_text.clone(),
+                                        ));
+                                    }),
+                            );
+                        }
+                        value_row
+                    }),
+            );
+        }
+        div()
+            .id("info-card")
+            .debug_selector(|| "info-card".into())
+            .relative()
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .px(px(26.))
+            .pt(px(32.))
+            .pb(px(28.))
+            .child(div().child(artwork))
+            .child(
+                div()
+                    .mt(px(10.))
+                    .w_full()
+                    .text_center()
+                    .text_size(px(15.))
+                    .line_height(px(19.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .line_clamp(2)
+                    .child(filename),
+            )
+            .child(div().mt(px(14.)).child(specs))
+            .child(
+                div()
+                    .id("info-close")
+                    .debug_selector(|| "info-close".into())
+                    .absolute()
+                    .left(px(14.))
+                    .top(px(12.))
+                    .size(px(16.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .child(div().size(px(12.)).rounded_full().bg(rgb(0xff5f57)))
+                    .on_click(move |_, _, cx| {
+                        close.update(cx, |host, cx| host.handle(Action::Close, cx))
+                    }),
+            )
+            .into_any_element()
+    }
+
+    /// The native application chooser, opened for a file from any folder.
+    pub(super) fn open_with_card(
+        &self,
+        path: &std::path::Path,
+        apps: &[crate::app::OpenWithApp],
+        p: Palette,
+    ) -> AnyElement {
+        let close = self.host.clone();
+        let host = self.host.clone();
+        let filename = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let mut rows = div().w(px(340.)).flex().flex_col().gap(px(2.));
+        for app in apps {
+            let desktop = app.desktop_file.clone();
+            let target = path.to_path_buf();
+            let host = host.clone();
+            let selector = format!("open-with-{}", app.desktop_file.display());
+            let mut row = div()
+                .id(SharedString::from(selector.clone()))
+                .debug_selector(move || selector.clone())
+                .h(px(38.))
+                .px(px(10.))
+                .rounded(px(8.))
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .cursor_pointer()
+                .hover(move |row| row.bg(p.line));
+            if let Some(icon) = app.icon.clone() {
+                row = row.child(img(icon).size(px(26.)).object_fit(ObjectFit::Contain));
+            } else {
+                row = row.child(div().size(px(26.)));
+            }
+            rows = rows.child(
+                row.child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(app.name.clone()),
+                )
+                .on_click(move |_, _, cx| {
+                    host.update(cx, |host, cx| {
+                        host.handle(
+                            Action::Backend(crate::backend::Command::LaunchDesktopWithPaths(
+                                desktop.clone(),
+                                vec![target.clone()],
+                            )),
+                            cx,
+                        );
+                        host.handle(Action::Close, cx);
+                    })
+                }),
+            );
+        }
+        div()
+            .id("open-with-card")
+            .relative()
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .px(px(26.))
+            .pt(px(36.))
+            .pb(px(26.))
+            .child(
+                div()
+                    .text_size(px(17.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("打开方式"),
+            )
+            .child(
+                div()
+                    .mt(px(2.))
+                    .text_size(px(11.))
+                    .text_color(p.muted)
+                    .child(filename),
+            )
+            .child(div().mt(px(12.)).child(rows))
+            .child(
+                div()
+                    .id("open-with-close")
+                    .debug_selector(|| "open-with-close".into())
+                    .absolute()
+                    .left(px(14.))
+                    .top(px(12.))
+                    .size(px(16.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .child(div().size(px(12.)).rounded_full().bg(rgb(0xff5f57)))
+                    .on_click(move |_, _, cx| {
+                        close.update(cx, |host, cx| host.handle(Action::Close, cx))
+                    }),
+            )
+            .into_any_element()
     }
 }
 

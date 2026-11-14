@@ -199,6 +199,8 @@ pub enum Command {
     LaunchDesktop(PathBuf),
     LaunchDesktopWithPaths(PathBuf, Vec<PathBuf>),
     OpenPath(PathBuf),
+    /// Move one path to the desktop trash.
+    Trash(PathBuf),
     /// Show one local file in the desktop's quick previewer (GNOME Sushi, the
     /// previewer Nautilus itself opens on space).
     PreviewFile(PathBuf),
@@ -748,6 +750,19 @@ fn perform(
             if let Err(error) = open_location(&path, &options.environment) {
                 report_failure(&options.environment, "无法打开文件", &path, &error)?;
             }
+        }
+        Command::Trash(path) => {
+            anyhow::ensure!(
+                path.is_absolute() && !path.as_os_str().as_bytes().contains(&0),
+                "Invalid location"
+            );
+            let path = path.to_string_lossy().into_owned();
+            run_tool(
+                "gio",
+                &["trash", "--", path.as_str()],
+                &options.environment,
+                Duration::from_secs(4),
+            )?;
         }
         Command::PreviewFile(path) => {
             anyhow::ensure!(

@@ -35,8 +35,17 @@ impl Mode {
         Self::Files,
         Self::Commands,
     ];
-    /// The four buttons on the mode rail (`Ctrl+1..4`).
-    pub const RAIL: [Self; 4] = [Self::Apps, Self::Wallpapers, Self::Clipboard, Self::Files];
+    /// The order `Tab` / `Shift+Tab` walk. The scored search renders the same
+    /// applications body as [`Self::Apps`], so the two share one stop instead
+    /// of adding a visually identical step; the command list is a body of its
+    /// own and closes the cycle.
+    pub const TAB_ORDER: [Self; 5] = [
+        Self::Apps,
+        Self::Wallpapers,
+        Self::Clipboard,
+        Self::Files,
+        Self::Commands,
+    ];
 
     pub fn value(self) -> &'static str {
         match self {

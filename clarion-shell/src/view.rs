@@ -206,6 +206,15 @@ pub struct ShellView {
     /// The clock `popup_motion` samples against, captured at view creation so
     /// tests can settle the ride by snapping instead of racing real time.
     popup_epoch: std::time::Instant,
+    /// When the Dock folder popup started shrinking back into its tile. The
+    /// Host keeps the surface alive for the exit ride, so the zoom-out needs
+    /// its own clock.
+    folder_zoom_out: Option<std::time::Instant>,
+    /// The popup outline the last panel render actually painted. The frost is
+    /// a binary compositor region, so it cannot fade with the content: it has
+    /// to follow the animated box and disappear as soon as the popup starts
+    /// leaving, or the blurred rectangle sits there alone.
+    panel_frost: Option<Bounds<Pixels>>,
     /// Keeps the folder surface mapped but empty while a file drag is in
     /// flight. The layer still owns the pointer grab, which is what lets the
     /// drag preview follow the cursor across the whole output.
@@ -685,6 +694,8 @@ impl ShellView {
             launchpad_slide: None,
             palette_glyph: None,
             popup_epoch: std::time::Instant::now(),
+            folder_zoom_out: None,
+            panel_frost: None,
             power_switch: RefCell::new(PowerSwitchAnim::default()),
             folder_drag_layer: false,
             dock_drag_seen: false,
@@ -2589,6 +2600,7 @@ impl ShellView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         self.folder_fan_active = false;
+        self.panel_frost = None;
         let panel = host.panel.clone().unwrap_or(Panel::Apps);
         if self.folder_drag_layer && matches!(&panel, Panel::DockFolder { .. }) {
             return div()
@@ -2631,6 +2643,8 @@ impl ShellView {
                 | Panel::Tray(_)
                 | Panel::System
                 | Panel::About
+                | Panel::Info { .. }
+                | Panel::OpenWith { .. }
         );
         let placement = if modal {
             Some(crate::app::panels::placement(host, &panel, width, height))
@@ -2735,8 +2749,10 @@ impl ShellView {
             Panel::Tray(_) => self.tray_menu(host, p),
             Panel::System => self.system_menu(host, p),
             Panel::About => self.about_card(host, p),
+            Panel::Info { path, title, rows } => self.info_card(path.as_deref(), title, rows, p),
+            Panel::OpenWith { path, apps } => self.open_with_card(path, apps, p),
             Panel::Dock(id) => self.dock_menu(host, id, p),
-            Panel::DockFolder { .. } => self.dock_folder_content(host, width, height, p, cx),
+            Panel::DockFolder { .. } => self.dock_folder_content(host, p, cx),
             Panel::DockFolderMenu { path } => self.dock_folder_menu_content(host, path, p),
             Panel::DockOverflow { ids, icon_size } => {
                 self.dock_overflow(host, ids, f32::from(*icon_size), p, window, cx)
@@ -2751,8 +2767,10 @@ impl ShellView {
             // The control center, battery popup and menus share one surface
             // recipe.
             body.p(px(12.))
-        } else if panel == Panel::About {
-            // The About card paints its own traffic lights and inner margins.
+        } else if panel == Panel::About
+            || matches!(panel, Panel::Info { .. } | Panel::OpenWith { .. })
+        {
+            // These cards paint their own inner margins.
             body.p(px(0.))
         } else if panel == Panel::Spotlight {
             // The palette's rows keep a real margin around the grid and list,
@@ -2890,6 +2908,58 @@ impl ShellView {
             if panel == Panel::Spotlight {
                 body = body.child(self.spotlight_status_bar(host, p, cx));
             }
+            // A pinned folder zooms out of its Dock tile and folds back into
+            // it when the popup closes: the box grows from the tile's centre
+            // while the content fades in with it. Every other arrow popup
+            // keeps its static entrance.
+            let folder_panel =
+                matches!(panel, Panel::DockFolder { .. }) && arrow.is_some();
+            let (folder_reveal, folder_animating) =
+                if folder_panel && !host.prefs.reduce_motion && !cfg!(test) {
+                    if host.panel_exit {
+                        let started = *self
+                            .folder_zoom_out
+                            .get_or_insert_with(std::time::Instant::now);
+                        dock_folder::folder_popup_close_progress(started.elapsed())
+                    } else {
+                        dock_folder::folder_popup_progress(self.popup_epoch.elapsed())
+                    }
+                } else {
+                    (1., false)
+                };
+            if folder_animating {
+                window.request_animation_frame();
+            }
+            // Interpolate the visible popup rectangle between the folder tile
+            // (the zoom's start) and the resting popup. The content keeps its
+            // final coordinates on screen and is clipped by this rectangle, so
+            // the box appears to grow out of the tile.
+            let zoom_rect = if folder_panel {
+                let tile = match &panel {
+                    Panel::DockFolder { root } => {
+                        crate::app::panels::folder_tile_center(host, root, width, height)
+                    }
+                    _ => None,
+                };
+                tile.map(|(tile_x, tile_y)| {
+                    // End the zoom on the folder artwork itself rather than the full Dock
+                // tile box, so the box has visibly landed on the icon before the
+                // surface is released.
+                let start = host.prefs.dock_size as f32 * 0.85;
+                    let end_x = f32::from(popup.origin.x) + pw / 2.;
+                    let end_y = f32::from(popup.origin.y) + ph / 2.;
+                    let center_x = tile_x + (end_x - tile_x) * folder_reveal;
+                    let center_y = tile_y + (end_y - tile_y) * folder_reveal;
+                    let zoom_w = start + (pw - start) * folder_reveal;
+                    let zoom_h = start + (ph - start) * folder_reveal;
+                    Bounds::new(
+                        point(px(center_x - zoom_w / 2.), px(center_y - zoom_h / 2.)),
+                        size(px(zoom_w), px(zoom_h)),
+                    )
+                })
+            } else {
+                None
+            };
             let mut inner = body;
             if let Some(arrow) = arrow {
                 use crate::app::panels::{ArrowEdge, DOCK_ARROW};
@@ -2988,14 +3058,24 @@ impl ShellView {
                 .top(px(0.))
                 .w(px(width))
                 .h(px(height))
-                .bg(rgba(0x00000001))
-                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                .bg(rgba(0x00000001));
+            // The About and Info cards are dismissed by their own close
+            // control only: an outside click stays a click on the backdrop.
+            let pinned = matches!(
+                panel,
+                Panel::About | Panel::Info { .. } | Panel::OpenWith { .. }
+            );
+            let backdrop = if pinned {
+                backdrop
+            } else {
+                let backdrop = backdrop.on_mouse_down(MouseButton::Left, move |_, _, cx| {
                     h.update(cx, |h, cx| h.handle(Action::Close, cx))
                 });
-            let h = self.host.clone();
-            let backdrop = backdrop.on_mouse_down(MouseButton::Right, move |_, _, cx| {
-                h.update(cx, |h, cx| h.handle(Action::Close, cx))
-            });
+                let h = self.host.clone();
+                backdrop.on_mouse_down(MouseButton::Right, move |_, _, cx| {
+                    h.update(cx, |h, cx| h.handle(Action::Close, cx))
+                })
+            };
             let backdrop = if panel == Panel::Spotlight {
                 // The launcher sheet dims the desktop behind it and rides the
                 // same appear motion as the popup.
@@ -3004,16 +3084,50 @@ impl ShellView {
                 backdrop
             };
             let overlay = div().relative().size_full().child(backdrop);
+            // The zooming folder draws a smaller box and clips the popup
+            // content inside it; every other popup draws at its resting rect.
+            let box_rect = zoom_rect.unwrap_or_else(|| {
+                Bounds::new(popup.origin, size(px(pw), px(drawn_h)))
+            });
+            let box_w = f32::from(box_rect.size.width);
+            let box_h = f32::from(box_rect.size.height);
+            let content_offset = point(
+                px(f32::from(popup.origin.x) - f32::from(box_rect.origin.x)),
+                px(f32::from(popup.origin.y) - f32::from(box_rect.origin.y)),
+            );
+            let content_height = if zoom_rect.is_some() { ph } else { drawn_h };
+            // The frost may only cover what is already opaque: a bar popup
+            // fades and sinks on the shared ride, a folder zooms out of its
+            // tile. Keeping the region at the resting rect while either runs
+            // leaves a blurred block behind the moving content.
+            let frost_rect = box_rect;
+            let frost_visible = if folder_panel {
+                // The blurred box belongs to the zoom from its first visible
+                // frame to its last: dropping it earlier would make the popup
+                // disappear while the box is still much larger than the icon.
+                folder_reveal >= 0.02
+            } else {
+                ride >= 0.9
+            };
+            self.panel_frost = frost_visible.then_some(frost_rect);
             let mut surfaced = div()
                 .absolute()
-                .left(popup.origin.x)
+                .left(box_rect.origin.x)
                 // The ride sinks the popup a little from its resting top, back
                 // up into place as it reaches 1.
-                .top(px(f32::from(popup.origin.y) + (1. - ride) * -8.))
-                .w(px(pw))
-                .h(px(drawn_h))
+                .top(px(f32::from(box_rect.origin.y) + (1. - ride) * -8.))
+                .w(px(box_w))
+                .h(px(box_h))
                 .relative()
-                .opacity(ride)
+                .overflow_hidden()
+                // A closing folder stays opaque all the way down to its icon:
+                // fading with the reveal made it dissolve at a large size
+                // instead of landing on the tile.
+                .opacity(ride * if host.panel_exit && folder_panel {
+                    1.
+                } else {
+                    (folder_reveal * 2.5).clamp(0., 1.)
+                })
                 // The catcher covers the whole output, so a click inside the
                 // visible popup must not also reach it.
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -3021,9 +3135,17 @@ impl ShellView {
                 .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_mouse_up(MouseButton::Right, |_, _, cx| cx.stop_propagation());
             if let Some(arrow) = arrow {
-                surfaced = surfaced.child(popup_shape(arrow, pw, ph, p));
+                surfaced = surfaced.child(popup_shape(arrow, box_w, box_h, p));
             }
-            return overlay.child(surfaced.child(inner)).into_any_element();
+            let content = div()
+                .absolute()
+                .left(content_offset.x)
+                .top(content_offset.y)
+                .w(px(pw))
+                .h(px(content_height))
+                .relative()
+                .child(inner);
+            return overlay.child(surfaced.child(content)).into_any_element();
         }
         body.child(
             div()
@@ -3104,6 +3226,8 @@ impl Render for ShellView {
                     | Panel::Tray(_)
                     | Panel::System
                     | Panel::About
+                    | Panel::Info { .. }
+                    | Panel::OpenWith { .. }
             )
         );
         if matches!(self.kind, Surface::SpotlightMenu) {
@@ -3189,7 +3313,7 @@ impl Render for ShellView {
                 window.set_glass_region(Some(&[]));
             } else if let Some(panel) = host.panel.as_ref() {
                 let placement = crate::app::panels::placement(host, panel, width, height);
-                if let Some(popup) = placement.popup {
+                if placement.popup.is_some() {
                     // Frost the popup's actual outline. A plain rectangle would
                     // blur the transparent corners and the strip beside the
                     // pointer wedge, leaving a rectangular halo around it. The
@@ -3199,12 +3323,21 @@ impl Render for ShellView {
                         crate::app::panels::SPOTLIGHT_RADIUS
                     } else if matches!(panel, Panel::Controls | Panel::Battery) {
                         crate::app::panels::CONTROLS_RADIUS
-                    } else if matches!(panel, Panel::About) {
+                    } else if matches!(
+                        panel,
+                        Panel::About | Panel::Info { .. } | Panel::OpenWith { .. }
+                    ) {
                         16.
                     } else {
                         POPUP_RADIUS
                     };
-                    let regions = popup_region(placement.arrow, popup, radius);
+                    // Follow the rect the panel actually painted this frame;
+                    // while the entrance/exit is in flight there is none, so
+                    // the blur goes away with the content instead of lingering.
+                    let regions = self
+                        .panel_frost
+                        .map(|rect| popup_region(placement.arrow, rect, radius))
+                        .unwrap_or_default();
                     window.set_glass_region(Some(&regions));
                 } else if !matches!(panel, Panel::DockFolder { .. }) {
                     // `None` falls back to the full input region in the
@@ -3282,6 +3415,13 @@ impl Render for ShellView {
             )
             .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
                 if this.input.read(cx).has_preedit() {
+                    return;
+                }
+                if matches!(
+                    this.state.panel,
+                    Some(Panel::About) | Some(Panel::Info { .. }) | Some(Panel::OpenWith { .. })
+                ) {
+                    // These cards close through their own control only.
                     return;
                 }
                 if matches!(this.kind, Surface::Auth) {

@@ -61,10 +61,37 @@ pub enum Panel {
     System,
     /// The compact "About This Mac" card opened from the system menu.
     About,
+    /// The desktop's "get info" card, opened as a top-level modal so it can
+    /// rise above application windows like the About card.
+    Info {
+        path: Option<PathBuf>,
+        title: String,
+        rows: Vec<(String, String)>,
+    },
+    /// The native application chooser for one file.
+    OpenWith {
+        path: PathBuf,
+        apps: Vec<OpenWithApp>,
+    },
+}
+
+/// One row of the native "open with" chooser.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenWithApp {
+    pub name: String,
+    pub desktop_file: PathBuf,
+    pub icon: Option<PathBuf>,
 }
 #[derive(Clone)]
 pub enum Action {
     Panel(Panel),
+    /// Open the desktop's file menu for one path (a Dock folder entry) on the
+    /// monitor that dispatched the click.
+    DesktopEntryMenu {
+        path: PathBuf,
+        x: f32,
+        y: f32,
+    },
     /// A bar-anchored opener: the panel plus the pointer x inside the bar's
     /// own coordinate space, so its popup drops from the clicked icon instead
     /// of the resting screen edge.
@@ -687,15 +714,89 @@ impl Host {
             dock_apps: self.dock_apps(),
         }
     }
+    /// A Dock folder popup covers the whole output, so anything the menu opens
+    /// (an app, the portal chooser, a preview window) must first get the
+    /// surface out of the way; otherwise the new window is behind it.
+    fn close_folder_overlay(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.panel, Some(Panel::DockFolder { .. })) {
+            self.close(cx);
+        }
+    }
+
     fn desktop_action(&mut self, action: DesktopAction, cx: &mut Context<Self>) {
         match action {
             DesktopAction::Open(path) => {
                 let _ = self.backend.send(backend::Command::OpenPath(path));
+                self.close_folder_overlay(cx);
+            }
+            DesktopAction::OpenWith(path) => {
+                self.close_folder_overlay(cx);
+                // Build the chooser from the application catalog: the session
+                // portal's `ask` request never produces a visible dialog under
+                // this compositor, so the shell owns the chooser.
+                let mime = crate::mime::path_mime(&path);
+                let mut apps: Vec<OpenWithApp> = match mime {
+                    Some(mime) => self
+                        .catalog
+                        .apps()
+                        .iter()
+                        .filter(|app| crate::mime::app_supports_mime(app, &mime))
+                        .map(|app| OpenWithApp {
+                            name: app.name.clone(),
+                            desktop_file: app.desktop_file.clone(),
+                            icon: app.icon_path.clone(),
+                        })
+                        .collect(),
+                    None => Vec::new(),
+                };
+                apps.sort_by_key(|app| app.name.to_lowercase());
+                apps.dedup_by(|a, b| a.desktop_file == b.desktop_file);
+                if apps.is_empty() {
+                    let _ = self.backend.send(backend::Command::OpenPath(path));
+                } else {
+                    self.open(Panel::OpenWith { path, apps }, cx);
+                }
             }
             DesktopAction::Preview(path) => {
                 let _ = self.backend.send(backend::Command::PreviewFile(path));
+                self.close_folder_overlay(cx);
             }
             DesktopAction::Settings => self.handle(Action::Settings, cx),
+            DesktopAction::Trash(path) => {
+                let parent = path.parent().map(std::path::Path::to_path_buf);
+                let _ = self.backend.send(backend::Command::Trash(path));
+                if let Some(parent) = parent {
+                    // The folder snapshot is rebuilt from disk; wait for GIO to
+                    // finish moving the file so the entry actually disappears.
+                    cx.spawn(async move |host, cx| {
+                        cx.background_executor()
+                            .timer(Duration::from_millis(350))
+                            .await;
+                        let _ = host.update(cx, |host, cx| host.request_folder_scan(parent, cx));
+                    })
+                    .detach();
+                }
+            }
+            DesktopAction::Reveal(path) => {
+                let target = if path.is_dir() {
+                    path
+                } else {
+                    path.parent().unwrap_or(&path).to_path_buf()
+                };
+                let _ = self.backend.send(backend::Command::OpenPath(target));
+                self.close_folder_overlay(cx);
+            }
+            DesktopAction::Info {
+                output,
+                path,
+                title,
+                rows,
+            } => {
+                if self.outputs.contains_key(&output) {
+                    self.dispatch_output = Some(output);
+                }
+                self.open(Panel::Info { path, title, rows }, cx);
+            }
             DesktopAction::Wallpaper(Some(path)) => {
                 for output in self.outputs.values() {
                     if let Some(desktop) = output.desktop {
@@ -1259,6 +1360,22 @@ impl Host {
             }
             Action::PickWallpaper => self.desktop_action(DesktopAction::Wallpaper(None), cx),
             Action::Close => self.close(cx),
+            Action::DesktopEntryMenu { path, x, y } => {
+                let output = self
+                    .dispatch_output
+                    .clone()
+                    .filter(|output| self.outputs.contains_key(output))
+                    .unwrap_or_else(|| self.active_output());
+                if let Some(desktop) = self
+                    .outputs
+                    .get(&output)
+                    .and_then(|view| view.desktop)
+                {
+                    let _ = desktop.update(cx, |desktop, window, cx| {
+                        desktop.open_entry_menu(path, point(px(x), px(y)), window, cx)
+                    });
+                }
+            }
             Action::OnOutput(output, action) => {
                 // Bar and Dock surfaces live on every output. Carry the one
                 // that dispatched the action while it applies, so its popup is
@@ -1778,6 +1895,9 @@ impl Host {
     /// settles in about 150ms at the shared response frequency, so the release
     /// timer adds slack rather than a second animation driver.
     const POPUP_EXIT: Duration = Duration::from_millis(170);
+    /// A folder zoom-out runs 260ms and must visibly reach the Dock icon and
+    /// rest there for a beat before the surface is released.
+    const FOLDER_POPUP_EXIT: Duration = Duration::from_millis(320);
     fn close(&mut self, cx: &mut Context<Self>) {
         self.preferences_placed = None;
         // The launcher's menu is not part of the panel's exit ride; it folds
@@ -1785,11 +1905,20 @@ impl Host {
         self.dismiss_menu(cx);
         self.dismiss_spotlight_menu(cx);
         // A fading bar popup repaints and rides out before its surface is
-        // released; anything else dismisses as before, right away.
-        let animate = self
+        // released; a grid/list folder does the same with its zoom back onto
+        // the Dock tile. Everything else dismisses right away.
+        let folder_zoom_out = match self.panel.as_ref() {
+            Some(Panel::DockFolder { root }) if !cfg!(test) => {
+                panels::resolved_folder_layout(&self.snapshot(), root) != FolderLayout::Fan
+            }
+            _ => false,
+        };
+        let animate = (self
             .panel
             .as_ref()
-            .is_some_and(|panel| panels::popup_exit_panel(panel) && !self.prefs.reduce_motion);
+            .is_some_and(panels::popup_exit_panel)
+            || folder_zoom_out)
+            && !self.prefs.reduce_motion;
         if !animate {
             self.discard(cx);
             return;
@@ -1816,8 +1945,13 @@ impl Host {
         });
         self.exiting = Some(window);
         cx.notify();
+        let wait = if folder_zoom_out {
+            Self::FOLDER_POPUP_EXIT
+        } else {
+            Self::POPUP_EXIT
+        };
         cx.spawn(async move |host, cx| {
-            cx.background_executor().timer(Self::POPUP_EXIT).await;
+            cx.background_executor().timer(wait).await;
             let _ = host.update(cx, |host, cx| host.finish_popup_exit(generation, cx));
         })
         .detach();

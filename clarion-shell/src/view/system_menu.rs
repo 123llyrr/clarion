@@ -31,13 +31,6 @@ impl ShellView {
                 ("preferences-system-symbolic", Some("settings.svg")),
                 Action::Panel(Panel::Preferences),
             ))
-            .child(self.system_menu_row(
-                p,
-                "recent",
-                "最近使用的项目",
-                ("document-open-recent-symbolic", Some("menu-folder-open.svg")),
-                Action::Panel(Panel::Recent),
-            ))
             .child(self.separator(p))
             .child(self.system_menu_row(
                 p,
@@ -72,7 +65,9 @@ impl ShellView {
                 p,
                 "logout",
                 format!("退出登录 “{}”…", host.user_name),
-                ("system-log-out-symbolic", None),
+                // The same mark Spotlight uses for `system.logout`, so the two
+                // ways out of the session read alike.
+                ("exit-symbolic", None),
                 Action::System(SystemAction::Logout),
             ));
         menu.into_any_element()

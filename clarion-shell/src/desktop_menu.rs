@@ -23,9 +23,12 @@ pub(crate) const DESKTOP_MENU_PADDING: f32 = 4.;
 pub(crate) const DESKTOP_MENU_RADIUS: f32 = 12.;
 pub(crate) const DESKTOP_MENU_ICON: f32 = 16.;
 
-pub(crate) fn context_menu_height(selected: bool, image: bool) -> f32 {
-    let (rows, separators) = if selected {
-        (10 + usize::from(image), 4)
+pub(crate) fn context_menu_height(selected: bool, image: bool, entry: bool) -> f32 {
+    let (rows, separators) = if entry {
+        // Open, Open With, Info, Quick Look, Trash, Show in Files.
+        (6, 2)
+    } else if selected {
+        (11 + usize::from(image), 4)
     } else {
         (5, 1)
     };
@@ -127,6 +130,9 @@ pub(crate) struct DesktopMenuView {
     has_selection: bool,
     has_image: bool,
     selected: Option<PathBuf>,
+    /// `Some` when the menu was opened for one file outside the desktop
+    /// directory (a Dock folder entry): only the file rows are offered.
+    target: Option<PathBuf>,
     focus: FocusHandle,
     /// The surface region currently frost-requested from the compositor.
     pub(crate) glass: Option<Bounds<Pixels>>,
@@ -144,6 +150,7 @@ impl DesktopMenuView {
         has_selection: bool,
         has_image: bool,
         selected: Option<PathBuf>,
+        target: Option<PathBuf>,
         cx: &mut Context<Self>,
     ) -> Self {
         Self {
@@ -156,6 +163,7 @@ impl DesktopMenuView {
             has_selection,
             has_image,
             selected,
+            target,
             focus: cx.focus_handle(),
             glass: None,
         }
@@ -178,7 +186,7 @@ impl DesktopMenuView {
 
     fn card(&self) -> Bounds<Pixels> {
         let [top, bottom, left, right] = self.reserved;
-        let height = context_menu_height(self.has_selection, self.has_image)
+        let height = context_menu_height(self.has_selection, self.has_image, self.target.is_some())
             .min((self.height - top - bottom - 16.).max(80.));
         Bounds::new(
             point(
@@ -272,7 +280,70 @@ impl DesktopMenuView {
             .into_any_element()
     }
 
+    /// The file rows offered for a Dock folder entry. The desktop's own
+    /// layout rows (new folder, wallpaper, settings) do not apply to a folder
+    /// outside the desktop, so this scope keeps only file actions.
+    fn entry_contents(&self, path: PathBuf) -> AnyElement {
+        let mut menu = div()
+            .id("desktop-menu-content")
+            .w_full()
+            .h_full()
+            .overflow_y_scroll()
+            .p(px(DESKTOP_MENU_PADDING))
+            .flex()
+            .flex_col();
+        let open = path.clone();
+        let open_with = path.clone();
+        let quick = path.clone();
+        let inspect = path.clone();
+        let trash = path.clone();
+        let reveal = path.clone();
+        menu = menu
+            .child(self.row(
+                "desktop-open",
+                "打开",
+                ("help-about-symbolic", "menu-open.svg"),
+                move |desktop, _, cx| desktop.send(DesktopAction::Open(open.clone()), cx),
+            ))
+            .child(self.row(
+                "desktop-open-with",
+                "打开方式",
+                ("software-store-symbolic", "menu-open.svg"),
+                move |desktop, _, cx| desktop.send(DesktopAction::OpenWith(open_with.clone()), cx),
+            ))
+            .child(self.separator("desktop-menu-separator-0"))
+            .child(self.row(
+                "desktop-info",
+                "显示简介",
+                ("dialog-information-symbolic", "menu-info.svg"),
+                move |desktop, _, cx| desktop.inspect_path(inspect.clone(), cx),
+            ))
+            .child(self.row(
+                "desktop-quick-look",
+                "快速查看",
+                ("zoom-fit-best-symbolic", "menu-eye.svg"),
+                move |desktop, _, cx| desktop.send(DesktopAction::Preview(quick.clone()), cx),
+            ))
+            .child(self.separator("desktop-menu-separator-1"))
+            .child(self.row(
+                "desktop-trash",
+                "移到废纸篓",
+                ("user-trash-symbolic", "menu-trash.svg"),
+                move |desktop, _, cx| desktop.send(DesktopAction::Trash(trash.clone()), cx),
+            ))
+            .child(self.row(
+                "desktop-open-directory",
+                "在文件管理器中显示",
+                ("folder-open-symbolic", "menu-folder-open.svg"),
+                move |desktop, _, cx| desktop.send(DesktopAction::Reveal(reveal.clone()), cx),
+            ));
+        menu.into_any_element()
+    }
+
     fn card_contents(&self) -> AnyElement {
+        if let Some(path) = self.target.clone() {
+            return self.entry_contents(path);
+        }
         let mut menu = div()
             .id("desktop-menu-content")
             .w_full()
@@ -283,12 +354,23 @@ impl DesktopMenuView {
             .flex_col();
         if self.has_selection {
             let selected = self.selected.clone();
+            let open_with_path = selected.clone();
             menu = menu
                 .child(self.row(
                     "desktop-open",
                     "打开",
-                    ("document-open-symbolic", "menu-open.svg"),
+                    ("help-about-symbolic", "menu-open.svg"),
                     |desktop, window, cx| desktop.activate(window, cx),
+                ))
+                .child(self.row(
+                    "desktop-open-with",
+                    "打开方式",
+                    ("software-store-symbolic", "menu-open.svg"),
+                    move |desktop, _, cx| {
+                        if let Some(path) = open_with_path.clone() {
+                            desktop.send(DesktopAction::OpenWith(path), cx);
+                        }
+                    },
                 ))
                 .child(self.separator("desktop-menu-separator-0"))
                 .child(self.row(
